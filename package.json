@@ -1,0 +1,11 @@
+{
+  "name": "robot-config-tools",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter app dev",
+    "build": "pnpm --filter app build",
+    "dev:electron": "pnpm --filter app dev:electron",
+    "build:electron": "pnpm --filter app build:electron",
+    "preview": "pnpm --filter app preview"
+  }
+}

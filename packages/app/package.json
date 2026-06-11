@@ -1,0 +1,38 @@
+{
+  "name": "app",
+  "private": true,
+  "main": "dist-electron/main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "dev:electron": "cross-env ELECTRON=true vite",
+    "build:electron": "cross-env ELECTRON=true vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^6.2.5",
+    "@playcanvas/pcui": "^6.1.4",
+    "@playcanvas/splat-transform": "2.1.0",
+    "antd": "^6.4.3",
+    "axios": "^1.17.0",
+    "laz-perf": "0.0.7",
+    "mqtt": "^5.15.1",
+    "playcanvas": "^2.18.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.17.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "cross-env": "^7.0.3",
+    "electron": "^42.3.3",
+    "sass": "^1.77.6",
+    "typescript": "^5.5.3",
+    "vite": "^5.4.0",
+    "vite-plugin-electron": "^0.28.7",
+    "vite-plugin-electron-renderer": "^0.14.5"
+  }
+}

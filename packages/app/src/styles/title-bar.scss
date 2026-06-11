@@ -1,0 +1,44 @@
+.app-header {
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  height: 48px;
+  line-height: 48px;
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.app-header__menu {
+  -webkit-app-region: no-drag;
+
+  // 全部状态去掉底部指示线
+  .ant-menu-item::after {
+    display: none !important;
+  }
+
+  // 去掉 hover/选中背景
+  .ant-menu-item:hover,
+  .ant-menu-item-selected,
+  .ant-menu-item-active {
+    background: transparent !important;
+  }
+}
+
+.app-header__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  -webkit-app-region: no-drag;
+}
+
+.app-header__controls {
+  -webkit-app-region: no-drag;
+
+  .ant-btn {
+    width: 36px;
+    height: 36px;
+    font-size: 14px;
+  }
+}

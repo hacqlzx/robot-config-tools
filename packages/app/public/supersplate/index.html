@@ -1,0 +1,51 @@
+<!--
+    SuperSplat 主 HTML 页面
+    -----------------------
+    这是一个基于 PlayCanvas 的 3D Gaussian Splatting 编辑器。
+    整个应用是一个纯前端 SPA（单页应用），无需后端服务器。
+
+    页面结构说明：
+    - : 构建时会被替换为实际的资源路径前缀
+    - manifest.json: PWA 应用清单，用于可安装到桌面的渐进式 Web 应用
+    - index.css: 全局样式文件
+    - Service Worker: 提供离线缓存支持（参见 sw.ts）
+    - index.js: TypeScript 编译后的应用入口（参见 index.ts）
+-->
+<!DOCTYPE html>
+<html>
+    <head>
+        <!-- 页面标题 -->
+        <title>SuperSplat</title>
+        <!-- 字符编码声明 -->
+        <meta charset="utf-8" />
+        <!-- 基础路径：构建工具（如 esbuild/vite）会替换 __BASE_HREF__ 为实际部署路径 -->
+        <base href="./">
+        <!-- PWA 应用清单 -->
+        <link rel="manifest" href="./manifest.json">
+        <!-- 全局样式 -->
+        <link rel="stylesheet" href="./index.css">
+        <!-- 占位图标，避免 404 请求 -->
+        <link rel="shortcut icon" href="#">
+        <!-- 页面描述（用于搜索引擎和分享预览） -->
+        <meta name="description" content="SuperSplat is an advanced browser-based editor for manipulating and optimizing 3D Gaussian Splats. It is open source and engine agnostic." />
+        <!-- 视口设置：禁止用户缩放，固定为 1.0 -->
+        <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0" />
+
+        <!-- Service Worker 注册：用于 PWA 离线支持和文件关联 -->
+        <script>
+            const sw = navigator.serviceWorker;
+            if (sw) {
+                // 注册 sw.js（由 sw.ts 编译生成）
+                // 用于实现缓存优先策略和 PWA 文件关联功能
+                sw.register('./sw.js')
+                    .then(reg => console.log('service worker registered', reg))
+                    .catch(err => console.log('failed to register service worker', err));
+            }
+        </script>
+    </head>
+
+    <body>
+        <!-- 应用入口脚本：index.js 由 index.ts 编译，负责启动整个编辑器 -->
+        <script type="module" src="./index.js"></script>
+    </body>
+</html>
