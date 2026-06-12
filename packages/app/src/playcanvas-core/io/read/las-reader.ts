@@ -180,7 +180,7 @@ export function parseLasHeader(buffer: ArrayBuffer): LasHeader {
  * 从点记录字节缓冲区解析单个点（支持格式 0-3，6-8）
  * 字段偏移量基于 ASPRS LAS 规范
  */
-function parsePoint(buffer: ArrayBuffer, offset: number, formatId: number): LasPoint {
+export function parsePoint(buffer: ArrayBuffer, offset: number, formatId: number): LasPoint {
     const view = new DataView(buffer);
     const le = true;
     let pos = offset;

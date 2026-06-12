@@ -7,5 +7,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   close: () => ipcRenderer.send('win:close'),
   ping: (ip) => ipcRenderer.invoke('ping', ip),
   getFilePath: (file) => webUtils.getPathForFile(file),
+  readFileChunk: (path, offset, length) => ipcRenderer.invoke('read-file-chunk', path, offset, length),
   readLargeFile: (path) => ipcRenderer.invoke('read-large-file', path),
+  project: {
+    list: () => ipcRenderer.invoke('project:list'),
+    create: (name) => ipcRenderer.invoke('project:create', name),
+    rename: (oldName, newName) => ipcRenderer.invoke('project:rename', oldName, newName),
+    delete: (name) => ipcRenderer.invoke('project:delete', name),
+  },
 });

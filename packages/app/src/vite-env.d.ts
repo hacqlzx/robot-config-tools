@@ -1,8 +1,8 @@
 /// <reference types="vite/client" />
 
-declare const __ELECTRON__: boolean;
-
 declare global {
+  const __ELECTRON__: boolean;
+
   interface Window {
     electronAPI?: {
       platform: string;
@@ -10,8 +10,15 @@ declare global {
       maximize: () => void;
       close: () => void;
       ping: (ip: string) => Promise<boolean>;
+      readFileChunk: (path: string, offset: number, length: number) => Promise<ArrayBuffer>;
       readLargeFile: (path: string) => Promise<ArrayBuffer>;
       getFilePath: (file: File) => string;
+      project: {
+        list: () => Promise<string[]>;
+        create: (name: string) => Promise<string>;
+        rename: (oldName: string, newName: string) => Promise<string>;
+        delete: (name: string) => Promise<string>;
+      };
     };
   }
 }

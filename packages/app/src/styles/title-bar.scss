@@ -11,6 +11,7 @@
 
 .app-header__menu {
   -webkit-app-region: no-drag;
+  font-size: 15px;
 
   // 全部状态去掉底部指示线
   .ant-menu-item::after {

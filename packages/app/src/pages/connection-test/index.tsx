@@ -28,7 +28,7 @@ export default function ConnectionTest() {
     const fullUrl = httpUrl;
     console.log('HTTP请求:', { method: httpMethod, url: fullUrl });
     try {
-      const res = await http({ method: httpMethod, url: httpUrl, timeout: 10000 });
+      const res = await http.request({ method: httpMethod, url: httpUrl, timeout: 10000 });
       const elapsed = Date.now() - startTime;
       setHttpStatus('success');
       setHttpResult(

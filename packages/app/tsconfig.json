@@ -13,6 +13,7 @@
     "jsx": "react-jsx",
     "strict": true,
     "strictNullChecks": false,
+    "allowJs": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true,
