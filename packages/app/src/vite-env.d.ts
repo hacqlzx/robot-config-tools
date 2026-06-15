@@ -27,6 +27,7 @@ declare global {
         delete: (name: string) => Promise<string>;
         importFile: (projectName: string, sourcePath: string, fileName: string) => Promise<string>;
         listTree: (projectName: string, subDir: string) => Promise<TreeNode[]>;
+        writeFile: (projectName: string, subPath: string, data: ArrayBuffer) => Promise<string>;
       };
     };
   }

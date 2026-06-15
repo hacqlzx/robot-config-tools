@@ -47,6 +47,7 @@ export default function SpaceEdit() {
   const [clipMode, setClipMode] = useState(false);
   const [clipEntityName, setClipEntityName] = useState("");
   const entitiesRef = useRef<Map<string, pc.Entity>>(new Map());
+  const lasHeadersRef = useRef<Map<string, any>>(new Map());
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -344,6 +345,9 @@ export default function SpaceEdit() {
       const headerBuf = await readFileChunk(file, 0, 4096, filePath);
       const header = parseLasHeader(headerBuf);
 
+      // 保存原始 header 用于导出
+      lasHeadersRef.current.set(file.name, header);
+
       if (isLasCompressed(header.pointFormatId)) {
         await loadLazWasm(file, filePath, header);
       } else {
@@ -392,6 +396,8 @@ export default function SpaceEdit() {
       const header = parseLasHeader(headerBuf);
 
       const file = new File([], fileName);
+      lasHeadersRef.current.set(fileName, header);
+
       if (isLasCompressed(header.pointFormatId)) {
         await loadLazWasm(file, filePath, header);
       } else {
@@ -476,7 +482,9 @@ export default function SpaceEdit() {
             <ClipController
               app={appRef.current}
               entityName={clipEntityName}
+              lasHeader={lasHeadersRef.current.get(clipEntityName) || null}
               onClose={() => setClipMode(false)}
+              onComplete={() => setTreeKey((k) => k + 1)}
             />
           )}
         </div>

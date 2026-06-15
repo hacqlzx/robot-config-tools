@@ -193,6 +193,19 @@ ipcMain.handle('project:list-tree', async (_event, projectName: string, subDir: 
   return readDirTree(targetDir);
 });
 
+// 写入文件到项目目录
+ipcMain.handle('project:write-file', async (_event, projectName: string, subPath: string, data: ArrayBuffer) => {
+  ensureProjectRoot();
+  const filePath = path.join(PROJECT_ROOT, projectName, subPath);
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const buf = Buffer.from(data);
+  await fs.promises.writeFile(filePath, buf);
+  return filePath;
+});
+
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {

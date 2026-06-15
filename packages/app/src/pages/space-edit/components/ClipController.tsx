@@ -1,13 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Button, message } from "antd";
+import { Button, App, Spin } from "antd";
 import { CheckOutlined, CloseOutlined } from "@ant-design/icons";
 import * as pc from "playcanvas";
 import { pointcloudVert, pointcloudFrag } from "../../../playcanvas-core/shaders/pointcloud-shader";
 
+interface LasHeaderInfo { pointFormatId: number; versionMinor: number; scaleX: number; scaleY: number; scaleZ: number; offsetX: number; offsetY: number; offsetZ: number; }
+
 interface Props {
   app: pc.Application | null;
   entityName: string;
-  shaderSource: { vert: string; frag: string };
+  lasHeader: LasHeaderInfo | null;
   onClose: () => void;
   onComplete?: () => void;
 }
@@ -21,19 +23,20 @@ const FACE_NORMALS = [
   new pc.Vec3(0, 0, -1), new pc.Vec3(0, 0, 1),
 ];
 
-export default function ClipController({ app, entityName, onClose, onComplete }: Props) {
+export default function ClipController({ app, entityName, lasHeader, onClose, onComplete }: Props) {
+  const { message } = App.useApp();
   const entity = app?.root?.findByName(entityName) || null;
   const [bounds, setBounds] = useState<Bounds>({ minX: 0, maxX: 10, minY: 0, maxY: 10, minZ: 0, maxZ: 10 });
+  const [saving, setSaving] = useState(false);
   const boxRootRef = useRef<pc.Entity | null>(null);
   const originCenterRef = useRef<{ cx: number; cy: number; cz: number }>({ cx: 0, cy: 0, cz: 0 });
   const dragRef = useRef<{ face: FaceIndex; startBounds: Bounds; sx: number; sy: number } | null>(null);
   const hoverRef = useRef<FaceIndex | null>(null);
   const originalMeshRef = useRef<{ mi: pc.MeshInstance; vb: pc.VertexBuffer } | null>(null);
   const clipMatRef = useRef<pc.ShaderMaterial | null>(null);
-
   const getWorldPos = () => entity?.getPosition() || new pc.Vec3();
 
-  // 初始化：只读取 bounds
+  // Init: save original mesh + create GPU clip material
   useEffect(() => {
     if (!entity || !app) return;
     const render = entity.render;
@@ -43,12 +46,10 @@ export default function ClipController({ app, entityName, onClose, onComplete }:
     const vb = mesh.vertexBuffer;
     if (!vb) return;
 
-    // 保存原始引用
     if (!originalMeshRef.current) {
       originalMeshRef.current = { mi, vb };
     }
 
-    // 读 bounds
     const data = vb.lock() as ArrayBuffer;
     const f32 = new Float32Array(data);
     const count = vb.getNumVertices();
@@ -66,7 +67,6 @@ export default function ClipController({ app, entityName, onClose, onComplete }:
     setBounds({ minX: mnX, maxX: mxX, minY: mnY, maxY: mxY, minZ: mnZ, maxZ: mxZ });
     originCenterRef.current = { cx: (mnX + mxX) / 2, cy: (mnY + mxY) / 2, cz: (mnZ + mxZ) / 2 };
 
-    // 创建 GPU 裁切材质
     const extent = Math.max(mxX - mnX, mxY - mnY, mxZ - mnZ);
     const pSize = extent > 0 ? extent / Math.cbrt(count) * 0.8 : 1;
 
@@ -82,9 +82,7 @@ export default function ClipController({ app, entityName, onClose, onComplete }:
       void main(void) {
         vec3 pos = vertex_position;
         bool inside = all(greaterThanEqual(pos, uClipMin)) && all(lessThanEqual(pos, uClipMax));
-        if (!inside) {
-          pos = vec3(0.0, -999999.0, 0.0);
-        }
+        if (!inside) { pos = vec3(0.0, -999999.0, 0.0); }
         gl_Position = matrix_viewProjection * matrix_model * vec4(pos, 1.0);
         gl_PointSize = inside ? uPointSize : 0.0;
         vColor = inside ? vertex_texCoord0 : vec4(0.0);
@@ -111,24 +109,23 @@ export default function ClipController({ app, entityName, onClose, onComplete }:
     clipMatRef.current = mat;
   }, [entity, app]);
 
-  // bounds 变化 → 更新裁剪 uniform
+  // bounds changed → update clip uniforms
   useEffect(() => {
     const mat = clipMatRef.current;
     if (!mat) return;
-    const b = bounds;
-    mat.setParameter("uClipMin", [b.minX, b.minY, b.minZ]);
-    mat.setParameter("uClipMax", [b.maxX, b.maxY, b.maxZ]);
+    mat.setParameter("uClipMin", [bounds.minX, bounds.minY, bounds.minZ]);
+    mat.setParameter("uClipMax", [bounds.maxX, bounds.maxY, bounds.maxZ]);
     mat.update();
   }, [bounds]);
 
-  // 创建/重建包围盒
+  // rebuild bounding box
   useEffect(() => {
     if (!app) return;
     rebuildBox();
     return () => { boxRootRef.current?.destroy(); boxRootRef.current = null; };
   }, [bounds, app]);
 
-  // 鼠标事件
+  // mouse events (capture phase for priority)
   useEffect(() => {
     if (!app) return;
     const canvas = app.graphicsDevice.canvas;
@@ -142,8 +139,7 @@ export default function ClipController({ app, entityName, onClose, onComplete }:
       canvas.removeEventListener("mousedown", md, true);
       window.removeEventListener("mousemove", mm, true);
       window.removeEventListener("mouseup", mu, true);
-      boxRootRef.current?.destroy();
-      boxRootRef.current = null;
+      boxRootRef.current?.destroy(); boxRootRef.current = null;
       (window as any).__clipDragging = false;
     };
   }, [app, bounds]);
@@ -162,7 +158,7 @@ export default function ClipController({ app, entityName, onClose, onComplete }:
     const sx = b.maxX - b.minX, sy = b.maxY - b.minY, sz = b.maxZ - b.minZ;
     const ncx = (b.minX + b.maxX) / 2, ncy = (b.minY + b.maxY) / 2, ncz = (b.minZ + b.maxZ) / 2;
 
-    // 绿色线框：12条边（8个角点连成12条线）
+    // Green wireframe: 12 edges
     const cx2 = (b.minX + b.maxX) / 2, cy2 = (b.minY + b.maxY) / 2, cz2 = (b.minZ + b.maxZ) / 2;
     const hx = sx / 2, hy = sy / 2, hz = sz / 2;
     const corners = [
@@ -185,26 +181,18 @@ export default function ClipController({ app, entityName, onClose, onComplete }:
       const e = new pc.Entity("edge");
       e.addComponent("render", { type: "box" });
       const m = e.render!.material as pc.StandardMaterial;
-      m.diffuse = edgeColor;
-      m.emissive = edgeColor;
-      m.useLighting = false;
-      m.update();
+      m.diffuse = edgeColor; m.emissive = edgeColor; m.useLighting = false; m.update();
       e.setLocalPosition(mid);
       e.setLocalScale(0.015, len, 0.015);
-      // 旋转薄柱体沿边方向
-      if (Math.abs(dir.x) > 0.9) {
-        e.setEulerAngles(0, 0, dir.x > 0 ? -90 : 90);
-      } else if (Math.abs(dir.z) > 0.9) {
-        e.setEulerAngles(dir.z > 0 ? 90 : -90, 0, 0);
-      }
-      // |dir.y| > 0.9 时默认 Y 轴，无需旋转
+      if (Math.abs(dir.x) > 0.9) { e.setEulerAngles(0, 0, dir.x > 0 ? -90 : 90); }
+      else if (Math.abs(dir.z) > 0.9) { e.setEulerAngles(dir.z > 0 ? 90 : -90, 0, 0); }
       root.addChild(e);
     });
 
-    // 6个箭头把手（红±X、绿±Y、蓝±Z）
+    // 6 arrow handles (red X, green Y, blue Z)
     const hLen = Math.max(sx, sy, sz) * 0.15;
     const arrowColors = { x: new pc.Color(1, 0.2, 0.2), y: new pc.Color(0.2, 1, 0.2), z: new pc.Color(0.2, 0.5, 1) };
-    const faceCenters: { pos: pc.Vec3; dir: pc.Vec3; color: pc.Color }[] = [
+    const faces: { pos: pc.Vec3; dir: pc.Vec3; color: pc.Color }[] = [
       { pos: new pc.Vec3(b.minX - oc.cx, ncy - oc.cy, ncz - oc.cz), dir: FACE_NORMALS[0], color: arrowColors.x },
       { pos: new pc.Vec3(b.maxX - oc.cx, ncy - oc.cy, ncz - oc.cz), dir: FACE_NORMALS[1], color: arrowColors.x },
       { pos: new pc.Vec3(ncx - oc.cx, b.minY - oc.cy, ncz - oc.cz), dir: FACE_NORMALS[2], color: arrowColors.y },
@@ -212,40 +200,22 @@ export default function ClipController({ app, entityName, onClose, onComplete }:
       { pos: new pc.Vec3(ncx - oc.cx, ncy - oc.cy, b.minZ - oc.cz), dir: FACE_NORMALS[4], color: arrowColors.z },
       { pos: new pc.Vec3(ncx - oc.cx, ncy - oc.cy, b.maxZ - oc.cz), dir: FACE_NORMALS[5], color: arrowColors.z },
     ];
-
-    faceCenters.forEach((fc) => {
+    faces.forEach((fc) => {
       const h = new pc.Entity("arrow");
-      const makeMat = () => {
-        const mat = new pc.StandardMaterial();
-        mat.diffuse = fc.color;
-        mat.emissive = fc.color;
-        mat.useLighting = false;
-        mat.update();
-        return mat;
-      };
-
+      const mk = () => { const m = new pc.StandardMaterial(); m.diffuse = fc.color; m.emissive = fc.color; m.useLighting = false; m.update(); return m; };
       const shaft = new pc.Entity("shaft");
-      shaft.addComponent("render", { type: "cylinder", material: makeMat() });
-      shaft.setLocalScale(0.18, hLen, 0.18);
-      shaft.setLocalPosition(0, hLen / 2, 0);
-      h.addChild(shaft);
-
+      shaft.addComponent("render", { type: "cylinder", material: mk() });
+      shaft.setLocalScale(0.18, hLen, 0.18); shaft.setLocalPosition(0, hLen / 2, 0); h.addChild(shaft);
       const cone = new pc.Entity("cone");
-      cone.addComponent("render", { type: "cone", material: makeMat() });
-      cone.setLocalScale(0.35, 0.6, 0.35);
-      cone.setLocalPosition(0, hLen, 0);
-      h.addChild(cone);
-
-      // 旋转到对应面方向
+      cone.addComponent("render", { type: "cone", material: mk() });
+      cone.setLocalScale(0.35, 0.6, 0.35); cone.setLocalPosition(0, hLen, 0); h.addChild(cone);
       const d = fc.dir;
       if (d.x === 1) h.setEulerAngles(0, 0, -90);
       else if (d.x === -1) h.setEulerAngles(0, 0, 90);
       else if (d.y === -1) h.setEulerAngles(0, 0, 180);
       else if (d.z === 1) h.setEulerAngles(90, 0, 0);
       else if (d.z === -1) h.setEulerAngles(-90, 0, 0);
-
-      h.setLocalPosition(fc.pos);
-      root.addChild(h);
+      h.setLocalPosition(fc.pos); root.addChild(h);
     });
   };
 
@@ -259,8 +229,7 @@ export default function ClipController({ app, entityName, onClose, onComplete }:
     const wp = new pc.Vec3();
     camComp.screenToWorld(sx - rect.left, sy - rect.top, 0.5, wp);
     const ray = new pc.Ray();
-    ray.origin.copy(wp);
-    ray.direction.copy(wp).sub(camPos).normalize();
+    ray.origin.copy(wp); ray.direction.copy(wp).sub(camPos).normalize();
     return ray;
   };
 
@@ -271,13 +240,13 @@ export default function ClipController({ app, entityName, onClose, onComplete }:
     const cx = wp.x + (b.minX + b.maxX) / 2, cy = wp.y + (b.minY + b.maxY) / 2, cz = wp.z + (b.minZ + b.maxZ) / 2;
     const hLen = Math.max(b.maxX - b.minX, b.maxY - b.minY, b.maxZ - b.minZ) * 0.15;
     const r = hLen * 0.5;
-    const tips: { face: FaceIndex; pos: pc.Vec3 }[] = [
-      { face: 0, pos: new pc.Vec3(wp.x + b.minX, cy, cz).add(FACE_NORMALS[0].clone().mulScalar(hLen * 0.8)) },
-      { face: 1, pos: new pc.Vec3(wp.x + b.maxX, cy, cz).add(FACE_NORMALS[1].clone().mulScalar(hLen * 0.8)) },
-      { face: 2, pos: new pc.Vec3(cx, wp.y + b.minY, cz).add(FACE_NORMALS[2].clone().mulScalar(hLen * 0.8)) },
-      { face: 3, pos: new pc.Vec3(cx, wp.y + b.maxY, cz).add(FACE_NORMALS[3].clone().mulScalar(hLen * 0.8)) },
-      { face: 4, pos: new pc.Vec3(cx, cy, wp.z + b.minZ).add(FACE_NORMALS[4].clone().mulScalar(hLen * 0.8)) },
-      { face: 5, pos: new pc.Vec3(cx, cy, wp.z + b.maxZ).add(FACE_NORMALS[5].clone().mulScalar(hLen * 0.8)) },
+    const tips = [
+      { face: 0 as FaceIndex, pos: new pc.Vec3(wp.x + b.minX, cy, cz).add(FACE_NORMALS[0].clone().mulScalar(hLen * 0.8)) },
+      { face: 1 as FaceIndex, pos: new pc.Vec3(wp.x + b.maxX, cy, cz).add(FACE_NORMALS[1].clone().mulScalar(hLen * 0.8)) },
+      { face: 2 as FaceIndex, pos: new pc.Vec3(cx, wp.y + b.minY, cz).add(FACE_NORMALS[2].clone().mulScalar(hLen * 0.8)) },
+      { face: 3 as FaceIndex, pos: new pc.Vec3(cx, wp.y + b.maxY, cz).add(FACE_NORMALS[3].clone().mulScalar(hLen * 0.8)) },
+      { face: 4 as FaceIndex, pos: new pc.Vec3(cx, cy, wp.z + b.minZ).add(FACE_NORMALS[4].clone().mulScalar(hLen * 0.8)) },
+      { face: 5 as FaceIndex, pos: new pc.Vec3(cx, cy, wp.z + b.maxZ).add(FACE_NORMALS[5].clone().mulScalar(hLen * 0.8)) },
     ];
     for (const t of tips) {
       const tr = t.pos.clone().sub(ray.origin);
@@ -331,21 +300,102 @@ export default function ClipController({ app, entityName, onClose, onComplete }:
 
   const onMouseUp = () => { dragRef.current = null; (window as any).__clipDragging = false; document.body.style.cursor = ""; };
 
-  const handleConfirm = useCallback(() => {
+  const saveClippedToDisk = useCallback(async (pts: number[], clrs: number[], count: number) => {
+    if (!window.electronAPI) return;
+    const selectedProject = localStorage.getItem("selectedProject");
+    if (!selectedProject) return;
+    const baseName = entityName.replace(/\.(las|laz)$/i, "");
+
+    let mnX = Infinity, mxX = -Infinity, mnY = Infinity, mxY = -Infinity, mnZ = Infinity, mxZ = -Infinity;
+    for (let i = 0; i < count; i++) {
+      const x = pts[i * 3], py = pts[i * 3 + 1], pz = pts[i * 3 + 2];
+      // PlayCanvas Y=up → LAS Z=up: 交换 Y 和 Z
+      const lasY = pz, lasZ = py;
+      if (x < mnX) mnX = x; if (x > mxX) mxX = x;
+      if (lasY < mnY) mnY = lasY; if (lasY > mxY) mxY = lasY;
+      if (lasZ < mnZ) mnZ = lasZ; if (lasZ > mxZ) mxZ = lasZ;
+    }
+    const scale = [0.001, 0.001, 0.001];
+    const lasOff = [mnX, mnY, mnZ];
+
+    const formatId = 2;
+    const pointLen = 26;
+    const vMinor = lasHeader?.versionMinor ?? 2;
+
+    const totalSize = 227 + count * pointLen;
+    const out = new Uint8Array(totalSize);
+
+    const hv = new DataView(out.buffer, 0, 227);
+    const enc = new TextEncoder();
+    const wStr = (off: number, str: string, len: number) => {
+      const b = enc.encode(str);
+      for (let i = 0; i < len; i++) hv.setUint8(off + i, i < b.length ? b[i] : 0);
+    };
+    wStr(0, "LASF", 4);
+    hv.setUint16(6, 0, true);
+    hv.setUint8(24, 1);
+    hv.setUint8(25, vMinor);
+    wStr(26, "", 32);
+    wStr(58, "robotConfig", 32);
+    hv.setUint16(90, 0, true);
+    hv.setUint16(92, 2025, true);
+    hv.setUint16(94, 227, true);
+    hv.setUint32(96, 227, true);
+    hv.setUint32(100, 0, true);
+    hv.setUint8(104, formatId);
+    hv.setUint16(105, pointLen, true);
+    hv.setUint32(107, count, true);
+    hv.setFloat64(131, scale[0], true);
+    hv.setFloat64(139, scale[1], true);
+    hv.setFloat64(147, scale[2], true);
+    hv.setFloat64(155, lasOff[0], true);
+    hv.setFloat64(163, lasOff[1], true);
+    hv.setFloat64(171, lasOff[2], true);
+    hv.setFloat64(179, mxX, true); hv.setFloat64(187, mnX, true);
+    hv.setFloat64(195, mxY, true); hv.setFloat64(203, mnY, true);
+    hv.setFloat64(211, mxZ, true); hv.setFloat64(219, mnZ, true);
+
+    let off = 227;
+    const i32 = new Int32Array(new ArrayBuffer(4));
+    const u8v = new Uint8Array(i32.buffer);
+    for (let i = 0; i < count; i++) {
+      const x = pts[i * 3], py = pts[i * 3 + 1], pz = pts[i * 3 + 2];
+      const lasY = pz, lasZ = py; // PlayCanvas Y=up → LAS Z=up
+      i32[0] = Math.round((x - lasOff[0]) / scale[0]); out.set(u8v, off); off += 4;
+      i32[0] = Math.round((lasY - lasOff[1]) / scale[1]); out.set(u8v, off); off += 4;
+      i32[0] = Math.round((lasZ - lasOff[2]) / scale[2]); out.set(u8v, off); off += 4;
+      out[off++] = 128; out[off++] = 0;
+      out[off++] = (1 & 0x07) | ((1 & 0x07) << 3);
+      out[off++] = 0; out[off++] = 0; out[off++] = 0;
+      out[off++] = 0; out[off++] = 0;
+      // RGB (uint16, 各 2 字节)
+      const r = clrs[i * 4], g = clrs[i * 4 + 1], b = clrs[i * 4 + 2];
+      out[off++] = r; out[off++] = r;
+      out[off++] = g; out[off++] = g;
+      out[off++] = b; out[off++] = b;
+    }
+
+    const dirFiles = await window.electronAPI.project.listTree(selectedProject, `地图/${baseName}`);
+    const existing = dirFiles.filter((f: any) => !f.isDir && /_\d+\.las$/.test(f.name));
+    let idx = 1;
+    while (existing.some((f: any) => f.name === `${baseName}_${idx}.las`)) idx++;
+    const newName = `${baseName}_${idx}.las`;
+    const subPath = `地图/${baseName}/${newName}`;
+    await window.electronAPI.project.writeFile(selectedProject, subPath, out.buffer.slice(0, off));
+  }, [entityName, lasHeader]);
+
+  const handleConfirm = useCallback(async () => {
     if (!entity || !app || !originalMeshRef.current) return;
     const og = originalMeshRef.current;
     const render = entity.render;
     if (!render?.meshInstances?.[0]) return;
-
     const vb = og.vb;
     const data = vb.lock() as ArrayBuffer;
     const f32 = new Float32Array(data);
     const u8 = new Uint8Array(data);
     const count = vb.getNumVertices();
     const b = bounds;
-
-    const pts: number[] = [];
-    const clrs: number[] = [];
+    const pts: number[] = [], clrs: number[] = [];
     for (let i = 0; i < count; i++) {
       const base = i * 4;
       const x = f32[base], y = f32[base + 1], z = f32[base + 2];
@@ -366,8 +416,7 @@ export default function ClipController({ app, entityName, onClose, onComplete }:
     ]);
     const newVb = new pc.VertexBuffer(gd, vf, newCount, { usage: pc.BUFFER_STATIC });
     const nd = newVb.lock() as ArrayBuffer;
-    const nf = new Float32Array(nd);
-    const nu = new Uint8Array(nd);
+    const nf = new Float32Array(nd), nu = new Uint8Array(nd);
     for (let i = 0; i < newCount; i++) {
       const bi = i * 4;
       nf[bi] = pts[i * 3]; nf[bi + 1] = pts[i * 3 + 1]; nf[bi + 2] = pts[i * 3 + 2];
@@ -375,30 +424,22 @@ export default function ClipController({ app, entityName, onClose, onComplete }:
       nu[bo] = clrs[i * 4]; nu[bo + 1] = clrs[i * 4 + 1]; nu[bo + 2] = clrs[i * 4 + 2]; nu[bo + 3] = clrs[i * 4 + 3];
     }
     newVb.unlock();
-
-    const newMesh = new pc.Mesh(gd);
-    newMesh.vertexBuffer = newVb;
+    const newMesh = new pc.Mesh(gd); newMesh.vertexBuffer = newVb;
     newMesh.primitive[0] = { baseVertex: 0, type: pc.PRIMITIVE_POINTS, base: 0, count: newCount };
-
-    const newMat = new pc.ShaderMaterial({
-      uniqueName: `clipped-${Date.now()}`,
-      vertexGLSL: pointcloudVert,
-      fragmentGLSL: pointcloudFrag,
-    });
-    newMat.blendType = pc.BLEND_NORMAL;
-    newMat.depthWrite = true;
-    newMat.depthTest = true;
-    newMat.cull = pc.CULLFACE_NONE;
-    newMat.update();
-
-    const newMi = new pc.MeshInstance(newMesh, newMat, null);
-    newMi.cull = false;
+    const newMat = new pc.ShaderMaterial({ uniqueName: `clipped-${Date.now()}`, vertexGLSL: pointcloudVert, fragmentGLSL: pointcloudFrag });
+    newMat.blendType = pc.BLEND_NORMAL; newMat.depthWrite = true; newMat.depthTest = true; newMat.cull = pc.CULLFACE_NONE; newMat.update();
+    const newMi = new pc.MeshInstance(newMesh, newMat, null); newMi.cull = false;
     render.meshInstances = [newMi];
+
+    setSaving(true);
+    await new Promise((r) => setTimeout(r, 50));
+    try { await saveClippedToDisk(pts, clrs, newCount); } catch (e: any) { console.error("保存失败:", e); }
+    setSaving(false);
 
     originalMeshRef.current = null;
     onClose(); onComplete?.();
     message.success(`裁切完成，保留 ${newCount.toLocaleString()} 个点`);
-  }, [entity, app, bounds, onClose, onComplete]);
+  }, [entity, app, bounds, onClose, onComplete, saveClippedToDisk]);
 
   const handleCancel = useCallback(() => {
     if (originalMeshRef.current && entity?.render) {
@@ -411,9 +452,13 @@ export default function ClipController({ app, entityName, onClose, onComplete }:
   const b = bounds;
   return (
     <div style={{ position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)", display: "flex", alignItems: "center", gap: 12, background: "#fff", borderRadius: 8, padding: "8px 16px", boxShadow: "0 2px 12px rgba(0,0,0,0.15)", zIndex: 20, fontSize: 12 }}>
-      <span style={{ color: "#666" }}>X: {b.minX.toFixed(1)}~{b.maxX.toFixed(1)} &nbsp; Y: {b.minY.toFixed(1)}~{b.maxY.toFixed(1)} &nbsp; Z: {b.minZ.toFixed(1)}~{b.maxZ.toFixed(1)}</span>
-      <Button size="small" icon={<CheckOutlined />} type="primary" onClick={handleConfirm}>确认</Button>
-      <Button size="small" icon={<CloseOutlined />} onClick={handleCancel}>取消</Button>
+      <span style={{ color: "#666" }}>X: {b.minX.toFixed(1)}~{b.maxX.toFixed(1)} Y: {b.minY.toFixed(1)}~{b.maxY.toFixed(1)} Z: {b.minZ.toFixed(1)}~{b.maxZ.toFixed(1)}</span>
+      {saving ? <Spin size="small" /> : (
+        <>
+          <Button size="small" icon={<CheckOutlined />} type="primary" onClick={handleConfirm}>确认</Button>
+          <Button size="small" icon={<CloseOutlined />} onClick={handleCancel}>取消</Button>
+        </>
+      )}
     </div>
   );
 }
