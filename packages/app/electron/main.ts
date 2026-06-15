@@ -152,6 +152,47 @@ ipcMain.handle('project:delete', async (_event, name: string) => {
   return name;
 });
 
+// 导入模型文件到项目：复制到 project/{projectName}/地图/{fileName}/{fileName}.las
+ipcMain.handle('project:import-file', async (_event, projectName: string, sourcePath: string, fileName: string) => {
+  ensureProjectRoot();
+  const mapDir = path.join(PROJECT_ROOT, projectName, '地图');
+  const targetDir = path.join(mapDir, fileName);
+  const targetPath = path.join(targetDir, `${fileName}.las`);
+  if (!fs.existsSync(mapDir)) {
+    fs.mkdirSync(mapDir, { recursive: true });
+  }
+  if (!fs.existsSync(targetDir)) {
+    fs.mkdirSync(targetDir, { recursive: true });
+  }
+  await fs.promises.copyFile(sourcePath, targetPath);
+  return targetPath;
+});
+
+// 列出项目目录下的文件树
+interface TreeNode {
+  name: string;
+  path: string;
+  isDir: boolean;
+  children?: TreeNode[];
+}
+
+function readDirTree(dirPath: string): TreeNode[] {
+  if (!fs.existsSync(dirPath)) return [];
+  return fs.readdirSync(dirPath, { withFileTypes: true }).map((entry) => {
+    const fullPath = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      return { name: entry.name, path: fullPath, isDir: true, children: readDirTree(fullPath) };
+    }
+    return { name: entry.name, path: fullPath, isDir: false };
+  });
+}
+
+ipcMain.handle('project:list-tree', async (_event, projectName: string, subDir: string) => {
+  ensureProjectRoot();
+  const targetDir = path.join(PROJECT_ROOT, projectName, subDir);
+  return readDirTree(targetDir);
+});
+
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {

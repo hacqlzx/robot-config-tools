@@ -3,6 +3,13 @@
 declare global {
   const __ELECTRON__: boolean;
 
+  interface TreeNode {
+    name: string;
+    path: string;
+    isDir: boolean;
+    children?: TreeNode[];
+  }
+
   interface Window {
     electronAPI?: {
       platform: string;
@@ -18,6 +25,8 @@ declare global {
         create: (name: string) => Promise<string>;
         rename: (oldName: string, newName: string) => Promise<string>;
         delete: (name: string) => Promise<string>;
+        importFile: (projectName: string, sourcePath: string, fileName: string) => Promise<string>;
+        listTree: (projectName: string, subDir: string) => Promise<TreeNode[]>;
       };
     };
   }

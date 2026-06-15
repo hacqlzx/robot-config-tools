@@ -1,24 +1,30 @@
-import { createBrowserRouter, Navigate } from 'react-router-dom';
-import AppLayout from '../App';
-import SpaceEdit from '../pages/space-edit';
-import ImageEdit from '../pages/image-edit';
-import ScreenVerify from '../pages/screen-verify';
-import DeviceVerify from '../pages/device-verify';
-import Config from '../pages/config';
-import ConnectionTest from '../pages/connection-test';
+import { lazy, Suspense } from "react";
+import { createBrowserRouter, Navigate } from "react-router-dom";
+import AppLayout from "../App";
+
+const SpaceEdit = lazy(() => import("../pages/space-edit"));
+const ImageEdit = lazy(() => import("../pages/image-edit"));
+const ScreenVerify = lazy(() => import("../pages/screen-verify"));
+const DeviceVerify = lazy(() => import("../pages/device-verify"));
+const Config = lazy(() => import("../pages/config"));
+const ConnectionTest = lazy(() => import("../pages/connection-test"));
+
+function LazyPage({ children }: { children: React.ReactNode }) {
+  return <Suspense fallback={<div style={{ padding: 24, textAlign: "center" }}>加载中...</div>}>{children}</Suspense>;
+}
 
 const router = createBrowserRouter([
   {
-    path: '/',
+    path: "/",
     element: <AppLayout />,
     children: [
       { index: true, element: <Navigate to="/space-edit" replace /> },
-      { path: 'space-edit', element: <SpaceEdit /> },
-      { path: 'image-edit', element: <ImageEdit /> },
-      { path: 'screen-verify', element: <ScreenVerify /> },
-      { path: 'device-verify', element: <DeviceVerify /> },
-      { path: 'config', element: <Config /> },
-      { path: 'connection-test', element: <ConnectionTest /> },
+      { path: "space-edit", element: <LazyPage><SpaceEdit /></LazyPage> },
+      { path: "image-edit", element: <LazyPage><ImageEdit /></LazyPage> },
+      { path: "screen-verify", element: <LazyPage><ScreenVerify /></LazyPage> },
+      { path: "device-verify", element: <LazyPage><DeviceVerify /></LazyPage> },
+      { path: "config", element: <LazyPage><Config /></LazyPage> },
+      { path: "connection-test", element: <LazyPage><ConnectionTest /></LazyPage> },
     ],
   },
 ]);

@@ -32,6 +32,16 @@ export default defineConfig(({ mode }) => {
     build: {
       target: 'es2022',
       sourcemap: true,
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            'playcanvas': ['playcanvas'],
+            'antd': ['antd', '@ant-design/icons'],
+            'splat': ['@playcanvas/splat-transform'],
+            'mqtt': ['mqtt'],
+          },
+        },
+      },
     },
 
     define: {

@@ -145,7 +145,7 @@ export class SimpleOrbitCamera {
   }
 
   // ─── 相机更新 ───
-  private updateCamera() {
+  updateCamera() {
     const e = this.elevation * pc.math.DEG_TO_RAD;
     const a = this.azimuth * pc.math.DEG_TO_RAD;
     const x = this.lookAt.x + this.distance * Math.cos(e) * Math.sin(a);
@@ -154,6 +154,23 @@ export class SimpleOrbitCamera {
     this.pivot.setLocalPosition(this.lookAt);
     this.camera.setLocalPosition(x - this.lookAt.x, y - this.lookAt.y, z - this.lookAt.z);
     this.camera.lookAt(this.lookAt);
+  }
+
+  /** 设置相机朝向 */
+  setViewDirection(direction: "前" | "后" | "左" | "右" | "上" | "下") {
+    const views: Record<string, { azimuth: number; elevation: number }> = {
+      "前": { azimuth: 0, elevation: 0 },
+      "后": { azimuth: 180, elevation: 0 },
+      "左": { azimuth: 90, elevation: 0 },
+      "右": { azimuth: -90, elevation: 0 },
+      "上": { azimuth: 0, elevation: 89 },
+      "下": { azimuth: 0, elevation: -89 },
+    };
+    const v = views[direction];
+    if (!v) return;
+    this.azimuth = v.azimuth;
+    this.elevation = v.elevation;
+    this.updateCamera();
   }
 
   private getMousePos(e: MouseEvent | Touch) {
@@ -165,6 +182,7 @@ export class SimpleOrbitCamera {
   }
 
   private onMouseDown = (e: MouseEvent) => {
+    if ((window as any).__clipDragging) return;
     this.dragging = true;
     this.button = e.button;
     const pos = this.getMousePos(e);
@@ -173,6 +191,7 @@ export class SimpleOrbitCamera {
   };
 
   private onMouseMove = (e: MouseEvent) => {
+    if ((window as any).__clipDragging) return;
     if (!this.dragging) return;
     const pos = this.getMousePos(e);
     const dx = pos.x - this.lastX;

@@ -14,5 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     create: (name) => ipcRenderer.invoke('project:create', name),
     rename: (oldName, newName) => ipcRenderer.invoke('project:rename', oldName, newName),
     delete: (name) => ipcRenderer.invoke('project:delete', name),
+    importFile: (projectName, sourcePath, fileName) => ipcRenderer.invoke('project:import-file', projectName, sourcePath, fileName),
+    listTree: (projectName, subDir) => ipcRenderer.invoke('project:list-tree', projectName, subDir),
   },
 });

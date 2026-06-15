@@ -1,12 +1,17 @@
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState, useCallback } from "react";
 import * as pc from "playcanvas";
+import { message } from "antd";
 import { SimpleOrbitCamera } from "../../playcanvas-core/simple-camera";
 import { BlobReadFileSystem } from "../../playcanvas-core/io/read/file-systems";
 import { loadGSplatData } from "../../playcanvas-core/io";
 import { pointcloudVert, pointcloudFrag } from "../../playcanvas-core/shaders/pointcloud-shader";
 import { parseLasHeader, loadLazPerf, getWasmUrl, LasHeader } from "../../playcanvas-core/io/read/las-reader";
+import Toolbar from "./components/Toolbar";
+import ViewCube from "./components/ViewCube";
+import SidePanel from "./components/SidePanel";
+import ClipController from "./components/ClipController";
 
-/** 检查 LAS 是否 LAZ 压缩（格式 ID 高位为 1） */
+/** 检查 LAS 是否 LAZ 压缩 */
 function isLasCompressed(formatId: number): boolean {
   return formatId >= 128;
 }
@@ -18,15 +23,12 @@ function readPointXYZ(view: DataView, offset: number): [number, number, number] 
 
 /** 根据点格式获取 RGB 在点记录中的字节偏移 */
 function getRgbOffset(formatId: number): number {
-  // LAS 1.4 (format >= 6): xyz(12)+intensity(2)+flags(2)+classification(1)+scanAngle(2)+userData(1)+pointSourceId(2)+gpsTime(8) = 30
   if (formatId >= 6) return 30;
-  // LAS 1.0-1.3 format 3/5: 多了 GPS 时间 (8 字节)，RGB 在偏移 28
   if (formatId === 3 || formatId === 5) return 28;
-  // LAS 1.0-1.3 format 2: 无 GPS 时间，RGB 在偏移 20
   return 20;
 }
 
-/** 从点记录原始字节中读取 RGB（uint16 高位 → uint8） */
+/** 从点记录原始字节中读取 RGB */
 function readPointRGB(view: DataView, offset: number, formatId: number, hasRgb: boolean): [number, number, number] {
   if (!hasRgb) return [128, 128, 128];
   const rgbOff = getRgbOffset(formatId);
@@ -36,9 +38,15 @@ function readPointRGB(view: DataView, offset: number, formatId: number, hasRgb: 
 export default function SpaceEdit() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [loading, setLoading] = useState(false);
+  const orbitRef = useRef<SimpleOrbitCamera | null>(null);
   const appRef = useRef<pc.Application | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [loadedFiles, setLoadedFiles] = useState<Set<string>>(new Set());
+  const [hiddenFiles, setHiddenFiles] = useState<Set<string>>(new Set());
+  const [treeKey, setTreeKey] = useState(0);
+  const [clipMode, setClipMode] = useState(false);
+  const [clipEntityName, setClipEntityName] = useState("");
+  const entitiesRef = useRef<Map<string, pc.Entity>>(new Map());
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -70,7 +78,6 @@ export default function SpaceEdit() {
       },
     });
 
-    // 自适应分辨率
     let rafId: number;
     const doResize = () => {
       if (rafId) cancelAnimationFrame(rafId);
@@ -104,6 +111,7 @@ export default function SpaceEdit() {
     app.root.addChild(camera);
 
     const orbit = new SimpleOrbitCamera(app, camera);
+    orbitRef.current = orbit;
     app.start();
     appRef.current = app;
 
@@ -116,10 +124,19 @@ export default function SpaceEdit() {
     };
   }, []);
 
-  /**
-   * 读取文件分块：优先走 Electron IPC（Node.js fs，无 2GB 限制），
-   * 降级为浏览器 Blob.slice()（有 ArrayBuffer 限制但可按块读取）
-   */
+  const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" | "上" | "下") => {
+    orbitRef.current?.setViewDirection(direction);
+  }, []);
+
+  /** 将相机焦点移到指定位置 */
+  const focusOnModel = useCallback((centerX: number, centerY: number, centerZ: number, extent: number) => {
+    const orbit = orbitRef.current;
+    if (!orbit) return;
+    orbit.lookAt.set(centerX, centerY, centerZ);
+    orbit.distance = extent * 1.5;
+    orbit.updateCamera();
+  }, []);
+
   const readFileChunk = async (file: File, offset: number, length: number, filePath: string | undefined): Promise<ArrayBuffer> => {
     if (filePath && window.electronAPI?.readFileChunk) {
       return window.electronAPI.readFileChunk(filePath, offset, length);
@@ -127,17 +144,12 @@ export default function SpaceEdit() {
     return file.slice(offset, offset + length).arrayBuffer();
   };
 
-  /** 未压缩 LAS：分块读取原始字节 + 直接解析 int32 坐标 → GPU，零 WASM */
-  const loadLasStreaming = async (
-    file: File,
-    filePath: string | undefined,
-    header: LasHeader
-  ) => {
+  const loadLasStreaming = async (file: File, filePath: string | undefined, header: LasHeader) => {
     const app = appRef.current!;
     const gd = app.graphicsDevice;
     const count = header.pointCount;
     const { scaleX, scaleY, scaleZ, offsetX, offsetY, offsetZ, minX, maxX, minY, maxY, minZ, maxZ, pointFormatId, pointRecordLength, pointDataOffset } = header;
-    const formatId = pointFormatId & 0x7F; // 去除压缩标志位
+    const formatId = pointFormatId & 0x7F;
     const hasRgb = [2, 3, 5, 7, 8, 10].includes(formatId);
 
     const cx = (minX + maxX) / 2;
@@ -167,8 +179,8 @@ export default function SpaceEdit() {
     const f32 = new Float32Array(vbLock);
     const u8 = new Uint8Array(vbLock);
 
-    const FILE_CHUNK_POINTS = 500000;  // 每次文件 IO 读取 50 万个点的原始字节
-    const GPU_CHUNK = 200000;          // GPU 写入分批复用主线程
+    const FILE_CHUNK_POINTS = 500000;
+    const GPU_CHUNK = 200000;
     let globalIdx = 0;
 
     const totalBytes = count * pointRecordLength;
@@ -178,7 +190,6 @@ export default function SpaceEdit() {
       const remaining = count - globalIdx;
       const pointsInChunk = Math.min(FILE_CHUNK_POINTS, remaining);
       const readSize = pointsInChunk * pointRecordLength;
-
       const chunkBuf = await readFileChunk(file, fileOff, readSize, filePath);
       const view = new DataView(chunkBuf);
 
@@ -202,12 +213,10 @@ export default function SpaceEdit() {
         }
       }
       globalIdx += pointsInChunk;
-      console.log(`LAS 流式: ${Math.round(globalIdx / count * 100)}%`);
       await new Promise((r) => setTimeout(r, 0));
     }
 
     vb.unlock();
-
     const mesh = new pc.Mesh(gd);
     mesh.vertexBuffer = vb;
     mesh.primitive[0] = { baseVertex: 0, type: pc.PRIMITIVE_POINTS, base: 0, count };
@@ -218,19 +227,14 @@ export default function SpaceEdit() {
     entity.addComponent("render", { meshInstances: [mi] });
     entity.setLocalPosition(cx, cz, cy);
     app.root.addChild(entity);
-
-    console.log(`LAS 流式渲染就绪: ${count.toLocaleString()} 个点`);
+    entitiesRef.current.set(file.name, entity);
+    focusOnModel(cx, cz, cy, extent);
   };
 
-  /** LAZ 压缩文件：需要 WASM 解压，对小文件走完整加载路径 */
-  const loadLazWasm = async (
-    file: File,
-    filePath: string | undefined,
-    header: LasHeader
-  ) => {
+  const loadLazWasm = async (file: File, filePath: string | undefined, header: LasHeader) => {
     const MAX_LAZ_SIZE = 1.5 * 1024 * 1024 * 1024;
     if (file.size > MAX_LAZ_SIZE) {
-      throw new Error(`LAZ 压缩文件过大（${(file.size / 1024 / 1024 / 1024).toFixed(1)} GB），暂不支持流式解压`);
+      throw new Error(`LAZ 压缩文件过大`);
     }
 
     const app = appRef.current!;
@@ -283,7 +287,6 @@ export default function SpaceEdit() {
     const pointLength = laszip.getPointLength();
     const actualFormat = laszip.getPointFormat();
     const pointPtr = LazPerf._malloc(pointLength);
-
     const hasRgb = [2, 3, 5, 7, 8, 10].includes(actualFormat);
     const rgbOff = hasRgb ? (actualFormat >= 6 ? 30 : 20) : 0;
 
@@ -308,16 +311,11 @@ export default function SpaceEdit() {
           u8[byteOff + 1] = LazPerf.HEAPU8[wasmOff + rgbOff + 3];
           u8[byteOff + 2] = LazPerf.HEAPU8[wasmOff + rgbOff + 5];
         } else {
-          u8[byteOff] = 128;
-          u8[byteOff + 1] = 128;
-          u8[byteOff + 2] = 128;
+          u8[byteOff] = 128; u8[byteOff + 1] = 128; u8[byteOff + 2] = 128;
         }
         u8[byteOff + 3] = 255;
       }
-      console.log(`LAZ: ${Math.round(end / count * 100)}%`);
-      if (end < count) {
-        await new Promise((r) => setTimeout(r, 0));
-      }
+      if (end < count) await new Promise((r) => setTimeout(r, 0));
     }
 
     LazPerf._free(pointPtr);
@@ -335,20 +333,16 @@ export default function SpaceEdit() {
     entity.addComponent("render", { meshInstances: [mi] });
     entity.setLocalPosition(cx, cz, cy);
     app.root.addChild(entity);
-
-    console.log(`LAZ 渲染就绪`);
+    entitiesRef.current.set(file.name, entity);
+    focusOnModel(cx, cz, cy, extent);
   };
 
   const loadLas = async (file: File) => {
     setLoading(true);
     try {
       const filePath = window.electronAPI?.getFilePath(file);
-      console.log("file.path:", filePath, "size:", (file.size / 1024 / 1024 / 1024).toFixed(2), "GB");
-
-      // 先读头部 4KB 判断压缩类型
       const headerBuf = await readFileChunk(file, 0, 4096, filePath);
       const header = parseLasHeader(headerBuf);
-      console.log(`LAS 点云: ${header.pointCount.toLocaleString()} 个点, 格式 ${header.pointFormatId}, 压缩=${isLasCompressed(header.pointFormatId)}`);
 
       if (isLasCompressed(header.pointFormatId)) {
         await loadLazWasm(file, filePath, header);
@@ -356,7 +350,7 @@ export default function SpaceEdit() {
         await loadLasStreaming(file, filePath, header);
       }
     } catch (e: any) {
-      console.error("LAS 加载失败:", e.message, e.stack);
+      console.error("LAS 加载失败:", e.message);
     }
     setLoading(false);
   };
@@ -367,7 +361,6 @@ export default function SpaceEdit() {
       const fs = new BlobReadFileSystem();
       fs.set(file.name, file);
       const { gsplatData } = await loadGSplatData(file.name, fs);
-      console.log(`加载成功: ${gsplatData.numSplats} 个 splats`);
 
       const app = appRef.current!;
       const asset = new pc.Asset(file.name, "gsplat", { url: `local-${Date.now()}`, filename: file.name });
@@ -377,31 +370,116 @@ export default function SpaceEdit() {
       const entity = new pc.Entity(file.name);
       entity.addComponent("gsplat", { asset: asset });
       app.root.addChild(entity);
+      entitiesRef.current.set(file.name, entity);
+
+      // 聚焦模型
+      const aabb = new pc.BoundingBox();
+      gsplatData.calcAabb(aabb);
+      const center = aabb.getCenter();
+      const extent = Math.max(aabb.halfExtents.x, aabb.halfExtents.y, aabb.halfExtents.z) * 2;
+      focusOnModel(center.x, center.y, center.z, extent);
     } catch (e: any) {
       console.error("加载失败:", e.message);
     }
     setLoading(false);
   };
 
-  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const loadLasFromPath = async (filePath: string) => {
+    setLoading(true);
+    try {
+      const fileName = filePath.split(/[\\/]/).pop() || "unknown.las";
+      const headerBuf = await window.electronAPI!.readFileChunk(filePath, 0, 4096);
+      const header = parseLasHeader(headerBuf);
+
+      const file = new File([], fileName);
+      if (isLasCompressed(header.pointFormatId)) {
+        await loadLazWasm(file, filePath, header);
+      } else {
+        await loadLasStreaming(file, filePath, header);
+      }
+      setLoadedFiles((prev) => new Set([...prev, fileName]));
+    } catch (e: any) {
+      console.error("LAS 加载失败:", e.message);
+    }
+    setLoading(false);
+  };
+
+  const handleFileSelect = async (file: File) => {
+    // 导入文件到项目目录
+    if (window.electronAPI) {
+      const sourcePath = window.electronAPI.getFilePath(file);
+      const baseName = file.name.replace(/\.[^.]+$/, "");
+      const selectedProject = localStorage.getItem("selectedProject");
+      if (sourcePath && selectedProject) {
+        try {
+          await window.electronAPI.project.importFile(selectedProject, sourcePath, baseName);
+        } catch (err: any) {
+          console.error("文件导入失败:", err.message);
+        }
+      }
+    }
+
     const ext = file.name.toLowerCase().split(".").pop();
     if (ext === "las" || ext === "laz") {
       loadLas(file);
     } else {
       loadPly(file);
     }
+    setLoadedFiles((prev) => new Set([...prev, file.name]));
+    setTreeKey((k) => k + 1);
   };
 
+  const handleToggleVisible = useCallback((filePath: string) => {
+    const entityName = filePath.split(/[\\/]/).pop() || filePath;
+    const entity = entitiesRef.current.get(entityName);
+    if (!entity) return;
+
+    const isHidden = hiddenFiles.has(filePath);
+    if (isHidden) {
+      entity.enabled = true;
+      setHiddenFiles((prev) => {
+        const next = new Set(prev);
+        next.delete(filePath);
+        return next;
+      });
+    } else {
+      entity.enabled = false;
+      setHiddenFiles((prev) => new Set([...prev, filePath]));
+    }
+  }, [hiddenFiles]);
+
+  const handleClipModel = useCallback(() => {
+    const entities = Array.from(entitiesRef.current.entries());
+    if (entities.length === 0) {
+      message.warning("请先加载模型");
+      return;
+    }
+    setClipEntityName(entities[0][0]);
+    setClipMode(true);
+  }, []);
+
   return (
-    <div ref={containerRef} style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden" }}>
-      <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block", position: "absolute", top: 0, left: 0 }} />
-      <div style={{ position: "absolute", top: 8, left: 8 }}>
-        <input ref={fileInputRef} type="file" accept=".ply,.splat,.las,.laz" onChange={handleFile} style={{ display: "none" }} />
-        <button onClick={() => fileInputRef.current?.click()} disabled={loading} style={{ padding: "4px 12px", cursor: "pointer" }}>
-          {loading ? "加载中..." : "加载文件"}
-        </button>
+    <div ref={containerRef} style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <Toolbar onFileSelect={handleFileSelect} onClipModel={handleClipModel} />
+      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+        <ViewCube onViewChange={handleViewChange} />
+        <SidePanel
+          key={treeKey}
+          onLoadLas={loadLasFromPath}
+          onToggleVisible={handleToggleVisible}
+          loadedFiles={loadedFiles}
+          hiddenFiles={hiddenFiles}
+        />
+        <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
+          <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block", position: "absolute", top: 0, left: 0 }} />
+          {clipMode && appRef.current && (
+            <ClipController
+              app={appRef.current}
+              entityName={clipEntityName}
+              onClose={() => setClipMode(false)}
+            />
+          )}
+        </div>
       </div>
     </div>
   );

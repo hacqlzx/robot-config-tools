@@ -77,10 +77,21 @@ export default function MapConfig() {
       title: "地图名称",
       dataIndex: "mapName",
       render: (text: string, record) => (
-        <span>
+        <span
+          style={{ cursor: "default" }}
+          onMouseEnter={(e) => {
+            const icon = (e.currentTarget as HTMLElement).querySelector(".edit-icon") as HTMLElement;
+            if (icon) icon.style.opacity = "1";
+          }}
+          onMouseLeave={(e) => {
+            const icon = (e.currentTarget as HTMLElement).querySelector(".edit-icon") as HTMLElement;
+            if (icon) icon.style.opacity = "0";
+          }}
+        >
           {text}
           <EditOutlined
-            style={{ marginLeft: 8, color: "#1677ff", cursor: "pointer", fontSize: 13 }}
+            className="edit-icon"
+            style={{ marginLeft: 8, color: "#1677ff", cursor: "pointer", fontSize: 13, opacity: 0, transition: "opacity 0.2s" }}
             onClick={() => handleEditName(record)}
           />
         </span>

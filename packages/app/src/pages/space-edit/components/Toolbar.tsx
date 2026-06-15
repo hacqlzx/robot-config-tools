@@ -1,0 +1,91 @@
+import { useRef } from "react";
+import { UploadOutlined, TableOutlined, SaveOutlined, ScissorOutlined, BorderOutlined, ThunderboltOutlined, AppstoreOutlined, NodeIndexOutlined, ExportOutlined } from "@ant-design/icons";
+import { message } from "antd";
+
+interface Props {
+  onFileSelect: (file: File) => void;
+  onClipModel?: () => void;
+}
+
+const BUTTONS = [
+  { icon: <UploadOutlined style={{ fontSize: 20 }} />, label: "空间模型加载", action: "file" as const },
+  { icon: <TableOutlined style={{ fontSize: 20 }} />, label: "点表加载" },
+  { icon: <SaveOutlined style={{ fontSize: 20 }} />, label: "保存全部" },
+  { icon: <ScissorOutlined style={{ fontSize: 20 }} />, label: "裁切模型", action: "clip" as const },
+  { icon: <BorderOutlined style={{ fontSize: 20 }} />, label: "绘制屏柜" },
+  { icon: <ThunderboltOutlined style={{ fontSize: 20 }} />, label: "绘制充电区域" },
+  { icon: <AppstoreOutlined style={{ fontSize: 20 }} />, label: "绘制设备区域" },
+  { icon: <NodeIndexOutlined style={{ fontSize: 20 }} />, label: "可行路径设定" },
+  { icon: <ExportOutlined style={{ fontSize: 20 }} />, label: "导出模型" },
+];
+
+export default function Toolbar({ onFileSelect, onClipModel }: Props) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const selectedProject = localStorage.getItem("selectedProject");
+    if (!selectedProject) {
+      message.warning("请先在顶部菜单栏选择一个项目");
+      e.target.value = "";
+      return;
+    }
+
+    onFileSelect(file);
+    e.target.value = "";
+  };
+
+  const handleClick = (action?: string) => {
+    switch (action) {
+      case "file": fileInputRef.current?.click(); break;
+      case "clip": onClipModel?.(); break;
+    }
+  };
+
+  return (
+    <>
+      <style>{`
+        .space-edit-toolbar-btn {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 4px;
+          border: none;
+          background: transparent;
+          cursor: pointer;
+          color: #333;
+          font-size: 12px;
+          padding: 6px 10px;
+          border-radius: 6px;
+          transition: all 0.2s;
+        }
+        .space-edit-toolbar-btn:hover {
+          background: #e6f4ff;
+          color: #1677ff;
+        }
+      `}</style>
+      <div style={{
+        display: "flex", alignItems: "center", gap: 4,
+        padding: "6px 12px",
+        background: "#fff",
+        borderBottom: "1px solid #e8e8e8",
+        flexShrink: 0,
+      }}>
+        <input ref={fileInputRef} type="file" accept=".ply,.splat,.las,.laz" onChange={handleFile} style={{ display: "none" }} />
+        {BUTTONS.map(({ icon, label, action }) => (
+          <button
+            key={label}
+            className="space-edit-toolbar-btn"
+            onClick={() => handleClick(action)}
+          >
+            {icon}
+            <span>{label}</span>
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
