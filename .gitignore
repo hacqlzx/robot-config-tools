@@ -34,3 +34,6 @@ coverage/
 # Electron 打包产物
 release/
 out/
+
+# 项目运行时数据
+project/
