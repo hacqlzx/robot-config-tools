@@ -1,8 +1,10 @@
-import { useRef } from "react";
+﻿import { useRef } from "react";
 import { UploadOutlined, TableOutlined, SaveOutlined, ScissorOutlined, BorderOutlined, ThunderboltOutlined, AppstoreOutlined, NodeIndexOutlined, ExportOutlined } from "@ant-design/icons";
 import { message } from "antd";
 
 interface Props {
+  cabinetMode?: boolean;
+  onToggleCabinet?: () => void;
   onFileSelect: (file: File) => void;
   onClipModel?: () => void;
 }
@@ -12,14 +14,14 @@ const BUTTONS = [
   { icon: <TableOutlined style={{ fontSize: 20 }} />, label: "点表加载" },
   { icon: <SaveOutlined style={{ fontSize: 20 }} />, label: "保存全部" },
   { icon: <ScissorOutlined style={{ fontSize: 20 }} />, label: "裁切模型", action: "clip" as const },
-  { icon: <BorderOutlined style={{ fontSize: 20 }} />, label: "绘制屏柜" },
+  { icon: <BorderOutlined style={{ fontSize: 20 }} />, label: "绘制屏柜", action: "cabinet" as const },
   { icon: <ThunderboltOutlined style={{ fontSize: 20 }} />, label: "绘制充电区域" },
   { icon: <AppstoreOutlined style={{ fontSize: 20 }} />, label: "绘制设备区域" },
   { icon: <NodeIndexOutlined style={{ fontSize: 20 }} />, label: "可行路径设定" },
   { icon: <ExportOutlined style={{ fontSize: 20 }} />, label: "导出模型" },
 ];
 
-export default function Toolbar({ onFileSelect, onClipModel }: Props) {
+export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onToggleCabinet }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -41,6 +43,7 @@ export default function Toolbar({ onFileSelect, onClipModel }: Props) {
     switch (action) {
       case "file": fileInputRef.current?.click(); break;
       case "clip": onClipModel?.(); break;
+      case "cabinet": onToggleCabinet?.(); break;
     }
   };
 
@@ -62,6 +65,7 @@ export default function Toolbar({ onFileSelect, onClipModel }: Props) {
           border-radius: 6px;
           transition: all 0.2s;
         }
+        .space-edit-toolbar-btn.active { background: #1677ff; color: #fff; }
         .space-edit-toolbar-btn:hover {
           background: #e6f4ff;
           color: #1677ff;
@@ -78,7 +82,7 @@ export default function Toolbar({ onFileSelect, onClipModel }: Props) {
         {BUTTONS.map(({ icon, label, action }) => (
           <button
             key={label}
-            className="space-edit-toolbar-btn"
+            className={`space-edit-toolbar-btn${action === "cabinet" && cabinetMode ? " active" : ""}`}
             onClick={() => handleClick(action)}
           >
             {icon}
