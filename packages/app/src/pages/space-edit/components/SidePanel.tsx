@@ -7,6 +7,8 @@ interface Props {
   onToggleVisible?: (filePath: string) => void;
   loadedFiles: Set<string>;
   hiddenFiles: Set<string>;
+  treeKey: number;
+  loadingFile: string;
 }
 
 const TABS = [
@@ -16,7 +18,7 @@ const TABS = [
   { key: "deviceArea", label: "设备区" },
 ];
 
-export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, hiddenFiles }: Props) {
+export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, hiddenFiles, treeKey, loadingFile }: Props) {
   const [sideTab, setSideTab] = useState("map");
   const [treeData, setTreeData] = useState<TreeNode[]>([]);
 
@@ -34,8 +36,10 @@ export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, hid
   useEffect(() => {
     if (sideTab === "map") {
       loadMapTree();
+      const timer = setInterval(loadMapTree, 3000);
+      return () => clearInterval(timer);
     }
-  }, [sideTab, loadMapTree]);
+  }, [sideTab, treeKey, loadMapTree]);
 
   return (
     <div style={{
@@ -78,6 +82,7 @@ export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, hid
               hiddenFiles={hiddenFiles}
               onLoadLas={onLoadLas}
               onToggleVisible={onToggleVisible}
+              loadingFile={loadingFile}
             />
           )
         ) : (

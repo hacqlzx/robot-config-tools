@@ -1,4 +1,4 @@
-import * as pc from "playcanvas";
+﻿import * as pc from "playcanvas";
 
 /**
  * 简易轨道/飞行相机 — 鼠标旋转/缩放/平移 + WASD飞行
@@ -13,6 +13,7 @@ export class SimpleOrbitCamera {
   elevation = 30;
   lookAt = new pc.Vec3(0, 0, 0);
   controlMode: "orbit" | "fly" = "orbit";
+  private onCameraChange?: () => void;
   flySpeed = 5;
 
   private dragging = false;
@@ -34,9 +35,10 @@ export class SimpleOrbitCamera {
   private fastDown = false;
   private slowDown = false;
 
-  constructor(app: pc.Application, camera: pc.Entity) {
+  constructor(app: pc.Application, camera: pc.Entity, onCameraChange?: () => void) {
     this.app = app;
     this.camera = camera;
+    this.onCameraChange = onCameraChange;
     this.pivot = new pc.Entity("camera-pivot");
     this.pivot.setLocalPosition(this.lookAt);
     this.pivot.addChild(camera);
@@ -154,6 +156,7 @@ export class SimpleOrbitCamera {
     this.pivot.setLocalPosition(this.lookAt);
     this.camera.setLocalPosition(x - this.lookAt.x, y - this.lookAt.y, z - this.lookAt.z);
     this.camera.lookAt(this.lookAt);
+    this.onCameraChange?.();
   }
 
   /** 设置相机朝向 */

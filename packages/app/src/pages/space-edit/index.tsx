@@ -1,11 +1,22 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import * as pc from "playcanvas";
-import { message } from "antd";
+import { message, Spin } from "antd";
 import { SimpleOrbitCamera } from "../../playcanvas-core/simple-camera";
 import { BlobReadFileSystem } from "../../playcanvas-core/io/read/file-systems";
 import { loadGSplatData } from "../../playcanvas-core/io";
 import { pointcloudVert, pointcloudFrag } from "../../playcanvas-core/shaders/pointcloud-shader";
 import { parseLasHeader, loadLazPerf, getWasmUrl, LasHeader } from "../../playcanvas-core/io/read/las-reader";
+
+/** 根据点数和硬件决定加载比例 */
+function getLoadFraction(pointCount: number): number {
+  if (pointCount > 20_000_000) return 0.25;
+  if (pointCount > 10_000_000) return 0.5;
+  return 1;
+}
+
+/** GPU 点预算上限，超出时步长降采样 */
+const MAX_POINTS = 10_000_000;
+
 import Toolbar from "./components/Toolbar";
 import ViewCube from "./components/ViewCube";
 import SidePanel from "./components/SidePanel";
@@ -41,6 +52,9 @@ export default function SpaceEdit() {
   const orbitRef = useRef<SimpleOrbitCamera | null>(null);
   const appRef = useRef<pc.Application | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingFile, setLoadingFile] = useState("");
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [loadingText, setLoadingText] = useState("");
   const [loadedFiles, setLoadedFiles] = useState<Set<string>>(new Set());
   const [hiddenFiles, setHiddenFiles] = useState<Set<string>>(new Set());
   const [treeKey, setTreeKey] = useState(0);
@@ -48,6 +62,14 @@ export default function SpaceEdit() {
   const [clipEntityName, setClipEntityName] = useState("");
   const entitiesRef = useRef<Map<string, pc.Entity>>(new Map());
   const lasHeadersRef = useRef<Map<string, any>>(new Map());
+  const filePathRef = useRef<Map<string, string>>(new Map());
+  const pointStatsRef = useRef<Map<string, { total: number; loaded: number }>>(new Map());
+  const renderDirtyRef = useRef(true);
+
+  /** 按需渲染：标记脏位，rAF 循环检测到后执行一次 app.render() */
+  const requestRender = useCallback(() => {
+    renderDirtyRef.current = true;
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -77,7 +99,7 @@ export default function SpaceEdit() {
         preferWebGl2: true,
         powerPreference: "high-performance",
       },
-    });
+    } as any);
 
     let rafId: number;
     const doResize = () => {
@@ -94,6 +116,7 @@ export default function SpaceEdit() {
           cvs.height = h;
           app.resizeCanvas(w, h);
         }
+        renderDirtyRef.current = true;
       });
     };
     const observer = new ResizeObserver(doResize);
@@ -111,22 +134,55 @@ export default function SpaceEdit() {
     camera.addComponent("camera", { fov: 60, clearColor: new pc.Color(0.12, 0.12, 0.12) });
     app.root.addChild(camera);
 
-    const orbit = new SimpleOrbitCamera(app, camera);
+    const orbit = new SimpleOrbitCamera(app, camera, () => { renderDirtyRef.current = true; });
     orbitRef.current = orbit;
+    app.graphicsDevice.maxPixelRatio = 1;
+
+    // P0: 关闭持续渲染循环，改用按需渲染
+    app.autoRender = false;
     app.start();
     appRef.current = app;
+
+    // 按需渲染循环：仅脏标记为 true 时执行一帧
+    let renderRafId = 0;
+    const renderLoop = () => {
+      if (renderDirtyRef.current) {
+        app.render();
+        renderDirtyRef.current = false;
+      }
+      renderRafId = requestAnimationFrame(renderLoop);
+    };
+    renderRafId = requestAnimationFrame(renderLoop);
 
     return () => {
       window.removeEventListener("resize", doResize);
       observer.disconnect();
       if (rafId) cancelAnimationFrame(rafId);
+      if (renderRafId) cancelAnimationFrame(renderRafId);
       orbit.destroy();
       app.destroy();
     };
   }, []);
 
+  // 大模型显示比例：渲染后更新 uDisplayRatio
+  useEffect(() => {
+    if (loadedFiles.size === 0) return;
+    entitiesRef.current.forEach((ent) => {
+      const mi = ent.render?.meshInstances?.[0];
+      if (mi?.material) {
+        const vb = mi.mesh?.vertexBuffer;
+        if (vb) {
+          (mi.material as any).setParameter?.("uDisplayRatio", getLoadFraction(vb.getNumVertices()));
+          mi.material.update?.();
+        }
+      }
+    });
+    requestRender();
+  }, [loadedFiles]);
+
   const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" | "上" | "下") => {
     orbitRef.current?.setViewDirection(direction);
+    requestRender();
   }, []);
 
   /** 将相机焦点移到指定位置 */
@@ -136,6 +192,7 @@ export default function SpaceEdit() {
     orbit.lookAt.set(centerX, centerY, centerZ);
     orbit.distance = extent * 1.5;
     orbit.updateCamera();
+    requestRender();
   }, []);
 
   const readFileChunk = async (file: File, offset: number, length: number, filePath: string | undefined): Promise<ArrayBuffer> => {
@@ -153,11 +210,15 @@ export default function SpaceEdit() {
     const formatId = pointFormatId & 0x7F;
     const hasRgb = [2, 3, 5, 7, 8, 10].includes(formatId);
 
+    // P1: 点数上限 — 步长降采样
+    const stride = count > MAX_POINTS ? Math.ceil(count / MAX_POINTS) : 1;
+    const loadCount = Math.ceil(count / stride);
+
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
     const cz = (minZ + maxZ) / 2;
     const extent = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
-    const pointSize = extent / Math.cbrt(count) * 0.8;
+    const pointSize = extent / Math.cbrt(loadCount) * 0.8;
 
     const mat = new pc.ShaderMaterial({
       uniqueName: "pointcloud",
@@ -175,14 +236,15 @@ export default function SpaceEdit() {
       { semantic: pc.SEMANTIC_POSITION, components: 3, type: pc.TYPE_FLOAT32 },
       { semantic: pc.SEMANTIC_TEXCOORD0, components: 4, type: pc.TYPE_UINT8, normalize: true },
     ]);
-    const vb = new pc.VertexBuffer(gd, format, count, { usage: pc.BUFFER_STATIC });
+    const vb = new pc.VertexBuffer(gd, format, loadCount, { usage: pc.BUFFER_STATIC });
     const vbLock = vb.lock() as ArrayBuffer;
     const f32 = new Float32Array(vbLock);
     const u8 = new Uint8Array(vbLock);
 
-    const FILE_CHUNK_POINTS = 500000;
-    const GPU_CHUNK = 200000;
+    const FILE_CHUNK_POINTS = 100000;
+    const GPU_CHUNK = 50000;
     let globalIdx = 0;
+    let outputIdx = 0;
 
     const totalBytes = count * pointRecordLength;
     const fileChunkBytes = FILE_CHUNK_POINTS * pointRecordLength;
@@ -197,11 +259,14 @@ export default function SpaceEdit() {
       for (let i = 0; i < pointsInChunk; i += GPU_CHUNK) {
         const gpuEnd = Math.min(i + GPU_CHUNK, pointsInChunk);
         for (let j = i; j < gpuEnd; j++) {
+          const srcIdx = globalIdx + j;
+          if (stride > 1 && srcIdx % stride !== 0) continue;
+
           const ptOff = j * pointRecordLength;
           const [ix, iy, iz] = readPointXYZ(view, ptOff);
           const [r, g, b] = readPointRGB(view, ptOff, formatId, hasRgb);
 
-          const base = (globalIdx + j) * 4;
+          const base = outputIdx * 4;
           f32[base] = ix * scaleX + offsetX - cx;
           f32[base + 1] = iz * scaleZ + offsetZ - cz;
           f32[base + 2] = iy * scaleY + offsetY - cy;
@@ -211,16 +276,20 @@ export default function SpaceEdit() {
           u8[byteOff + 1] = g;
           u8[byteOff + 2] = b;
           u8[byteOff + 3] = 255;
+
+          outputIdx++;
         }
       }
       globalIdx += pointsInChunk;
+      setLoadingProgress(Math.round(globalIdx / count * 100));
+      requestRender();
       await new Promise((r) => setTimeout(r, 0));
     }
 
     vb.unlock();
     const mesh = new pc.Mesh(gd);
     mesh.vertexBuffer = vb;
-    mesh.primitive[0] = { baseVertex: 0, type: pc.PRIMITIVE_POINTS, base: 0, count };
+    mesh.primitive[0] = { baseVertex: 0, type: pc.PRIMITIVE_POINTS, base: 0, count: loadCount };
 
     const mi = new pc.MeshInstance(mesh, mat, null);
     mi.cull = false;
@@ -229,6 +298,7 @@ export default function SpaceEdit() {
     entity.setLocalPosition(cx, cz, cy);
     app.root.addChild(entity);
     entitiesRef.current.set(file.name, entity);
+    pointStatsRef.current.set(file.name, { total: count, loaded: loadCount });
     focusOnModel(cx, cz, cy, extent);
   };
 
@@ -243,11 +313,15 @@ export default function SpaceEdit() {
     const count = header.pointCount;
     const { scaleX, scaleY, scaleZ, offsetX, offsetY, offsetZ, minX, maxX, minY, maxY, minZ, maxZ } = header;
 
+    // P1: 点数上限 — 步长降采样
+    const stride = count > MAX_POINTS ? Math.ceil(count / MAX_POINTS) : 1;
+    const loadCount = Math.ceil(count / stride);
+
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
     const cz = (minZ + maxZ) / 2;
     const extent = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
-    const pointSize = extent / Math.cbrt(count) * 0.8;
+    const pointSize = extent / Math.cbrt(loadCount) * 0.8;
 
     const mat = new pc.ShaderMaterial({
       uniqueName: "pointcloud",
@@ -265,7 +339,7 @@ export default function SpaceEdit() {
       { semantic: pc.SEMANTIC_POSITION, components: 3, type: pc.TYPE_FLOAT32 },
       { semantic: pc.SEMANTIC_TEXCOORD0, components: 4, type: pc.TYPE_UINT8, normalize: true },
     ]);
-    const vb = new pc.VertexBuffer(gd, format, count, { usage: pc.BUFFER_STATIC });
+    const vb = new pc.VertexBuffer(gd, format, loadCount, { usage: pc.BUFFER_STATIC });
     const vbLock = vb.lock() as ArrayBuffer;
     const f32 = new Float32Array(vbLock);
     const u8 = new Uint8Array(vbLock);
@@ -291,17 +365,21 @@ export default function SpaceEdit() {
     const hasRgb = [2, 3, 5, 7, 8, 10].includes(actualFormat);
     const rgbOff = hasRgb ? (actualFormat >= 6 ? 30 : 20) : 0;
 
-    const CHUNK = 200000;
+    const CHUNK = 50000;
+    let outputIdx = 0;
     for (let i = 0; i < count; i += CHUNK) {
       const end = Math.min(i + CHUNK, count);
       for (let j = i; j < end; j++) {
         laszip.getPoint(pointPtr);
+
+        if (stride > 1 && j % stride !== 0) continue;
+
         const wasmOff = pointPtr;
         const ix = LazPerf.HEAP32[wasmOff / 4];
         const iy = LazPerf.HEAP32[wasmOff / 4 + 1];
         const iz = LazPerf.HEAP32[wasmOff / 4 + 2];
 
-        const base = j * 4;
+        const base = outputIdx * 4;
         f32[base] = ix * scaleX + offsetX - cx;
         f32[base + 1] = iz * scaleZ + offsetZ - cz;
         f32[base + 2] = iy * scaleY + offsetY - cy;
@@ -315,7 +393,11 @@ export default function SpaceEdit() {
           u8[byteOff] = 128; u8[byteOff + 1] = 128; u8[byteOff + 2] = 128;
         }
         u8[byteOff + 3] = 255;
+
+        outputIdx++;
       }
+      setLoadingProgress(Math.round(end / count * 100));
+      requestRender();
       if (end < count) await new Promise((r) => setTimeout(r, 0));
     }
 
@@ -326,7 +408,7 @@ export default function SpaceEdit() {
 
     const mesh = new pc.Mesh(gd);
     mesh.vertexBuffer = vb;
-    mesh.primitive[0] = { baseVertex: 0, type: pc.PRIMITIVE_POINTS, base: 0, count };
+    mesh.primitive[0] = { baseVertex: 0, type: pc.PRIMITIVE_POINTS, base: 0, count: loadCount };
 
     const mi = new pc.MeshInstance(mesh, mat, null);
     mi.cull = false;
@@ -335,18 +417,21 @@ export default function SpaceEdit() {
     entity.setLocalPosition(cx, cz, cy);
     app.root.addChild(entity);
     entitiesRef.current.set(file.name, entity);
+    pointStatsRef.current.set(file.name, { total: count, loaded: loadCount });
     focusOnModel(cx, cz, cy, extent);
   };
 
   const loadLas = async (file: File) => {
     setLoading(true);
+    setLoadingFile(file.name);
+    setLoadingText("正在加载模型...");
     try {
       const filePath = window.electronAPI?.getFilePath(file);
       const headerBuf = await readFileChunk(file, 0, 4096, filePath);
       const header = parseLasHeader(headerBuf);
 
-      // 保存原始 header 用于导出
       lasHeadersRef.current.set(file.name, header);
+      filePathRef.current.set(file.name, filePath || "");
 
       if (isLasCompressed(header.pointFormatId)) {
         await loadLazWasm(file, filePath, header);
@@ -357,6 +442,9 @@ export default function SpaceEdit() {
       console.error("LAS 加载失败:", e.message);
     }
     setLoading(false);
+    setLoadingFile("");
+    setLoadingText("");
+    setLoadingProgress(0);
   };
 
   const loadPly = async (file: File) => {
@@ -375,28 +463,32 @@ export default function SpaceEdit() {
       entity.addComponent("gsplat", { asset: asset });
       app.root.addChild(entity);
       entitiesRef.current.set(file.name, entity);
+      pointStatsRef.current.set(file.name, { total: gsplatData.numSplats, loaded: gsplatData.numSplats });
 
-      // 聚焦模型
       const aabb = new pc.BoundingBox();
       gsplatData.calcAabb(aabb);
-      const center = aabb.getCenter();
+      const center = aabb.center;
       const extent = Math.max(aabb.halfExtents.x, aabb.halfExtents.y, aabb.halfExtents.z) * 2;
       focusOnModel(center.x, center.y, center.z, extent);
     } catch (e: any) {
-      console.error("加载失败:", e.message);
+      console.error("LAS 加载失败:", e.message);
     }
     setLoading(false);
+    setLoadingFile("");
   };
 
   const loadLasFromPath = async (filePath: string) => {
+    const fileName = filePath.split(/[\\/]/).pop() || "unknown.las";
     setLoading(true);
+    setLoadingFile(fileName);
+    setLoadingText("正在加载模型...");
     try {
-      const fileName = filePath.split(/[\\/]/).pop() || "unknown.las";
       const headerBuf = await window.electronAPI!.readFileChunk(filePath, 0, 4096);
       const header = parseLasHeader(headerBuf);
 
       const file = new File([], fileName);
       lasHeadersRef.current.set(fileName, header);
+      filePathRef.current.set(fileName, filePath);
 
       if (isLasCompressed(header.pointFormatId)) {
         await loadLazWasm(file, filePath, header);
@@ -408,10 +500,12 @@ export default function SpaceEdit() {
       console.error("LAS 加载失败:", e.message);
     }
     setLoading(false);
+    setLoadingFile("");
+    setLoadingText("");
+    setLoadingProgress(0);
   };
 
   const handleFileSelect = async (file: File) => {
-    // 导入文件到项目目录
     if (window.electronAPI) {
       const sourcePath = window.electronAPI.getFilePath(file);
       const baseName = file.name.replace(/\.[^.]+$/, "");
@@ -452,15 +546,34 @@ export default function SpaceEdit() {
       entity.enabled = false;
       setHiddenFiles((prev) => new Set([...prev, filePath]));
     }
+    requestRender();
   }, [hiddenFiles]);
 
   const handleClipModel = useCallback(() => {
-    const entities = Array.from(entitiesRef.current.entries());
-    if (entities.length === 0) {
+    const entries = Array.from(entitiesRef.current.entries());
+    if (entries.length === 0) {
       message.warning("请先加载模型");
       return;
     }
-    setClipEntityName(entities[0][0]);
+
+    entries.forEach(([key, ent]) => {
+      if (!ent.enabled) {
+        ent.destroy();
+        entitiesRef.current.delete(key);
+      }
+    });
+
+    const visible = Array.from(entitiesRef.current.entries());
+    if (visible.length > 1) {
+      message.warning("存在多个可见模型，请只保留一个模型后再裁切");
+      return;
+    }
+    if (visible.length === 0) {
+      message.warning("没有可见模型");
+      return;
+    }
+
+    setClipEntityName(visible[0][0]);
     setClipMode(true);
   }, []);
 
@@ -470,21 +583,73 @@ export default function SpaceEdit() {
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         <ViewCube onViewChange={handleViewChange} />
         <SidePanel
-          key={treeKey}
+          treeKey={treeKey}
           onLoadLas={loadLasFromPath}
           onToggleVisible={handleToggleVisible}
           loadedFiles={loadedFiles}
           hiddenFiles={hiddenFiles}
+          loadingFile={loadingFile}
         />
         <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
           <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block", position: "absolute", top: 0, left: 0 }} />
+          {(loading || loadingProgress > 0) && (
+            <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 100, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "all" }}>
+              <Spin size="large" />
+              <div style={{ color: "#fff", marginTop: 16, fontSize: 14 }}>{loadingText || "处理中..."}</div>
+              {loadingProgress > 0 && (
+                <div style={{ width: 200, marginTop: 12 }}>
+                  <div style={{ width: "100%", height: 4, background: "rgba(255,255,255,0.2)", borderRadius: 2, overflow: "hidden" }}>
+                    <div style={{ width: `${loadingProgress}%`, height: "100%", background: "#fff", borderRadius: 2, transition: "width 0.2s" }} />
+                  </div>
+                  <div style={{ color: "#fff", fontSize: 12, textAlign: "center", marginTop: 4 }}>{loadingProgress}%</div>
+                </div>
+              )}
+            </div>
+          )}
+          {/* 点信息 */}
+          {loadedFiles.size > 0 && (
+            <div style={{ position: "absolute", bottom: 8, right: 8, background: "rgba(0,0,0,0.55)", color: "#ccc", padding: "4px 8px", borderRadius: 4, fontSize: 11, fontFamily: "monospace", lineHeight: 1.5, zIndex: 10, pointerEvents: "none", userSelect: "none" }}>
+              {Array.from(loadedFiles).map((name) => {
+                const stats = pointStatsRef.current.get(name);
+                if (!stats) return null;
+                const rate = stats.total > 0 ? (stats.loaded / stats.total * 100).toFixed(1) : "100";
+                const isDown = stats.loaded < stats.total;
+                return (
+                  <div key={name}>
+                    <div>{name}</div>
+                    <div>总计: {stats.total.toLocaleString()} | 加载: {stats.loaded.toLocaleString()} {isDown ? `| 采样: ${rate}%` : ""}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
           {clipMode && appRef.current && (
             <ClipController
               app={appRef.current}
               entityName={clipEntityName}
               lasHeader={lasHeadersRef.current.get(clipEntityName) || null}
+              origFilePath={filePathRef.current.get(clipEntityName) || ""}
               onClose={() => setClipMode(false)}
-              onComplete={() => setTreeKey((k) => k + 1)}
+              onProgress={(pct) => { setLoadingProgress(pct); setLoadingText(pct >= 100 ? "" : "正在保存..."); }}
+              onComplete={(clipName) => {
+                setTreeKey((k) => k + 1);
+                setLoadingText("");
+                setLoadingProgress(0);
+                if (clipName) {
+                  const oldEnt = entitiesRef.current.get(clipEntityName);
+                  if (oldEnt) { oldEnt.destroy(); entitiesRef.current.delete(clipEntityName); }
+                  setLoadedFiles((prev) => { const next = new Set(prev); next.delete(clipEntityName); return next; });
+
+                  setTimeout(async () => {
+                    const project = localStorage.getItem("selectedProject");
+                    if (project && window.electronAPI) {
+                      const files = await window.electronAPI.project.listTree(project, `地图/${clipName}`);
+                      const lasFile: any = files.find((f: any) => f.name.endsWith(".las"));
+                      if (lasFile) loadLasFromPath(lasFile.path);
+                    }
+                  }, 500);
+                }
+              }}
             />
           )}
         </div>
