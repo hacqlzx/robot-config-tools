@@ -235,7 +235,7 @@ export default function AppHeader() {
   return (
     <div className="app-header" style={{ background: "#fff", borderBottom: "1px solid #f0f0f0" }}>
       {contextHolder}
-      <Menu mode="horizontal" selectedKeys={[location.pathname]} items={menuItems} className="app-header__menu" style={{ width: "auto" }} onClick={({ key }) => navigate(key)} />
+      <Menu mode="horizontal" selectedKeys={[location.hash.slice(1) || location.pathname]} items={menuItems} className="app-header__menu" style={{ width: "auto" }} onClick={({ key }) => navigate(key)} />
       <div className="app-header__toolbar">
         <Dropdown menu={{ items: projectMenu }} trigger={["hover"]}>
           <Button type="text" size="small" icon={<ProjectOutlined />} />
