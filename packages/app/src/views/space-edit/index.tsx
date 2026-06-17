@@ -245,10 +245,12 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
           return;
         }
 
+        console.log("[点表导入] 开始导入，共", rows.length, "行...");
         await api.startBatch();
         const result = await api.importPoints(rows, station.id, station.stationName, station.stationCode);
         await api.endBatch();
 
+        console.log("[点表导入] 导入完成:", result);
         message.success("import success: " + result.inserted + " new, " + result.updated + " updated");
         if (result.errors.length > 0) {
           message.warning("errors: " + result.errors.slice(0, 3).join("; "));
