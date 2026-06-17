@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { Modal, Form, Button, Popconfirm, message } from "antd";
 import { DeleteOutlined, LinkOutlined } from "@ant-design/icons";
-import { getCurrentIp, setCurrentIp, setConnectionStatus } from "@/stores/backendStore";
+import { getCurrentIp, setCurrentIp, setConnectionStatus, notifyIpSwitch } from "@/stores/backendStore";
 import IpInput from "@/components/ip-input";
 
 const STORAGE_KEY = "backend_ip_list";
@@ -55,6 +55,7 @@ export default function BackendModal({ open, onClose }: Props) {
     if (ok) {
       setIpList([...ipList, { ip: values.ip }]);
       setCurrentIp(values.ip);
+      notifyIpSwitch();
       message.success(`${values.ip} 连接成功`);
       form.resetFields();
       onClose();
@@ -70,6 +71,7 @@ export default function BackendModal({ open, onClose }: Props) {
     setConnectingIndex(null);
     if (ok) {
       setCurrentIp(ip);
+      notifyIpSwitch();
       message.success(`${ip} 连接成功`);
       onClose();
     } else {

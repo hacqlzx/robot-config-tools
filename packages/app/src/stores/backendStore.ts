@@ -1,8 +1,9 @@
-const CURRENT_IP_KEY = "backend_current_ip";
+﻿const CURRENT_IP_KEY = "backend_current_ip";
 
 export type ConnectionStatus = "disconnected" | "connected" | "failed";
 
 let _status: ConnectionStatus = "disconnected";
+let _ipSwitchVersion = 0;
 const listeners = new Set<() => void>();
 
 export function getConnectionStatus(): ConnectionStatus {
@@ -12,6 +13,16 @@ export function getConnectionStatus(): ConnectionStatus {
 export function setConnectionStatus(s: ConnectionStatus) {
   _status = s;
   listeners.forEach((fn) => fn());
+}
+
+/** IP 切换时调用，通知各方重新拉数据 */
+export function notifyIpSwitch() {
+  _ipSwitchVersion++;
+  listeners.forEach((fn) => fn());
+}
+
+export function getIpSwitchVersion() {
+  return _ipSwitchVersion;
 }
 
 export function subscribe(fn: () => void) {

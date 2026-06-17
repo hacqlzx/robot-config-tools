@@ -54,7 +54,7 @@ export function importPointExcel(
   const result: ImportResult = { total: rows.length, inserted: 0, updated: 0, errors: [] };
 
   // 确保厂站存在
-  let fac = facRepo.findByStationCode(stationCode);
+  let fac = facRepo.findByStationName(stationName);
   if (!fac) {
     fac = facRepo.create({
       stationName, stationCode,

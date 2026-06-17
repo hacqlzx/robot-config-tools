@@ -1,19 +1,15 @@
 ﻿import { useState, useEffect, useCallback } from "react";
-import { Menu, Button, Select, Dropdown, Modal, Input, Popconfirm, message, Tag } from "antd";
+import { Menu, Button, Select, Dropdown, Modal, Input, Popconfirm, message } from "antd";
 import { MinusOutlined, BorderOutlined, CloseOutlined, SettingOutlined, ProjectOutlined, PlusOutlined, EditOutlined, DeleteOutlined, CheckOutlined } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 import { useNavigate, useLocation } from "react-router-dom";
 import { menuConfig } from "@/config/menu";
 import BackendModal from "@/pages/backend-modal";
-import { getFacInfo } from "@/api/config";
 import { getConnectionStatus, subscribe, ConnectionStatus, getCurrentIp } from "@/stores/backendStore";
 
 const menuItems: MenuProps["items"] = menuConfig.map((item) => ({ key: item.key, label: item.label }));
 
 const SELECTED_PROJECT_KEY = "selectedProject";
-const SELECTED_STATION_KEY = "selectedStation";
-const SELECTED_STATION_CODE_KEY = "selectedStationCode";
-const SELECTED_STATION_NAME_KEY = "selectedStationName";
 
 function getStoredProject(): string | null {
   try {
@@ -48,11 +44,6 @@ export default function AppHeader() {
   const [selectedProject, setSelectedProject] = useState<string | null>(getStoredProject);
   const [connStatus, setConnStatus] = useState<ConnectionStatus>(getConnectionStatus);
   const [messageApi, contextHolder] = message.useMessage();
-  const [stationList, setStationList] = useState<{ id: number; stationName: string; stationCode: string; voltName: string; stationTypeDesc: string }[]>([]);
-  const [selectedStationId, setSelectedStationId] = useState<number | null>(() => {
-    try { return Number(localStorage.getItem(SELECTED_STATION_KEY)) || null; } catch { return null; }
-  });
-  const [stationLoading, setStationLoading] = useState(false);
 
   // 同步 selectedProject 到 localStorage
   useEffect(() => {
@@ -64,32 +55,8 @@ export default function AppHeader() {
   }, []);
 
 
-  // ?? selectedStationId ? localStorage
-  useEffect(() => {
-    try {
-      if (selectedStationId) localStorage.setItem(SELECTED_STATION_KEY, String(selectedStationId));
-      else localStorage.removeItem(SELECTED_STATION_KEY);
-    } catch { /* ignore */ }
-  }, [selectedStationId]);
 
   // ?????????????????
-  const fetchStations = useCallback(async () => {
-    if (connStatus !== "connected") return;
-    setStationLoading(true);
-    try {
-      const res = await getFacInfo();
-      console.log("[fetchStations] response:", res.data);
-      if (res.data?.success && Array.isArray(res.data.data)) {
-        setStationList(res.data.data);
-        console.log("[fetchStations] loaded", res.data.data.length, "stations");
-      } else {
-        console.warn("[fetchStations] unexpected response format:", res.data);
-      }
-    } catch (e) { console.error("[fetchStations] error:", e); }
-    setStationLoading(false);
-  }, [connStatus]);
-
-  useEffect(() => { fetchStations(); }, [fetchStations]);
 
   // ?????????? IP????????????
   useEffect(() => {
@@ -108,19 +75,6 @@ export default function AppHeader() {
       console.log("[app-header] ping result:", ok);
       if (ok) {
         setConnStatus("connected");
-        try {
-          setStationLoading(true);
-          const res = await getFacInfo();
-          console.log("[auto-fetch] facInfo response:", res.data);
-          if (res.data?.success && Array.isArray(res.data.data)) {
-            setStationList(res.data.data);
-            console.log("[auto-fetch] loaded", res.data.data.length, "stations");
-          }
-        } catch (e) {
-          console.error("[auto-fetch] error:", e);
-        } finally {
-          setStationLoading(false);
-        }
       } else {
         setConnStatus("failed");
       }
@@ -136,6 +90,11 @@ export default function AppHeader() {
       messageApi.error("加载项目列表失败");
     }
   }, [messageApi]);
+
+  // 初始化加载项目列表
+  useEffect(() => {
+    loadProjects();
+  }, []); // eslint-disable-next-line
 
   useEffect(() => {
     if (editProjectOpen) {
@@ -240,12 +199,7 @@ export default function AppHeader() {
         <Dropdown menu={{ items: projectMenu }} trigger={["hover"]}>
           <Button type="text" size="small" icon={<ProjectOutlined />} />
         </Dropdown>
-        {selectedProject && (
-          <Tag color="blue" closable onClose={() => setSelectedProject(null)}>
-            {selectedProject}
-          </Tag>
-        )}
-        <Select placeholder="选择厂站" style={{ width: 160 }} size="small" loading={stationLoading} value={selectedStationId} onChange={(v) => { setSelectedStationId(v); const s = stationList.find((x) => x.id === v); if (s) { try { localStorage.setItem(SELECTED_STATION_CODE_KEY, s.stationCode); localStorage.setItem(SELECTED_STATION_NAME_KEY, s.stationName); } catch {} } }} allowClear options={stationList.map((s) => ({ label: s.stationName, value: s.id }))} />
+        <Select placeholder="选择项目" style={{ width: 160 }} size="small" value={selectedProject} onChange={(v) => { setSelectedProject(v); }} allowClear options={projects.map((p) => ({ label: p, value: p }))} />
         <Select placeholder="选择机器人" style={{ width: 120 }} size="small" options={[]} />
         <Dropdown menu={{ items: settingMenu }} trigger={["hover"]}>
           <div style={{ position: "relative", display: "inline-flex" }}>

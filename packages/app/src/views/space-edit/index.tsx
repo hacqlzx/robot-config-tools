@@ -1,10 +1,9 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import { parsePointExcel } from "@/utils/excel-parser";
-import { message as antMsg } from "antd";
 import { useLasLoader } from "./hooks/useLasLoader";
 import * as pc from "playcanvas";
 import { useCabinetDrawing } from "./hooks/useCabinetDrawing";
-import { message, Spin } from "antd";
+import { Spin, App } from "antd";
 import { SimpleOrbitCamera } from "../../playcanvas-core/simple-camera";
 
 /** 根据点数和硬件决定加载比例 */
@@ -20,6 +19,7 @@ import SidePanel from "./components/SidePanel";
 import ClipController from "./components/ClipController";
 
 export default function SpaceEdit() {
+  const { message } = App.useApp();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const orbitRef = useRef<SimpleOrbitCamera | null>(null);
@@ -199,31 +199,35 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
   const handleImportPointTable = async (file: File) => {
     setImporting(true);
     try {
-      // 1. ?? Excel
-      const { rows } = await parsePointExcel(file);
+      // 1. ?? Excel????
+      const { rows, stationName } = await parsePointExcel(file);
 
       if (rows.length === 0) {
-        antMsg.warning("?????????");
+        message.warning("?????????");
         setImporting(false);
         return;
       }
 
-      // 2. ?????????
-      const stationCode = localStorage.getItem("selectedStationCode");
-      const stationName = localStorage.getItem("selectedStationName");
-      if (!stationCode || !stationName) {
-        antMsg.warning("?????????");
+      if (!stationName) {
+        message.warning("Excel ????????");
         setImporting(false);
         return;
       }
 
-      // 3. Electron ????? IPC ??
+      // 2. Electron ????? IPC ??
       const api = (window as any).electronAPI;
       if (api) {
-        // ????????????? stationCode ???
+        console.log("[????] ??:", stationName);
+
+        // ??????????
         const stations = await api.db.station.list();
-        let station = stations.find((s: any) => s.stationCode === stationCode);
+        console.log("[????] ??????:", stations.map((s: any) => ({ id: s.id, code: s.stationCode, name: s.stationName })));
+
+        let station = stations.find((s: any) => s.stationName === stationName);
+
         if (!station) {
+          // ????? stationCode
+          const stationCode = stationName.substring(0, 10) + Date.now().toString().slice(-4);
           station = await api.db.station.create({
             stationName, stationCode,
             outStationCode: "", facType: "1", stationType: "1",
@@ -232,26 +236,28 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
             useTime: "", responsiblePerson: "", telephone: "",
             envDataRobotId: 0, currentFac: 1, alarmLevel: 0, sortNum: 1,
           });
+          console.log("[????] ????:", { id: station.id, name: station.stationName });
         }
 
         if (!station || !station.id) {
-          antMsg.error('??????');
+          message.error('??????');
           setImporting(false);
           return;
         }
+
         await api.startBatch();
         const result = await api.importPoints(rows, station.id, station.stationName, station.stationCode);
         await api.endBatch();
 
-        antMsg.success("import success: " + result.inserted + " new, " + result.updated + " updated");
+        message.success("import success: " + result.inserted + " new, " + result.updated + " updated");
         if (result.errors.length > 0) {
-          antMsg.warning("errors: " + result.errors.slice(0, 3).join("; "));
+          message.warning("errors: " + result.errors.slice(0, 3).join("; "));
         }
       } else {
-        antMsg.warning("import only available in Electron mode");
+        message.warning("import only available in Electron mode");
       }
     } catch (e: any) {
-      antMsg.error("import failed: " + e.message);
+      message.error("import failed: " + e.message);
     }
     setImporting(false);
   };

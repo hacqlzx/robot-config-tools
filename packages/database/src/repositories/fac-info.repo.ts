@@ -19,7 +19,14 @@ export class FacInfoRepo {
     const vals = "@stationName, @stationCode, @outStationCode, @facType, @stationType, @provinceName, @cityName, @areaName, @createBy, @createTime, @updateBy, @updateTime, @voltName, @useTime, @responsiblePerson, @telephone, @envDataRobotId, @currentFac, @alarmLevel, @sortNum";
     const stmt = this.db.prepare("INSERT INTO fac_info (" + cols + ") VALUES (" + vals + ")");
     const result = stmt.run({ ...dto, createTime: now, updateTime: now });
-    return this.getById(Number(result.lastInsertRowid))!;
+    if (result.changes === 0) {
+      throw new Error("INSERT fac_info failed: changes=0, lastInsertRowid=" + result.lastInsertRowid);
+    }
+    const inserted = this.getById(Number(result.lastInsertRowid));
+    if (!inserted) {
+      throw new Error("INSERT fac_info succeeded but getById returned undefined, lastInsertRowid=" + result.lastInsertRowid);
+    }
+    return inserted;
   }
 
   update(id: number, dto: UpdateFacInfoDTO): void {
@@ -42,8 +49,12 @@ export class FacInfoRepo {
     return this.db.prepare("SELECT * FROM fac_info WHERE station_code = ?").get(code) as FacInfo | undefined;
   }
 
-  upsert(dto: CreateFacInfoDTO & { stationCode: string }): FacInfo {
-    const existing = this.findByStationCode(dto.stationCode);
+  findByStationName(name: string): FacInfo | undefined {
+    return this.db.prepare("SELECT * FROM fac_info WHERE station_name = ?").get(name) as FacInfo | undefined;
+  }
+
+  upsert(dto: CreateFacInfoDTO & { stationName: string }): FacInfo {
+    const existing = this.findByStationName(dto.stationName);
     if (existing) {
       this.update(existing.id, dto);
       return this.getById(existing.id)!;

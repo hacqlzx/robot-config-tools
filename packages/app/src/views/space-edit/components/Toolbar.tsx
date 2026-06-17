@@ -1,4 +1,4 @@
-import { useRef } from "react";
+﻿import { useRef } from "react";
 import { UploadOutlined, TableOutlined, SaveOutlined, ScissorOutlined, BorderOutlined, ThunderboltOutlined, AppstoreOutlined, NodeIndexOutlined, ExportOutlined } from "@ant-design/icons";
 import { message } from "antd";
 
@@ -52,7 +52,13 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
   const handleClick = (action?: string) => {
     switch (action) {
       case "file": fileInputRef.current?.click(); break;
-      case "point": pointInputRef.current?.click(); break;
+      case "point":
+        const sc = localStorage.getItem("selectedStationCode");
+        if (!sc) {
+          message.warning("请先在顶部菜单栏选择厂站");
+          return;
+        }
+        pointInputRef.current?.click(); break;
       case "clip": onClipModel?.(); break;
       case "cabinet": onToggleCabinet?.(); break;
     }
