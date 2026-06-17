@@ -48,7 +48,8 @@
     },
     "files": [
       "dist/**/*",
-      "dist-electron/**/*"
+      "dist-electron/**/*",
+      "!node_modules/**/*"
     ],
     "win": {
       "target": "nsis",
@@ -60,9 +61,13 @@
     },
     "electronDownload": {
       "mirror": "https://npmmirror.com/mirrors/electron/"
-    }
+    },
+    "npmRebuild": false,
+    "nodeGypRebuild": false,
+    "asar": false
   },
   "version": "1.0.0",
   "description": "Robot Config Tools",
-  "author": "robot"
+  "author": "robot",
+  "packageManager": "pnpm@9"
 }
