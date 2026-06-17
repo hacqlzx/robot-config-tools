@@ -1,14 +1,14 @@
-import { lazy, Suspense } from "react";
+﻿import { lazy, Suspense } from "react";
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import AppLayout from "../App";
 
-const SpaceEdit = lazy(() => import("../pages/space-edit"));
-const ImageEdit = lazy(() => import("../pages/image-edit"));
-const ScreenVerify = lazy(() => import("../pages/screen-verify"));
-const DeviceVerify = lazy(() => import("../pages/device-verify"));
-const Config = lazy(() => import("../pages/config"));
-const ConnectionTest = lazy(() => import("../pages/connection-test"));
-const DbTest = lazy(() => import("../pages/db-test"));
+const SpaceEdit = lazy(() => import("../views/space-edit"));
+const ImageEdit = lazy(() => import("../views/image-edit"));
+const ScreenVerify = lazy(() => import("../views/screen-verify"));
+const DeviceVerify = lazy(() => import("../views/device-verify"));
+const Config = lazy(() => import("../views/config"));
+const ConnectionTest = lazy(() => import("../views/connection-test"));
+const DbTest = lazy(() => import("../views/db-test"));
 
 function LazyPage({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<div style={{ padding: 24, textAlign: "center" }}>Loading...</div>}>{children}</Suspense>;
