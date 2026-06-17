@@ -11,6 +11,8 @@ instance.interceptors.request.use((config) => {
   const ip = getCurrentIp();
   if (ip) {
     config.baseURL = `https://${ip}`;
+  } else {
+    console.warn("[http] IP not configured, request may fail:", config.url);
   }
   return config;
 });
