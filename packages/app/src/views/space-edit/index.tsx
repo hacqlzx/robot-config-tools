@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback } from "react";
+﻿import { useRef, useEffect, useState, useCallback } from "react";
 import { parsePointExcel } from "@/utils/excel-parser";
 import { useLasLoader } from "./hooks/useLasLoader";
 import * as pc from "playcanvas";
@@ -199,34 +199,34 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
   const handleImportPointTable = async (file: File) => {
     setImporting(true);
     try {
-      // 1. ?? Excel????
+      // 1. 解析 Excel，取站名
       const { rows, stationName } = await parsePointExcel(file);
 
       if (rows.length === 0) {
-        message.warning("?????????");
+        message.warning("未解析到有效数据行");
         setImporting(false);
         return;
       }
 
       if (!stationName) {
-        message.warning("Excel ????????");
+        message.warning("Excel 中未找到厂站名称");
         setImporting(false);
         return;
       }
 
-      // 2. Electron ????? IPC ??
+      // 2. Electron 模式：通过 IPC 导入
       const api = (window as any).electronAPI;
       if (api) {
-        console.log("[????] ??:", stationName);
+        console.log("[点表导入] 站名:", stationName);
 
-        // ??????????
+        // 优先查找已有同名校验
         const stations = await api.db.station.list();
-        console.log("[????] ??????:", stations.map((s: any) => ({ id: s.id, code: s.stationCode, name: s.stationName })));
+        console.log("[点表导入] 已有厂站列表:", stations.map((s: any) => ({ id: s.id, code: s.stationCode, name: s.stationName })));
 
         let station = stations.find((s: any) => s.stationName === stationName);
 
         if (!station) {
-          // ????? stationCode
+          // 用站名生成 stationCode
           const stationCode = stationName.substring(0, 10) + Date.now().toString().slice(-4);
           station = await api.db.station.create({
             stationName, stationCode,
