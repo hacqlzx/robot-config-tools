@@ -4,7 +4,7 @@ import { MinusOutlined, BorderOutlined, CloseOutlined, SettingOutlined, ProjectO
 import type { MenuProps } from "antd";
 import { useNavigate, useLocation } from "react-router-dom";
 import { menuConfig } from "@/config/menu";
-import BackendModal from "@/components/backend-modal";
+import BackendModal from "@/pages/backend-modal";
 import { getFacInfo } from "@/api/config";
 import { getConnectionStatus, subscribe, ConnectionStatus, getCurrentIp } from "@/stores/backendStore";
 

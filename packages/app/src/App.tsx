@@ -1,6 +1,6 @@
-import { Layout, ConfigProvider, App } from "antd";
+﻿import { Layout, ConfigProvider, App } from "antd";
 import { Outlet } from "react-router-dom";
-import AppHeader from "./components/app-header";
+import AppHeader from "./pages/app-header";
 import "./styles/global.css";
 import "./styles/title-bar.scss";
 
