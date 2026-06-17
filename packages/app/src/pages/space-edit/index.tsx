@@ -1,4 +1,6 @@
-﻿import { useRef, useEffect, useState, useCallback } from "react";
+import { useRef, useEffect, useState, useCallback } from "react";
+import { parsePointExcel } from "@/utils/excel-parser";
+import { message as antMsg } from "antd";
 import { useLasLoader } from "./hooks/useLasLoader";
 import * as pc from "playcanvas";
 import { useCabinetDrawing } from "./hooks/useCabinetDrawing";
@@ -23,6 +25,7 @@ export default function SpaceEdit() {
   const orbitRef = useRef<SimpleOrbitCamera | null>(null);
   const appRef = useRef<pc.Application | null>(null);
   const [loading, setLoading] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [loadingFile, setLoadingFile] = useState("");
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [loadingText, setLoadingText] = useState("");
@@ -36,6 +39,9 @@ export default function SpaceEdit() {
   const filePathRef = useRef<Map<string, string>>(new Map());
   const pointStatsRef = useRef<Map<string, { total: number; loaded: number }>>(new Map());
   const renderDirtyRef = useRef(true);
+  const modelExtentRef = useRef(10);
+  const modelCenterRef = useRef({ x: 0, y: 0, z: 0 });
+  const hasAutoFocusedRef = useRef(false);
   const { cabinetMode, handleToggleCabinet, setupCabinetDrawing } = useCabinetDrawing();
 
   /** 按需渲染：标记脏位，rAF 循环检测到后执行一次 app.render() */
@@ -154,20 +160,33 @@ export default function SpaceEdit() {
     requestRender();
   }, [loadedFiles]);
 
-  const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" | "上" | "下") => {
-    orbitRef.current?.setViewDirection(direction);
-    requestRender();
-  }, []);
-
-  /** 将相机焦点移到指定位置 */
-  const focusOnModel = useCallback((centerX: number, centerY: number, centerZ: number, extent: number) => {
+const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" | "上" | "下") => {
     const orbit = orbitRef.current;
     if (!orbit) return;
-    orbit.lookAt.set(centerX, centerY, centerZ);
-    orbit.distance = extent * 1.5;
+    const c = modelCenterRef.current;
+    const ext = modelExtentRef.current;
+    console.log("[视角] 方向:", direction, "中心:", c.x.toFixed(1), c.y.toFixed(1), c.z.toFixed(1), "范围:", ext.toFixed(1));
+    orbit.lookAt.set(c.x, c.y, c.z);
+    orbit.distance = ext * 1.5;
+    orbit.setViewDirection(direction);
     orbit.updateCamera();
     requestRender();
-  }, []);
+  }, [])
+
+  /** 将相机焦点移到指定位置 */const focusOnModel = useCallback((centerX: number, centerY: number, centerZ: number, extent: number) => {
+    modelExtentRef.current = extent;
+    modelCenterRef.current = { x: centerX, y: centerY, z: centerZ };
+    if (!hasAutoFocusedRef.current) {
+      hasAutoFocusedRef.current = true;
+      const orbit = orbitRef.current;
+      if (orbit) {
+        orbit.lookAt.set(centerX, centerY, centerZ);
+        orbit.distance = extent * 1.5;
+        orbit.updateCamera();
+        requestRender();
+      }
+    }
+  }, [])
 
   const { loadLas, loadPly, loadLasFromPath } = useLasLoader({
     appRef, entitiesRef, lasHeadersRef, filePathRef, pointStatsRef,
@@ -175,6 +194,67 @@ export default function SpaceEdit() {
     setLoading, setLoadingFile, setLoadingText, setLoadingProgress,
     setLoadedFiles, setTreeKey,
   });
+
+  /** 点表 Excel 导入 */
+  const handleImportPointTable = async (file: File) => {
+    setImporting(true);
+    try {
+      // 1. ?? Excel
+      const { rows } = await parsePointExcel(file);
+
+      if (rows.length === 0) {
+        antMsg.warning("?????????");
+        setImporting(false);
+        return;
+      }
+
+      // 2. ?????????
+      const stationCode = localStorage.getItem("selectedStationCode");
+      const stationName = localStorage.getItem("selectedStationName");
+      if (!stationCode || !stationName) {
+        antMsg.warning("?????????");
+        setImporting(false);
+        return;
+      }
+
+      // 3. Electron ????? IPC ??
+      const api = (window as any).electronAPI;
+      if (api) {
+        // ????????????? stationCode ???
+        const stations = await api.db.station.list();
+        let station = stations.find((s: any) => s.stationCode === stationCode);
+        if (!station) {
+          station = await api.db.station.create({
+            stationName, stationCode,
+            outStationCode: "", facType: "1", stationType: "1",
+            provinceName: "", cityName: "", areaName: "",
+            createBy: "import", updateBy: "import", voltName: rows[0]?.voltName ?? "",
+            useTime: "", responsiblePerson: "", telephone: "",
+            envDataRobotId: 0, currentFac: 1, alarmLevel: 0, sortNum: 1,
+          });
+        }
+
+        if (!station || !station.id) {
+          antMsg.error('??????');
+          setImporting(false);
+          return;
+        }
+        await api.startBatch();
+        const result = await api.importPoints(rows, station.id, station.stationName, station.stationCode);
+        await api.endBatch();
+
+        antMsg.success("import success: " + result.inserted + " new, " + result.updated + " updated");
+        if (result.errors.length > 0) {
+          antMsg.warning("errors: " + result.errors.slice(0, 3).join("; "));
+        }
+      } else {
+        antMsg.warning("import only available in Electron mode");
+      }
+    } catch (e: any) {
+      antMsg.error("import failed: " + e.message);
+    }
+    setImporting(false);
+  };
 
   const handleFileSelect = async (file: File) => {
     if (window.electronAPI) {
@@ -251,7 +331,7 @@ export default function SpaceEdit() {
 
   return (
     <div ref={containerRef} style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      <Toolbar onFileSelect={handleFileSelect} onClipModel={handleClipModel} cabinetMode={cabinetMode} onToggleCabinet={handleToggleCabinet} />
+      <Toolbar onFileSelect={handleFileSelect} onClipModel={handleClipModel} cabinetMode={cabinetMode} onToggleCabinet={handleToggleCabinet} onImportPointTable={handleImportPointTable} importing={importing} />
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         <ViewCube onViewChange={handleViewChange} />
         <SidePanel

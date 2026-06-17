@@ -13,18 +13,14 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@': path.resolve('src'),
-        // PlayCanvas 引擎（开发用 dbg 版本）
         playcanvas: path.resolve(`node_modules/playcanvas/build/playcanvas${isDev ? '.dbg' : ''}/src/index.js`),
-        // laz-perf 浏览器版
         'laz-perf': path.resolve('node_modules/laz-perf/lib/web/index'),
       },
     },
 
     css: {
       preprocessorOptions: {
-        scss: {
-          silenceDeprecations: ['legacy-js-api'],
-        },
+        scss: { silenceDeprecations: ['legacy-js-api'] },
       },
       devSourcemap: true,
     },
@@ -50,9 +46,7 @@ export default defineConfig(({ mode }) => {
 
     server: {
       port: 50050,
-      hmr: {
-        overlay: false,
-      },
+      hmr: { overlay: false },
     },
 
     optimizeDeps: {
@@ -61,7 +55,6 @@ export default defineConfig(({ mode }) => {
 
     plugins: [
       react(),
-      // SVG → data-uri（playcanvas 编辑器用）
       {
         name: 'svg-data-uri',
         transform(code, id) {
@@ -83,7 +76,7 @@ export default defineConfig(({ mode }) => {
             build: {
               outDir: 'dist-electron',
               rollupOptions: {
-                external: ['electron'],
+                external: ['electron', 'sql.js'],
               },
             },
           },

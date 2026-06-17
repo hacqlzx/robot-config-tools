@@ -6,7 +6,7 @@ import { BlobReadFileSystem } from "../../../playcanvas-core/io/read/file-system
 import { loadGSplatData } from "../../../playcanvas-core/io";
 
 /** GPU 点预算上限，超出时步长降采样 */
-const MAX_POINTS = 10_000_000;
+const MAX_POINTS = 20_000_000;
 
 /** 检查 LAS 是否 LAZ 压缩 */
 function isLasCompressed(formatId: number): boolean {

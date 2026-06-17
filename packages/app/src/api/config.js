@@ -7,6 +7,11 @@ export function getAllFac() {
   return http.get("/robot/tool/getAllFac");
 }
 
+/** ???????? ID??????????????? */
+export function getFacInfo() {
+  return http.get("/robot/tool/facInfo/get");
+}
+
 // ========== 示例 ==========
 
 /**

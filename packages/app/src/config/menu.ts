@@ -11,4 +11,5 @@ export const menuConfig: MenuItem[] = [
   { key: '/device-verify', label: '设备验证图' },
   { key: '/config', label: '配置' },
   { key: '/connection-test', label: '连接测试' },
+  { key: '/db-test', label: 'DB测试' },
 ];

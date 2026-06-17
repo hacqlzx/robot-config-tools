@@ -1,6 +1,8 @@
 packages:
   - packages/app
+  - packages/database
 
 ignoredBuiltDependencies:
   - '@parcel/watcher'
   - esbuild
+  - better-sqlite3

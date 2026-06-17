@@ -53,6 +53,8 @@ export class SimpleOrbitCamera {
     canvas.addEventListener("touchstart", this.onTouchStart, { passive: false });
     canvas.addEventListener("touchmove", this.onTouchMove, { passive: false });
     canvas.addEventListener("touchend", this.onTouchEnd);
+    canvas.addEventListener("mouseleave", this.resetMouseDrag);
+    document.addEventListener("mouseleave", this.resetMouseDrag);
     this._canvas = canvas;
 
     // 键盘事件
@@ -185,7 +187,7 @@ export class SimpleOrbitCamera {
   }
 
   private onMouseDown = (e: MouseEvent) => {
-    if ((window as any).__clipDragging) return;
+    if ((window as any).__clipDragging || (window as any).__cabinetDragging) return;
     this.dragging = true;
     this.button = e.button;
     const pos = this.getMousePos(e);
@@ -194,7 +196,7 @@ export class SimpleOrbitCamera {
   };
 
   private onMouseMove = (e: MouseEvent) => {
-    if ((window as any).__clipDragging) return;
+    if ((window as any).__clipDragging || (window as any).__cabinetDragging) return;
     if (!this.dragging) return;
     const pos = this.getMousePos(e);
     const dx = pos.x - this.lastX;
@@ -218,6 +220,11 @@ export class SimpleOrbitCamera {
   };
 
   private onMouseUp = () => {
+    this.dragging = false;
+    this.button = -1;
+  };
+
+  private resetMouseDrag = () => {
     this.dragging = false;
     this.button = -1;
   };
@@ -275,6 +282,8 @@ export class SimpleOrbitCamera {
       canvas.removeEventListener("touchstart", this.onTouchStart);
       canvas.removeEventListener("touchmove", this.onTouchMove);
       canvas.removeEventListener("touchend", this.onTouchEnd);
+    canvas.removeEventListener("mouseleave", this.resetMouseDrag);
+    document.removeEventListener("mouseleave", this.resetMouseDrag);
     }
     document.removeEventListener("keydown", this.onKeyDown);
     document.removeEventListener("keyup", this.onKeyUp);

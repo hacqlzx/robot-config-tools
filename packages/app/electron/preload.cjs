@@ -1,5 +1,13 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+// Helper: invoke a db channel and unwrap {ok, data/error}
+function dbInvoke(repo, method) {
+  return (...args) => ipcRenderer.invoke(`db:${repo}:${method}`, ...args).then((res) => {
+    if (!res.ok) throw new Error(res.error);
+    return res.data;
+  });
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   minimize: () => ipcRenderer.send('win:minimize'),
@@ -17,5 +25,67 @@ contextBridge.exposeInMainWorld('electronAPI', {
     importFile: (projectName, sourcePath, fileName) => ipcRenderer.invoke('project:import-file', projectName, sourcePath, fileName),
     listTree: (projectName, subDir) => ipcRenderer.invoke('project:list-tree', projectName, subDir),
     writeFile: (projectName, subPath, data) => ipcRenderer.invoke('project:write-file', projectName, subPath, data),
+  },
+  // ---- 数据库 API ----
+  importPoints: (rows, stationId, stationName, stationCode) => ipcRenderer.invoke('db:importPoints', rows, stationId, stationName, stationCode).then(r => { if (!r.ok) throw new Error(r.error); return r.data; }),
+  startBatch: () => ipcRenderer.invoke('db:startBatch'),
+  endBatch:   () => ipcRenderer.invoke('db:endBatch'),
+  
+  
+  db: {
+    station: {
+      list:       dbInvoke('station', 'list'),
+      getById:    dbInvoke('station', 'getById'),
+      create:     dbInvoke('station', 'create'),
+      update:     dbInvoke('station', 'update'),
+      delete:     dbInvoke('station', 'delete'),
+    },
+    voltage: {
+      list:             dbInvoke('voltage', 'list'),
+      getById:          dbInvoke('voltage', 'getById'),
+      findByStationId:  dbInvoke('voltage', 'findByStationId'),
+      create:           dbInvoke('voltage', 'create'),
+      update:           dbInvoke('voltage', 'update'),
+      delete:           dbInvoke('voltage', 'delete'),
+    },
+    bay: {
+      list:             dbInvoke('bay', 'list'),
+      getById:          dbInvoke('bay', 'getById'),
+      findByVoltId:     dbInvoke('bay', 'findByVoltId'),
+      findByStationId:  dbInvoke('bay', 'findByStationId'),
+      create:           dbInvoke('bay', 'create'),
+      update:           dbInvoke('bay', 'update'),
+      delete:           dbInvoke('bay', 'delete'),
+    },
+    mainDevice: {
+      list:             dbInvoke('mainDevice', 'list'),
+      getById:          dbInvoke('mainDevice', 'getById'),
+      findByBayId:      dbInvoke('mainDevice', 'findByBayId'),
+      findByStationId:  dbInvoke('mainDevice', 'findByStationId'),
+      create:           dbInvoke('mainDevice', 'create'),
+      update:           dbInvoke('mainDevice', 'update'),
+      delete:           dbInvoke('mainDevice', 'delete'),
+    },
+    component: {
+      list:               dbInvoke('component', 'list'),
+      getById:            dbInvoke('component', 'getById'),
+      findByMainDeviceId: dbInvoke('component', 'findByMainDeviceId'),
+      findByStationId:    dbInvoke('component', 'findByStationId'),
+      create:             dbInvoke('component', 'create'),
+      update:             dbInvoke('component', 'update'),
+      delete:             dbInvoke('component', 'delete'),
+    },
+    point: {
+      list:                dbInvoke('point', 'list'),
+      getById:             dbInvoke('point', 'getById'),
+      findByPointCode:     dbInvoke('point', 'findByPointCode'),
+      findByCalibrationId: dbInvoke('point', 'findByCalibrationId'),
+      findByStationId:     dbInvoke('point', 'findByStationId'),
+      findByComponentId:   dbInvoke('point', 'findByComponentId'),
+      paginate:            dbInvoke('point', 'paginate'),
+      create:              dbInvoke('point', 'create'),
+      update:              dbInvoke('point', 'update'),
+      delete:              dbInvoke('point', 'delete'),
+    },
   },
 });

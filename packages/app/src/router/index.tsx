@@ -8,9 +8,10 @@ const ScreenVerify = lazy(() => import("../pages/screen-verify"));
 const DeviceVerify = lazy(() => import("../pages/device-verify"));
 const Config = lazy(() => import("../pages/config"));
 const ConnectionTest = lazy(() => import("../pages/connection-test"));
+const DbTest = lazy(() => import("../pages/db-test"));
 
 function LazyPage({ children }: { children: React.ReactNode }) {
-  return <Suspense fallback={<div style={{ padding: 24, textAlign: "center" }}>加载中...</div>}>{children}</Suspense>;
+  return <Suspense fallback={<div style={{ padding: 24, textAlign: "center" }}>Loading...</div>}>{children}</Suspense>;
 }
 
 const router = createBrowserRouter([
@@ -25,6 +26,7 @@ const router = createBrowserRouter([
       { path: "device-verify", element: <LazyPage><DeviceVerify /></LazyPage> },
       { path: "config", element: <LazyPage><Config /></LazyPage> },
       { path: "connection-test", element: <LazyPage><ConnectionTest /></LazyPage> },
+      { path: "db-test", element: <LazyPage><DbTest /></LazyPage> },
     ],
   },
 ]);

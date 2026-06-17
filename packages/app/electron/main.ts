@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { exec } from 'child_process';
 import { fileURLToPath } from 'url';
+import { initDbIpc, closeDbIpc } from './db-ipc';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -206,8 +207,13 @@ ipcMain.handle('project:write-file', async (_event, projectName: string, subPath
   return filePath;
 });
 
-app.whenReady().then(createWindow);
+app.whenReady().then(async () => {
+  // 初始化数据库 + 注册 IPC
+  await initDbIpc();
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
+  closeDbIpc();
   if (process.platform !== 'darwin') app.quit();
 });

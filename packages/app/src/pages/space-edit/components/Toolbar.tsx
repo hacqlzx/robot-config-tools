@@ -1,4 +1,4 @@
-﻿import { useRef } from "react";
+import { useRef } from "react";
 import { UploadOutlined, TableOutlined, SaveOutlined, ScissorOutlined, BorderOutlined, ThunderboltOutlined, AppstoreOutlined, NodeIndexOutlined, ExportOutlined } from "@ant-design/icons";
 import { message } from "antd";
 
@@ -7,11 +7,13 @@ interface Props {
   onToggleCabinet?: () => void;
   onFileSelect: (file: File) => void;
   onClipModel?: () => void;
+  onImportPointTable?: (file: File) => void;
+  importing?: boolean;
 }
 
 const BUTTONS = [
   { icon: <UploadOutlined style={{ fontSize: 20 }} />, label: "空间模型加载", action: "file" as const },
-  { icon: <TableOutlined style={{ fontSize: 20 }} />, label: "点表加载" },
+  { icon: <TableOutlined style={{ fontSize: 20 }} />, label: "点表加载", action: "point" as const },
   { icon: <SaveOutlined style={{ fontSize: 20 }} />, label: "保存全部" },
   { icon: <ScissorOutlined style={{ fontSize: 20 }} />, label: "裁切模型", action: "clip" as const },
   { icon: <BorderOutlined style={{ fontSize: 20 }} />, label: "绘制屏柜", action: "cabinet" as const },
@@ -21,8 +23,9 @@ const BUTTONS = [
   { icon: <ExportOutlined style={{ fontSize: 20 }} />, label: "导出模型" },
 ];
 
-export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onToggleCabinet }: Props) {
+export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onToggleCabinet, onImportPointTable, importing }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pointInputRef = useRef<HTMLInputElement>(null);
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -39,9 +42,17 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
     e.target.value = "";
   };
 
+  const handlePointFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    onImportPointTable?.(file);
+    e.target.value = "";
+  };
+
   const handleClick = (action?: string) => {
     switch (action) {
       case "file": fileInputRef.current?.click(); break;
+      case "point": pointInputRef.current?.click(); break;
       case "clip": onClipModel?.(); break;
       case "cabinet": onToggleCabinet?.(); break;
     }
@@ -79,14 +90,16 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
         flexShrink: 0,
       }}>
         <input ref={fileInputRef} type="file" accept=".ply,.splat,.las,.laz" onChange={handleFile} style={{ display: "none" }} />
+        <input ref={pointInputRef} type="file" accept=".xlsx,.xls" onChange={handlePointFile} style={{ display: "none" }} />
         {BUTTONS.map(({ icon, label, action }) => (
           <button
             key={label}
             className={`space-edit-toolbar-btn${action === "cabinet" && cabinetMode ? " active" : ""}`}
             onClick={() => handleClick(action)}
+            disabled={action === "point" && importing}
           >
             {icon}
-            <span>{label}</span>
+            <span>{label}{action === "point" && importing ? "..." : ""}</span>
           </button>
         ))}
       </div>
