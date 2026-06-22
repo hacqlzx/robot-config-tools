@@ -1,154 +1,172 @@
-import { useState, useEffect } from "react";
-import { Button, Table, Popconfirm, message } from "antd";
+﻿import { useState, useRef, useEffect } from "react";
+import { Button, Table, Modal, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { ReloadOutlined, PlusOutlined } from "@ant-design/icons";
 import StationFormModal from "./StationFormModal";
-// import { getAllFac } from "@/api/config.js";
-
-export const FAC_TYPE_MAP: Record<string, string> = {
-  "10": "配电房",
-  "20": "开闭所",
-  "30": "变电站",
-};
-
-export const STATION_TYPE_MAP: Record<string, string> = {
-  "1": "AIS站",
-  "2": "GIS站",
-  "3": "HGIS站",
-  "4": "室内站",
-};
+import { getFacInfo, addFac, editFac, deleteFac, setCurrentFac } from "@/api/config.js";
 
 export interface StationRecord {
   id: number;
   stationName: string;
   stationCode: string;
   voltName: string;
-  facType: string;
-  stationType: string;
+  stationTypeDesc: string;
+  /** 是否默认厂站 0=是 1=否 */
+  currentFac: number;
+  /** 表单用：厂站类型代码 */
+  facType?: string;
+  /** 表单用：变电站类型代码 */
+  stationType?: string;
   provinceName?: string;
   cityName?: string;
   areaName?: string;
 }
 
-const STORAGE_KEY = "selectedStation";
-
-function getStoredStation(): number | null {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
-  } catch {
-    return null;
-  }
-}
-
-function setStoredStation(id: number | null) {
-  try {
-    if (id !== null) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(id));
-    } else {
-      localStorage.removeItem(STORAGE_KEY);
-    }
-  } catch {
-    // ignore
-  }
+/** 响应通用结构 */
+interface ApiResponse<T> {
+  code: number;
+  message: string | null;
+  data: T;
+  timestamp: string;
+  success: boolean;
 }
 
 export default function StationConfig() {
-  const [data, setData] = useState<StationRecord[]>(mockData);
-  const [selectedStation, setSelectedStation] = useState<number | null>(getStoredStation);
+  const [data, setData] = useState<StationRecord[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editRecord, setEditRecord] = useState<StationRecord | null>(null);
+  const fetchedRef = useRef(false);
 
-  useEffect(() => {
-    setStoredStation(selectedStation);
-  }, [selectedStation]);
-
-  // TODO: 自动获取厂站列表
-  // const fetchStations = async () => {
-  //   try {
-  //     const res = await getAllFac();
-  //     setData(res.data || []);
-  //   } catch {
-  //     message.error("获取厂站列表失败");
-  //   }
-  // };
-  //
-  // useEffect(() => {
-  //   fetchStations();
-  // }, []);
-
-  const handleSwitch = (id: number) => {
-    setSelectedStation(id);
-    message.success("切换成功");
+  /** 查询厂站列表 */
+  const fetchStations = async () => {
+    setLoading(true);
+    try {
+      const res = await getFacInfo();
+      const body = res.data as ApiResponse<StationRecord[]>;
+      if (body.success) {
+        if (body.data) {
+          setData(body.data);
+        }
+      } else {
+        message.error(body.message || "获取厂站列表失败");
+      }
+    } catch {
+      message.error("获取厂站列表失败");
+    } finally {
+      setLoading(false);
+    }
   };
 
+  useEffect(() => {
+    if (!fetchedRef.current) {
+      fetchedRef.current = true;
+      fetchStations();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** 切换默认厂站 */
+  const handleSwitch = async (id: number) => {
+    try {
+      const res = await setCurrentFac(id);
+      const body = res.data as ApiResponse<null>;
+      if (body.success) {
+        message.success("切换成功");
+        fetchStations();
+      } else {
+        message.error(body.message || "切换失败");
+      }
+    } catch {
+      message.error("切换失败");
+    }
+  };
+
+  /** 编辑 */
   const handleEdit = (record: StationRecord) => {
     setEditRecord(record);
     setModalOpen(true);
   };
 
-  const handleDelete = (id: number) => {
-    setData(data.filter((item) => item.id !== id));
-    if (selectedStation === id) {
-      setSelectedStation(null);
-    }
-    message.success("删除成功");
+  /** 删除 */
+  const handleDelete = (record: StationRecord) => {
+    Modal.confirm({
+      centered: true,
+      title: "确认删除",
+      content: `确定要删除厂站「${record.stationName}」吗？`,
+      okText: "确定",
+      cancelText: "取消",
+      onOk: async () => {
+        try {
+          const res = await deleteFac(record.id);
+          const body = res.data as ApiResponse<null>;
+          if (body.success) {
+            message.success("删除成功");
+            fetchStations();
+          } else {
+            message.error(body.message || "删除失败");
+          }
+        } catch {
+          message.error("删除失败");
+        }
+      },
+    });
   };
 
+  /** 新增 */
   const handleAdd = () => {
     setEditRecord(null);
     setModalOpen(true);
   };
 
-  const handleSubmit = (values: StationRecord) => {
-    if (editRecord) {
-      setData(data.map((item) => (item.id === editRecord.id ? { ...values, id: editRecord.id } : item)));
-      message.success("编辑成功");
-    } else {
-      const newId = Math.max(0, ...data.map((d) => d.id)) + 1;
-      setData([...data, { ...values, id: newId }]);
-      message.success("新增成功");
+  /** 新增 / 编辑 提交 */
+  const handleSubmit = async (values: any) => {
+    setSubmitting(true);
+    try {
+      let res;
+      if (editRecord) {
+        res = await editFac({ id: editRecord.id, ...values });
+      } else {
+        res = await addFac(values);
+      }
+      const body = res.data as ApiResponse<null>;
+      if (body.success) {
+        message.success(editRecord ? "编辑成功" : "新增成功");
+        setModalOpen(false);
+        fetchStations();
+      } else {
+        message.error(body.message || (editRecord ? "编辑失败" : "新增失败"));
+      }
+    } catch {
+      message.error(editRecord ? "编辑失败" : "新增失败");
+    } finally {
+      setSubmitting(false);
     }
-    setModalOpen(false);
   };
 
   const columns: ColumnsType<StationRecord> = [
-    { title: "序号", dataIndex: "id", width: 60, align: "center" },
+    { title: "序号", width: 60, align: "center", render: (_: any, __: any, index: number) => index + 1 },
     { title: "厂站名称", dataIndex: "stationName" },
     { title: "厂站编码", dataIndex: "stationCode" },
     { title: "电压等级", dataIndex: "voltName", width: 100 },
-    {
-      title: "厂站类型",
-      dataIndex: "facType",
-      width: 110,
-      render: (v: string) => FAC_TYPE_MAP[v] || v,
-    },
-    {
-      title: "变电站类型",
-      dataIndex: "stationType",
-      width: 110,
-      render: (v: string) => STATION_TYPE_MAP[v] || v,
-    },
+    { title: "厂站类型", dataIndex: "stationTypeDesc", width: 110 },
     {
       title: "操作",
       width: 200,
       render: (_, record) => (
         <div style={{ display: "flex", gap: 4 }}>
-          <Button type="link" size="small" onClick={() => handleSwitch(record.id)}>
-            切换
-          </Button>
+          {record.currentFac === 1 && (
+            <Button type="link" size="small" onClick={() => handleSwitch(record.id)}>
+              切换
+            </Button>
+          )}
           <Button type="link" size="small" onClick={() => handleEdit(record)}>
             编辑
           </Button>
-          <Popconfirm
-            title="确定删除？"
-            onConfirm={() => handleDelete(record.id)}
-            okText="确定"
-            cancelText="取消"
-          >
-            <Button type="link" size="small" danger>
-              删除
-            </Button>
-          </Popconfirm>
+          <Button type="link" size="small" danger onClick={() => handleDelete(record)}>
+            删除
+          </Button>
         </div>
       ),
     },
@@ -157,7 +175,9 @@ export default function StationConfig() {
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", gap: 8, marginBottom: 12, justifyContent: "flex-end" }}>
-        <Button icon={<ReloadOutlined />}>刷新</Button>
+        <Button icon={<ReloadOutlined />} onClick={fetchStations} loading={loading}>
+          刷新
+        </Button>
         <Button icon={<PlusOutlined />} type="primary" onClick={handleAdd}>
           新增
         </Button>
@@ -170,20 +190,16 @@ export default function StationConfig() {
           pagination={false}
           size="small"
           bordered
+          loading={loading}
         />
       </div>
       <StationFormModal
         open={modalOpen}
         record={editRecord}
+        confirmLoading={submitting}
         onClose={() => setModalOpen(false)}
         onSubmit={handleSubmit}
       />
     </div>
   );
 }
-
-const mockData: StationRecord[] = [
-  { id: 1, stationName: "测试场站", stationCode: "20250228", voltName: "220kV", facType: "30", stationType: "3" },
-  { id: 2, stationName: "2号场站", stationCode: "20250301", voltName: "110kV", facType: "10", stationType: "1" },
-  { id: 3, stationName: "3号场站", stationCode: "20250302", voltName: "35kV", facType: "20", stationType: "2" },
-];

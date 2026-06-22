@@ -1,9 +1,9 @@
-import { useEffect } from "react";
-import { Modal, Form, Input, InputNumber, Select } from "antd";
+﻿import { useEffect } from "react";
+import { Modal, Form, Input, Select } from "antd";
 import IpInput from "@/components/ip-input";
 
 interface FacOption {
-  value: string;
+  value: number;
   label: string;
 }
 
@@ -11,11 +11,12 @@ interface Props {
   open: boolean;
   record: { id: number; robotName: string; robotCode: string } | null;
   facOptions: FacOption[];
+  confirmLoading: boolean;
   onClose: () => void;
   onSubmit: (values: any) => void;
 }
 
-export default function RobotFormModal({ open, record, facOptions, onClose, onSubmit }: Props) {
+export default function RobotFormModal({ open, record, facOptions, confirmLoading, onClose, onSubmit }: Props) {
   const [form] = Form.useForm();
   const isEdit = !!record;
 
@@ -43,7 +44,9 @@ export default function RobotFormModal({ open, record, facOptions, onClose, onSu
       onCancel={onClose}
       okText="确定"
       cancelText="取消"
+      confirmLoading={confirmLoading}
       destroyOnClose
+      getContainer={false}
     >
       <Form form={form} layout="horizontal" labelAlign="right" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
         {isEdit ? (
@@ -57,14 +60,11 @@ export default function RobotFormModal({ open, record, facOptions, onClose, onSu
           </>
         ) : (
           <>
-            <Form.Item label="所属厂站" name="belongFacIdList" rules={[{ required: true, message: "请选择厂站" }]}>
-              <Select mode="multiple" placeholder="请选择" options={facOptions} />
+            <Form.Item label="所属厂站" name="belongFacId" rules={[{ required: true, message: "请选择厂站" }]}>
+              <Select placeholder="请选择" options={facOptions} />
             </Form.Item>
             <Form.Item label="IP 地址" name="ip" rules={[{ required: true, message: "请输入 IP" }]}>
               <IpInput />
-            </Form.Item>
-            <Form.Item label="端口" name="port" rules={[{ required: true, message: "请输入端口" }]}>
-              <InputNumber placeholder="请输入" style={{ width: "100%" }} min={1} max={65535} />
             </Form.Item>
           </>
         )}

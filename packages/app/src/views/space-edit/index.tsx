@@ -148,6 +148,8 @@ export default function SpaceEdit() {
   useEffect(() => {
     if (loadedFiles.size === 0) return;
     entitiesRef.current.forEach((ent) => {
+      // 只对 GSplat 实体应用显示比例，pointcloud 已通过 stride 控制 GPU 预算
+      if (!ent.gsplat) return;
       const mi = ent.render?.meshInstances?.[0];
       if (mi?.material) {
         const vb = mi.mesh?.vertexBuffer;
@@ -393,5 +395,6 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
     </div>
   );
 }
+
 
 

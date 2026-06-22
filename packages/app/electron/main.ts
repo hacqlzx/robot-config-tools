@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, ipcMain } from "electron";
+﻿import { app, BrowserWindow, Menu, ipcMain } from "electron";
 import path from "path";
 import fs from "fs";
 import { exec } from "child_process";
@@ -10,7 +10,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // === GPU 配置：解决双显卡机器默认使用核显导致模型颜色渲染异常的问题 ===
 // 绕过 Chromium GPU 黑名单，避免某些核显被强制回退到软件渲染导致颜色丢失
 app.commandLine.appendSwitch("ignore-gpu-blocklist");
-// 指定使用 D3D11 作为 ANGLE 后端（微软官方推荐的 WebGL 后端，兼容性/稳定性最优）
+// 指定使用 D3D11 作为 ANGLE 后端（微软官方推荐的 WebGL 后端，兼容性与稳定性最优）
 app.commandLine.appendSwitch("use-angle", "d3d11");
 // 禁用 GPU vsync，减少渲染延迟
 app.commandLine.appendSwitch("disable-gpu-vsync");
@@ -37,8 +37,7 @@ function createWindow() {
   console.log("preload path:", preloadPath, "exists:", fs.existsSync(preloadPath));
 
   const win = new BrowserWindow({
-    width: 1600,
-    height: 900,
+    show: false,
     frame: false,
     webPreferences: {
       preload: preloadPath,
@@ -50,6 +49,9 @@ function createWindow() {
       webSecurity: false,
     },
   });
+
+  win.maximize();
+  win.show();
 
   // 窗口控制
   ipcMain.on("win:minimize", () => win.minimize());

@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+﻿import { useState, useRef, useEffect } from "react";
 import { Input } from "antd";
 
 interface Props {
@@ -10,6 +10,11 @@ export default function IpInput({ value, onChange }: Props) {
   const parts = (value || "").split(".");
   const refs = useRef<any[]>([]);
   const [vals, setVals] = useState([parts[0] || "", parts[1] || "", parts[2] || "", parts[3] || ""]);
+
+  useEffect(() => {
+    const p = (value || "").split(".");
+    setVals([p[0] || "", p[1] || "", p[2] || "", p[3] || ""]);
+  }, [value]);
 
   const emit = (next: string[]) => {
     const ip = next.join(".");

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+﻿import { useEffect } from "react";
 import { Modal, Form, Input, Select } from "antd";
 import type { StationRecord } from "./index";
 
@@ -18,12 +18,14 @@ const STATION_TYPE_OPTIONS = [
 interface Props {
   open: boolean;
   record: StationRecord | null;
+  confirmLoading: boolean;
   onClose: () => void;
   onSubmit: (values: StationRecord) => void;
 }
 
-export default function StationFormModal({ open, record, onClose, onSubmit }: Props) {
+export default function StationFormModal({ open, record, confirmLoading, onClose, onSubmit }: Props) {
   const [form] = Form.useForm();
+  const isEdit = !!record;
 
   useEffect(() => {
     if (open) {
@@ -42,14 +44,16 @@ export default function StationFormModal({ open, record, onClose, onSubmit }: Pr
 
   return (
     <Modal
-      title={record ? "编辑厂站" : "新增厂站"}
+      title={isEdit ? "编辑厂站" : "新增厂站"}
       open={open}
       centered
       onOk={handleOk}
       onCancel={onClose}
       okText="确定"
       cancelText="取消"
+      confirmLoading={confirmLoading}
       destroyOnClose
+      getContainer={false}
     >
       <Form form={form} layout="horizontal" labelAlign="right" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
         <Form.Item label="厂站名称" name="stationName" rules={[{ required: true, message: "请输入厂站名称" }]}>

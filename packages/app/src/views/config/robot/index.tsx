@@ -1,24 +1,10 @@
-import { useState } from "react";
-import { Button, Table, Modal, Tag, Popconfirm, message } from "antd";
+﻿import { useState, useRef, useEffect } from "react";
+import { Button, Table, Modal, Tag, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { ReloadOutlined, PlusOutlined } from "@ant-design/icons";
 import RobotFormModal from "./RobotFormModal";
-
-export interface CameraVO {
-  cameraId: number;
-  cameraName: string;
-  videoType: string;
-  visibleManufacturerTypeName: string;
-  visibleIp: string;
-  visiblePort: number;
-  infraredIp: string;
-  infraredPort: number;
-  visibleRtspAddress: string;
-  infraredRtspAddress: string;
-  visibleRtmpAddress: string;
-  infraredRtmpAddress: string;
-  pullFlowMode?: number;
-}
+import CameraTableModal, { type CameraVO } from "./CameraTableModal";
+import { getAllRobot, addRobot, updateRobot, deleteRobot, getFacInfo } from "@/api/config.js";
 
 export interface RobotRecord {
   id: number;
@@ -29,7 +15,7 @@ export interface RobotRecord {
   operationFacName: string;
   currentMapName: string;
   robotTypeName: string;
-  onlineState: string;
+  onlineState: number;
   cameraVOS?: CameraVO[];
   mqttIp?: string;
   mqttPort?: number;
@@ -37,24 +23,16 @@ export interface RobotRecord {
   ftpsPort?: number;
 }
 
-const PULL_FLOW_MODE_MAP: Record<number, string> = {
-  1: "RTSP",
-  2: "RTMP",
-};
+interface ApiResponse<T> {
+  code: number;
+  message: string | null;
+  data: T;
+  timestamp: string;
+  success: boolean;
+}
 
-const getVideoTypeTag = (videoType: string) => {
-  const map: Record<string, { color: string; bg: string; label: string }> = {
-    "1": { color: "#1677ff", bg: "#e6f4ff", label: "可见光" },
-    "2": { color: "#fa8c16", bg: "#fff7e6", label: "红外" },
-    "3": { color: "#722ed1", bg: "#f9f0ff", label: "可见光与红外" },
-  };
-  const item = map[videoType];
-  if (!item) return videoType;
-  return <Tag color={item.label === "可见光" ? "blue" : item.label === "红外" ? "orange" : "purple"}>{item.label}</Tag>;
-};
-
-const getStatusPill = (state: string) => {
-  const online = state === "online";
+const getStatusPill = (state: number) => {
+  const online = state === 1;
   return (
     <span
       style={{
@@ -82,39 +60,132 @@ const getStatusPill = (state: string) => {
 };
 
 export default function RobotConfig() {
-  const [data] = useState<RobotRecord[]>([mockRobot]);
+  const [data, setData] = useState<RobotRecord[]>([]);
+  const [facOptions, setFacOptions] = useState<{ value: number; label: string }[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editRecord, setEditRecord] = useState<{ id: number; robotName: string; robotCode: string } | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraData, setCameraData] = useState<CameraVO[]>([]);
+  const fetchedRef = useRef(false);
 
-  const facOptions = data.map((item) => ({
-    value: String(item.id),
-    label: item.operationFacName,
-  }));
+  /** 查询机器人列表 */
+  const fetchRobots = async () => {
+    setLoading(true);
+    try {
+      const res = await getAllRobot();
+      const body = res.data as ApiResponse<RobotRecord[]>;
+      if (body.success) {
+        if (body.data) {
+          setData(body.data);
+        }
+      } else {
+        message.error(body.message || "获取机器人列表失败");
+      }
+    } catch {
+      message.error("获取机器人列表失败");
+    } finally {
+      setLoading(false);
+    }
+  };
 
+  /** 查询厂站列表（供新增时选择） */
+  const fetchFacOptions = async () => {
+    try {
+      const res = await getFacInfo();
+      const body = res.data as ApiResponse<{ id: number; stationName: string }[]>;
+      if (body.success) {
+        if (body.data) {
+          setFacOptions(
+            body.data.map((item) => ({ value: item.id, label: item.stationName })),
+          );
+        }
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  useEffect(() => {
+    if (!fetchedRef.current) {
+      fetchedRef.current = true;
+      fetchRobots();
+      fetchFacOptions();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** 编辑 */
   const handleEdit = (record: RobotRecord) => {
     setEditRecord({ id: record.id, robotName: record.robotName, robotCode: record.robotCode });
     setModalOpen(true);
   };
 
+  /** 删除 */
+  const handleDelete = (record: RobotRecord) => {
+    Modal.confirm({
+      centered: true,
+      title: "确认删除",
+      content: `确定要删除机器人「${record.robotName}」吗？`,
+      okText: "确定",
+      cancelText: "取消",
+      onOk: async () => {
+        try {
+          const res = await deleteRobot(record.id);
+          const body = res.data as ApiResponse<null>;
+          if (body.success) {
+            message.success("删除成功");
+            fetchRobots();
+          } else {
+            message.error(body.message || "删除失败");
+          }
+        } catch {
+          message.error("删除失败");
+        }
+      },
+    });
+  };
+
+  /** 新增 */
   const handleAdd = () => {
     setEditRecord(null);
     setModalOpen(true);
   };
 
-  const handleSubmit = (values: any) => {
-    message.success(editRecord ? "编辑成功" : "新增成功");
-    setModalOpen(false);
+  /** 新增 / 编辑 提交 */
+  const handleSubmit = async (values: any) => {
+    setSubmitting(true);
+    try {
+      let res;
+      if (editRecord) {
+        res = await updateRobot({ id: editRecord.id, ...values });
+      } else {
+        res = await addRobot(values);
+      }
+      const body = res.data as ApiResponse<null>;
+      if (body.success) {
+        message.success(editRecord ? "编辑成功" : "新增成功");
+        setModalOpen(false);
+        fetchRobots();
+      } else {
+        message.error(body.message || (editRecord ? "编辑失败" : "新增失败"));
+      }
+    } catch {
+      message.error(editRecord ? "编辑失败" : "新增失败");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
+  /** 相机 */
   const handleCamera = (record: RobotRecord) => {
     setCameraData(record.cameraVOS || []);
     setCameraOpen(true);
   };
 
-  const robotColumns: ColumnsType<RobotRecord> = [
-    { title: "序号", dataIndex: "id", width: 60, align: "center" },
+  const columns: ColumnsType<RobotRecord> = [
+    { title: "序号", width: 60, align: "center", render: (_: any, __: any, index: number) => index + 1 },
     { title: "厂站", dataIndex: "operationFacName", width: 120 },
     { title: "机器人名称", dataIndex: "robotName", width: 160 },
     { title: "机器人编码", dataIndex: "robotCode", width: 160 },
@@ -139,59 +210,10 @@ export default function RobotConfig() {
           <Button type="link" size="small" onClick={() => handleCamera(record)}>
             相机
           </Button>
-          <Popconfirm title="确定删除？" okText="确定" cancelText="取消">
-            <Button type="link" size="small" danger>
-              删除
-            </Button>
-          </Popconfirm>
+          <Button type="link" size="small" danger onClick={() => handleDelete(record)}>
+            删除
+          </Button>
         </div>
-      ),
-    },
-  ];
-
-  const cameraColumns: ColumnsType<CameraVO> = [
-    { title: "序号", dataIndex: "cameraId", width: 60, align: "center" },
-    { title: "相机名称", dataIndex: "cameraName", width: 120 },
-    {
-      title: "相机类型",
-      dataIndex: "videoType",
-      width: 140,
-      render: getVideoTypeTag,
-    },
-    { title: "生产厂家", dataIndex: "visibleManufacturerTypeName", width: 120 },
-    {
-      title: "IP地址",
-      width: 140,
-      render: (_, record) => {
-        const vt = record.videoType;
-        if (vt === "1") return record.visibleIp;
-        if (vt === "2") return record.infraredIp;
-        return `${record.visibleIp} / ${record.infraredIp}`;
-      },
-    },
-    {
-      title: "服务端口",
-      width: 100,
-      render: (_, record) => {
-        const vt = record.videoType;
-        if (vt === "1") return record.visiblePort;
-        if (vt === "2") return record.infraredPort;
-        return `${record.visiblePort} / ${record.infraredPort}`;
-      },
-    },
-    {
-      title: "拉流方式",
-      dataIndex: "pullFlowMode",
-      width: 90,
-      render: (v: number) => PULL_FLOW_MODE_MAP[v] || v || "-",
-    },
-    {
-      title: "操作",
-      width: 80,
-      render: () => (
-        <Button type="link" size="small">
-          查看
-        </Button>
       ),
     },
   ];
@@ -199,7 +221,9 @@ export default function RobotConfig() {
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", gap: 8, marginBottom: 12, justifyContent: "flex-end" }}>
-        <Button icon={<ReloadOutlined />}>刷新</Button>
+        <Button icon={<ReloadOutlined />} onClick={fetchRobots} loading={loading}>
+          刷新
+        </Button>
         <Button icon={<PlusOutlined />} type="primary" onClick={handleAdd}>
           新增
         </Button>
@@ -207,82 +231,27 @@ export default function RobotConfig() {
       <div style={{ flex: 1, overflow: "auto" }}>
         <Table
           rowKey="id"
-          columns={robotColumns}
+          columns={columns}
           dataSource={data}
           pagination={false}
           size="small"
           bordered
+          loading={loading}
         />
       </div>
       <RobotFormModal
         open={modalOpen}
         record={editRecord}
         facOptions={facOptions}
+        confirmLoading={submitting}
         onClose={() => setModalOpen(false)}
         onSubmit={handleSubmit}
       />
-      <Modal
-        title="相机列表"
+      <CameraTableModal
         open={cameraOpen}
-        width={1200}
-        centered
-        footer={null}
-        onCancel={() => setCameraOpen(false)}
-      >
-        <Table
-          rowKey="cameraId"
-          columns={cameraColumns}
-          dataSource={cameraData}
-          pagination={false}
-          scroll={{ y: 400 }}
-          size="small"
-          bordered
-        />
-      </Modal>
+        data={cameraData}
+        onClose={() => setCameraOpen(false)}
+      />
     </div>
   );
 }
-
-const mockRobot: RobotRecord = {
-  id: 1,
-  robotName: "巡检机器人1号",
-  robotCode: "RB20250301",
-  ip: "192.168.1.100",
-  port: 8080,
-  operationFacName: "测试场站",
-  currentMapName: "一层地图",
-  robotTypeName: "轮式巡检机器人",
-  onlineState: "online",
-  cameraVOS: [
-    {
-      cameraId: 1,
-      cameraName: "前视相机",
-      videoType: "1",
-      visibleManufacturerTypeName: "海康威视",
-      visibleIp: "192.168.1.101",
-      visiblePort: 554,
-      infraredIp: "",
-      infraredPort: 0,
-      visibleRtspAddress: "rtsp://192.168.1.101/stream1",
-      infraredRtspAddress: "",
-      visibleRtmpAddress: "",
-      infraredRtmpAddress: "",
-      pullFlowMode: 1,
-    },
-    {
-      cameraId: 2,
-      cameraName: "红外热成像",
-      videoType: "2",
-      visibleManufacturerTypeName: "大华",
-      visibleIp: "",
-      visiblePort: 0,
-      infraredIp: "192.168.1.102",
-      infraredPort: 554,
-      visibleRtspAddress: "",
-      infraredRtspAddress: "rtsp://192.168.1.102/thermal",
-      visibleRtmpAddress: "",
-      infraredRtmpAddress: "",
-      pullFlowMode: 2,
-    },
-  ],
-};

@@ -1,4 +1,4 @@
-﻿import { useCallback } from "react";
+import { useCallback } from "react";
 import * as pc from "playcanvas";
 import { pointcloudVert, pointcloudFrag } from "../../../playcanvas-core/shaders/pointcloud-shader";
 import { parseLasHeader, loadLazPerf, getWasmUrl, LasHeader } from "../../../playcanvas-core/io/read/las-reader";
@@ -230,7 +230,7 @@ export function useLasLoader({
     const actualFormat = laszip.getPointFormat();
     const pointPtr = LazPerf._malloc(pointLength);
     const hasRgb = [2, 3, 5, 7, 8, 10].includes(actualFormat);
-    const rgbOff = hasRgb ? (actualFormat >= 6 ? 30 : 20) : 0;
+    const rgbOff = hasRgb ? getRgbOffset(actualFormat) : 0;
 
     const CHUNK = 50000;
     let outputIdx = 0;
@@ -372,3 +372,4 @@ export function useLasLoader({
 
   return { loadLas, loadPly, loadLasFromPath };
 }
+

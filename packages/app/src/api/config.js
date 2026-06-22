@@ -1,4 +1,4 @@
-import http from "@/services/http";
+﻿import http from "@/services/http";
 
 // ========== 厂站 ==========
 
@@ -7,25 +7,119 @@ export function getAllFac() {
   return http.get("/robot/tool/getAllFac");
 }
 
-/** ???????? ID??????????????? */
+/** 厂站查询 */
 export function getFacInfo() {
   return http.get("/robot/tool/facInfo/get");
 }
 
-// ========== 示例 ==========
+/** 厂站新增 */
+export function addFac(data) {
+  return http.post("/robot/tool/facInfo/add", data);
+}
 
-/**
- * GET 携带 query 参数
- * getAllFac({ stationName: "xxx", page: 1 })
- */
-// export function getAllFac(params) {
-//   return http.get("/robot/tool/getAllFac", params);
-// }
+/** 厂站更新 */
+export function editFac(data) {
+  return http.post("/robot/tool/facInfo/edit", data);
+}
 
-/**
- * POST 携带 body 参数
- * createFac({ stationName: "xxx", stationCode: "001" })
- */
-// export function createFac(data) {
-//   return http.post("/robot/tool/createFac", data);
-// }
+/** 厂站删除 */
+export function deleteFac(id) {
+  return http.post("/robot/tool/facInfo/delete", { id });
+}
+
+/** 厂站切换默认厂站 */
+export function setCurrentFac(id) {
+  return http.post("/robot/tool/facInfo/setCurrentFac", { id });
+}
+
+// ========== 机器人 ==========
+
+/** 机器人查询 */
+export function getAllRobot() {
+  return http.get("/robot/tool/robot/getAllRobot");
+}
+
+/** 机器人新增 */
+export function addRobot(data) {
+  return http.post("/robot/tool/robot/add", data);
+}
+
+/** 机器人更新 */
+export function updateRobot(data) {
+  return http.post("/robot/tool/robot/update", data);
+}
+
+/** 机器人删除 */
+export function deleteRobot(id) {
+  return http.get("/robot/tool/robot/delete", { id });
+}
+
+// ========== 地图 ==========
+
+/** 地图查询 */
+export function getMapList() {
+  return http.get("/robot/tool/robotMap/get");
+}
+
+/** 地图修改 */
+export function editMap(data) {
+  return http.post("/robot/tool/robotMap/edit", data);
+}
+
+/** 地图删除 */
+export function deleteMap(id) {
+  return http.get("/robot/tool/robotMap/delete", { id });
+}
+
+/** 地图切换运行 */
+export function setCurrentMap(id) {
+  return http.get("/robot/tool/robotMap/setCurrentMap", { id });
+}
+
+// ========== 后台 ==========
+
+/** 后台查询 */
+export function getRobotInfo() {
+  return http.get("/robot/tool/robotHost/get");
+}
+
+/** 后台保存 */
+export function saveRobotInfo(data) {
+  return http.post("/robot/tool/robotHost/saveOrEdit", data);
+}
+
+// ========== 智能分析服务 ==========
+
+/** 分析主机查询 */
+export function getAnalysisMachineInfo() {
+  return http.get("/robot/tool/analysisMachineInfo/get");
+}
+
+/** 分析主机保存 */
+export function saveAnalysisMachineInfo(data) {
+  return http.post("/robot/tool/analysisMachineInfo/save", data);
+}
+
+// ========== 上级主机 ==========
+
+/** 上级主机查询 */
+export function getSuperSystemInfo() {
+  return http.get("/robot/tool/superSystemInfo/get");
+}
+
+/** 上级主机保存 */
+export function saveSuperSystemInfo(data) {
+  return http.post("/robot/tool/superSystemInfo/save", data);
+}
+
+// ========== 网络 ==========
+
+/** 网络查询 */
+export function getNetworkList() {
+  return http.get("/robot/tool/network/get");
+}
+
+/** 网络修改 */
+export function editNetwork(data) {
+  return http.post("/robot/tool/network/edit", data);
+}
