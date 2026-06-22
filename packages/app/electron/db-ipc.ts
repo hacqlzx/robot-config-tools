@@ -1,10 +1,9 @@
-import { ipcMain } from "electron";
+﻿import { ipcMain } from "electron";
 import {
   initDatabase,
   closeDatabase,
   runMigrations,
   getDatabase,
-  FacInfoRepo,
   DeviceVoltageRepo,
   DeviceBayRepo,
   DeviceMainRepo,
@@ -14,8 +13,10 @@ import {
   migration001Name,
   migration001Up,
   migration001Down,
-  DbWrapper,
 } from "@robot/database";
+import type { PointExcelRow, ImportResult } from "@robot/database";
+
+// ---- repo IPC helpers ----
 
 function registerRepoHandlers(def: { name: string; repo: any; methods: string[] }): void {
   for (const method of def.methods) {
@@ -31,26 +32,11 @@ function registerRepoHandlers(def: { name: string; repo: any; methods: string[] 
   }
 }
 
+// ---- batch / import helpers ----
 
-  // batchMode: 批量操作时包裹，结束时一次性写盘
-  ipcMain.handle("db:batchMode", async (_event) => {
-    try {
-      const db = getDatabase();
-      db.batchMode(() => {});  // just a marker, actual work done between calls
-      return { ok: true };
-    } catch (e: any) {
-      return { ok: false, error: e.message };
-    }
-  });
-  ipcMain.handle("db:saveToDisk", async () => {
-    try {
-      getDatabase().saveToDisk();
-      return { ok: true };
-    } catch (e: any) {
-      return { ok: false, error: e.message };
-    }
-  });let _batchMode = false;
+let _batchMode = false;
 
+function registerBatchHandlers(): void {
   ipcMain.handle("db:startBatch", async () => {
     try {
       _batchMode = true;
@@ -68,19 +54,35 @@ function registerRepoHandlers(def: { name: string; repo: any; methods: string[] 
       return { ok: false, error: e.message };
     }
   });
-
-
-  // 导入点表
-  ipcMain.handle("db:importPoints", async (_event, rows: any[], stationId: number, stationName: string, stationCode: string) => {
+  ipcMain.handle("db:saveToDisk", async () => {
     try {
-      const { importPointExcel } = await import("@robot/database");
-      const db = getDatabase();
-      const result = importPointExcel(db, rows, stationId, stationName, stationCode);
-      return { ok: true, data: result };
+      getDatabase().saveToDisk();
+      return { ok: true };
     } catch (e: any) {
       return { ok: false, error: e.message };
     }
-  });export async function initDbIpc(): Promise<void> {
+  });
+}
+
+function registerImportHandler(): void {
+  ipcMain.handle(
+    "db:importPoints",
+    async (_event, rows: PointExcelRow[], stationName: string, stationCode: string) => {
+      try {
+        const { importPointExcel } = await import("@robot/database");
+        const db = getDatabase();
+        const result: ImportResult = importPointExcel(db, rows, stationName, stationCode);
+        return { ok: true, data: result };
+      } catch (e: any) {
+        return { ok: false, error: e.message };
+      }
+    },
+  );
+}
+
+// ---- init / close ----
+
+export async function initDbIpc(): Promise<void> {
   const db = await initDatabase();
 
   runMigrations(db, [
@@ -88,7 +90,6 @@ function registerRepoHandlers(def: { name: string; repo: any; methods: string[] 
   ]);
 
   const repos = [
-    { name: "station", repo: new FacInfoRepo(db), methods: ["list", "getById", "create", "update", "delete"] },
     { name: "voltage", repo: new DeviceVoltageRepo(db), methods: ["list", "getById", "findByStationId", "create", "update", "delete"] },
     { name: "bay", repo: new DeviceBayRepo(db), methods: ["list", "getById", "findByVoltId", "findByStationId", "create", "update", "delete"] },
     { name: "mainDevice", repo: new DeviceMainRepo(db), methods: ["list", "getById", "findByBayId", "findByStationId", "create", "update", "delete"] },
@@ -99,6 +100,8 @@ function registerRepoHandlers(def: { name: string; repo: any; methods: string[] 
   for (const def of repos) {
     registerRepoHandlers(def);
   }
+  registerBatchHandlers();
+  registerImportHandler();
 
   console.log("[DB] IPC handlers registered");
 }

@@ -1,4 +1,4 @@
-/// <reference types="vite/client" />
+﻿/// <reference types="vite/client" />
 
 declare global {
   const __ELECTRON__: boolean;
@@ -29,17 +29,10 @@ declare global {
         listTree: (projectName: string, subDir: string) => Promise<TreeNode[]>;
         writeFile: (projectName: string, subPath: string, data: ArrayBuffer) => Promise<string>;
       };
-      importPoints: (rows: any[], stationId: number, stationName: string, stationCode: string) => Promise<{ total: number; inserted: number; updated: number; errors: string[] }>;
+      importPoints: (rows: any[], stationName: string, stationCode: string) => Promise<{ total: number; inserted: number; updated: number; errors: string[] }>;
       startBatch: () => Promise<void>;
       endBatch: () => Promise<void>;
       db: {
-        station: {
-          list: () => Promise<import('@robot/database').FacInfo[]>;
-          getById: (id: number) => Promise<import('@robot/database').FacInfo | null>;
-          create: (dto: import('@robot/database').CreateFacInfoDTO) => Promise<import('@robot/database').FacInfo>;
-          update: (id: number, dto: import('@robot/database').UpdateFacInfoDTO) => Promise<void>;
-          delete: (id: number) => Promise<void>;
-        };
         voltage: {
           list: () => Promise<import('@robot/database').DeviceVoltage[]>;
           getById: (id: number) => Promise<import('@robot/database').DeviceVoltage | null>;

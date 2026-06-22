@@ -5,6 +5,13 @@ import { parseLasHeader, loadLazPerf, getWasmUrl, LasHeader } from "../../../pla
 import { BlobReadFileSystem } from "../../../playcanvas-core/io/read/file-systems";
 import { loadGSplatData } from "../../../playcanvas-core/io";
 
+
+/** 根据点数和硬件决定加载比例 */
+function getLoadFraction(pointCount: number): number {
+  if (pointCount > 20_000_000) return 0.25;
+  if (pointCount > 10_000_000) return 0.5;
+  return 1;
+}
 /** GPU 点预算上限，超出时步长降采样 */
 const MAX_POINTS = 20_000_000;
 
@@ -89,6 +96,7 @@ export function useLasLoader({
     mat.depthTest = true;
     mat.cull = pc.CULLFACE_NONE;
     mat.setParameter("uPointSize", pointSize);
+    mat.setParameter("uDisplayRatio", 1.0);
     mat.update();
 
     const format = new pc.VertexFormat(gd, [
@@ -191,6 +199,7 @@ export function useLasLoader({
     mat.depthTest = true;
     mat.cull = pc.CULLFACE_NONE;
     mat.setParameter("uPointSize", pointSize);
+    mat.setParameter("uDisplayRatio", 1.0);
     mat.update();
 
     const format = new pc.VertexFormat(gd, [

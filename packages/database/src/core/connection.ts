@@ -1,4 +1,4 @@
-import initSqlJs, { Database as SqlJsDatabase, SqlJsStatic } from "sql.js";
+﻿import initSqlJs, { Database as SqlJsDatabase, SqlJsStatic } from "sql.js";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
@@ -18,7 +18,7 @@ function toCamel(obj: any): any {
 }
 
 interface Statement {
-  run(...params: any[]): { lastInsertRowid: number | bigint; changes: number };
+  run(...params: any[]): { lastInsertRowid: number; changes: number };
   get(...params: any[]): any;
   all(...params: any[]): any[];
 }
@@ -39,41 +39,63 @@ export class DbWrapper {
     return {
       run(...params: any[]) {
         const flat = params.length === 1 ? params[0] : params;
-        self.db.run(
-          sql,
+        const bindParams: any =
           !Array.isArray(flat) && typeof flat === "object" && flat !== null
             ? flat
-            : Array.isArray(flat) ? flat : [flat],
-        );
-        const row = self.db.exec("SELECT last_insert_rowid()")[0];
+            : Array.isArray(flat) ? flat : [flat];
+
+        // sql.js 原生 db.run() 内部走 prepare → bind → step → free，正确处理 @named params
+        self.db.run(sql, bindParams);
+
+        // 立即取 changes（在 exec 之前，避免被覆盖）
+        const changes = self.db.getRowsModified();
+
+        // exec 取 last_insert_rowid
+        const execResult = self.db.exec("SELECT last_insert_rowid()");
+        const lastInsertRowid =
+          execResult.length > 0 && execResult[0].values.length > 0
+            ? (execResult[0].values[0][0] as number)
+            : 0;
+
         self.dirty = true;
         self.scheduleSave();
-        return {
-          lastInsertRowid: row ? (row.values[0][0] as number) : 0,
-          changes: self.db.getRowsModified(),
-        };
+        return { lastInsertRowid, changes };
       },
       get(...params: any[]) {
         const stmt = self.db.prepare(sql);
-        if (params.length > 0) {
-          const flat = params.length === 1 ? params[0] : params;
-          stmt.bind(flat);
+        try {
+          if (params.length > 0) {
+            const flat = params.length === 1 ? params[0] : params;
+            const bindParams: any =
+              !Array.isArray(flat) && typeof flat === "object" && flat !== null
+                ? flat
+                : Array.isArray(flat) ? flat : [flat];
+            stmt.bind(bindParams);
+          }
+          let result: any = null;
+          if (stmt.step()) result = toCamel(stmt.getAsObject());
+          return result;
+        } finally {
+          stmt.free();
         }
-        let result: any = null;
-        if (stmt.step()) result = toCamel(stmt.getAsObject());
-        stmt.free();
-        return result;
       },
       all(...params: any[]) {
         const stmt = self.db.prepare(sql);
-        if (params.length > 0) {
-          const flat = params.length === 1 ? params[0] : params;
-          stmt.bind(flat);
+        try {
+          if (params.length > 0) {
+            const flat = params.length === 1 ? params[0] : params;
+            const bindParams: any =
+              !Array.isArray(flat) && typeof flat === "object" && flat !== null
+                ? flat
+                : Array.isArray(flat) ? flat : [flat];
+            stmt.bind(bindParams);
+          }
+          const rows: any[] = [];
+          while (stmt.step()) rows.push(toCamel(stmt.getAsObject()));
+          return rows;
+        } finally {
+          stmt.free();
         }
-        const rows: any[] = [];
-        while (stmt.step()) rows.push(toCamel(stmt.getAsObject()));
-        stmt.free();
-        return rows;
       },
     };
   }
@@ -84,7 +106,6 @@ export class DbWrapper {
     this.scheduleSave();
   }
 
-  /** 批量导入时关闭自动保存 */
   batchMode<T>(fn: () => T): T {
     this.autoSave = false;
     try {
@@ -95,7 +116,6 @@ export class DbWrapper {
     }
   }
 
-  /** 手动保存到磁盘 */
   saveToDisk(): void {
     if (!this.dirty) return;
     if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
@@ -106,7 +126,6 @@ export class DbWrapper {
     this.dirty = false;
   }
 
-  /** 延迟保存：单次操作用 debounce，批量操作不触发 */
   private scheduleSave(): void {
     if (!this.autoSave) return;
     if (this.saveTimer) clearTimeout(this.saveTimer);

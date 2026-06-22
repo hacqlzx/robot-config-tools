@@ -1,4 +1,5 @@
-import * as XLSX from "xlsx";
+﻿import * as XLSX from "xlsx";
+import type { PointExcelRow } from "@robot/database";
 
 // ---- 枚举：中文 → 数字 ----
 
@@ -8,7 +9,7 @@ const RECOGNITION_TYPE: Record<string, string> = {
   "红外测温": "ir_temp", "可见光查看": "visible",
 };
 const SAVE_TYPE: Record<string, number> = {
-  "可见光照片": 1, "可见光图片": 1, "红外图谱": 2,
+  "可见光照": 1, "可见光图片": 1, "红外图谱": 2,
   "音频": 3, "可见光+红外": 4,
 };
 const METER_TYPE: Record<string, number> = {
@@ -20,8 +21,7 @@ const POSITION_STATE: Record<string, number> = {
 };
 const IMPORTANT_LEVEL: Record<string, number> = { "Ⅰ类": 1, "Ⅱ类": 2, "Ⅲ类": 3 };
 const MAIN_DEVICE_TYPE: Record<string, number> = {
-  "油浸式变压器(电抗器)": 1, "油浸式变压器（电抗器）": 1,
-  "断路器": 2, "组合电器": 3, "GIS": 3,
+  "油浸式变压器(电抗器)": 1, "断路器": 2, "组合电器": 3, "GIS": 3,
   "隔离开关": 4, "电压互感器": 5, "电流互感器": 6,
   "避雷器": 7, "电容器": 8, "电抗器": 9,
   "开关柜": 10, "二次屏柜": 29,
@@ -34,9 +34,9 @@ const BAY_TYPE: Record<string, string> = {
   "站用变间隔": "站用变间隔", "主变低压侧间隔": "主变低压侧间隔",
 };
 
-/** 巡视类型中文 → 编码 */
+/** 巡检类型中文 → 编码 */
 const INSPECTION_TYPE: Record<string, string> = {
-  "例行巡视": "101", "气温骤变特巡": "201", "高温特巡": "202",
+  "例行巡检": "101", "气温骤变特巡": "201", "高温特巡": "202",
   "雾霾特巡": "203", "大风特巡": "204", "下雪特巡": "205",
   "覆冰特巡": "206", "雷暴特巡": "207", "大负荷特巡": "208",
   "雨后特巡": "209", "冰雹特巡": "210", "沙尘暴特巡": "211",
@@ -46,7 +46,7 @@ const INSPECTION_TYPE: Record<string, string> = {
   "鸟巢特巡": "221", "设备红外测温": "301", "油位油温表抄录": "302",
   "避雷器表计抄录": "303", "SF6压力表抄录": "304",
   "液压表抄录": "305", "位置状态识别": "306", "调压档位抄录": "307",
-  "自定义巡视": "401", "熄灯巡视": "501",
+  "自定义巡检": "401", "熄灯巡检": "501",
 };
 
 // ---- 列名映射（Excel 表头 → 字段） ----
@@ -78,35 +78,11 @@ const COLUMN_MAP: Record<string, string> = {
   "巡视类型7": "inspect7", "巡视类型8": "inspect8",
 };
 
-export interface PointExcelRow {
-  voltName: string;
-  voltCode?: string;
-  bayName: string;
-  bayType?: string;
-  bayCode?: string;
-  mainDeviceName: string;
-  mainDeviceType?: number;
-  mainDeviceCode?: string;
-  phaseType?: number;
-  componentName: string;
-  componentType?: string;
-  componentCode?: string;
-  pointName: string;
-  pointCode?: string;
-  cruiseId?: string;
-  recognitionTypeList?: string;
-  saveTypeList?: number;
-  meterType?: number;
-  positionStateType?: number;
-  importantLevel?: number;
-  inspectionSubType?: string;
-  stationName?: string;
-  stationCode?: string;
-  alarmLevel?: number;
-  sortNum?: number;
-}
-
-/** 解析 Excel，跳过第 1 行说明，第 2 行为表头，数据从第 3 行开始 */
+/**
+ * 解析 Excel 点位表
+ * 第 1 行（index 0）= 表头，数据从第 2 行（index 1）开始
+ * 模板无说明行
+ */
 export function parsePointExcel(file: File): Promise<{ rows: PointExcelRow[]; stationName: string }> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -121,17 +97,17 @@ export function parsePointExcel(file: File): Promise<{ rows: PointExcelRow[]; st
           header: 1, defval: "",
         }) as any[][];
 
-        if (jsonData.length < 3) {
+        if (jsonData.length < 2) {
           reject(new Error("Excel 至少需要表头 + 1 行数据"));
           return;
         }
 
-        const headers = jsonData[1] as string[];  // 第 2 行 = 表头
+        const headers = jsonData[0] as string[];
         const rows: PointExcelRow[] = [];
         const errors: string[] = [];
         let stationName = "";
 
-        for (let r = 2; r < jsonData.length; r++) {
+        for (let r = 1; r < jsonData.length; r++) {
           const rawRow = jsonData[r] as any[];
           const row: any = {};
 
@@ -140,6 +116,11 @@ export function parsePointExcel(file: File): Promise<{ rows: PointExcelRow[]; st
             if (key) {
               row[key] = rawRow[c] ?? "";
             }
+          }
+
+          // 跳过示例行（点位名称以 "示例" 开头）
+          if (row.pointName && String(row.pointName).startsWith("示例")) {
+            continue;
           }
 
           // ---- 枚举转换 ----
@@ -160,7 +141,7 @@ export function parsePointExcel(file: File): Promise<{ rows: PointExcelRow[]; st
           else row.phaseType = 0;
           if (row.bayType && BAY_TYPE[row.bayType]) row.bayType = BAY_TYPE[row.bayType];
 
-          // 巡视类型拼接
+          // 巡检类型拼接
           const inspects: string[] = [];
           for (let i = 1; i <= 8; i++) {
             const val = row["inspect" + i];
@@ -168,10 +149,10 @@ export function parsePointExcel(file: File): Promise<{ rows: PointExcelRow[]; st
           }
           if (inspects.length > 0) row.inspectionSubType = inspects.join(",");
 
-          // 获取厂站名（取第一行的值）
+          // 获取厂站名（取第一个非空值）
           if (!stationName && row.stationName) stationName = String(row.stationName);
 
-          // cruiseId 用 pointCode
+          // cruiseId 回退用 pointCode
           row.cruiseId = row.cruiseId || row.pointCode || "";
 
           // 必填校验

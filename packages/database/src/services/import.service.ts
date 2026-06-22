@@ -1,12 +1,11 @@
 ﻿import { DbWrapper } from "../core/connection";
-import { FacInfoRepo } from "../repositories/fac-info.repo";
 import { DeviceVoltageRepo } from "../repositories/device-voltage.repo";
 import { DeviceBayRepo } from "../repositories/device-bay.repo";
 import { DeviceMainRepo } from "../repositories/device-main.repo";
 import { DeviceComponentRepo } from "../repositories/device-component.repo";
 import { DevicePointRepo } from "../repositories/device-point.repo";
 
-/** Excel 每行数据结构 */
+/** Excel 每行数据结构（与 excel-parser.ts 共享） */
 export interface PointExcelRow {
   voltName: string;
   voltCode?: string;
@@ -22,9 +21,15 @@ export interface PointExcelRow {
   componentCode?: string;
   pointName: string;
   pointCode?: string;
-  cruiseId: string;
-  robotId?: number;
-  robotName?: string;
+  cruiseId?: string;
+  recognitionTypeList?: string;
+  saveTypeList?: number;
+  meterType?: number;
+  positionStateType?: number;
+  importantLevel?: number;
+  inspectionSubType?: string;
+  stationName?: string;
+  stationCode?: string;
   alarmLevel?: number;
   sortNum?: number;
 }
@@ -36,15 +41,18 @@ export interface ImportResult {
   errors: string[];
 }
 
-/** 导入点表数据（Excel 行转设备树） */
+/**
+ * 导入点表数据：Excel 行 → 设备树（增量 upsert）
+ *
+ * stationName / stationCode 直接透传到各层级，厂站仅作为筛选字段不单独建表。
+ * stationId 传 0 表示不关联外部厂站记录。
+ */
 export function importPointExcel(
   db: DbWrapper,
   rows: PointExcelRow[],
-  stationId: number,
   stationName: string,
   stationCode: string,
 ): ImportResult {
-  const facRepo = new FacInfoRepo(db);
   const voltageRepo = new DeviceVoltageRepo(db);
   const bayRepo = new DeviceBayRepo(db);
   const mainRepo = new DeviceMainRepo(db);
@@ -53,36 +61,38 @@ export function importPointExcel(
 
   const result: ImportResult = { total: rows.length, inserted: 0, updated: 0, errors: [] };
 
-  // 确保厂站存在
-  let fac = facRepo.findByStationName(stationName);
-  if (!fac) {
-    fac = facRepo.create({
-      stationName, stationCode,
-      outStationCode: "", facType: "1", stationType: "1",
-      provinceName: "", cityName: "", areaName: "",
-      createBy: "import", updateBy: "import",
-      voltName: rows[0]?.voltName ?? "",
-      useTime: "", responsiblePerson: "", telephone: "",
-      envDataRobotId: 0, currentFac: 1, alarmLevel: 0, sortNum: 1,
-    });
-  }
-  const localStationId = fac.id;
-
   for (const row of rows) {
     try {
-      // 1. voltage
+    // ??????????????
+    row.voltName = row.voltName?.trim() ?? "";
+    row.voltCode = row.voltCode?.trim() ?? "";
+    row.bayName = row.bayName?.trim() ?? "";
+    row.bayCode = row.bayCode?.trim() ?? "";
+    row.bayType = row.bayType?.trim() ?? "";
+    row.mainDeviceName = row.mainDeviceName?.trim() ?? "";
+    row.mainDeviceCode = row.mainDeviceCode?.trim() ?? "";
+    row.componentName = row.componentName?.trim() ?? "";
+    row.componentCode = row.componentCode?.trim() ?? "";
+    row.componentType = row.componentType?.trim() ?? "";
+    row.pointName = row.pointName?.trim() ?? "";
+    row.pointCode = row.pointCode?.trim() ?? "";
+    row.cruiseId = row.cruiseId?.trim() ?? "";
+    row.stationName = row.stationName?.trim() ?? "";
+    row.stationCode = row.stationCode?.trim() ?? "";
+      // 1. voltage（按名称+厂站 upsert）
       const volt = voltageRepo.upsert({
         voltName: row.voltName,
         voltCode: row.voltCode ?? "",
-        stationId: localStationId,
+        stationId: 0,
         stationName,
         stationCode,
         alarmLevel: row.alarmLevel ?? 0,
         sortNum: 1,
-        createBy: "import", updateBy: "import",
+        createBy: "import",
+        updateBy: "import",
       });
 
-      // 2. bay
+      // 2. bay（按名称+电压 upsert）
       const bay = bayRepo.upsert({
         bayName: row.bayName,
         bayType: row.bayType ?? "",
@@ -90,16 +100,17 @@ export function importPointExcel(
         voltId: volt.id,
         voltName: volt.voltName,
         voltCode: volt.voltCode,
-        stationId: localStationId,
+        stationId: 0,
         stationName,
         stationCode,
         alarmLevel: row.alarmLevel ?? 0,
         sortNum: 1,
         repairFlag: 0,
-        createBy: "import", updateBy: "import",
+        createBy: "import",
+        updateBy: "import",
       });
 
-      // 3. main device
+      // 3. main device（按名称+间隔 upsert）
       const main = mainRepo.upsert({
         mainDeviceName: row.mainDeviceName,
         mainDeviceType: row.mainDeviceType ?? 29,
@@ -115,7 +126,7 @@ export function importPointExcel(
         voltId: volt.id,
         voltName: volt.voltName,
         voltCode: volt.voltCode,
-        stationId: localStationId,
+        stationId: 0,
         stationName,
         stationCode,
         alarmLevel: row.alarmLevel ?? 0,
@@ -129,10 +140,11 @@ export function importPointExcel(
         productionDate: "",
         commissioningDate: "",
         remarkInfo: "",
-        createBy: "import", updateBy: "import",
+        createBy: "import",
+        updateBy: "import",
       });
 
-      // 4. component
+      // 4. component（按名称+主设备 upsert）
       const comp = compRepo.upsert({
         componentName: row.componentName,
         componentType: row.componentType ?? "",
@@ -149,44 +161,57 @@ export function importPointExcel(
         voltId: volt.id,
         voltName: volt.voltName,
         voltCode: volt.voltCode,
-        stationId: localStationId,
+        stationId: 0,
         stationName,
         stationCode,
         alarmLevel: row.alarmLevel ?? 0,
         sortNum: 1,
         repairFlag: 0,
-        createBy: "import", updateBy: "import",
+        createBy: "import",
+        updateBy: "import",
       });
 
-      // 5. point
-      const existing = pointRepo.findByCruiseId(row.cruiseId);
+      // 5. point（按 cruiseId upsert，空则按 pointCode 回退）
+      const cruiseId = row.cruiseId || row.pointCode || "";
+      if (!cruiseId) {
+        result.errors.push(`行 "${row.pointName}": cruiseId 和 pointCode 均为空，跳过`);
+        continue;
+      }
+
+      const existing = pointRepo.findByCruiseId(cruiseId);
       if (existing) {
         pointRepo.update(existing.id, {
           pointName: row.pointName,
-          pointCode: row.pointCode,
-          cruiseId: row.cruiseId,
+          pointCode: row.pointCode ?? "",
+          cruiseId,
+          recognitionTypeList: row.recognitionTypeList ?? existing.recognitionTypeList,
+          saveTypeList: row.saveTypeList ?? existing.saveTypeList,
+          meterType: row.meterType ?? existing.meterType,
+          positionStateType: row.positionStateType ?? existing.positionStateType,
+          importantLevel: row.importantLevel ?? existing.importantLevel,
+          inspectionSubType: row.inspectionSubType ?? existing.inspectionSubType,
         });
         result.updated++;
       } else {
         pointRepo.create({
           pointName: row.pointName,
           pointCode: row.pointCode ?? "",
-          cruiseId: row.cruiseId,
-          recognitionTypeList: "",
-          saveTypeList: 1,
-          meterType: 0,
-          positionStateType: 0,
+          cruiseId,
+          recognitionTypeList: row.recognitionTypeList ?? "",
+          saveTypeList: row.saveTypeList ?? 1,
+          meterType: row.meterType ?? 0,
+          positionStateType: row.positionStateType ?? 0,
           appearanceType: 0,
           defectRecType: "",
           pointTagsCodeList: "",
           defectJudgeType: 0,
-          importantLevel: 2,
+          importantLevel: row.importantLevel ?? 2,
           sortNum: row.sortNum ?? 1,
           threePhaseFlag: 0,
           threePhaseAssociateId: "",
           demarcateState: 0,
-          robotId: row.robotId ?? 0,
-          robotName: row.robotName ?? "",
+          robotId: 0,
+          robotName: "",
           originCalibrationPath: "",
           extendCalibrationPath: "",
           visibleCalibrationPath: "",
@@ -209,11 +234,12 @@ export function importPointExcel(
           voltId: volt.id,
           voltName: volt.voltName,
           voltCode: volt.voltCode,
-          stationId: localStationId,
+          stationId: 0,
           stationName,
           stationCode,
-          inspectionSubType: "",
-          createBy: "import", updateBy: "import",
+          inspectionSubType: row.inspectionSubType ?? "",
+          createBy: "import",
+          updateBy: "import",
           alarmLevel: row.alarmLevel ?? 0,
           mapCode: "",
           repairFlag: 0,

@@ -1,0 +1,101 @@
+﻿<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>西安750kV泾渭变 · 巡检数据</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Microsoft YaHei','PingFang SC',sans-serif;background:#f0f2f5;color:#333}
+.header{background:linear-gradient(135deg,#1a73e8,#0d47a1);color:#fff;padding:20px 30px}
+.header h1{font-size:22px;margin-bottom:4px}
+.header .sub{font-size:13px;opacity:.85}
+.stats{display:flex;gap:20px;padding:15px 30px;background:#fff;border-bottom:1px solid #e0e0e0;font-size:13px;flex-wrap:wrap}
+.stat-item{display:flex;gap:6px;align-items:center}
+.stat-label{color:#888}
+.stat-value{font-weight:700;color:#1a73e8}
+.container{max-width:1400px;margin:20px auto;padding:0 20px}
+.panel-group{background:#fff;border-radius:10px;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,.06);overflow:hidden}
+.panel-header{display:flex;align-items:center;padding:14px 20px;cursor:pointer;user-select:none;gap:10px;border-bottom:1px solid #f0f0f0}
+.panel-header:hover{background:#f8f9fb}
+.panel-header .arrow{width:22px;height:22px;display:flex;align-items:center;justify-content:center;transition:transform .2s;font-size:12px;color:#888}
+.panel-header.collapsed .arrow{transform:rotate(-90deg)}
+.panel-no{color:#fff;background:#1a73e8;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0}
+.panel-name{font-weight:600;font-size:14px;flex:1}
+.panel-count{color:#888;font-size:12px}
+.device-name{color:#666;font-size:12px;margin-left:8px}
+.panel-body{max-height:0;overflow:hidden;transition:max-height .3s}
+.panel-body.open{max-height:20000px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead th{background:#f5f6f8;padding:10px 12px;text-align:left;font-weight:600;color:#555;border-bottom:2px solid #e0e0e0;white-space:nowrap}
+tbody td{padding:9px 12px;border-bottom:1px solid #f0f0f0;vertical-align:top}
+tbody tr:hover{background:#f8f9fb}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.badge-pt2{background:#e3f2fd;color:#1565c0}
+.badge-pt3{background:#fff3e0;color:#e65100}
+.badge-imp{background:#fce4ec;color:#c62828}
+.footer{text-align:center;padding:20px;color:#aaa;font-size:12px}
+#search{padding:10px 14px;border:1px solid #d0d0d0;border-radius:8px;font-size:14px;width:300px;outline:none}
+#search:focus{border-color:#1a73e8;box-shadow:0 0 0 3px rgba(26,115,232,.12)}
+.toolbar{padding:16px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.toolbar button{padding:8px 16px;background:#1a73e8;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px}
+.toolbar button:hover{background:#1557b0}
+.toolbar .btn-outline{background:#fff;color:#1a73e8;border:1px solid #1a73e8}
+.toolbar .btn-outline:hover{background:#e8f0fe}
+</style>
+</head>
+<body>
+<div class="header">
+<h1>西安750kV泾渭变 · 巡检数据</h1>
+<div class="sub">电压等级: 220kV | 区域: 保护室 | 生成时间: {{GEN_TIME}}</div>
+</div>
+<div class="stats">
+<div class="stat-item"><span class="stat-label">屏柜总数</span><span class="stat-value">{{PANEL_COUNT}}</span></div>
+<div class="stat-item"><span class="stat-label">测点总数</span><span class="stat-value">{{ROW_COUNT}}</span></div>
+<div class="stat-item"><span class="stat-label">重要测点</span><span class="stat-value">{{IMPT_COUNT}}</span></div>
+</div>
+<div class="container">
+<div class="toolbar">
+<input type="text" id="search" placeholder="搜索测点名称、屏柜..." oninput="filter()">
+<button onclick="expandAll()">全部展开</button>
+<button class="btn-outline" onclick="collapseAll()">全部折叠</button>
+</div>
+<div id="panelList"></div>
+</div>
+<div class="footer">西安750kV泾渭变 · 巡检配置数据</div>
+<script>
+var treeData = {{TREE_DATA}};
+function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function render(){
+    var h='';
+    treeData.forEach(function(p,i){
+        h+='<div class="panel-group"><div class="panel-header" onclick="this.classList.toggle(\'collapsed\');this.nextElementSibling.classList.toggle(\'open\')">';
+        h+='<span class="arrow">&#9660;</span><span class="panel-no">'+(i+1)+'</span>';
+        h+='<span class="panel-name">'+escHtml(p.name)+'</span>';
+        h+='<span class="device-name">'+escHtml(p.device||'')+'</span>';
+        h+='<span class="panel-count">'+p.points.length+' 个测点</span></div>';
+        h+='<div class="panel-body open"><table><thead><tr><th>#</th><th>测点名称</th><th>ass_id</th><th>cruise_id</th><th>pt_type</th><th>sub_pt_type</th><th>impt_type</th><th>stop_id</th></tr></thead><tbody>';
+        p.points.forEach(function(pt,j){
+            h+='<tr data-search="'+(p.name+' '+pt.name).toLowerCase().replace(/"/g,'')+'">';
+            h+='<td>'+(j+1)+'</td><td>'+escHtml(pt.name)+'</td><td>'+pt.ass_id+'</td><td>'+pt.cruise_id+'</td>';
+            h+='<td><span class="badge badge-pt'+pt.pt_type+'">'+pt.pt_type+'</span></td>';
+            h+='<td>'+(pt.sub_pt_type||'')+'</td>';
+            h+='<td><span class="badge badge-imp">'+pt.impt_type+'</span></td>';
+            h+='<td>'+pt.stop_id+'</td></tr>';
+        });
+        h+='</tbody></table></div></div>';
+    });
+    document.getElementById('panelList').innerHTML=h;
+}
+function filter(){
+    var s=(document.getElementById('search').value||'').toLowerCase();
+    document.querySelectorAll('.panel-group').forEach(function(g){
+        var rows=g.querySelectorAll('tbody tr'),vis=0;
+        rows.forEach(function(r){if(!s||r.dataset.search.indexOf(s)>=0){r.style.display='';vis++}else{r.style.display='none'}});
+        g.style.display=vis>0?'':'none';
+    });
+}
+function expandAll(){document.querySelectorAll('.panel-header').forEach(function(h){h.classList.remove('collapsed');h.nextElementSibling.classList.add('open')});}
+function collapseAll(){document.querySelectorAll('.panel-header').forEach(function(h){h.classList.add('collapsed');h.nextElementSibling.classList.remove('open')});}
+render();
+</script>
+</body>
+</html>

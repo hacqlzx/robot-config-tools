@@ -199,11 +199,10 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
   const handleImportPointTable = async (file: File) => {
     setImporting(true);
     try {
-      // 1. 解析 Excel，取站名
       const { rows, stationName } = await parsePointExcel(file);
 
       if (rows.length === 0) {
-        message.warning("未解析到有效数据行");
+        message.warning("Excel 中无有效数据行");
         setImporting(false);
         return;
       }
@@ -214,54 +213,31 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
         return;
       }
 
-      // 2. Electron 模式：通过 IPC 导入
       const api = (window as any).electronAPI;
-      if (api) {
-        console.log("[点表导入] 站名:", stationName);
+      if (!api) {
+        message.warning("仅 Electron 模式下可用");
+        setImporting(false);
+        return;
+      }
 
-        // 优先查找已有同名校验
-        const stations = await api.db.station.list();
-        console.log("[点表导入] 已有厂站列表:", stations.map((s: any) => ({ id: s.id, code: s.stationCode, name: s.stationName })));
+      // 用站名生成 stationCode
+      const stationCode = stationName.substring(0, 10) + Date.now().toString().slice(-4);
 
-        let station = stations.find((s: any) => s.stationName === stationName);
+      console.log("[点表导入] 站名:", stationName, "开始导入", rows.length, "行...");
+      await api.startBatch();
+      const result = await api.importPoints(rows, stationName, stationCode);
+      await api.endBatch();
 
-        if (!station) {
-          // 用站名生成 stationCode
-          const stationCode = stationName.substring(0, 10) + Date.now().toString().slice(-4);
-          station = await api.db.station.create({
-            stationName, stationCode,
-            outStationCode: "", facType: "1", stationType: "1",
-            provinceName: "", cityName: "", areaName: "",
-            createBy: "import", updateBy: "import", voltName: rows[0]?.voltName ?? "",
-            useTime: "", responsiblePerson: "", telephone: "",
-            envDataRobotId: 0, currentFac: 1, alarmLevel: 0, sortNum: 1,
-          });
-          console.log("[????] ????:", { id: station.id, name: station.stationName });
-        }
-
-        if (!station || !station.id) {
-          message.error('??????');
-          setImporting(false);
-          return;
-        }
-
-        console.log("[点表导入] 开始导入，共", rows.length, "行...");
-        await api.startBatch();
-        const result = await api.importPoints(rows, station.id, station.stationName, station.stationCode);
-        await api.endBatch();
-
-        console.log("[点表导入] 导入完成:", result);
-        message.success("import success: " + result.inserted + " new, " + result.updated + " updated");
-        if (result.errors.length > 0) {
-          message.warning("errors: " + result.errors.slice(0, 3).join("; "));
-        }
-      } else {
-        message.warning("import only available in Electron mode");
+      console.log("[点表导入] 导入完成:", result);
+      message.success("导入成功: " + result.inserted + " 新增, " + result.updated + " 更新");
+      if (result.errors.length > 0) {
+        message.warning("错误: " + result.errors.slice(0, 3).join("; "));
       }
     } catch (e: any) {
-      message.error("import failed: " + e.message);
+      message.error("导入失败: " + e.message);
+    } finally {
+      setImporting(false);
     }
-    setImporting(false);
   };
 
   const handleFileSelect = async (file: File) => {
@@ -417,3 +393,5 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
     </div>
   );
 }
+
+
