@@ -146,12 +146,39 @@ class PointCloud extends Element {
         let rgbOff = 0;
         if (hasRgb) {
             if (actualFormat >= 6) {
-                // LAS 1.4: xyz(12) + intensity(2) + flags(2B) + classification(1) + scanAngle(2) + userData(1) + pointSourceId(2) + gpsTime(8)
+                // LAS 1.4: 12(xyz)+2(intensity)+1(flags1)+1(flags2)+1(class)+1(userData)+2(scanAngle)+2(pointSourceId)+8(gpsTime)=30
                 rgbOff = 30;
+            } else if (actualFormat === 3 || actualFormat === 5) {
+                // LAS 1.0-1.3 formats 3,5: have GPS time (8 bytes) before RGB
+                // 12(xyz)+2(intensity)+1(flags)+1(class)+1(scanAngle)+1(userData)+2(pointSourceId)+8(gpsTime)=28
+                rgbOff = 28;
             } else {
-                // LAS 1.0-1.3: xyz(12) + intensity(2) + flags(1) + classification(1) + scanAngle(1) + userData(1) + pointSourceId(2)
+                // LAS 1.0-1.3 format 2: no GPS time
+                // 12(xyz)+2(intensity)+1(flags)+1(class)+1(scanAngle)+1(userData)+2(pointSourceId)=20
                 rgbOff = 20;
             }
+        }
+
+        // 采样检测 RGB 位深：部分 LAS 把 8 位颜色(0-255)存在 uint16 低字节，高字节为 0
+        // 采样最大值 > 255 为真 16 位(取高字节 shift=8)，否则 8 位(直接取低字节 shift=0)
+        let rgbShift = 8;
+        if (hasRgb) {
+            const sLaszip = new LazPerf.LASZip();
+            sLaszip.open(filePtr, arrayBuffer.byteLength);
+            const sPtr = LazPerf._malloc(pointLength);
+            const sN = Math.min(2000, count);
+            let maxRgb = 0;
+            for (let k = 0; k < sN; k++) {
+                sLaszip.getPoint(sPtr);
+                const o = sPtr + rgbOff;
+                maxRgb = Math.max(maxRgb,
+                    LazPerf.HEAPU8[o] | (LazPerf.HEAPU8[o + 1] << 8),
+                    LazPerf.HEAPU8[o + 2] | (LazPerf.HEAPU8[o + 3] << 8),
+                    LazPerf.HEAPU8[o + 4] | (LazPerf.HEAPU8[o + 5] << 8));
+            }
+            rgbShift = maxRgb > 255 ? 8 : 0;
+            LazPerf._free(sPtr);
+            sLaszip.delete();
         }
 
         // 分批解码 + 直写 GPU 缓冲区
@@ -175,9 +202,10 @@ class PointCloud extends Element {
                 // RGB 颜色
                 const byteOff = base * 4 + 12;
                 if (hasRgb) {
-                    u8[byteOff] = LazPerf.HEAPU8[wasmOff + rgbOff + 1];
-                    u8[byteOff + 1] = LazPerf.HEAPU8[wasmOff + rgbOff + 3];
-                    u8[byteOff + 2] = LazPerf.HEAPU8[wasmOff + rgbOff + 5];
+                    const o = wasmOff + rgbOff;
+                    u8[byteOff] = ((LazPerf.HEAPU8[o] | (LazPerf.HEAPU8[o + 1] << 8)) >> rgbShift) & 0xff;
+                    u8[byteOff + 1] = ((LazPerf.HEAPU8[o + 2] | (LazPerf.HEAPU8[o + 3] << 8)) >> rgbShift) & 0xff;
+                    u8[byteOff + 2] = ((LazPerf.HEAPU8[o + 4] | (LazPerf.HEAPU8[o + 5] << 8)) >> rgbShift) & 0xff;
                 } else {
                     u8[byteOff] = 128;
                     u8[byteOff + 1] = 128;
@@ -243,6 +271,18 @@ class PointCloud extends Element {
         const f32 = new Float32Array(vbLock);
         const u8 = new Uint8Array(vbLock);
 
+        // 采样检测 RGB 位深：>255 为真 16 位(取高字节)，否则 8 位存低字节(直接取值)
+        let rgbShift = 8;
+        {
+            const sN = Math.min(2000, count);
+            let maxRgb = 0;
+            for (let k = 0; k < sN; k++) {
+                const p = points[k];
+                maxRgb = Math.max(maxRgb, p.red ?? 0, p.green ?? 0, p.blue ?? 0);
+            }
+            rgbShift = maxRgb > 255 ? 8 : 0;
+        }
+
         // 分批填充顶点缓冲区，每批后让出主线程
         const CHUNK = 200000;
         for (let i = 0; i < count; i += CHUNK) {
@@ -255,9 +295,9 @@ class PointCloud extends Element {
                 f32[base + 2] = p.z * scaleZ + offsetZ - cz;
                 // 第 4 个 float 位置是 color (4 bytes uint8)
                 const byteOff = base * 4 + 12;
-                u8[byteOff] = (p.red ?? 0) >> 8;
-                u8[byteOff + 1] = (p.green ?? 0) >> 8;
-                u8[byteOff + 2] = (p.blue ?? 0) >> 8;
+                u8[byteOff] = ((p.red ?? 0) >> rgbShift) & 0xff;
+                u8[byteOff + 1] = ((p.green ?? 0) >> rgbShift) & 0xff;
+                u8[byteOff + 2] = ((p.blue ?? 0) >> rgbShift) & 0xff;
                 u8[byteOff + 3] = 255;
             }
             onProgress?.(end / count, end, count);

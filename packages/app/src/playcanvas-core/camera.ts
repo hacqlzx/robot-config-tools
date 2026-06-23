@@ -839,11 +839,17 @@ class Camera extends Element {
             // 场景在相机前方
             this.far = dist + boundRadius;
             // 如果相机在包围盒内，设置一个合理的最小近平面
-            this.near = Math.max(1e-6, dist < boundRadius ? this.far / (1024 * 16) : dist - boundRadius);
+                        // use 4096:1 ratio instead of 16384:1 to preserve depth precision with 24-bit depth buffer
+            // floor raised from 1e-6 to 0.01 to avoid near-clip precision collapse
+            if (dist < boundRadius) {
+                this.near = Math.max(0.01, this.far / 4096);
+            } else {
+                this.near = Math.max(0.01, dist - boundRadius);
+            }
         } else {
             // 场景在相机后方
             this.far = boundRadius * 2;
-            this.near = this.far / (1024 * 16);
+            this.near = Math.max(0.01, this.far / 4096);
         }
     }
 

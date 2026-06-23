@@ -31,7 +31,6 @@ export async function performClipSave({
   onClose, onComplete, message,
 }: ClipSaveParams) {
   const clipBounds = bounds;
-  const wp = entity.getLocalPosition();
   const gd = app.graphicsDevice;
 
   setSaving(true);
@@ -45,6 +44,9 @@ export async function performClipSave({
     const fmtId = hdr.pointFormatId & 0x7F;
     const totalCount = hdr.pointCount;
     const { scaleX, scaleY, scaleZ, offsetX, offsetY, offsetZ, pointRecordLength, pointDataOffset } = hdr;
+    // 实体已放在世界原点(floating origin)，这里用 header 中心(世界坐标)做坐标还原基准，
+    // 轴序与加载时 entity 原本的 (cx, cz, cy) 一致
+    const wp = new pc.Vec3((hdr.minX + hdr.maxX) / 2, (hdr.minZ + hdr.maxZ) / 2, (hdr.minY + hdr.maxY) / 2);
     const hasRgb = [2, 3, 5, 7, 8, 10].includes(fmtId);
     const rgbOff = hasRgb ? (fmtId >= 6 ? 30 : (fmtId === 3 || fmtId === 5 ? 28 : 20)) : 0;
 
@@ -66,8 +68,10 @@ export async function performClipSave({
       wy >= clipBounds.minY && wy <= clipBounds.maxY &&
       wz >= clipBounds.minZ && wz <= clipBounds.maxZ;
 
-    // ── 2. 第一遍：计数 ──
+    // ── 2. 第一遍：计数（顺便采样 RGB 位深）──
     let clippedCount = 0;
+    let maxRgbSample = 0;
+    const RGB_SAMPLE = 2000;
 
     if (isComp) {
       const createLazPerf = await loadLazPerf();
@@ -86,6 +90,13 @@ export async function performClipSave({
         const iz = LazPerf.HEAP32[pointPtr / 4 + 2];
         const [wx, wy, wz] = lasToLocal(ix, iy, iz);
         if (isInside(wx, wy, wz)) clippedCount++;
+        if (hasRgb && i < RGB_SAMPLE) {
+          const o = pointPtr + rgbOff;
+          maxRgbSample = Math.max(maxRgbSample,
+            LazPerf.HEAPU8[o] | (LazPerf.HEAPU8[o + 1] << 8),
+            LazPerf.HEAPU8[o + 2] | (LazPerf.HEAPU8[o + 3] << 8),
+            LazPerf.HEAPU8[o + 4] | (LazPerf.HEAPU8[o + 5] << 8));
+        }
         if (i % CHUNK === 0) {
           setProgress(Math.round(i / totalCount * 30));
           onProgress?.(Math.round(i / totalCount * 30));
@@ -115,6 +126,11 @@ export async function performClipSave({
             view.getInt32(ptOff + 8, true),
           );
           if (isInside(wx, wy, wz)) clippedCount++;
+          if (hasRgb && globalIdx + i < RGB_SAMPLE) {
+            const o = ptOff + rgbOff;
+            maxRgbSample = Math.max(maxRgbSample,
+              view.getUint16(o, true), view.getUint16(o + 2, true), view.getUint16(o + 4, true));
+          }
         }
         setProgress(Math.round((globalIdx + ptsInChunk) / totalCount * 30));
         onProgress?.(Math.round((globalIdx + ptsInChunk) / totalCount * 30));
@@ -122,8 +138,10 @@ export async function performClipSave({
       }
     }
 
+    const rgbShift = hasRgb ? (maxRgbSample > 255 ? 8 : 0) : 8;
     console.log("[裁切] 裁切后点数:", clippedCount.toLocaleString());
     console.log("[裁切] 保留比例:", (clippedCount / totalCount * 100).toFixed(2) + "%");
+    console.log("[裁切] RGB maxSample=" + maxRgbSample + " rgbShift=" + rgbShift);
 
     if (clippedCount === 0) {
       setSaving(false);
@@ -193,9 +211,13 @@ export async function performClipSave({
         nf[gpuIdx * 4 + 2] = wz;
 
         if (hasRgb) {
-          nu[gpuIdx * 16 + 12] = LazPerf2.HEAPU8[pp2 + rgbOff + 1];
-          nu[gpuIdx * 16 + 13] = LazPerf2.HEAPU8[pp2 + rgbOff + 3];
-          nu[gpuIdx * 16 + 14] = LazPerf2.HEAPU8[pp2 + rgbOff + 5];
+          const o = pp2 + rgbOff;
+          const r16 = LazPerf2.HEAPU8[o] | (LazPerf2.HEAPU8[o + 1] << 8);
+          const g16 = LazPerf2.HEAPU8[o + 2] | (LazPerf2.HEAPU8[o + 3] << 8);
+          const b16 = LazPerf2.HEAPU8[o + 4] | (LazPerf2.HEAPU8[o + 5] << 8);
+          nu[gpuIdx * 16 + 12] = (r16 >> rgbShift) & 0xff;
+          nu[gpuIdx * 16 + 13] = (g16 >> rgbShift) & 0xff;
+          nu[gpuIdx * 16 + 14] = (b16 >> rgbShift) & 0xff;
         } else {
           nu[gpuIdx * 16 + 12] = 128; nu[gpuIdx * 16 + 13] = 128; nu[gpuIdx * 16 + 14] = 128;
         }
@@ -209,9 +231,10 @@ export async function performClipSave({
         out[outIdx++] = 0; out[outIdx++] = 0; out[outIdx++] = 0;
         out[outIdx++] = 0; out[outIdx++] = 0;
         if (hasRgb) {
-          out[outIdx++] = LazPerf2.HEAPU8[pp2 + rgbOff + 1]; out[outIdx++] = LazPerf2.HEAPU8[pp2 + rgbOff + 1];
-          out[outIdx++] = LazPerf2.HEAPU8[pp2 + rgbOff + 3]; out[outIdx++] = LazPerf2.HEAPU8[pp2 + rgbOff + 3];
-          out[outIdx++] = LazPerf2.HEAPU8[pp2 + rgbOff + 5]; out[outIdx++] = LazPerf2.HEAPU8[pp2 + rgbOff + 5];
+          const o = pp2 + rgbOff;
+          out[outIdx++] = LazPerf2.HEAPU8[o];     out[outIdx++] = LazPerf2.HEAPU8[o + 1];
+          out[outIdx++] = LazPerf2.HEAPU8[o + 2]; out[outIdx++] = LazPerf2.HEAPU8[o + 3];
+          out[outIdx++] = LazPerf2.HEAPU8[o + 4]; out[outIdx++] = LazPerf2.HEAPU8[o + 5];
         } else {
           for (let k = 0; k < 6; k++) out[outIdx++] = 128;
         }
@@ -253,9 +276,10 @@ export async function performClipSave({
           nf[gpuIdx * 4 + 2] = wz;
 
           if (hasRgb) {
-            nu[gpuIdx * 16 + 12] = view.getUint8(ptOff + rgbOff + 1);
-            nu[gpuIdx * 16 + 13] = view.getUint8(ptOff + rgbOff + 3);
-            nu[gpuIdx * 16 + 14] = view.getUint8(ptOff + rgbOff + 5);
+            const o = ptOff + rgbOff;
+            nu[gpuIdx * 16 + 12] = (view.getUint16(o, true) >> rgbShift) & 0xff;
+            nu[gpuIdx * 16 + 13] = (view.getUint16(o + 2, true) >> rgbShift) & 0xff;
+            nu[gpuIdx * 16 + 14] = (view.getUint16(o + 4, true) >> rgbShift) & 0xff;
           } else {
             nu[gpuIdx * 16 + 12] = 128; nu[gpuIdx * 16 + 13] = 128; nu[gpuIdx * 16 + 14] = 128;
           }
@@ -269,9 +293,10 @@ export async function performClipSave({
           out[outIdx++] = 0; out[outIdx++] = 0; out[outIdx++] = 0;
           out[outIdx++] = 0; out[outIdx++] = 0;
           if (hasRgb) {
-            out[outIdx++] = view.getUint8(ptOff + rgbOff + 1); out[outIdx++] = view.getUint8(ptOff + rgbOff + 1);
-            out[outIdx++] = view.getUint8(ptOff + rgbOff + 3); out[outIdx++] = view.getUint8(ptOff + rgbOff + 3);
-            out[outIdx++] = view.getUint8(ptOff + rgbOff + 5); out[outIdx++] = view.getUint8(ptOff + rgbOff + 5);
+            const o = ptOff + rgbOff;
+            out[outIdx++] = view.getUint8(o);     out[outIdx++] = view.getUint8(o + 1);
+            out[outIdx++] = view.getUint8(o + 2); out[outIdx++] = view.getUint8(o + 3);
+            out[outIdx++] = view.getUint8(o + 4); out[outIdx++] = view.getUint8(o + 5);
           } else {
             for (let k = 0; k < 6; k++) out[outIdx++] = 128;
           }

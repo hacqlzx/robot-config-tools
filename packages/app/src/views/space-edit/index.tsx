@@ -76,6 +76,9 @@ export default function SpaceEdit() {
       graphicsDeviceOptions: {
         preferWebGl2: true,
         powerPreference: "high-performance",
+        // 按需渲染(autoRender=false)下必须保留绘制缓冲，否则未重绘的帧缓冲被丢弃
+        // 导致画面在正确帧与空帧间交替 → 抖动、远端忽隐忽现、裁切面闪现
+        preserveDrawingBuffer: true,
       },
     } as any);
 
@@ -122,9 +125,14 @@ export default function SpaceEdit() {
     appRef.current = app;
     const cabinetCleanup = setupCabinetDrawing(app, camera, requestRender, entitiesRef);
 
-    // 按需渲染循环：仅脏标记为 true 时执行一帧
+    // 统一渲染循环：每帧先更新相机飞行(WASD)，再按需渲染，避免飞行与渲染分属两个 rAF 循环导致顿挫
     let renderRafId = 0;
+    let lastFrameTime = performance.now();
     const renderLoop = () => {
+      const now = performance.now();
+      const dt = Math.min((now - lastFrameTime) / 1000, 0.1);
+      lastFrameTime = now;
+      orbitRef.current?.updateFly(dt);
       if (renderDirtyRef.current) {
         app.render();
         renderDirtyRef.current = false;
@@ -178,15 +186,23 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
   /** 将相机焦点移到指定位置 */const focusOnModel = useCallback((centerX: number, centerY: number, centerZ: number, extent: number) => {
     modelExtentRef.current = extent;
     modelCenterRef.current = { x: centerX, y: centerY, z: centerZ };
-    if (!hasAutoFocusedRef.current) {
-      hasAutoFocusedRef.current = true;
-      const orbit = orbitRef.current;
-      if (orbit) {
+    const orbit = orbitRef.current;
+    if (orbit) {
+      // 把场景尺寸告知相机，近/远裁剪面由 updateCamera 随距离实时维护，避免大模型被裁剪面切掉
+      orbit.sceneRadius = Math.max(orbit.sceneRadius, extent);
+      orbit.sceneCenter.set(centerX, centerY, centerZ);
+      orbit.maxDistance = Math.max(orbit.maxDistance, extent * 5);
+      if (!hasAutoFocusedRef.current) {
+        hasAutoFocusedRef.current = true;
         orbit.lookAt.set(centerX, centerY, centerZ);
         orbit.distance = extent * 1.5;
-        orbit.updateCamera();
-        requestRender();
       }
+      orbit.updateCamera();
+      const cam = orbit.camera.camera;
+      console.log("[相机] extent=" + extent.toFixed(1) + " distance=" + orbit.distance.toFixed(1) +
+        " sceneRadius=" + orbit.sceneRadius.toFixed(1) +
+        " nearClip=" + (cam?.nearClip ?? -1).toFixed(3) + " farClip=" + (cam?.farClip ?? -1).toFixed(1));
+      requestRender();
     }
   }, [])
 

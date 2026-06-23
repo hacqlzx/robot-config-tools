@@ -9,6 +9,9 @@ export class SimpleOrbitCamera {
   camera: pc.Entity;
   pivot: pc.Entity;
   distance = 5;
+  maxDistance = 200;
+  sceneRadius = 10;
+  sceneCenter = new pc.Vec3(0, 0, 0);
   azimuth = 0;
   elevation = 30;
   lookAt = new pc.Vec3(0, 0, 0);
@@ -63,7 +66,6 @@ export class SimpleOrbitCamera {
     window.addEventListener("blur", this.clearAllKeys);
 
     this.updateCamera();
-    this.startFlyLoop();
   }
 
   // ─── 飞行循环 ───
@@ -81,8 +83,8 @@ export class SimpleOrbitCamera {
     this.rafId = requestAnimationFrame(tick);
   }
 
-  // ─── WASD 飞行逻辑（参考 supersplat-main controllers.ts） ───
-  private updateFly(dt: number) {
+  // ─── WASD 飞行逻辑（参考 supersplat-main controllers.ts）。由外部渲染循环每帧调用 ───
+  updateFly(dt: number) {
     if (this.controlMode !== "fly") return;
 
     const forward = (this.flyForward ? 1 : 0) - (this.flyBackward ? 1 : 0);
@@ -158,6 +160,21 @@ export class SimpleOrbitCamera {
     this.pivot.setLocalPosition(this.lookAt);
     this.camera.setLocalPosition(x - this.lookAt.x, y - this.lookAt.y, z - this.lookAt.z);
     this.camera.lookAt(this.lookAt);
+
+    // 动态维护近/远裁剪面：用相机到模型中心的"真实距离"计算（而非 orbit.distance，
+    // 因为 WASD 飞行只平移 lookAt、distance 不变，会导致飞近时近裁剪面错误切掉模型）
+    const cam = this.camera.camera;
+    if (cam) {
+      const dx = x - this.sceneCenter.x;
+      const dy = y - this.sceneCenter.y;
+      const dz = z - this.sceneCenter.z;
+      const dReal = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      const far = Math.max((dReal + this.sceneRadius) * 2, 10);
+      const near = Math.max(0.05, (dReal - this.sceneRadius) * 0.5);
+      cam.farClip = far;
+      cam.nearClip = near;
+    }
+
     this.onCameraChange?.();
   }
 
@@ -231,7 +248,7 @@ export class SimpleOrbitCamera {
 
   private onWheel = (e: WheelEvent) => {
     e.preventDefault();
-    this.distance = Math.max(0.1, Math.min(200, this.distance * (1 + e.deltaY * 0.001)));
+    this.distance = Math.max(0.1, Math.min(this.maxDistance, this.distance * (1 + e.deltaY * 0.001)));
     this.updateCamera();
   };
 
@@ -265,7 +282,7 @@ export class SimpleOrbitCamera {
       const a = this.getMousePos(e.touches[0]);
       const b = this.getMousePos(e.touches[1]);
       const d = Math.hypot(b.x - a.x, b.y - a.y);
-      this.distance = Math.max(0.1, Math.min(200, this.distance * (this.touchDist / d)));
+      this.distance = Math.max(0.1, Math.min(this.maxDistance, this.distance * (this.touchDist / d)));
       this.touchDist = d;
       this.updateCamera();
     }
