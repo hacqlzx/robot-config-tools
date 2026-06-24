@@ -134,6 +134,15 @@ export class CabinetDrawing {
     return this.cube ? 4 : this.corners.length;
   }
 
+  /** 获取立方体几何（8 顶点世界坐标 + 分隔参数），未成体返回 null */
+  getGeometry(): { verts: number[][]; splits: number[] } | null {
+    if (!this.cube) return null;
+    return {
+      verts: this.cube.verts.map((v) => [v.x, v.y, v.z]),
+      splits: this.splits.map((s) => s.t),
+    };
+  }
+
   /** 撤销：优先撤分隔 → 撤立方体 → 撤角点 */
   undo() {
     if (this.splits.length > 0) {

@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Button, Select, Table, Input } from "antd";
+import { Button, Select, Table, Input, message } from "antd";
 import { UndoOutlined, CloseOutlined, SaveOutlined } from "@ant-design/icons";
 
 interface Props {
@@ -12,7 +12,7 @@ interface Props {
   /** 关闭绘制屏柜 */
   onClose: () => void;
   /** 保存：传出当前面板数据 */
-  onSave?: (data: { areaId?: number; bayId?: number; rows: CabinetRow[] }) => void;
+  onSave?: (data: { area: { id: number; name: string; code: string }; bay: { id: number; name: string; code: string }; rows: CabinetRow[] }) => void;
   /** 屏柜名称变化时上报（用于 3D 框上方红色标签） */
   onNamesChange?: (names: string[]) => void;
 }
@@ -117,6 +117,18 @@ export default function CabinetPanel({ cornerCount, cabinetCount, onUndo, onClos
     document.addEventListener("mouseup", onUp);
   }, [offset]);
 
+  const handleSave = useCallback(() => {
+    if (areaId == null || bayId == null) {
+      message.warning("请先选择区域和间隔");
+      return;
+    }
+    const v = voltList.find((x) => x.id === areaId);
+    const b = bayList.find((x) => x.id === bayId);
+    const area = { id: areaId, name: v?.voltName || "", code: v?.voltCode || "" };
+    const bay = { id: bayId, name: b?.bayName || "", code: b?.bayCode || "" };
+    onSave?.({ area, bay, rows });
+  }, [areaId, bayId, voltList, bayList, rows, onSave]);
+
   const tip = cornerCount < 4
     ? `点击屏柜【${STEP_LABELS[cornerCount]}】（${cornerCount + 1}/4）`
     : "已生成 ✓ 可拖动顶点调整";
@@ -212,7 +224,7 @@ export default function CabinetPanel({ cornerCount, cabinetCount, onUndo, onClos
             type="primary"
             size="small"
             icon={<SaveOutlined />}
-            onClick={() => onSave?.({ areaId, bayId, rows })}
+            onClick={handleSave}
           >
             保存
           </Button>

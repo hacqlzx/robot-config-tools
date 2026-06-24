@@ -13,6 +13,8 @@ interface CabinetDrawingAPI {
   handleUndo: () => void;
   /** 设置各屏柜名称（框上方红色标签） */
   setCabinetNames: (names: string[]) => void;
+  /** 获取立方体几何（8 顶点 + 分隔参数），未成体返回 null */
+  getCabinetGeometry: () => { verts: number[][]; splits: number[] } | null;
   setupCabinetDrawing: (
     app: pc.Application,
     camera: pc.Entity,
@@ -69,5 +71,9 @@ export function useCabinetDrawing(): CabinetDrawingAPI {
     drawingRef.current?.setCabinetNames(names);
   }, []);
 
-  return { cabinetMode, cornerCount, cabinetCount, handleToggleCabinet, handleUndo, setCabinetNames, setupCabinetDrawing };
+  const getCabinetGeometry = useCallback(() => {
+    return drawingRef.current?.getGeometry() ?? null;
+  }, []);
+
+  return { cabinetMode, cornerCount, cabinetCount, handleToggleCabinet, handleUndo, setCabinetNames, getCabinetGeometry, setupCabinetDrawing };
 }

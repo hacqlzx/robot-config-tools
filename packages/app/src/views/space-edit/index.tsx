@@ -18,6 +18,8 @@ import ViewCube from "./components/ViewCube";
 import SidePanel from "./components/SidePanel";
 import ClipController from "./components/ClipController";
 import CabinetPanel from "./components/CabinetPanel";
+import { saveCabinetDrawing, loadCabinetItems, loadCabinetItemsFromJson, type CabinetItem } from "./hooks/drawing/drawing-storage";
+import { CabinetViewer } from "./hooks/drawing/CabinetViewer";
 
 export default function SpaceEdit() {
   const { message } = App.useApp();
@@ -36,6 +38,9 @@ export default function SpaceEdit() {
   const [clipMode, setClipMode] = useState(false);
   const [clipEntityName, setClipEntityName] = useState("");
   const entitiesRef = useRef<Map<string, pc.Entity>>(new Map());
+  const cabinetViewerRef = useRef<CabinetViewer | null>(null);
+  const [drawingShown, setDrawingShown] = useState<Set<string>>(new Set());
+  const shownByJsonRef = useRef<Map<string, number[]>>(new Map());
   const lasHeadersRef = useRef<Map<string, any>>(new Map());
   const filePathRef = useRef<Map<string, string>>(new Map());
   const pointStatsRef = useRef<Map<string, { total: number; loaded: number }>>(new Map());
@@ -43,7 +48,7 @@ export default function SpaceEdit() {
   const modelExtentRef = useRef(10);
   const modelCenterRef = useRef({ x: 0, y: 0, z: 0 });
   const hasAutoFocusedRef = useRef(false);
-  const { cabinetMode, cornerCount, cabinetCount, handleToggleCabinet, handleUndo, setCabinetNames, setupCabinetDrawing } = useCabinetDrawing();
+  const { cabinetMode, cornerCount, cabinetCount, handleToggleCabinet, handleUndo, setCabinetNames, getCabinetGeometry, setupCabinetDrawing } = useCabinetDrawing();
 
   /** 按需渲染：标记脏位，rAF 循环检测到后执行一次 app.render() */
   const requestRender = useCallback(() => {
@@ -125,6 +130,8 @@ export default function SpaceEdit() {
     app.start();
     appRef.current = app;
     const cabinetCleanup = setupCabinetDrawing(app, camera, requestRender, entitiesRef);
+    const viewer = new CabinetViewer(app, camera, requestRender);
+    cabinetViewerRef.current = viewer;
 
     // 统一渲染循环：每帧先更新相机飞行(WASD)，再按需渲染，避免飞行与渲染分属两个 rAF 循环导致顿挫
     let renderRafId = 0;
@@ -148,6 +155,8 @@ export default function SpaceEdit() {
       if (rafId) cancelAnimationFrame(rafId);
       if (renderRafId) cancelAnimationFrame(renderRafId);
       cabinetCleanup();
+      viewer.destroy();
+      cabinetViewerRef.current = null;
       orbit.destroy();
       app.destroy();
     };
@@ -331,11 +340,93 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
     setClipMode(true);
   }, []);
 
-  /** 保存屏柜（暂仅面板维护，输出当前数据） */
-  const handleSaveCabinet = useCallback((data: { areaId?: number; bayId?: number; rows: { key: string; code: string; name: string }[] }) => {
-    console.log("[屏柜] 保存:", data);
-    message.success(`已保存 ${data.rows.length} 个屏柜`);
-  }, [message]);
+  /** 保存屏柜：写入当前模型目录下的绘制 JSON（按 type 隔离，创建/更新） */
+  const handleSaveCabinet = useCallback(async (data: { area: { id: number; name: string; code: string }; bay: { id: number; name: string; code: string }; rows: { key: string; code: string; name: string }[] }) => {
+    const api = window.electronAPI;
+    if (!api) { message.warning("仅 Electron 模式下可保存"); return; }
+    const projectName = localStorage.getItem("selectedProject");
+    if (!projectName) { message.warning("请先选择项目"); return; }
+    const geometry = getCabinetGeometry();
+    if (!geometry) { message.warning("请先完成屏柜绘制（四点成体）"); return; }
+
+    // 当前绘制模型路径：优先可见且有路径的模型
+    let modelPath = "";
+    for (const [name, ent] of entitiesRef.current) {
+      const p = filePathRef.current.get(name);
+      if (ent.enabled && p) { modelPath = p; break; }
+    }
+    if (!modelPath) {
+      const first = filePathRef.current.values().next().value;
+      if (first) modelPath = first;
+    }
+    if (!modelPath) { message.warning("未找到绘制模型，无法保存"); return; }
+
+    const item: CabinetItem = {
+      id: (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()),
+      type: "cabinet",
+      area: data.area,
+      bay: data.bay,
+      geometry,
+      cabinets: data.rows.map((r) => ({ code: r.code, name: r.name })),
+      updatedAt: new Date().toISOString(),
+    };
+    try {
+      await saveCabinetDrawing({ api, projectName, modelPath, item });
+      message.success(`保存成功（${item.cabinets.length} 个屏柜）`);
+    } catch (e: any) {
+      message.error("保存失败: " + (e?.message || e));
+    }
+  }, [getCabinetGeometry, message]);
+
+  /** 当前绘制模型路径：优先可见且有路径的模型 */
+  const getCurrentModelPath = useCallback((): string => {
+    for (const [name, ent] of entitiesRef.current) {
+      const p = filePathRef.current.get(name);
+      if (ent.enabled && p) return p;
+    }
+    return filePathRef.current.values().next().value || "";
+  }, []);
+
+  /** 屏柜树勾选变化：读该模型 JSON，按勾选的间隔回显/隐藏屏柜 */
+  const handleCabinetCheck = useCallback(async (bayIds: number[]) => {
+    const viewer = cabinetViewerRef.current;
+    const api = window.electronAPI;
+    if (!viewer || !api) return;
+    const modelPath = getCurrentModelPath();
+    if (!modelPath) return;
+    let items: CabinetItem[] = [];
+    try {
+      items = await loadCabinetItems(api, modelPath);
+    } catch {
+      return;
+    }
+    const byBay = new Map(items.map((it) => [it.bay.id, it]));
+    const want = new Set(bayIds.filter((id) => byBay.has(id)));
+    for (const id of viewer.getShownIds()) if (!want.has(id)) viewer.hide(id);
+    for (const id of want) if (!viewer.has(id)) viewer.show(byBay.get(id)!);
+  }, [getCurrentModelPath]);
+
+  /** 地图树勾选绘制 json：回显/隐藏其中的屏柜 */
+  const handleToggleDrawing = useCallback(async (jsonPath: string, checked: boolean) => {
+    const viewer = cabinetViewerRef.current;
+    const api = window.electronAPI;
+    if (!viewer || !api) return;
+    if (checked) {
+      const items = await loadCabinetItemsFromJson(api, jsonPath);
+      items.forEach((it) => viewer.show(it));
+      shownByJsonRef.current.set(jsonPath, items.map((it) => it.bay.id));
+      setDrawingShown((prev) => new Set(prev).add(jsonPath));
+    } else {
+      const ids = shownByJsonRef.current.get(jsonPath) || [];
+      ids.forEach((id) => viewer.hide(id));
+      shownByJsonRef.current.delete(jsonPath);
+      setDrawingShown((prev) => {
+        const next = new Set(prev);
+        next.delete(jsonPath);
+        return next;
+      });
+    }
+  }, []);
 
   return (
     <div ref={containerRef} style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -349,6 +440,9 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
           loadedFiles={loadedFiles}
           hiddenFiles={hiddenFiles}
           loadingFile={loadingFile}
+          onCabinetCheck={handleCabinetCheck}
+          mapDrawingShown={drawingShown}
+          onToggleDrawing={handleToggleDrawing}
         />
         <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
           <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block", position: "absolute", top: 0, left: 0 }} />

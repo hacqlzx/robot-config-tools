@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from "react";
+import { Dropdown } from "antd";
 import { FolderOutlined, FileOutlined, LoadingOutlined } from "@ant-design/icons";
+import { DRAWING_FILE_NAME } from "../hooks/drawing/drawing-storage";
 
 interface TreeNode {
   name: string;
@@ -18,9 +20,17 @@ interface Props {
   onToggleVisible?: (filePath: string) => void;
   /** 懒加载子节点，返回的 children 会被合并到对应节点下 */
   loadChildren?: (node: TreeNode) => Promise<TreeNode[]>;
+  /** 右键-重命名 */
+  onRequestRename?: (node: TreeNode) => void;
+  /** 右键-删除 */
+  onRequestDelete?: (node: TreeNode) => void;
+  /** 已回显的绘制 json 路径集合 */
+  drawingShown?: Set<string>;
+  /** 勾选/取消绘制 json（回显屏柜） */
+  onToggleDrawing?: (path: string, checked: boolean) => void;
 }
 
-export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, loadingFile, onLoadLas, onToggleVisible, loadChildren }: Props) {
+export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, loadingFile, onLoadLas, onToggleVisible, loadChildren, onRequestRename, onRequestDelete, drawingShown, onToggleDrawing }: Props) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
     const expandAll = (list: TreeNode[]) => {
@@ -58,6 +68,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, l
   }, [nodes]);
 
   const isLas = (name: string) => name.endsWith(".las") || name.endsWith(".laz");
+  const isDrawing = (name: string) => name === DRAWING_FILE_NAME;
 
   /** 合并节点自身的 children 与懒加载的 children */
   const getEffectiveChildren = (node: TreeNode): TreeNode[] | undefined => {
@@ -105,12 +116,16 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, l
     if (node.isDir) {
       const children = getEffectiveChildren(node);
       if (!children || children.length === 0) return { checked: false };
-      const states = children.map(getCheckState);
+      const states = children.filter((c) => !isDrawing(c.name)).map(getCheckState);
+      if (states.length === 0) return { checked: false };
       const allChecked = states.every((s) => s.checked);
       const someChecked = states.some((s) => s.checked || s.indeterminate);
       if (allChecked) return { checked: true };
       if (someChecked) return { checked: false, indeterminate: true };
       return { checked: false };
+    }
+    if (isDrawing(node.name)) {
+      return { checked: drawingShown?.has(node.path) || false };
     }
     if (isLas(node.name)) {
       const nameKey = node.name;
@@ -140,6 +155,8 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, l
         });
       };
       recurse(children);
+    } else if (isDrawing(node.name)) {
+      onToggleDrawing?.(node.path, checked);
     } else if (isLas(node.name)) {
       const isLoaded = loadedFiles.has(node.name);
       const isHidden = hiddenFiles.has(node.path);
@@ -158,9 +175,18 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, l
         const state = getCheckState(node);
         const effectiveChildren = getEffectiveChildren(node);
         const isLoading = loadingNodes.has(node.path);
+        const menuItems = [
+          { key: "rename", label: "重命名" },
+          { key: "delete", label: "删除", danger: true },
+        ];
+        const onMenuClick = (info: { key: string }) => {
+          if (info.key === "rename") onRequestRename?.(node);
+          else if (info.key === "delete") onRequestDelete?.(node);
+        };
 
         return (
           <div key={node.path}>
+            <Dropdown menu={{ items: menuItems, onClick: onMenuClick }} trigger={["contextMenu"]}>
             <div
               style={{
                 display: "flex",
@@ -219,6 +245,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, l
                 <LoadingOutlined style={{ color: "#1677ff", fontSize: 14, flexShrink: 0 }} />
               )}
             </div>
+            </Dropdown>
             {node.isDir && effectiveChildren && expanded[node.path] && (
               <TreeView
                 nodes={effectiveChildren}
@@ -229,6 +256,10 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, l
                 onLoadLas={onLoadLas}
                 onToggleVisible={onToggleVisible}
                 loadChildren={loadChildren}
+                onRequestRename={onRequestRename}
+                onRequestDelete={onRequestDelete}
+                drawingShown={drawingShown}
+                onToggleDrawing={onToggleDrawing}
               />
             )}
           </div>

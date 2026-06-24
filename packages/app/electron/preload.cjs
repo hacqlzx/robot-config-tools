@@ -33,6 +33,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.invoke("project:list-tree", projectName, subDir),
     writeFile: (projectName, subPath, data) =>
       ipcRenderer.invoke("project:write-file", projectName, subPath, data),
+    deletePath: (targetPath) =>
+      ipcRenderer.invoke("project:delete-path", targetPath),
+    renamePath: (targetPath, newName) =>
+      ipcRenderer.invoke("project:rename-path", targetPath, newName),
   },
   // ---- 数据库 API ----
   importPoints: (rows, stationName, stationCode, projectName) =>

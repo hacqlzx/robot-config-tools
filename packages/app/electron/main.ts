@@ -223,6 +223,42 @@ ipcMain.handle("project:write-file", async (_event, projectName: string, subPath
   const buf = Buffer.from(data);
   await fs.promises.writeFile(filePath, buf);
   return filePath;
+});
+
+// 删除项目内文件/目录（绝对路径，限项目根内）
+ipcMain.handle("project:delete-path", async (_event, targetPath: string) => {
+  ensureProjectRoot();
+  const resolved = path.resolve(targetPath);
+  if (!resolved.startsWith(path.resolve(PROJECT_ROOT))) {
+    throw new Error("路径越界，禁止删除");
+  }
+  if (!fs.existsSync(resolved)) {
+    throw new Error("文件不存在");
+  }
+  fs.rmSync(resolved, { recursive: true, force: true });
+  return true;
+});
+
+// 重命名项目内文件/目录（同目录改名，限项目根内）
+ipcMain.handle("project:rename-path", async (_event, targetPath: string, newName: string) => {
+  ensureProjectRoot();
+  const resolved = path.resolve(targetPath);
+  if (!resolved.startsWith(path.resolve(PROJECT_ROOT))) {
+    throw new Error("路径越界，禁止重命名");
+  }
+  if (!fs.existsSync(resolved)) {
+    throw new Error("文件不存在");
+  }
+  const safeName = String(newName).replace(/[\\/]/g, "").trim();
+  if (!safeName) {
+    throw new Error("名称不能为空");
+  }
+  const newPath = path.join(path.dirname(resolved), safeName);
+  if (fs.existsSync(newPath)) {
+    throw new Error("同名文件已存在");
+  }
+  fs.renameSync(resolved, newPath);
+  return newPath;
 });// GPU 信息诊断：启动时自动写入日志文件，客户出问题时可直接发送此文件排查
 async function logGPUInfo() {
   const logPath = path.join(app.getPath("userData"), "gpu-info.log");

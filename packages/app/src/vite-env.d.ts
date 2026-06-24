@@ -28,6 +28,8 @@ declare global {
         importFile: (projectName: string, sourcePath: string, fileName: string) => Promise<string>;
         listTree: (projectName: string, subDir: string) => Promise<TreeNode[]>;
         writeFile: (projectName: string, subPath: string, data: ArrayBuffer) => Promise<string>;
+        deletePath: (targetPath: string) => Promise<boolean>;
+        renamePath: (targetPath: string, newName: string) => Promise<string>;
       };
       importPoints: (rows: any[], stationName: string, stationCode: string, projectName: string) => Promise<{ total: number; inserted: number; updated: number; errors: string[] }>;
       startBatch: () => Promise<void>;

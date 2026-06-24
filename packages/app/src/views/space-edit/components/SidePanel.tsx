@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Tree } from "antd";
+import { Tree, Modal, Input, message } from "antd";
 import type { TreeProps, TreeDataNode } from "antd";
 import TreeView from "./TreeView";
 import type { TreeNode } from "./TreeView";
@@ -15,6 +15,12 @@ interface Props {
   hiddenFiles: Set<string>;
   treeKey: number;
   loadingFile: string;
+  /** 屏柜树勾选变化（传出勾选的间隔 id，用于 3D 回显） */
+  onCabinetCheck?: (bayIds: number[]) => void;
+  /** 已回显的绘制 json 路径集合 */
+  mapDrawingShown?: Set<string>;
+  /** 勾选/取消地图树里的绘制 json（回显屏柜） */
+  onToggleDrawing?: (path: string, checked: boolean) => void;
 }
 
 const TABS = [
@@ -137,7 +143,7 @@ const TREE_CSS = `
   .side-tree .ant-tree-switcher { width: 16px; flex-shrink: 0; }
 `;
 
-export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, hiddenFiles, treeKey, loadingFile }: Props) {
+export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, hiddenFiles, treeKey, loadingFile, onCabinetCheck, mapDrawingShown, onToggleDrawing }: Props) {
   const [sideTab, setSideTab] = useState("map");
   const [mapTreeData, setMapTreeData] = useState<TreeNode[]>([]);
   const [deviceTreeData, setDeviceTreeData] = useState<TreeDataNode[]>([]);
@@ -145,6 +151,8 @@ export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, hid
   const [deviceAreaTreeData, setDeviceAreaTreeData] = useState<TreeDataNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(false);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
+  const [renameTarget, setRenameTarget] = useState<TreeNode | null>(null);
+  const [renameValue, setRenameValue] = useState("");
 
   const draggingRef = useRef(false);
   const startXRef = useRef(0);
@@ -247,6 +255,58 @@ export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, hid
     }
   }, [sideTab, loadBayTypeTree]);
 
+  /** 右键-删除：直接删除文件/目录并刷新地图树 */
+  const handleRequestDelete = useCallback((node: TreeNode) => {
+    // 已加载到场景的模型不允许删除（含目录内已加载的子文件）
+    const loadedNames: string[] = [];
+    const walk = (n: TreeNode) => {
+      if (!n.isDir && /\.(las|laz)$/i.test(n.name) && loadedFiles.has(n.name)) loadedNames.push(n.name);
+      n.children?.forEach(walk);
+    };
+    walk(node);
+    if (loadedNames.length > 0) {
+      message.warning(`「${loadedNames.join("、")}」已加载到场景，请先在地图中取消勾选后再删除`);
+      return;
+    }
+    Modal.confirm({
+      title: "删除确认",
+      content: `确定删除「${node.name}」？该操作将直接删除文件，不可恢复。`,
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: async () => {
+        try {
+          await window.electronAPI?.project.deletePath(node.path);
+          message.success("已删除");
+          loadMapTree();
+        } catch (e: any) {
+          message.error("删除失败: " + (e?.message || e));
+        }
+      },
+    });
+  }, [loadMapTree, loadedFiles]);
+
+  /** 右键-重命名：打开弹窗 */
+  const handleRequestRename = useCallback((node: TreeNode) => {
+    setRenameTarget(node);
+    setRenameValue(node.name);
+  }, []);
+
+  /** 执行重命名 */
+  const doRename = useCallback(async () => {
+    if (!renameTarget) return;
+    const name = renameValue.trim();
+    if (!name) { message.warning("名称不能为空"); return; }
+    try {
+      await window.electronAPI?.project.renamePath(renameTarget.path, name);
+      message.success("已重命名");
+      setRenameTarget(null);
+      loadMapTree();
+    } catch (e: any) {
+      message.error("重命名失败: " + (e?.message || e));
+    }
+  }, [renameTarget, renameValue, loadMapTree]);
+
   /** 渲染 antd Tree（设备台账或屏柜共用） */
   const renderAntdTree = (data: TreeDataNode[], loadData: TreeProps["loadData"]) => (
     <div className="side-tree" style={{ overflow: "hidden" }}>
@@ -319,6 +379,10 @@ export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, hid
                 onLoadLas={onLoadLas}
                 onToggleVisible={onToggleVisible}
                 loadingFile={loadingFile}
+                onRequestRename={handleRequestRename}
+                onRequestDelete={handleRequestDelete}
+                drawingShown={mapDrawingShown}
+                onToggleDrawing={onToggleDrawing}
               />
             )
           ) : sideTab === "device" ? (
@@ -340,8 +404,18 @@ export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, hid
                   treeData={cabinetTreeData}
                   showIcon={false}
                   blockNode
+                  checkable
                   defaultExpandAll
                   style={{ fontSize: 12 }}
+                  onCheck={(checked) => {
+                    const keys = (Array.isArray(checked) ? checked : checked.checked) as React.Key[];
+                    const bayIds = keys
+                      .map(String)
+                      .filter((k) => k.startsWith("bay/"))
+                      .map((k) => parseInt(k.slice(4), 10))
+                      .filter((n) => !isNaN(n));
+                    onCabinetCheck?.(bayIds);
+                  }}
                 />
               </div>
             )
@@ -366,6 +440,22 @@ export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, hid
           )}
         </div>
       </div>
+      <Modal
+        title="重命名"
+        open={!!renameTarget}
+        onOk={doRename}
+        onCancel={() => setRenameTarget(null)}
+        okText="确定"
+        cancelText="取消"
+        destroyOnHidden
+      >
+        <Input
+          value={renameValue}
+          onChange={(e) => setRenameValue(e.target.value)}
+          onPressEnter={doRename}
+          autoFocus
+        />
+      </Modal>
     </>
   );
 }

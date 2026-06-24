@@ -1,0 +1,106 @@
+// 空间绘制数据持久化：充电区域、设备区、屏柜 等统一存于模型目录下同一 JSON
+// 文件名固定，按 type 标识区分各类绘制，支持二次编辑（按 type 局部更新，互不影响）
+
+/** 绘制类型标识 */
+export type DrawingType = "cabinet" | "device-area" | "charging-area";
+
+/** 屏柜绘制记录（一次绘制 = 一个立方体，可沿宽度分隔成多个屏柜） */
+export interface CabinetItem {
+  id: string;
+  type: "cabinet";
+  /** 所属区域（电压） */
+  area: { id: number; name: string; code: string };
+  /** 所属间隔 */
+  bay: { id: number; name: string; code: string };
+  /** 几何：立方体 8 顶点世界坐标 + 沿前底边的分隔参数 */
+  geometry: { verts: number[][]; splits: number[] };
+  /** 各分隔屏柜（编码 + 名称） */
+  cabinets: { code: string; name: string }[];
+  updatedAt: string;
+}
+
+/** 后续可扩充 device-area / charging-area 等记录类型 */
+export type DrawingItem = CabinetItem;
+
+/** 绘制数据文件结构 */
+export interface DrawingFile {
+  version: number;
+  items: DrawingItem[];
+}
+
+/** 绘制数据文件名（充电区域、设备区、屏柜共用一个文件） */
+export const DRAWING_FILE_NAME = "充电区域、设备区、屏柜.json";
+
+type ElectronAPI = NonNullable<Window["electronAPI"]>;
+
+/** 由模型绝对路径推导同目录下 JSON 的绝对路径（读用） */
+function jsonAbsPath(modelPath: string): string {
+  return modelPath.replace(/[^\\/]+$/, DRAWING_FILE_NAME);
+}
+
+/** 由模型绝对路径推导项目相对子路径（写用，writeFile 需要项目相对路径） */
+function jsonSubPath(modelPath: string): string {
+  const norm = modelPath.replace(/\\/g, "/");
+  const idx = norm.indexOf("/地图/");
+  if (idx >= 0) {
+    const rel = norm.slice(idx + 1); // 地图/xxx/xxx.las
+    return rel.replace(/[^/]+$/, DRAWING_FILE_NAME);
+  }
+  return DRAWING_FILE_NAME;
+}
+
+/** 读取现有绘制文件（不存在则返回空结构） */
+async function readDrawingFile(api: ElectronAPI, modelPath: string): Promise<DrawingFile> {
+  try {
+    const buf = await api.readLargeFile(jsonAbsPath(modelPath));
+    const text = new TextDecoder("utf-8").decode(buf);
+    const data = JSON.parse(text) as DrawingFile;
+    if (!Array.isArray(data.items)) data.items = [];
+    if (typeof data.version !== "number") data.version = 1;
+    return data;
+  } catch {
+    return { version: 1, items: [] };
+  }
+}
+
+/** 写入绘制文件（覆盖） */
+async function writeDrawingFile(api: ElectronAPI, projectName: string, modelPath: string, data: DrawingFile): Promise<void> {
+  const bytes = new TextEncoder().encode(JSON.stringify(data, null, 2));
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  await api.project.writeFile(projectName, jsonSubPath(modelPath), buffer);
+}
+
+/**
+ * 保存屏柜绘制：读现有文件 → 替换同一间隔(bay.id)的 cabinet 记录为当前绘制 → 写回。
+ * 其他间隔的屏柜及其他 type（充电区域/设备区）保持不变。第一次没有文件则创建。
+ */
+export async function saveCabinetDrawing(params: {
+  api: ElectronAPI;
+  projectName: string;
+  modelPath: string;
+  item: CabinetItem;
+}): Promise<void> {
+  const { api, projectName, modelPath, item } = params;
+  const file = await readDrawingFile(api, modelPath);
+  file.items = file.items.filter((it) => !(it.type === "cabinet" && it.bay.id === item.bay.id));
+  file.items.push(item);
+  await writeDrawingFile(api, projectName, modelPath, file);
+}
+
+/** 读取该模型已保存的全部屏柜记录（用于回显） */
+export async function loadCabinetItems(api: ElectronAPI, modelPath: string): Promise<CabinetItem[]> {
+  const file = await readDrawingFile(api, modelPath);
+  return file.items.filter((it): it is CabinetItem => it.type === "cabinet");
+}
+
+/** 直接按绘制 JSON 的绝对路径读取屏柜记录（地图树勾选 json 时用） */
+export async function loadCabinetItemsFromJson(api: ElectronAPI, jsonPath: string): Promise<CabinetItem[]> {
+  try {
+    const buf = await api.readLargeFile(jsonPath);
+    const data = JSON.parse(new TextDecoder("utf-8").decode(buf)) as DrawingFile;
+    if (!Array.isArray(data.items)) return [];
+    return data.items.filter((it): it is CabinetItem => it.type === "cabinet");
+  } catch {
+    return [];
+  }
+}
