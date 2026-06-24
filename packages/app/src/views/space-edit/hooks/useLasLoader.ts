@@ -96,7 +96,6 @@ export function useLasLoader({
         maxRgb = Math.max(maxRgb, sv.getUint16(o + rgbOff, true), sv.getUint16(o + rgbOff + 2, true), sv.getUint16(o + rgbOff + 4, true));
       }
       rgbShift = maxRgb > 255 ? 8 : 0;
-      console.log("[LAS RGB] maxSample=" + maxRgb + " rgbShift=" + rgbShift + (rgbShift === 0 ? " (8位存低字节)" : " (16位取高字节)"));
     }
 
     const cx = (minX + maxX) / 2;
@@ -211,9 +210,6 @@ export function useLasLoader({
     const localCenterY = (lminY + lmaxY) / 2;
     const localCenterZ = (lminZ + lmaxZ) / 2;
     const realExtent = Math.max(lmaxX - lminX, lmaxY - lminY, lmaxZ - lminZ, 1);
-    console.log("[LAS bbox] header.extent=" + extent.toFixed(1) +
-      " 实测.extent=" + realExtent.toFixed(1) +
-      " 局部中心=(" + localCenterX.toFixed(2) + "," + localCenterY.toFixed(2) + "," + localCenterZ.toFixed(2) + ")");
     focusOnModel(localCenterX, localCenterY, localCenterZ, realExtent);
   };
 

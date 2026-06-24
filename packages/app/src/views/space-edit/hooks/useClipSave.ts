@@ -141,7 +141,6 @@ export async function performClipSave({
     const rgbShift = hasRgb ? (maxRgbSample > 255 ? 8 : 0) : 8;
     console.log("[裁切] 裁切后点数:", clippedCount.toLocaleString());
     console.log("[裁切] 保留比例:", (clippedCount / totalCount * 100).toFixed(2) + "%");
-    console.log("[裁切] RGB maxSample=" + maxRgbSample + " rgbShift=" + rgbShift);
 
     if (clippedCount === 0) {
       setSaving(false);

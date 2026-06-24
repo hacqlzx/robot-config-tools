@@ -198,10 +198,6 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
         orbit.distance = extent * 1.5;
       }
       orbit.updateCamera();
-      const cam = orbit.camera.camera;
-      console.log("[相机] extent=" + extent.toFixed(1) + " distance=" + orbit.distance.toFixed(1) +
-        " sceneRadius=" + orbit.sceneRadius.toFixed(1) +
-        " nearClip=" + (cam?.nearClip ?? -1).toFixed(3) + " farClip=" + (cam?.farClip ?? -1).toFixed(1));
       requestRender();
     }
   }, [])

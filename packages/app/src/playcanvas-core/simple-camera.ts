@@ -25,7 +25,6 @@ export class SimpleOrbitCamera {
   private button = -1;
   private _canvas: HTMLCanvasElement | null = null;
   private touchDist = 0;
-  private rafId = 0;
   private moveVec = new pc.Vec3();
 
   // 飞行按键状态
@@ -66,21 +65,6 @@ export class SimpleOrbitCamera {
     window.addEventListener("blur", this.clearAllKeys);
 
     this.updateCamera();
-  }
-
-  // ─── 飞行循环 ───
-  private lastTime = performance.now();
-  private startFlyLoop() {
-    const tick = () => {
-      if (this.rafId) {
-        const now = performance.now();
-        const dt = Math.min((now - this.lastTime) / 1000, 0.1);
-        this.lastTime = now;
-        this.updateFly(dt);
-        this.rafId = requestAnimationFrame(tick);
-      }
-    };
-    this.rafId = requestAnimationFrame(tick);
   }
 
   // ─── WASD 飞行逻辑（参考 supersplat-main controllers.ts）。由外部渲染循环每帧调用 ───
@@ -305,7 +289,6 @@ export class SimpleOrbitCamera {
     document.removeEventListener("keydown", this.onKeyDown);
     document.removeEventListener("keyup", this.onKeyUp);
     window.removeEventListener("blur", this.clearAllKeys);
-    if (this.rafId) cancelAnimationFrame(this.rafId);
     this.pivot?.destroy();
   }
 }
