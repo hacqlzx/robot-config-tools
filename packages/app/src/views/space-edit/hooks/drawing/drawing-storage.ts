@@ -104,3 +104,26 @@ export async function loadCabinetItemsFromJson(api: ElectronAPI, jsonPath: strin
     return [];
   }
 }
+
+/** 由绘制 JSON 绝对路径推导项目相对子路径（写回用） */
+function subPathFromJson(jsonPath: string): string {
+  const norm = jsonPath.replace(/\\/g, "/");
+  const idx = norm.indexOf("/地图/");
+  return idx >= 0 ? norm.slice(idx + 1) : DRAWING_FILE_NAME;
+}
+
+/** 删除某间隔的屏柜记录并写回 JSON */
+export async function deleteCabinetItem(api: ElectronAPI, projectName: string, jsonPath: string, bayId: number): Promise<void> {
+  let data: DrawingFile = { version: 1, items: [] };
+  try {
+    const buf = await api.readLargeFile(jsonPath);
+    const parsed = JSON.parse(new TextDecoder("utf-8").decode(buf)) as DrawingFile;
+    if (Array.isArray(parsed.items)) data = parsed;
+  } catch {
+    return;
+  }
+  data.items = data.items.filter((it) => !(it.type === "cabinet" && it.bay.id === bayId));
+  const bytes = new TextEncoder().encode(JSON.stringify(data, null, 2));
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  await api.project.writeFile(projectName, subPathFromJson(jsonPath), buffer);
+}

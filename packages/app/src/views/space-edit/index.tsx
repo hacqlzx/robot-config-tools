@@ -18,7 +18,7 @@ import ViewCube from "./components/ViewCube";
 import SidePanel from "./components/SidePanel";
 import ClipController from "./components/ClipController";
 import CabinetPanel from "./components/CabinetPanel";
-import { saveCabinetDrawing, loadCabinetItems, loadCabinetItemsFromJson, type CabinetItem } from "./hooks/drawing/drawing-storage";
+import { saveCabinetDrawing, loadCabinetItems, loadCabinetItemsFromJson, deleteCabinetItem, DRAWING_FILE_NAME, type CabinetItem } from "./hooks/drawing/drawing-storage";
 import { CabinetViewer } from "./hooks/drawing/CabinetViewer";
 
 export default function SpaceEdit() {
@@ -41,6 +41,7 @@ export default function SpaceEdit() {
   const cabinetViewerRef = useRef<CabinetViewer | null>(null);
   const [drawingShown, setDrawingShown] = useState<Set<string>>(new Set());
   const shownByJsonRef = useRef<Map<string, number[]>>(new Map());
+  const savedCabinetRef = useRef<{ item: CabinetItem; jsonPath: string } | null>(null);
   const lasHeadersRef = useRef<Map<string, any>>(new Map());
   const filePathRef = useRef<Map<string, string>>(new Map());
   const pointStatsRef = useRef<Map<string, { total: number; loaded: number }>>(new Map());
@@ -372,11 +373,13 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
     };
     try {
       await saveCabinetDrawing({ api, projectName, modelPath, item });
+      savedCabinetRef.current = { item, jsonPath: modelPath.replace(/[^\\/]+$/, DRAWING_FILE_NAME) };
       message.success(`保存成功（${item.cabinets.length} 个屏柜）`);
+      handleToggleCabinet(); // 保存后自动关闭弹窗
     } catch (e: any) {
       message.error("保存失败: " + (e?.message || e));
     }
-  }, [getCabinetGeometry, message]);
+  }, [getCabinetGeometry, message, handleToggleCabinet]);
 
   /** 当前绘制模型路径：优先可见且有路径的模型 */
   const getCurrentModelPath = useCallback((): string => {
@@ -402,8 +405,9 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
     }
     const byBay = new Map(items.map((it) => [it.bay.id, it]));
     const want = new Set(bayIds.filter((id) => byBay.has(id)));
+    const jsonPath = modelPath.replace(/[^\\/]+$/, DRAWING_FILE_NAME);
     for (const id of viewer.getShownIds()) if (!want.has(id)) viewer.hide(id);
-    for (const id of want) if (!viewer.has(id)) viewer.show(byBay.get(id)!);
+    for (const id of want) if (!viewer.has(id)) viewer.show(byBay.get(id)!, jsonPath);
   }, [getCurrentModelPath]);
 
   /** 地图树勾选绘制 json：回显/隐藏其中的屏柜 */
@@ -413,7 +417,7 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
     if (!viewer || !api) return;
     if (checked) {
       const items = await loadCabinetItemsFromJson(api, jsonPath);
-      items.forEach((it) => viewer.show(it));
+      items.forEach((it) => viewer.show(it, jsonPath));
       shownByJsonRef.current.set(jsonPath, items.map((it) => it.bay.id));
       setDrawingShown((prev) => new Set(prev).add(jsonPath));
     } else {
@@ -427,6 +431,46 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
       });
     }
   }, []);
+
+  /** 删除回显的屏柜 item：从 JSON 移除并从场景隐藏（勾选态保持） */
+  const handleDeleteCabinetItem = useCallback(async (jsonPath: string, bayId: number) => {
+    const api = window.electronAPI;
+    const projectName = localStorage.getItem("selectedProject");
+    if (!api || !projectName) return;
+    try {
+      await deleteCabinetItem(api, projectName, jsonPath, bayId);
+    } catch (e: any) {
+      message.error("删除失败: " + (e?.message || e));
+      return;
+    }
+    cabinetViewerRef.current?.hide(bayId);
+    const ids = shownByJsonRef.current.get(jsonPath);
+    if (ids) shownByJsonRef.current.set(jsonPath, ids.filter((id) => id !== bayId));
+    message.success("已删除");
+  }, [message]);
+
+  // 绑定删除回调
+  useEffect(() => {
+    cabinetViewerRef.current?.setOnRequestDelete(handleDeleteCabinetItem);
+  }, [handleDeleteCabinetItem]);
+
+  // 绘制模式切换：切换选中交互；关闭弹窗时把已保存的屏柜转为回显保留（未保存的由绘制器清除）
+  useEffect(() => {
+    const viewer = cabinetViewerRef.current;
+    viewer?.setInteractive(!cabinetMode);
+    if (!cabinetMode) {
+      const saved = savedCabinetRef.current;
+      if (saved && viewer) {
+        viewer.show(saved.item, saved.jsonPath);
+        const ids = shownByJsonRef.current.get(saved.jsonPath) || [];
+        if (!ids.includes(saved.item.bay.id)) {
+          shownByJsonRef.current.set(saved.jsonPath, [...ids, saved.item.bay.id]);
+        }
+        setDrawingShown((prev) => new Set(prev).add(saved.jsonPath));
+      }
+      savedCabinetRef.current = null;
+    }
+  }, [cabinetMode]);
 
   return (
     <div ref={containerRef} style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
