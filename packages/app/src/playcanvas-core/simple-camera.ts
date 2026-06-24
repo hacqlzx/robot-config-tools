@@ -188,7 +188,7 @@ export class SimpleOrbitCamera {
   }
 
   private onMouseDown = (e: MouseEvent) => {
-    if ((window as any).__clipDragging || (window as any).__cabinetDragging) return;
+    if ((window as any).__clipDragging || (window as any).__drawingDragging) return;
     this.dragging = true;
     this.button = e.button;
     const pos = this.getMousePos(e);
@@ -197,7 +197,7 @@ export class SimpleOrbitCamera {
   };
 
   private onMouseMove = (e: MouseEvent) => {
-    if ((window as any).__clipDragging || (window as any).__cabinetDragging) return;
+    if ((window as any).__clipDragging || (window as any).__drawingDragging) return;
     if (!this.dragging) return;
     const pos = this.getMousePos(e);
     const dx = pos.x - this.lastX;

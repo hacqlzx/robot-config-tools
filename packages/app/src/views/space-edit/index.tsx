@@ -17,6 +17,7 @@ import Toolbar from "./components/Toolbar";
 import ViewCube from "./components/ViewCube";
 import SidePanel from "./components/SidePanel";
 import ClipController from "./components/ClipController";
+import CabinetPanel from "./components/CabinetPanel";
 
 export default function SpaceEdit() {
   const { message } = App.useApp();
@@ -42,7 +43,7 @@ export default function SpaceEdit() {
   const modelExtentRef = useRef(10);
   const modelCenterRef = useRef({ x: 0, y: 0, z: 0 });
   const hasAutoFocusedRef = useRef(false);
-  const { cabinetMode, handleToggleCabinet, setupCabinetDrawing } = useCabinetDrawing();
+  const { cabinetMode, cornerCount, cabinetCount, handleToggleCabinet, handleUndo, setCabinetNames, setupCabinetDrawing } = useCabinetDrawing();
 
   /** 按需渲染：标记脏位，rAF 循环检测到后执行一次 app.render() */
   const requestRender = useCallback(() => {
@@ -330,6 +331,12 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
     setClipMode(true);
   }, []);
 
+  /** 保存屏柜（暂仅面板维护，输出当前数据） */
+  const handleSaveCabinet = useCallback((data: { areaId?: number; bayId?: number; rows: { key: string; code: string; name: string }[] }) => {
+    console.log("[屏柜] 保存:", data);
+    message.success(`已保存 ${data.rows.length} 个屏柜`);
+  }, [message]);
+
   return (
     <div ref={containerRef} style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <Toolbar onFileSelect={handleFileSelect} onClipModel={handleClipModel} cabinetMode={cabinetMode} onToggleCabinet={handleToggleCabinet} onImportPointTable={handleImportPointTable} importing={importing} />
@@ -375,6 +382,16 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
                 );
               })}
             </div>
+          )}
+          {cabinetMode && (
+            <CabinetPanel
+              cornerCount={cornerCount}
+              cabinetCount={cabinetCount}
+              onUndo={handleUndo}
+              onClose={handleToggleCabinet}
+              onSave={handleSaveCabinet}
+              onNamesChange={setCabinetNames}
+            />
           )}
           {clipMode && appRef.current && (
             <ClipController
