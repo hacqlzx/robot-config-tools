@@ -237,9 +237,12 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
       // 用站名生成 stationCode
       const stationCode = stationName.substring(0, 10) + Date.now().toString().slice(-4);
 
-      console.log("[点表导入] 站名:", stationName, "开始导入", rows.length, "行...");
+      // 获取当前项目名
+      const projectName = localStorage.getItem("selectedProject") || "默认项目";
+
+      console.log("[点表导入] 项目:", projectName, "站名:", stationName, "开始导入", rows.length, "行...");
       await api.startBatch();
-      const result = await api.importPoints(rows, stationName, stationCode);
+      const result = await api.importPoints(rows, stationName, stationCode, projectName);
       await api.endBatch();
 
       console.log("[点表导入] 导入完成:", result);
@@ -404,6 +407,12 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
           )}
         </div>
       </div>
+      {importing && (
+        <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", pointerEvents: "all" }}>
+          <Spin size="large" />
+          <div style={{ color: "#fff", marginTop: 16, fontSize: 14 }}>正在导入点表...</div>
+        </div>
+      )}
     </div>
   );
 }

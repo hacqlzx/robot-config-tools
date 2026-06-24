@@ -11,6 +11,7 @@ export interface DeviceVoltage {
   stationName: string;
   stationCode: string;
   sortNum: number;
+  projectName: string;
   createTime: string;
   createBy: string;
   updateTime: string;
@@ -37,6 +38,7 @@ export interface DeviceBay {
   stationName: string;
   stationCode: string;
   sortNum: number;
+  projectName: string;
   createTime: string;
   createBy: string;
   updateTime: string;
@@ -72,6 +74,7 @@ export interface DeviceMain {
   stationName: string;
   stationCode: string;
   sortNum: number;
+  projectName: string;
   createTime: string;
   createBy: string;
   updateTime: string;
@@ -116,6 +119,7 @@ export interface DeviceComponent {
   stationName: string;
   stationCode: string;
   sortNum: number;
+  projectName: string;
   createTime: string;
   createBy: string;
   updateTime: string;
@@ -176,6 +180,7 @@ export interface DevicePoint {
   stationName: string;
   stationCode: string;
   inspectionSubType: string;
+  projectName: string;
   createTime: string;
   createBy: string;
   updateTime: string;
@@ -189,3 +194,15 @@ export interface DevicePoint {
 
 export type CreateDevicePointDTO = Omit<DevicePoint, 'id' | 'createTime' | 'updateTime'>;
 export type UpdateDevicePointDTO = Partial<Omit<DevicePoint, 'id' | 'createTime' | 'updateTime'>>;
+
+// ============================================================
+// project_station
+// ============================================================
+
+export interface ProjectStation {
+  id: number;
+  projectName: string;
+  stationName: string;
+  createTime: string;
+  updateTime: string;
+}

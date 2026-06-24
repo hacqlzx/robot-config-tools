@@ -35,9 +35,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.invoke("project:write-file", projectName, subPath, data),
   },
   // ---- 数据库 API ----
-  importPoints: (rows, stationName, stationCode) =>
+  importPoints: (rows, stationName, stationCode, projectName) =>
     ipcRenderer
-      .invoke("db:importPoints", rows, stationName, stationCode)
+      .invoke("db:importPoints", rows, stationName, stationCode, projectName)
       .then((r) => {
         if (!r.ok) throw new Error(r.error);
         return r.data;

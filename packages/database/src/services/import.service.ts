@@ -4,6 +4,7 @@ import { DeviceBayRepo } from "../repositories/device-bay.repo";
 import { DeviceMainRepo } from "../repositories/device-main.repo";
 import { DeviceComponentRepo } from "../repositories/device-component.repo";
 import { DevicePointRepo } from "../repositories/device-point.repo";
+import { ProjectStationRepo } from "../repositories/project-station.repo";
 
 /** Excel 每行数据结构（与 excel-parser.ts 共享） */
 export interface PointExcelRow {
@@ -52,19 +53,32 @@ export function importPointExcel(
   rows: PointExcelRow[],
   stationName: string,
   stationCode: string,
+  projectName: string,
 ): ImportResult {
   const voltageRepo = new DeviceVoltageRepo(db);
   const bayRepo = new DeviceBayRepo(db);
   const mainRepo = new DeviceMainRepo(db);
   const compRepo = new DeviceComponentRepo(db);
   const pointRepo = new DevicePointRepo(db);
+  const psRepo = new ProjectStationRepo(db);
+
+  // 项目-厂站绑定校验
+  const existingBinding = psRepo.getByProjectName(projectName);
+  if (existingBinding) {
+    if (existingBinding.stationName !== stationName) {
+      throw new Error(
+        `导入失败：当前项目 "${projectName}" 已绑定厂站 "${existingBinding.stationName}"，` +
+        `与导入点表中的厂站 "${stationName}" 不一致，请确认点表文件是否正确`
+      );
+    }
+  }
 
   const result: ImportResult = { total: rows.length, inserted: 0, updated: 0, errors: [] };
 
   for (const row of rows) {
     try {
-    // ??????????????
-    row.voltName = row.voltName?.trim() ?? "";
+      // 字段值去首尾空格
+      row.voltName = row.voltName?.trim() ?? "";
     row.voltCode = row.voltCode?.trim() ?? "";
     row.bayName = row.bayName?.trim() ?? "";
     row.bayCode = row.bayCode?.trim() ?? "";
@@ -79,7 +93,7 @@ export function importPointExcel(
     row.cruiseId = row.cruiseId?.trim() ?? "";
     row.stationName = row.stationName?.trim() ?? "";
     row.stationCode = row.stationCode?.trim() ?? "";
-      // 1. voltage（按名称+厂站 upsert）
+      // 1. voltage（按名称+厂站+项目 upsert）
       const volt = voltageRepo.upsert({
         voltName: row.voltName,
         voltCode: row.voltCode ?? "",
@@ -88,11 +102,12 @@ export function importPointExcel(
         stationCode,
         alarmLevel: row.alarmLevel ?? 0,
         sortNum: 1,
+        projectName,
         createBy: "import",
         updateBy: "import",
       });
 
-      // 2. bay（按名称+电压 upsert）
+      // 2. bay（按名称+电压+项目 upsert）
       const bay = bayRepo.upsert({
         bayName: row.bayName,
         bayType: row.bayType ?? "",
@@ -105,12 +120,13 @@ export function importPointExcel(
         stationCode,
         alarmLevel: row.alarmLevel ?? 0,
         sortNum: 1,
+        projectName,
         repairFlag: 0,
         createBy: "import",
         updateBy: "import",
       });
 
-      // 3. main device（按名称+间隔 upsert）
+      // 3. main device（按名称+间隔+项目 upsert）
       const main = mainRepo.upsert({
         mainDeviceName: row.mainDeviceName,
         mainDeviceType: row.mainDeviceType ?? 29,
@@ -131,6 +147,7 @@ export function importPointExcel(
         stationCode,
         alarmLevel: row.alarmLevel ?? 0,
         sortNum: 1,
+        projectName,
         repairFlag: 0,
         deviceModel: "",
         deviceSource: "",
@@ -144,7 +161,7 @@ export function importPointExcel(
         updateBy: "import",
       });
 
-      // 4. component（按名称+主设备 upsert）
+      // 4. component（按名称+主设备+项目 upsert）
       const comp = compRepo.upsert({
         componentName: row.componentName,
         componentType: row.componentType ?? "",
@@ -166,37 +183,38 @@ export function importPointExcel(
         stationCode,
         alarmLevel: row.alarmLevel ?? 0,
         sortNum: 1,
+        projectName,
         repairFlag: 0,
         createBy: "import",
         updateBy: "import",
       });
 
-      // 5. point（按 cruiseId upsert，空则按 pointCode 回退）
-      const cruiseId = row.cruiseId || row.pointCode || "";
-      if (!cruiseId) {
-        result.errors.push(`行 "${row.pointName}": cruiseId 和 pointCode 均为空，跳过`);
+      // 5. point（按 pointCode 查重，cruiseId 仅作传参字段）
+      if (!row.pointCode) {
+        result.errors.push(`行 "${row.pointName}": pointCode 为空，跳过`);
         continue;
       }
 
-      const existing = pointRepo.findByCruiseId(cruiseId);
-      if (existing) {
-        pointRepo.update(existing.id, {
+      const existingPoint = pointRepo.findByPointCode(row.pointCode, projectName);
+
+      if (existingPoint) {
+        pointRepo.update(existingPoint.id, {
           pointName: row.pointName,
           pointCode: row.pointCode ?? "",
-          cruiseId,
-          recognitionTypeList: row.recognitionTypeList ?? existing.recognitionTypeList,
-          saveTypeList: row.saveTypeList ?? existing.saveTypeList,
-          meterType: row.meterType ?? existing.meterType,
-          positionStateType: row.positionStateType ?? existing.positionStateType,
-          importantLevel: row.importantLevel ?? existing.importantLevel,
-          inspectionSubType: row.inspectionSubType ?? existing.inspectionSubType,
+          cruiseId: row.cruiseId ?? existingPoint.cruiseId,
+          recognitionTypeList: row.recognitionTypeList ?? existingPoint.recognitionTypeList,
+          saveTypeList: row.saveTypeList ?? existingPoint.saveTypeList,
+          meterType: row.meterType ?? existingPoint.meterType,
+          positionStateType: row.positionStateType ?? existingPoint.positionStateType,
+          importantLevel: row.importantLevel ?? existingPoint.importantLevel,
+          inspectionSubType: row.inspectionSubType ?? existingPoint.inspectionSubType,
         });
         result.updated++;
       } else {
         pointRepo.create({
           pointName: row.pointName,
           pointCode: row.pointCode ?? "",
-          cruiseId,
+          cruiseId: row.cruiseId ?? "",
           recognitionTypeList: row.recognitionTypeList ?? "",
           saveTypeList: row.saveTypeList ?? 1,
           meterType: row.meterType ?? 0,
@@ -238,6 +256,7 @@ export function importPointExcel(
           stationName,
           stationCode,
           inspectionSubType: row.inspectionSubType ?? "",
+          projectName,
           createBy: "import",
           updateBy: "import",
           alarmLevel: row.alarmLevel ?? 0,
@@ -251,6 +270,11 @@ export function importPointExcel(
     } catch (e: any) {
       result.errors.push(`行 "${row.pointName}": ${e.message}`);
     }
+  }
+
+  // 首次导入时创建项目-厂站绑定
+  if (!existingBinding) {
+    psRepo.bind(projectName, stationName);
   }
 
   return result;

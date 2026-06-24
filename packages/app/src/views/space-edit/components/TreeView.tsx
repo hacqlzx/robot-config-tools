@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { FolderOutlined, FileOutlined, LoadingOutlined } from "@ant-design/icons";
 
 interface TreeNode {
@@ -16,9 +16,11 @@ interface Props {
   loadingFile: string;
   onLoadLas?: (filePath: string) => void;
   onToggleVisible?: (filePath: string) => void;
+  /** 懒加载子节点，返回的 children 会被合并到对应节点下 */
+  loadChildren?: (node: TreeNode) => Promise<TreeNode[]>;
 }
 
-export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, loadingFile, onLoadLas, onToggleVisible }: Props) {
+export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, loadingFile, onLoadLas, onToggleVisible, loadChildren }: Props) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
     const expandAll = (list: TreeNode[]) => {
@@ -32,6 +34,10 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, l
     expandAll(nodes);
     return init;
   });
+
+  const [lazyChildren, setLazyChildren] = useState<Record<string, TreeNode[]>>({});
+  const [loadingNodes, setLoadingNodes] = useState<Set<string>>(new Set());
+  const loadedRef = useRef<Set<string>>(new Set());
 
   // 当节点变化时自动展开新目录
   useEffect(() => {
@@ -53,10 +59,53 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, l
 
   const isLas = (name: string) => name.endsWith(".las") || name.endsWith(".laz");
 
+  /** 合并节点自身的 children 与懒加载的 children */
+  const getEffectiveChildren = (node: TreeNode): TreeNode[] | undefined => {
+    if (node.children && node.children.length > 0) return node.children;
+    const lazy = lazyChildren[node.path];
+    if (lazy && lazy.length > 0) return lazy;
+    return node.children;
+  };
+
+  const handleExpand = async (node: TreeNode) => {
+    const isExpanded = expanded[node.path];
+
+    // 折叠
+    if (isExpanded) {
+      setExpanded((prev) => ({ ...prev, [node.path]: false }));
+      return;
+    }
+
+    // 已懒加载过或已有子节点 → 直接展开
+    const hasChildren = (node.children && node.children.length > 0) || lazyChildren[node.path];
+    if (hasChildren) {
+      setExpanded((prev) => ({ ...prev, [node.path]: true }));
+      return;
+    }
+
+    // 需要懒加载
+    if (loadChildren && !loadedRef.current.has(node.path)) {
+      loadedRef.current.add(node.path);
+      setLoadingNodes((prev) => new Set(prev).add(node.path));
+      try {
+        const children = await loadChildren(node);
+        setLazyChildren((prev) => ({ ...prev, [node.path]: children }));
+        setExpanded((prev) => ({ ...prev, [node.path]: true }));
+      } finally {
+        setLoadingNodes((prev) => {
+          const next = new Set(prev);
+          next.delete(node.path);
+          return next;
+        });
+      }
+    }
+  };
+
   const getCheckState = (node: TreeNode): { checked: boolean; indeterminate?: boolean } => {
     if (node.isDir) {
-      if (!node.children || node.children.length === 0) return { checked: false };
-      const states = node.children.map(getCheckState);
+      const children = getEffectiveChildren(node);
+      if (!children || children.length === 0) return { checked: false };
+      const states = children.map(getCheckState);
       const allChecked = states.every((s) => s.checked);
       const someChecked = states.some((s) => s.checked || s.indeterminate);
       if (allChecked) return { checked: true };
@@ -72,7 +121,8 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, l
 
   const handleCheck = (node: TreeNode, checked: boolean) => {
     if (node.isDir) {
-      // 递归设置子节点
+      const children = getEffectiveChildren(node);
+      if (!children) return;
       const recurse = (list: TreeNode[]) => {
         list.forEach((child) => {
           if (child.isDir && child.children) {
@@ -89,7 +139,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, l
           }
         });
       };
-      if (node.children) recurse(node.children);
+      recurse(children);
     } else if (isLas(node.name)) {
       const isLoaded = loadedFiles.has(node.name);
       const isHidden = hiddenFiles.has(node.path);
@@ -106,6 +156,9 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, l
     <>
       {nodes.map((node) => {
         const state = getCheckState(node);
+        const effectiveChildren = getEffectiveChildren(node);
+        const isLoading = loadingNodes.has(node.path);
+
         return (
           <div key={node.path}>
             <div
@@ -126,9 +179,15 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, l
               {node.isDir ? (
                 <span
                   style={{ fontSize: 10, width: 12, textAlign: "center", cursor: "pointer" }}
-                  onClick={() => setExpanded((prev) => ({ ...prev, [node.path]: !prev[node.path] }))}
+                  onClick={() => handleExpand(node)}
                 >
-                  {expanded[node.path] ? "▼" : "▶"}
+                  {isLoading ? (
+                    <LoadingOutlined style={{ fontSize: 12 }} />
+                  ) : expanded[node.path] ? (
+                    "▼"
+                  ) : (
+                    "▶"
+                  )}
                 </span>
               ) : (
                 <span style={{ width: 12 }} />
@@ -160,15 +219,16 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, l
                 <LoadingOutlined style={{ color: "#1677ff", fontSize: 14, flexShrink: 0 }} />
               )}
             </div>
-            {node.isDir && node.children && expanded[node.path] && (
+            {node.isDir && effectiveChildren && expanded[node.path] && (
               <TreeView
-                nodes={node.children}
+                nodes={effectiveChildren}
                 depth={depth + 1}
                 loadedFiles={loadedFiles}
                 hiddenFiles={hiddenFiles}
                 loadingFile={loadingFile}
                 onLoadLas={onLoadLas}
                 onToggleVisible={onToggleVisible}
+                loadChildren={loadChildren}
               />
             )}
           </div>

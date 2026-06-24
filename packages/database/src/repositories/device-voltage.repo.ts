@@ -5,21 +5,26 @@ import { DeviceVoltage, CreateDeviceVoltageDTO, UpdateDeviceVoltageDTO } from ".
 const COLUMNS = [
   "volt_name", "volt_code", "alarm_level",
   "station_id", "station_name", "station_code",
-  "sort_num", "create_time", "create_by", "update_time", "update_by",
+  "sort_num", "project_name",
+  "create_time", "create_by", "update_time", "update_by",
 ] as const;
 
 function toRow(dto: CreateDeviceVoltageDTO, now: string): any[] {
   return [
     dto.voltName, dto.voltCode, dto.alarmLevel,
     dto.stationId, dto.stationName, dto.stationCode,
-    dto.sortNum, now, dto.createBy, now, dto.updateBy,
+    dto.sortNum, dto.projectName,
+    now, dto.createBy, now, dto.updateBy,
   ];
 }
 
 export class DeviceVoltageRepo {
   constructor(private db: DbWrapper) {}
 
-  list(): DeviceVoltage[] {
+  list(projectName?: string): DeviceVoltage[] {
+    if (projectName) {
+      return this.db.prepare("SELECT * FROM device_voltage WHERE project_name = ? ORDER BY sort_num").all(projectName) as DeviceVoltage[];
+    }
     return this.db.prepare("SELECT * FROM device_voltage ORDER BY sort_num").all() as DeviceVoltage[];
   }
 
@@ -27,7 +32,10 @@ export class DeviceVoltageRepo {
     return this.db.prepare("SELECT * FROM device_voltage WHERE id = ?").get(id) as DeviceVoltage | undefined;
   }
 
-  findByStationId(stationId: number): DeviceVoltage[] {
+  findByStationId(stationId: number, projectName?: string): DeviceVoltage[] {
+    if (projectName) {
+      return this.db.prepare("SELECT * FROM device_voltage WHERE station_id = ? AND project_name = ? ORDER BY sort_num").all(stationId, projectName) as DeviceVoltage[];
+    }
     return this.db.prepare("SELECT * FROM device_voltage WHERE station_id = ? ORDER BY sort_num").all(stationId) as DeviceVoltage[];
   }
 
@@ -62,12 +70,22 @@ export class DeviceVoltageRepo {
     this.db.prepare(`UPDATE device_voltage SET ${fields.join(", ")} WHERE id = ?`).run(vals);
   }
 
-  findByVoltNameAndStationId(voltName: string, stationId: number): DeviceVoltage | undefined {
-    return this.db.prepare("SELECT * FROM device_voltage WHERE volt_name = ? AND station_id = ?").get(voltName, stationId) as DeviceVoltage | undefined;
+  findByVoltNameAndStationId(voltName: string, stationId: number, projectName: string): DeviceVoltage | undefined {
+    return this.db.prepare("SELECT * FROM device_voltage WHERE volt_name = ? AND station_id = ? AND project_name = ?").get(voltName, stationId, projectName) as DeviceVoltage | undefined;
   }
 
-  upsert(dto: CreateDeviceVoltageDTO & { voltName: string; stationId: number }): DeviceVoltage {
-    const existing = this.findByVoltNameAndStationId(dto.voltName, dto.stationId);
+  findByVoltCode(voltCode: string, projectName: string): DeviceVoltage | undefined {
+    return this.db.prepare("SELECT * FROM device_voltage WHERE volt_code = ? AND project_name = ?").get(voltCode, projectName) as DeviceVoltage | undefined;
+  }
+
+  upsert(dto: CreateDeviceVoltageDTO & { voltName: string; voltCode: string; stationId: number; projectName: string }): DeviceVoltage {
+    let existing: DeviceVoltage | undefined;
+    if (dto.voltCode) {
+      existing = this.findByVoltCode(dto.voltCode, dto.projectName);
+    }
+    if (!existing) {
+      existing = this.findByVoltNameAndStationId(dto.voltName, dto.stationId, dto.projectName);
+    }
     if (existing) {
       this.update(existing.id, dto);
       return this.getById(existing.id)!;

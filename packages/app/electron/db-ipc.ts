@@ -13,6 +13,18 @@ import {
   migration001Name,
   migration001Up,
   migration001Down,
+  migration002Version,
+  migration002Name,
+  migration002Up,
+  migration002Down,
+  migration003Version,
+  migration003Name,
+  migration003Up,
+  migration003Down,
+  migration004Version,
+  migration004Name,
+  migration004Up,
+  migration004Down,
 } from "@robot/database";
 import type { PointExcelRow, ImportResult } from "@robot/database";
 
@@ -67,11 +79,11 @@ function registerBatchHandlers(): void {
 function registerImportHandler(): void {
   ipcMain.handle(
     "db:importPoints",
-    async (_event, rows: PointExcelRow[], stationName: string, stationCode: string) => {
+    async (_event, rows: PointExcelRow[], stationName: string, stationCode: string, projectName: string) => {
       try {
         const { importPointExcel } = await import("@robot/database");
         const db = getDatabase();
-        const result: ImportResult = importPointExcel(db, rows, stationName, stationCode);
+        const result: ImportResult = importPointExcel(db, rows, stationName, stationCode, projectName);
         return { ok: true, data: result };
       } catch (e: any) {
         return { ok: false, error: e.message };
@@ -87,6 +99,9 @@ export async function initDbIpc(): Promise<void> {
 
   runMigrations(db, [
     { version: migration001Version, name: migration001Name, up: migration001Up, down: migration001Down },
+    { version: migration002Version, name: migration002Name, up: migration002Up, down: migration002Down },
+    { version: migration003Version, name: migration003Name, up: migration003Up, down: migration003Down },
+    { version: migration004Version, name: migration004Name, up: migration004Up, down: migration004Down },
   ]);
 
   const repos = [

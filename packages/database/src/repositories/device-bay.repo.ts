@@ -6,7 +6,8 @@ const COLUMNS = [
   "bay_type", "bay_name", "bay_code", "alarm_level",
   "volt_id", "volt_name", "volt_code",
   "station_id", "station_name", "station_code",
-  "sort_num", "create_time", "create_by", "update_time", "update_by", "repair_flag",
+  "sort_num", "project_name",
+  "create_time", "create_by", "update_time", "update_by", "repair_flag",
 ] as const;
 
 function toRow(dto: CreateDeviceBayDTO, now: string): any[] {
@@ -14,14 +15,18 @@ function toRow(dto: CreateDeviceBayDTO, now: string): any[] {
     dto.bayType, dto.bayName, dto.bayCode, dto.alarmLevel,
     dto.voltId, dto.voltName, dto.voltCode,
     dto.stationId, dto.stationName, dto.stationCode,
-    dto.sortNum, now, dto.createBy, now, dto.updateBy, dto.repairFlag,
+    dto.sortNum, dto.projectName,
+    now, dto.createBy, now, dto.updateBy, dto.repairFlag,
   ];
 }
 
 export class DeviceBayRepo {
   constructor(private db: DbWrapper) {}
 
-  list(): DeviceBay[] {
+  list(projectName?: string): DeviceBay[] {
+    if (projectName) {
+      return this.db.prepare("SELECT * FROM device_bay WHERE project_name = ? ORDER BY sort_num").all(projectName) as DeviceBay[];
+    }
     return this.db.prepare("SELECT * FROM device_bay ORDER BY sort_num").all() as DeviceBay[];
   }
 
@@ -29,11 +34,17 @@ export class DeviceBayRepo {
     return this.db.prepare("SELECT * FROM device_bay WHERE id = ?").get(id) as DeviceBay | undefined;
   }
 
-  findByVoltId(voltId: number): DeviceBay[] {
+  findByVoltId(voltId: number, projectName?: string): DeviceBay[] {
+    if (projectName) {
+      return this.db.prepare("SELECT * FROM device_bay WHERE volt_id = ? AND project_name = ? ORDER BY sort_num").all(voltId, projectName) as DeviceBay[];
+    }
     return this.db.prepare("SELECT * FROM device_bay WHERE volt_id = ? ORDER BY sort_num").all(voltId) as DeviceBay[];
   }
 
-  findByStationId(stationId: number): DeviceBay[] {
+  findByStationId(stationId: number, projectName?: string): DeviceBay[] {
+    if (projectName) {
+      return this.db.prepare("SELECT * FROM device_bay WHERE station_id = ? AND project_name = ? ORDER BY sort_num").all(stationId, projectName) as DeviceBay[];
+    }
     return this.db.prepare("SELECT * FROM device_bay WHERE station_id = ? ORDER BY sort_num").all(stationId) as DeviceBay[];
   }
 
@@ -68,12 +79,22 @@ export class DeviceBayRepo {
     this.db.prepare(`UPDATE device_bay SET ${fields.join(", ")} WHERE id = ?`).run(vals);
   }
 
-  findByBayNameAndVoltId(bayName: string, voltId: number): DeviceBay | undefined {
-    return this.db.prepare("SELECT * FROM device_bay WHERE bay_name = ? AND volt_id = ?").get(bayName, voltId) as DeviceBay | undefined;
+  findByBayNameAndVoltId(bayName: string, voltId: number, projectName: string): DeviceBay | undefined {
+    return this.db.prepare("SELECT * FROM device_bay WHERE bay_name = ? AND volt_id = ? AND project_name = ?").get(bayName, voltId, projectName) as DeviceBay | undefined;
   }
 
-  upsert(dto: CreateDeviceBayDTO & { bayName: string; voltId: number }): DeviceBay {
-    const existing = this.findByBayNameAndVoltId(dto.bayName, dto.voltId);
+  findByBayCode(bayCode: string, projectName: string): DeviceBay | undefined {
+    return this.db.prepare("SELECT * FROM device_bay WHERE bay_code = ? AND project_name = ?").get(bayCode, projectName) as DeviceBay | undefined;
+  }
+
+  upsert(dto: CreateDeviceBayDTO & { bayName: string; bayCode: string; voltId: number; projectName: string }): DeviceBay {
+    let existing: DeviceBay | undefined;
+    if (dto.bayCode) {
+      existing = this.findByBayCode(dto.bayCode, dto.projectName);
+    }
+    if (!existing) {
+      existing = this.findByBayNameAndVoltId(dto.bayName, dto.voltId, dto.projectName);
+    }
     if (existing) {
       this.update(existing.id, dto);
       return this.getById(existing.id)!;

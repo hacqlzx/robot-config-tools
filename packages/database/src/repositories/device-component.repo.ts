@@ -9,7 +9,8 @@ const COLUMNS = [
   "bay_id", "bay_type", "bay_name", "bay_code",
   "volt_id", "volt_name", "volt_code",
   "station_id", "station_name", "station_code",
-  "sort_num", "create_time", "create_by", "update_time", "update_by", "repair_flag",
+  "sort_num", "project_name",
+  "create_time", "create_by", "update_time", "update_by", "repair_flag",
 ] as const;
 
 function toRow(dto: CreateDeviceComponentDTO, now: string): any[] {
@@ -20,14 +21,18 @@ function toRow(dto: CreateDeviceComponentDTO, now: string): any[] {
     dto.bayId, dto.bayType, dto.bayName, dto.bayCode,
     dto.voltId, dto.voltName, dto.voltCode,
     dto.stationId, dto.stationName, dto.stationCode,
-    dto.sortNum, now, dto.createBy, now, dto.updateBy, dto.repairFlag,
+    dto.sortNum, dto.projectName,
+    now, dto.createBy, now, dto.updateBy, dto.repairFlag,
   ];
 }
 
 export class DeviceComponentRepo {
   constructor(private db: DbWrapper) {}
 
-  list(): DeviceComponent[] {
+  list(projectName?: string): DeviceComponent[] {
+    if (projectName) {
+      return this.db.prepare("SELECT * FROM device_component WHERE project_name = ? ORDER BY sort_num").all(projectName) as DeviceComponent[];
+    }
     return this.db.prepare("SELECT * FROM device_component ORDER BY sort_num").all() as DeviceComponent[];
   }
 
@@ -35,11 +40,17 @@ export class DeviceComponentRepo {
     return this.db.prepare("SELECT * FROM device_component WHERE id = ?").get(id) as DeviceComponent | undefined;
   }
 
-  findByMainDeviceId(mainDeviceId: number): DeviceComponent[] {
+  findByMainDeviceId(mainDeviceId: number, projectName?: string): DeviceComponent[] {
+    if (projectName) {
+      return this.db.prepare("SELECT * FROM device_component WHERE main_device_id = ? AND project_name = ? ORDER BY sort_num").all(mainDeviceId, projectName) as DeviceComponent[];
+    }
     return this.db.prepare("SELECT * FROM device_component WHERE main_device_id = ? ORDER BY sort_num").all(mainDeviceId) as DeviceComponent[];
   }
 
-  findByStationId(stationId: number): DeviceComponent[] {
+  findByStationId(stationId: number, projectName?: string): DeviceComponent[] {
+    if (projectName) {
+      return this.db.prepare("SELECT * FROM device_component WHERE station_id = ? AND project_name = ? ORDER BY sort_num").all(stationId, projectName) as DeviceComponent[];
+    }
     return this.db.prepare("SELECT * FROM device_component WHERE station_id = ? ORDER BY sort_num").all(stationId) as DeviceComponent[];
   }
 
@@ -74,12 +85,22 @@ export class DeviceComponentRepo {
     this.db.prepare(`UPDATE device_component SET ${fields.join(", ")} WHERE id = ?`).run(vals);
   }
 
-  findByComponentNameAndMainDeviceId(componentName: string, mainDeviceId: number): DeviceComponent | undefined {
-    return this.db.prepare("SELECT * FROM device_component WHERE component_name = ? AND main_device_id = ?").get(componentName, mainDeviceId) as DeviceComponent | undefined;
+  findByComponentNameAndMainDeviceId(componentName: string, mainDeviceId: number, projectName: string): DeviceComponent | undefined {
+    return this.db.prepare("SELECT * FROM device_component WHERE component_name = ? AND main_device_id = ? AND project_name = ?").get(componentName, mainDeviceId, projectName) as DeviceComponent | undefined;
   }
 
-  upsert(dto: CreateDeviceComponentDTO & { componentName: string; mainDeviceId: number }): DeviceComponent {
-    const existing = this.findByComponentNameAndMainDeviceId(dto.componentName, dto.mainDeviceId);
+  findByComponentCode(componentCode: string, projectName: string): DeviceComponent | undefined {
+    return this.db.prepare("SELECT * FROM device_component WHERE component_code = ? AND project_name = ?").get(componentCode, projectName) as DeviceComponent | undefined;
+  }
+
+  upsert(dto: CreateDeviceComponentDTO & { componentName: string; componentCode: string; mainDeviceId: number; projectName: string }): DeviceComponent {
+    let existing: DeviceComponent | undefined;
+    if (dto.componentCode) {
+      existing = this.findByComponentCode(dto.componentCode, dto.projectName);
+    }
+    if (!existing) {
+      existing = this.findByComponentNameAndMainDeviceId(dto.componentName, dto.mainDeviceId, dto.projectName);
+    }
     if (existing) {
       this.update(existing.id, dto);
       return this.getById(existing.id)!;

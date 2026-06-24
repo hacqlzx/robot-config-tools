@@ -17,7 +17,7 @@ const COLUMNS = [
   "bay_id", "bay_type", "bay_name", "bay_code",
   "volt_id", "volt_name", "volt_code",
   "station_id", "station_name", "station_code",
-  "inspection_sub_type",
+  "inspection_sub_type", "project_name",
   "create_time", "create_by", "update_time", "update_by",
   "alarm_level", "map_code", "repair_flag", "device_info", "remark",
 ] as const;
@@ -38,7 +38,7 @@ function toRow(dto: CreateDevicePointDTO, now: string): any[] {
     dto.bayId, dto.bayType, dto.bayName, dto.bayCode,
     dto.voltId, dto.voltName, dto.voltCode,
     dto.stationId, dto.stationName, dto.stationCode,
-    dto.inspectionSubType,
+    dto.inspectionSubType, dto.projectName,
     now, dto.createBy, now, dto.updateBy,
     dto.alarmLevel, dto.mapCode, dto.repairFlag, dto.deviceInfo, dto.remark,
   ];
@@ -47,7 +47,10 @@ function toRow(dto: CreateDevicePointDTO, now: string): any[] {
 export class DevicePointRepo {
   constructor(private db: DbWrapper) {}
 
-  list(): DevicePoint[] {
+  list(projectName?: string): DevicePoint[] {
+    if (projectName) {
+      return this.db.prepare("SELECT * FROM device_point WHERE project_name = ? ORDER BY sort_num").all(projectName) as DevicePoint[];
+    }
     return this.db.prepare("SELECT * FROM device_point ORDER BY sort_num").all() as DevicePoint[];
   }
 
@@ -55,24 +58,45 @@ export class DevicePointRepo {
     return this.db.prepare("SELECT * FROM device_point WHERE id = ?").get(id) as DevicePoint | undefined;
   }
 
-  findByPointCode(pointCode: string): DevicePoint | undefined {
+  findByPointCode(pointCode: string, projectName?: string): DevicePoint | undefined {
+    if (projectName) {
+      return this.db.prepare("SELECT * FROM device_point WHERE point_code = ? AND project_name = ?").get(pointCode, projectName) as DevicePoint | undefined;
+    }
     return this.db.prepare("SELECT * FROM device_point WHERE point_code = ?").get(pointCode) as DevicePoint | undefined;
   }
 
-  findByCalibrationId(calibrationId: string): DevicePoint | undefined {
+  findByCalibrationId(calibrationId: string, projectName?: string): DevicePoint | undefined {
+    if (projectName) {
+      return this.db.prepare("SELECT * FROM device_point WHERE calibration_id = ? AND project_name = ?").get(calibrationId, projectName) as DevicePoint | undefined;
+    }
     return this.db.prepare("SELECT * FROM device_point WHERE calibration_id = ?").get(calibrationId) as DevicePoint | undefined;
   }
 
-  findByStationId(stationId: number): DevicePoint[] {
+  findByStationId(stationId: number, projectName?: string): DevicePoint[] {
+    if (projectName) {
+      return this.db.prepare("SELECT * FROM device_point WHERE station_id = ? AND project_name = ? ORDER BY sort_num").all(stationId, projectName) as DevicePoint[];
+    }
     return this.db.prepare("SELECT * FROM device_point WHERE station_id = ? ORDER BY sort_num").all(stationId) as DevicePoint[];
   }
 
-  findByComponentId(componentId: number): DevicePoint[] {
+  findByComponentId(componentId: number, projectName?: string): DevicePoint[] {
+    if (projectName) {
+      return this.db.prepare("SELECT * FROM device_point WHERE component_id = ? AND project_name = ? ORDER BY sort_num").all(componentId, projectName) as DevicePoint[];
+    }
     return this.db.prepare("SELECT * FROM device_point WHERE component_id = ? ORDER BY sort_num").all(componentId) as DevicePoint[];
   }
 
-  paginate(page: number, pageSize: number, stationId?: number): { data: DevicePoint[]; total: number } {
+  paginate(page: number, pageSize: number, stationId?: number, projectName?: string): { data: DevicePoint[]; total: number } {
     const offset = (page - 1) * pageSize;
+    if (stationId !== undefined && projectName) {
+      const total = (
+        this.db.prepare("SELECT COUNT(*) AS cnt FROM device_point WHERE station_id = ? AND project_name = ?").get(stationId, projectName) as { cnt: number }
+      ).cnt;
+      const data = this.db
+        .prepare("SELECT * FROM device_point WHERE station_id = ? AND project_name = ? ORDER BY sort_num LIMIT ? OFFSET ?")
+        .all(stationId, projectName, pageSize, offset) as DevicePoint[];
+      return { data, total };
+    }
     if (stationId !== undefined) {
       const total = (
         this.db.prepare("SELECT COUNT(*) AS cnt FROM device_point WHERE station_id = ?").get(stationId) as { cnt: number }
@@ -80,6 +104,13 @@ export class DevicePointRepo {
       const data = this.db
         .prepare("SELECT * FROM device_point WHERE station_id = ? ORDER BY sort_num LIMIT ? OFFSET ?")
         .all(stationId, pageSize, offset) as DevicePoint[];
+      return { data, total };
+    }
+    if (projectName) {
+      const total = (this.db.prepare("SELECT COUNT(*) AS cnt FROM device_point WHERE project_name = ?").get(projectName) as { cnt: number }).cnt;
+      const data = this.db
+        .prepare("SELECT * FROM device_point WHERE project_name = ? ORDER BY sort_num LIMIT ? OFFSET ?")
+        .all(projectName, pageSize, offset) as DevicePoint[];
       return { data, total };
     }
     const total = (this.db.prepare("SELECT COUNT(*) AS cnt FROM device_point").get() as { cnt: number }).cnt;
@@ -120,16 +151,19 @@ export class DevicePointRepo {
     this.db.prepare(`UPDATE device_point SET ${fields.join(", ")} WHERE id = ?`).run(vals);
   }
 
-  findByCruiseId(cruiseId: string): DevicePoint | undefined {
-    return this.db.prepare("SELECT * FROM device_point WHERE cruise_id = ?").get(cruiseId) as DevicePoint | undefined;
+  findByCruiseId(cruiseId: string, projectName: string): DevicePoint | undefined {
+    return this.db.prepare("SELECT * FROM device_point WHERE cruise_id = ? AND project_name = ?").get(cruiseId, projectName) as DevicePoint | undefined;
   }
 
-  findByPointName(pointName: string): DevicePoint[] {
+  findByPointName(pointName: string, projectName?: string): DevicePoint[] {
+    if (projectName) {
+      return this.db.prepare("SELECT * FROM device_point WHERE point_name = ? AND project_name = ?").all(pointName, projectName) as DevicePoint[];
+    }
     return this.db.prepare("SELECT * FROM device_point WHERE point_name = ?").all(pointName) as DevicePoint[];
   }
 
-  upsert(dto: CreateDevicePointDTO & { cruiseId: string }): DevicePoint {
-    const existing = this.findByCruiseId(dto.cruiseId);
+  upsert(dto: CreateDevicePointDTO & { pointCode: string; projectName: string }): DevicePoint {
+    const existing = this.findByPointCode(dto.pointCode, dto.projectName);
     if (existing) {
       this.update(existing.id, dto);
       return this.getById(existing.id)!;

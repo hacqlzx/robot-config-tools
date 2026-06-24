@@ -54,21 +54,22 @@ const INSPECTION_TYPE: Record<string, string> = {
 const COLUMN_MAP: Record<string, string> = {
   "*点位名称": "pointName", "点位名称": "pointName",
   "点位编码": "pointCode",
-  "*识别类型1": "recognitionType1",
-  "识别类型2": "recognitionType2",
+  "巡检点ID": "cruiseId",
+  "*识别类型1": "recognitionType1", "识别类型1": "recognitionType1",
+  "*识别类型2": "recognitionType2", "识别类型2": "recognitionType2",
   "采集类型": "saveTypeList",
   "表计类型": "meterType",
   "位置状态类型": "positionStateType",
-  "重要等级": "importantLevel",
+  "*重要等级": "importantLevel", "重要等级": "importantLevel",
   "*部件名称": "componentName", "部件名称": "componentName",
   "部件编码": "componentCode",
   "*主设备名称": "mainDeviceName", "主设备名称": "mainDeviceName",
   "主设备编码": "mainDeviceCode",
-  "*主设备类型": "mainDeviceType",
-  "*相位": "phaseType",
+  "*主设备类型": "mainDeviceType", "主设备类型": "mainDeviceType",
+  "*相位": "phaseType", "相位": "phaseType",
   "*间隔名称": "bayName", "间隔名称": "bayName",
   "间隔编码": "bayCode",
-  "*间隔类型": "bayType",
+  "*间隔类型": "bayType", "间隔类型": "bayType",
   "*区域": "voltName", "区域": "voltName",
   "区域编码": "voltCode",
   "*厂站": "stationName", "厂站": "stationName",
@@ -152,11 +153,11 @@ export function parsePointExcel(file: File): Promise<{ rows: PointExcelRow[]; st
           // 获取厂站名（取第一个非空值）
           if (!stationName && row.stationName) stationName = String(row.stationName);
 
-          // cruiseId 回退用 pointCode
-          row.cruiseId = row.cruiseId || row.pointCode || "";
+          // cruiseId 独立字段，不合并 pointCode
+          row.cruiseId = row.cruiseId?.trim() ?? "";
 
           // 必填校验
-          if (!row.voltName || !row.bayName || !row.mainDeviceName || !row.componentName || !row.pointName) {
+          if (!row.voltName || !row.bayName || !row.mainDeviceName || !row.componentName || !row.pointName || !row.pointCode) {
             errors.push(`第 ${r + 1} 行: 缺少必填字段`);
             continue;
           }
