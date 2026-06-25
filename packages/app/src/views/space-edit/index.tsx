@@ -3,6 +3,7 @@ import { parsePointExcel } from "@/utils/excel-parser";
 import { useLasLoader } from "./hooks/useLasLoader";
 import * as pc from "playcanvas";
 import { useCabinetDrawing } from "./hooks/useCabinetDrawing";
+import { useChargingAreaDrawing } from "./hooks/useChargingAreaDrawing";
 import { Spin, App } from "antd";
 import { SimpleOrbitCamera } from "../../playcanvas-core/simple-camera";
 
@@ -18,6 +19,7 @@ import ViewCube from "./components/ViewCube";
 import SidePanel from "./components/SidePanel";
 import ClipController from "./components/ClipController";
 import CabinetPanel from "./components/CabinetPanel";
+import ChargingAreaPanel from "./components/ChargingAreaPanel";
 import { saveCabinetDrawing, loadCabinetItems, loadCabinetItemsFromJson, deleteCabinetItem, DRAWING_FILE_NAME, type CabinetItem } from "./hooks/drawing/drawing-storage";
 import { CabinetViewer } from "./hooks/drawing/CabinetViewer";
 
@@ -50,6 +52,7 @@ export default function SpaceEdit() {
   const modelCenterRef = useRef({ x: 0, y: 0, z: 0 });
   const hasAutoFocusedRef = useRef(false);
   const { cabinetMode, cornerCount, cabinetCount, handleToggleCabinet, handleUndo, setCabinetNames, getCabinetGeometry, setupCabinetDrawing } = useCabinetDrawing();
+  const { chargingMode, pointCount: chargingPointCount, handleToggleCharging, handleUndo: handleChargingUndo, setupChargingAreaDrawing } = useChargingAreaDrawing();
 
   /** 按需渲染：标记脏位，rAF 循环检测到后执行一次 app.render() */
   const requestRender = useCallback(() => {
@@ -131,6 +134,7 @@ export default function SpaceEdit() {
     app.start();
     appRef.current = app;
     const cabinetCleanup = setupCabinetDrawing(app, camera, requestRender, entitiesRef);
+    const chargingCleanup = setupChargingAreaDrawing(app, camera, requestRender, entitiesRef);
     const viewer = new CabinetViewer(app, camera, requestRender);
     cabinetViewerRef.current = viewer;
 
@@ -156,6 +160,7 @@ export default function SpaceEdit() {
       if (rafId) cancelAnimationFrame(rafId);
       if (renderRafId) cancelAnimationFrame(renderRafId);
       cabinetCleanup();
+      chargingCleanup();
       viewer.destroy();
       cabinetViewerRef.current = null;
       orbit.destroy();
@@ -454,10 +459,14 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
     cabinetViewerRef.current?.setOnRequestDelete(handleDeleteCabinetItem);
   }, [handleDeleteCabinetItem]);
 
-  // 绘制模式切换：切换选中交互；关闭弹窗时把已保存的屏柜转为回显保留（未保存的由绘制器清除）
+  // 选中交互：绘制屏柜或绘制充电区域时禁用回显屏柜的选中，避免冲突
+  useEffect(() => {
+    cabinetViewerRef.current?.setInteractive(!cabinetMode && !chargingMode);
+  }, [cabinetMode, chargingMode]);
+
+  // 关闭屏柜弹窗时把已保存的屏柜转为回显保留（未保存的由绘制器清除）
   useEffect(() => {
     const viewer = cabinetViewerRef.current;
-    viewer?.setInteractive(!cabinetMode);
     if (!cabinetMode) {
       const saved = savedCabinetRef.current;
       if (saved && viewer) {
@@ -474,7 +483,7 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
 
   return (
     <div ref={containerRef} style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      <Toolbar onFileSelect={handleFileSelect} onClipModel={handleClipModel} cabinetMode={cabinetMode} onToggleCabinet={handleToggleCabinet} onImportPointTable={handleImportPointTable} importing={importing} />
+      <Toolbar onFileSelect={handleFileSelect} onClipModel={handleClipModel} cabinetMode={cabinetMode} onToggleCabinet={handleToggleCabinet} chargingMode={chargingMode} onToggleCharging={handleToggleCharging} onImportPointTable={handleImportPointTable} importing={importing} />
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         <ViewCube onViewChange={handleViewChange} />
         <SidePanel
@@ -529,6 +538,13 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
               onClose={handleToggleCabinet}
               onSave={handleSaveCabinet}
               onNamesChange={setCabinetNames}
+            />
+          )}
+          {chargingMode && (
+            <ChargingAreaPanel
+              pointCount={chargingPointCount}
+              onUndo={handleChargingUndo}
+              onClose={handleToggleCharging}
             />
           )}
           {clipMode && appRef.current && (

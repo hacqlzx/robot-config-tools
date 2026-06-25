@@ -8,7 +8,7 @@ import { loadGSplatData } from "../../../playcanvas-core/io";
 
 /** 根据点数和硬件决定加载比例 */
 /** GPU 点预算上限，超出时步长降采样 */
-const MAX_POINTS = 10_000_000;
+const MAX_POINTS = 30_000_000;
 
 /** 检查 LAS 是否 LAZ 压缩 */
 function isLasCompressed(formatId: number): boolean {

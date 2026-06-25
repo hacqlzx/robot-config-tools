@@ -5,6 +5,8 @@ import { message } from "antd";
 interface Props {
   cabinetMode?: boolean;
   onToggleCabinet?: () => void;
+  chargingMode?: boolean;
+  onToggleCharging?: () => void;
   onFileSelect: (file: File) => void;
   onClipModel?: () => void;
   onImportPointTable?: (file: File) => void;
@@ -17,13 +19,13 @@ const BUTTONS = [
   { icon: <SaveOutlined style={{ fontSize: 20 }} />, label: "保存全部" },
   { icon: <ScissorOutlined style={{ fontSize: 20 }} />, label: "裁切模型", action: "clip" as const },
   { icon: <BorderOutlined style={{ fontSize: 20 }} />, label: "绘制屏柜", action: "cabinet" as const },
-  { icon: <ThunderboltOutlined style={{ fontSize: 20 }} />, label: "绘制充电区域" },
+  { icon: <ThunderboltOutlined style={{ fontSize: 20 }} />, label: "绘制充电区域", action: "charging" as const },
   { icon: <AppstoreOutlined style={{ fontSize: 20 }} />, label: "绘制设备区域" },
   { icon: <NodeIndexOutlined style={{ fontSize: 20 }} />, label: "可行路径设定" },
   { icon: <ExportOutlined style={{ fontSize: 20 }} />, label: "导出模型" },
 ];
 
-export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onToggleCabinet, onImportPointTable, importing }: Props) {
+export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onToggleCabinet, chargingMode, onToggleCharging, onImportPointTable, importing }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pointInputRef = useRef<HTMLInputElement>(null);
 
@@ -61,6 +63,7 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
         pointInputRef.current?.click(); break;
       case "clip": onClipModel?.(); break;
       case "cabinet": onToggleCabinet?.(); break;
+      case "charging": onToggleCharging?.(); break;
     }
   };
 
@@ -100,7 +103,7 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
         {BUTTONS.map(({ icon, label, action }) => (
           <button
             key={label}
-            className={`space-edit-toolbar-btn${action === "cabinet" && cabinetMode ? " active" : ""}`}
+            className={`space-edit-toolbar-btn${(action === "cabinet" && cabinetMode) || (action === "charging" && chargingMode) ? " active" : ""}`}
             onClick={() => handleClick(action)}
             disabled={action === "point" && importing}
           >

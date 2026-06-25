@@ -90,9 +90,16 @@ export function updateLineEntity(line: pc.Entity, from: pc.Vec3, to: pc.Vec3, th
   const mid = new pc.Vec3().add2(from, to).mulScalar(0.5);
   const len = from.clone().sub(to).length();
   const fwd = new pc.Vec3().sub2(to, from).normalize();
+  const target = mid.clone().add(fwd);
   line.setLocalPosition(mid);
   line.setLocalScale(thickness, thickness, len);
-  line.lookAt(mid.clone().add(fwd));
+  // 线方向接近竖直时 forward 与默认 up=(0,1,0) 共线，lookAt 退化选择不稳定
+  // 此时换用 (1,0,0) 做 up，其余情况保持默认 (0,1,0)
+  if (Math.abs(fwd.y) > 0.999) {
+    line.lookAt(target.x, target.y, target.z, 1, 0, 0);
+  } else {
+    line.lookAt(target.x, target.y, target.z, 0, 1, 0);
+  }
 }
 
 /** 创建一个不受光照影响的纯色材质（每个实体独立，避免共享默认材质被相互覆盖） */
