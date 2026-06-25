@@ -7,6 +7,9 @@ interface Props {
   onToggleCabinet?: () => void;
   chargingMode?: boolean;
   onToggleCharging?: () => void;
+  deviceAreaMode?: boolean;
+  onToggleDeviceArea?: () => void;
+  onSaveAll?: () => void;
   onFileSelect: (file: File) => void;
   onClipModel?: () => void;
   onImportPointTable?: (file: File) => void;
@@ -16,16 +19,16 @@ interface Props {
 const BUTTONS = [
   { icon: <UploadOutlined style={{ fontSize: 20 }} />, label: "空间模型加载", action: "file" as const },
   { icon: <TableOutlined style={{ fontSize: 20 }} />, label: "点表加载", action: "point" as const },
-  { icon: <SaveOutlined style={{ fontSize: 20 }} />, label: "保存全部" },
+  { icon: <SaveOutlined style={{ fontSize: 20 }} />, label: "保存全部", action: "saveAll" as const },
   { icon: <ScissorOutlined style={{ fontSize: 20 }} />, label: "裁切模型", action: "clip" as const },
   { icon: <BorderOutlined style={{ fontSize: 20 }} />, label: "绘制屏柜", action: "cabinet" as const },
   { icon: <ThunderboltOutlined style={{ fontSize: 20 }} />, label: "绘制充电区域", action: "charging" as const },
-  { icon: <AppstoreOutlined style={{ fontSize: 20 }} />, label: "绘制设备区域" },
+  { icon: <AppstoreOutlined style={{ fontSize: 20 }} />, label: "绘制设备区域", action: "deviceArea" as const },
   { icon: <NodeIndexOutlined style={{ fontSize: 20 }} />, label: "可行路径设定" },
   { icon: <ExportOutlined style={{ fontSize: 20 }} />, label: "导出模型" },
 ];
 
-export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onToggleCabinet, chargingMode, onToggleCharging, onImportPointTable, importing }: Props) {
+export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onToggleCabinet, chargingMode, onToggleCharging, deviceAreaMode, onToggleDeviceArea, onSaveAll, onImportPointTable, importing }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pointInputRef = useRef<HTMLInputElement>(null);
 
@@ -64,6 +67,8 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
       case "clip": onClipModel?.(); break;
       case "cabinet": onToggleCabinet?.(); break;
       case "charging": onToggleCharging?.(); break;
+      case "deviceArea": onToggleDeviceArea?.(); break;
+      case "saveAll": onSaveAll?.(); break;
     }
   };
 
@@ -103,7 +108,7 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
         {BUTTONS.map(({ icon, label, action }) => (
           <button
             key={label}
-            className={`space-edit-toolbar-btn${(action === "cabinet" && cabinetMode) || (action === "charging" && chargingMode) ? " active" : ""}`}
+            className={`space-edit-toolbar-btn${(action === "cabinet" && cabinetMode) || (action === "charging" && chargingMode) || (action === "deviceArea" && deviceAreaMode) ? " active" : ""}`}
             onClick={() => handleClick(action)}
             disabled={action === "point" && importing}
           >

@@ -6,6 +6,23 @@ import { BlobReadFileSystem } from "../../../playcanvas-core/io/read/file-system
 import { loadGSplatData } from "../../../playcanvas-core/io";
 
 
+/** 从 Y 分布直方图中推算地面 Y（取低区最密集的 Y 值） */
+function findGroundYFromHistogram(hist: Map<number, number>, lminY: number, lmaxY: number): number {
+  const range = lmaxY - lminY;
+  if (range <= 0) return lminY;
+  const entries = Array.from(hist.entries()).sort((a, b) => a[0] - b[0]);
+  if (entries.length === 0) return lminY;
+  // 只在低 30% 区域中找最密集的 Y
+  const lowThreshold = lminY + range * 0.3;
+  let bestY = entries[0][0];
+  let bestCount = 0;
+  for (const [y, count] of entries) {
+    if (y > lowThreshold) break;
+    if (count > bestCount) { bestCount = count; bestY = y; }
+  }
+  return bestY;
+}
+
 /** 根据点数和硬件决定加载比例 */
 /** GPU 点预算上限，超出时步长降采样 */
 const MAX_POINTS = 30_000_000;
@@ -47,6 +64,7 @@ interface UseLasLoaderParams {
   lasHeadersRef: React.MutableRefObject<Map<string, any>>;
   filePathRef: React.MutableRefObject<Map<string, string>>;
   pointStatsRef: React.MutableRefObject<Map<string, { total: number; loaded: number }>>;
+  modelGroundYRef: React.MutableRefObject<number>;
   requestRender: () => void;
   focusOnModel: (cx: number, cy: number, cz: number, extent: number) => void;
   setLoading: (v: boolean) => void;
@@ -58,7 +76,7 @@ interface UseLasLoaderParams {
 }
 
 export function useLasLoader({
-  appRef, entitiesRef, lasHeadersRef, filePathRef, pointStatsRef,
+  appRef, entitiesRef, lasHeadersRef, filePathRef, pointStatsRef, modelGroundYRef,
   requestRender, focusOnModel,
   setLoading, setLoadingFile, setLoadingText, setLoadingProgress,
   setLoadedFiles, setTreeKey,
@@ -133,6 +151,7 @@ export function useLasLoader({
 
     // 实测局部坐标范围（相对 header 中心），用于校验 header bbox 是否准确
     let lminX = Infinity, lmaxX = -Infinity, lminY = Infinity, lmaxY = -Infinity, lminZ = Infinity, lmaxZ = -Infinity;
+    const yHist = new Map<number, number>();
 
     const totalBytes = count * pointRecordLength;
     const fileChunkBytes = FILE_CHUNK_POINTS * pointRecordLength;
@@ -157,13 +176,16 @@ export function useLasLoader({
           const base = outputIdx * 4;
           const fx = ix * scaleX + offsetX - cx;
           const fy = iz * scaleZ + offsetZ - cz;
-          const fz = iy * scaleY + offsetY - cy;
+          const fz = -(iy * scaleY + offsetY - cy);
           f32[base] = fx;
           f32[base + 1] = fy;
           f32[base + 2] = fz;
           if (fx < lminX) lminX = fx; if (fx > lmaxX) lmaxX = fx;
           if (fy < lminY) lminY = fy; if (fy > lmaxY) lmaxY = fy;
           if (fz < lminZ) lminZ = fz; if (fz > lmaxZ) lmaxZ = fz;
+
+          const yBin = Math.round(fy * 5) / 5;
+          yHist.set(yBin, (yHist.get(yBin) || 0) + 1);
 
           const byteOff = base * 4 + 12;
           u8[byteOff] = r;
@@ -210,6 +232,7 @@ export function useLasLoader({
     const localCenterY = (lminY + lmaxY) / 2;
     const localCenterZ = (lminZ + lmaxZ) / 2;
     const realExtent = Math.max(lmaxX - lminX, lmaxY - lminY, lmaxZ - lminZ, 1);
+    modelGroundYRef.current = findGroundYFromHistogram(yHist, lminY, lmaxY);
     focusOnModel(localCenterX, localCenterY, localCenterZ, realExtent);
   };
 
@@ -312,6 +335,8 @@ export function useLasLoader({
 
     const CHUNK = 50000;
     let outputIdx = 0;
+    let lminY = Infinity, lmaxY = -Infinity;
+    const yHist = new Map<number, number>();
     for (let i = 0; i < count; i += CHUNK) {
       const end = Math.min(i + CHUNK, count);
       for (let j = i; j < end; j++) {
@@ -326,7 +351,13 @@ export function useLasLoader({
         const base = outputIdx * 4;
         f32[base] = ix * scaleX + offsetX - cx;
         f32[base + 1] = iz * scaleZ + offsetZ - cz;
-        f32[base + 2] = iy * scaleY + offsetY - cy;
+        f32[base + 2] = -(iy * scaleY + offsetY - cy);
+
+        const fy = f32[base + 1];
+        if (fy < lminY) lminY = fy;
+        if (fy > lmaxY) lmaxY = fy;
+        const yBin = Math.round(fy * 5) / 5;
+        yHist.set(yBin, (yHist.get(yBin) || 0) + 1);
 
         const byteOff = base * 4 + 12;
         if (hasRgb) {
@@ -371,6 +402,7 @@ export function useLasLoader({
     app.root.addChild(entity);
     entitiesRef.current.set(file.name, entity);
     pointStatsRef.current.set(file.name, { total: count, loaded: loadCount });
+    modelGroundYRef.current = findGroundYFromHistogram(yHist, lminY, lmaxY);
     focusOnModel(0, 0, 0, extent);
   };
 

@@ -4,7 +4,6 @@ import type { CabinetItem } from "./drawing-storage";
 
 const RED = new pc.Color(1, 0.1, 0.1);
 const GREEN = new pc.Color(0.2, 1, 0.3);
-const HIGHLIGHT = new pc.Color(1, 0.9, 0.1);
 const THICKNESS = 0.01;
 const HIGHLIGHT_THICKNESS = 0.025;
 
@@ -16,8 +15,6 @@ const GREEN_EDGES: [number, number][] = [
   [4, 5], [5, 6], [6, 7], [7, 4],
   [0, 4], [1, 5], [3, 7],
 ];
-/** 全部 12 条棱（高亮用） */
-const ALL_EDGES: [number, number][] = [...RED_EDGES, ...GREEN_EDGES];
 
 function v3(a: number[]): pc.Vec3 {
   return new pc.Vec3(a[0], a[1], a[2]);
@@ -72,10 +69,10 @@ export class CabinetViewer {
 
   private interactive = true;
   private selected: number | null = null;
-  private highlightLines: pc.Entity[] = [];
   private menuEl: HTMLDivElement | null = null;
   private downPos: { x: number; y: number } | null = null;
   private onRequestDelete?: (jsonPath: string, bayId: number) => void;
+  private onSelectChange?: (selected: boolean) => void;
 
   constructor(app: pc.Application, camera: pc.Entity, requestRender: () => void) {
     this.app = app;
@@ -93,6 +90,10 @@ export class CabinetViewer {
 
   setOnRequestDelete(fn: (jsonPath: string, bayId: number) => void) {
     this.onRequestDelete = fn;
+  }
+
+  setOnSelectChange(fn: (selected: boolean) => void) {
+    this.onSelectChange = fn;
   }
 
   /** 启用/禁用选中交互（绘制模式下应禁用） */
@@ -163,20 +164,29 @@ export class CabinetViewer {
   // ============ 选中 / 高亮 ============
 
   private select(bayId: number) {
-    this.deselect();
+    this.deselect_all();
     const s = this.shown.get(bayId);
     if (!s) return;
-    for (const [a, b] of ALL_EDGES) {
-      this.highlightLines.push(createLine(this.app, s.verts[a], s.verts[b], HIGHLIGHT, HIGHLIGHT_THICKNESS));
-    }
+    s.lines.forEach((line) => line.setLocalScale(HIGHLIGHT_THICKNESS, HIGHLIGHT_THICKNESS, line.getLocalScale().z));
     this.selected = bayId;
+    this.onSelectChange?.(true);
     this.requestRender();
   }
 
-  private deselect() {
-    this.highlightLines.forEach((e) => e.destroy());
-    this.highlightLines.length = 0;
+  /** 取消选中（供外部调用） */
+  deselect() {
+    this.deselect_all();
+  }
+
+  private deselect_all() {
+    if (this.selected != null) {
+      const s = this.shown.get(this.selected);
+      if (s) {
+        s.lines.forEach((line) => line.setLocalScale(THICKNESS, THICKNESS, line.getLocalScale().z));
+      }
+    }
     this.selected = null;
+    this.onSelectChange?.(false);
     this.requestRender();
   }
 

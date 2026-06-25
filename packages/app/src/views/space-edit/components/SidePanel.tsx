@@ -12,7 +12,6 @@ interface Props {
   onLoadLas?: (filePath: string) => Promise<void>;
   onToggleVisible?: (filePath: string) => void;
   loadedFiles: Set<string>;
-  hiddenFiles: Set<string>;
   treeKey: number;
   loadingFile: string;
   /** 屏柜树勾选变化（传出勾选的间隔 id，用于 3D 回显） */
@@ -143,7 +142,7 @@ const TREE_CSS = `
   .side-tree .ant-tree-switcher { width: 16px; flex-shrink: 0; }
 `;
 
-export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, hiddenFiles, treeKey, loadingFile, onCabinetCheck, mapDrawingShown, onToggleDrawing }: Props) {
+export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, treeKey, loadingFile, onCabinetCheck, mapDrawingShown, onToggleDrawing }: Props) {
   const [sideTab, setSideTab] = useState("map");
   const [mapTreeData, setMapTreeData] = useState<TreeNode[]>([]);
   const [deviceTreeData, setDeviceTreeData] = useState<TreeDataNode[]>([]);
@@ -375,10 +374,9 @@ export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, hid
               <TreeView
                 nodes={mapTreeData}
                 loadedFiles={loadedFiles}
-                hiddenFiles={hiddenFiles}
+                loadingFile={loadingFile}
                 onLoadLas={onLoadLas}
                 onToggleVisible={onToggleVisible}
-                loadingFile={loadingFile}
                 onRequestRename={handleRequestRename}
                 onRequestDelete={handleRequestDelete}
                 drawingShown={mapDrawingShown}

@@ -19,8 +19,30 @@ export interface CabinetItem {
   updatedAt: string;
 }
 
-/** 后续可扩充 device-area / charging-area 等记录类型 */
-export type DrawingItem = CabinetItem;
+/** 充电区域绘制记录（一个矩形区域） */
+export interface ChargingAreaItem {
+  id: string;
+  type: "charging-area";
+  /** 几何：立体矩形 8 顶点世界坐标 */
+  geometry: { verts: number[][] };
+  updatedAt: string;
+}
+
+/** 设备区域绘制记录（可多个矩形，每个可绑定间隔） */
+export interface DeviceAreaItem {
+  id: string;
+  type: "device-area";
+  /** 几何：立体矩形 8 顶点世界坐标 */
+  geometry: { verts: number[][] };
+  /** 高度（米） */
+  height: number;
+  /** 绑定的间隔 */
+  bay: { id: number; name: string; code: string } | null;
+  updatedAt: string;
+}
+
+/** 后续可扩充 device-area 等记录类型 */
+export type DrawingItem = CabinetItem | ChargingAreaItem | DeviceAreaItem;
 
 /** 绘制数据文件结构 */
 export interface DrawingFile {
@@ -93,6 +115,83 @@ export async function loadCabinetItems(api: ElectronAPI, modelPath: string): Pro
   return file.items.filter((it): it is CabinetItem => it.type === "cabinet");
 }
 
+/** 保存充电区域：读现有文件 → 移除旧充电区域记录 → 写入新记录 */
+export async function saveChargingArea(params: {
+  api: ElectronAPI;
+  projectName: string;
+  modelPath: string;
+  item: ChargingAreaItem;
+}): Promise<void> {
+  const { api, projectName, modelPath, item } = params;
+  const file = await readDrawingFile(api, modelPath);
+  file.items = file.items.filter((it) => it.type !== "charging-area");
+  file.items.push(item);
+  await writeDrawingFile(api, projectName, modelPath, file);
+}
+
+/** 读取该模型已保存的充电区域记录（用于回显） */
+export async function loadChargingArea(api: ElectronAPI, modelPath: string): Promise<ChargingAreaItem | null> {
+  const file = await readDrawingFile(api, modelPath);
+  return file.items.find((it): it is ChargingAreaItem => it.type === "charging-area") ?? null;
+}
+
+/** 保存设备区域列表：读现有文件 → 移除旧设备区记录 → 写入新记录列表 */
+export async function saveDeviceAreas(params: {
+  api: ElectronAPI;
+  projectName: string;
+  modelPath: string;
+  items: DeviceAreaItem[];
+}): Promise<void> {
+  const { api, projectName, modelPath, items } = params;
+  const file = await readDrawingFile(api, modelPath);
+  file.items = file.items.filter((it) => it.type !== "device-area");
+  for (const item of items) file.items.push(item);
+  await writeDrawingFile(api, projectName, modelPath, file);
+}
+
+/** 读取该模型已保存的全部设备区记录（用于回显） */
+export async function loadDeviceAreas(api: ElectronAPI, modelPath: string): Promise<DeviceAreaItem[]> {
+  const file = await readDrawingFile(api, modelPath);
+  return file.items.filter((it): it is DeviceAreaItem => it.type === "device-area");
+}
+
+/** 递归收集目录下所有 JSON 文件中已绑定的间隔 ID（跨模型去重） */
+async function collectBoundBayIds(api: ElectronAPI, nodes: TreeNode[], ids: Set<number>) {
+  for (const node of nodes) {
+    if (node.isDir && node.children) {
+      await collectBoundBayIds(api, node.children, ids);
+    } else if (node.name === DRAWING_FILE_NAME) {
+      try {
+        const buf = await api.readLargeFile(node.path);
+        const data = JSON.parse(new TextDecoder("utf-8").decode(buf)) as DrawingFile;
+        for (const it of data.items || []) {
+          if (it.type === "device-area" && (it as DeviceAreaItem).bay) {
+            ids.add((it as DeviceAreaItem).bay!.id);
+          }
+        }
+      } catch {}
+    }
+  }
+}
+
+/** 查询整个项目下所有模型里已被设备区绑定的间隔 ID 集合 */
+export async function getBoundBayIdsInProject(api: ElectronAPI, projectName: string): Promise<Set<number>> {
+  const ids = new Set<number>();
+  try {
+    const nodes = await api.project.listTree(projectName, "地图");
+    await collectBoundBayIds(api, nodes, ids);
+  } catch {}
+  return ids;
+}
+
+/** TreeNode 类型引用（来自树组件） */
+interface TreeNode {
+  name: string;
+  path: string;
+  isDir: boolean;
+  children?: TreeNode[];
+}
+
 /** 直接按绘制 JSON 的绝对路径读取屏柜记录（地图树勾选 json 时用） */
 export async function loadCabinetItemsFromJson(api: ElectronAPI, jsonPath: string): Promise<CabinetItem[]> {
   try {
@@ -102,6 +201,29 @@ export async function loadCabinetItemsFromJson(api: ElectronAPI, jsonPath: strin
     return data.items.filter((it): it is CabinetItem => it.type === "cabinet");
   } catch {
     return [];
+  }
+}
+
+/** 直接按绘制 JSON 的绝对路径读取全部记录（地图树勾选 json 时用） */
+export async function loadAllItemsFromJson(api: ElectronAPI, jsonPath: string): Promise<DrawingItem[]> {
+  try {
+    const buf = await api.readLargeFile(jsonPath);
+    const data = JSON.parse(new TextDecoder("utf-8").decode(buf)) as DrawingFile;
+    return Array.isArray(data.items) ? data.items : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 直接按绘制 JSON 的绝对路径读取充电区域记录（地图树勾选 json 时用） */
+export async function loadChargingAreaFromJson(api: ElectronAPI, jsonPath: string): Promise<ChargingAreaItem | null> {
+  try {
+    const buf = await api.readLargeFile(jsonPath);
+    const data = JSON.parse(new TextDecoder("utf-8").decode(buf)) as DrawingFile;
+    if (!Array.isArray(data.items)) return null;
+    return data.items.find((it): it is ChargingAreaItem => it.type === "charging-area") ?? null;
+  } catch {
+    return null;
   }
 }
 

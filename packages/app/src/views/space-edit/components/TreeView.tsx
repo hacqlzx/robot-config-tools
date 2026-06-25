@@ -14,9 +14,8 @@ interface Props {
   nodes: TreeNode[];
   depth?: number;
   loadedFiles: Set<string>;
-  hiddenFiles: Set<string>;
   loadingFile: string;
-  onLoadLas?: (filePath: string) => void;
+  onLoadLas?: (filePath: string) => Promise<void>;
   onToggleVisible?: (filePath: string) => void;
   /** 懒加载子节点，返回的 children 会被合并到对应节点下 */
   loadChildren?: (node: TreeNode) => Promise<TreeNode[]>;
@@ -30,7 +29,7 @@ interface Props {
   onToggleDrawing?: (path: string, checked: boolean) => void;
 }
 
-export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, loadingFile, onLoadLas, onToggleVisible, loadChildren, onRequestRename, onRequestDelete, drawingShown, onToggleDrawing }: Props) {
+export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, onLoadLas, onToggleVisible, loadChildren, onRequestRename, onRequestDelete, drawingShown, onToggleDrawing }: Props) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
     const expandAll = (list: TreeNode[]) => {
@@ -128,8 +127,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, l
       return { checked: drawingShown?.has(node.path) || false };
     }
     if (isLas(node.name)) {
-      const nameKey = node.name;
-      return { checked: loadedFiles.has(nameKey) && !hiddenFiles.has(node.path) };
+      return { checked: loadedFiles.has(node.name) };
     }
     return { checked: false };
   };
@@ -138,33 +136,44 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, l
     if (node.isDir) {
       const children = getEffectiveChildren(node);
       if (!children) return;
-      const recurse = (list: TreeNode[]) => {
-        list.forEach((child) => {
-          if (child.isDir && child.children) {
-            recurse(child.children);
-          } else if (isLas(child.name)) {
-            const isLoaded = loadedFiles.has(child.name);
-            const isHidden = hiddenFiles.has(child.path);
-            if (checked) {
-              if (!isLoaded) onLoadLas?.(child.path);
-              else if (isHidden) onToggleVisible?.(child.path);
-            } else {
-              if (isLoaded && !isHidden) onToggleVisible?.(child.path);
+      const recurse = async (list: TreeNode[]) => {
+        const lasNodes: TreeNode[] = [];
+        const drawNodes: TreeNode[] = [];
+        const collect = (items: TreeNode[]) => {
+          items.forEach((child) => {
+            if (child.isDir && child.children) {
+              collect(child.children);
+            } else if (isLas(child.name)) {
+              lasNodes.push(child);
+            } else if (isDrawing(child.name)) {
+              drawNodes.push(child);
             }
+          });
+        };
+        collect(list);
+
+        for (const child of lasNodes) {
+          const isLoaded = loadedFiles.has(child.name);
+          if (checked) {
+            if (!isLoaded) await onLoadLas?.(child.path);
+          } else {
+            if (isLoaded) onToggleVisible?.(child.path);
           }
-        });
+        }
+
+        for (const child of drawNodes) {
+          onToggleDrawing?.(child.path, checked);
+        }
       };
       recurse(children);
     } else if (isDrawing(node.name)) {
       onToggleDrawing?.(node.path, checked);
     } else if (isLas(node.name)) {
       const isLoaded = loadedFiles.has(node.name);
-      const isHidden = hiddenFiles.has(node.path);
       if (checked) {
         if (!isLoaded) onLoadLas?.(node.path);
-        else if (isHidden) onToggleVisible?.(node.path);
       } else {
-        if (isLoaded && !isHidden) onToggleVisible?.(node.path);
+        if (isLoaded) onToggleVisible?.(node.path);
       }
     }
   };
@@ -251,7 +260,6 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, hiddenFiles, l
                 nodes={effectiveChildren}
                 depth={depth + 1}
                 loadedFiles={loadedFiles}
-                hiddenFiles={hiddenFiles}
                 loadingFile={loadingFile}
                 onLoadLas={onLoadLas}
                 onToggleVisible={onToggleVisible}

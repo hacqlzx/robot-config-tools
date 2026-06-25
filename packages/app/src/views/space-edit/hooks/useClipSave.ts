@@ -61,7 +61,7 @@ export async function performClipSave({
     const lasToLocal = (ix: number, iy: number, iz: number): [number, number, number] => [
       ix * scaleX + offsetX - wp.x,
       iz * scaleZ + offsetZ - wp.y,
-      iy * scaleY + offsetY - wp.z,
+      -(iy * scaleY + offsetY - wp.z),
     ];
     const isInside = (wx: number, wy: number, wz: number) =>
       wx >= clipBounds.minX && wx <= clipBounds.maxX &&
@@ -223,7 +223,7 @@ export async function performClipSave({
         nu[gpuIdx * 16 + 15] = 255;
 
         i32[0] = Math.round((wx + wp.x - offsetX) / scaleX); out.set(u8v, outIdx); outIdx += 4;
-        i32[0] = Math.round((wz + wp.z - offsetY) / scaleY); out.set(u8v, outIdx); outIdx += 4;
+        i32[0] = Math.round((-wz + wp.z - offsetY) / scaleY); out.set(u8v, outIdx); outIdx += 4;
         i32[0] = Math.round((wy + wp.y - offsetZ) / scaleZ); out.set(u8v, outIdx); outIdx += 4;
         out[outIdx++] = 128; out[outIdx++] = 0;
         out[outIdx++] = (1 & 0x07) | ((1 & 0x07) << 3);
@@ -238,9 +238,10 @@ export async function performClipSave({
           for (let k = 0; k < 6; k++) out[outIdx++] = 128;
         }
 
+        const origY = -wz + wp.z;
         if (wx + wp.x < mnX) mnX = wx + wp.x; if (wx + wp.x > mxX) mxX = wx + wp.x;
         if (wy + wp.y < mnY) mnY = wy + wp.y; if (wy + wp.y > mxY) mxY = wy + wp.y;
-        if (wz + wp.z < mnZ) mnZ = wz + wp.z; if (wz + wp.z > mxZ) mxZ = wz + wp.z;
+        if (origY < mnZ) mnZ = origY; if (origY > mxZ) mxZ = origY;
 
         gpuIdx++;
         if (i % CHUNK === 0) {
@@ -285,7 +286,7 @@ export async function performClipSave({
           nu[gpuIdx * 16 + 15] = 255;
 
           i32[0] = Math.round((wx + wp.x - offsetX) / scaleX); out.set(u8v, outIdx); outIdx += 4;
-          i32[0] = Math.round((wz + wp.z - offsetY) / scaleY); out.set(u8v, outIdx); outIdx += 4;
+          i32[0] = Math.round((-wz + wp.z - offsetY) / scaleY); out.set(u8v, outIdx); outIdx += 4;
           i32[0] = Math.round((wy + wp.y - offsetZ) / scaleZ); out.set(u8v, outIdx); outIdx += 4;
           out[outIdx++] = 128; out[outIdx++] = 0;
           out[outIdx++] = (1 & 0x07) | ((1 & 0x07) << 3);
@@ -302,7 +303,7 @@ export async function performClipSave({
 
           if (wx + wp.x < mnX) mnX = wx + wp.x; if (wx + wp.x > mxX) mxX = wx + wp.x;
           if (wy + wp.y < mnY) mnY = wy + wp.y; if (wy + wp.y > mxY) mxY = wy + wp.y;
-          if (wz + wp.z < mnZ) mnZ = wz + wp.z; if (wz + wp.z > mxZ) mxZ = wz + wp.z;
+          if (-wz + wp.z < mnZ) mnZ = -wz + wp.z; if (-wz + wp.z > mxZ) mxZ = -wz + wp.z;
 
           gpuIdx++;
         }

@@ -1,18 +1,24 @@
 import { useState, useRef, useCallback } from "react";
-import { Button } from "antd";
-import { UndoOutlined, CloseOutlined } from "@ant-design/icons";
+import { Button, InputNumber } from "antd";
+import { UndoOutlined, CloseOutlined, SaveOutlined } from "@ant-design/icons";
 
 interface Props {
   /** 已放置的点数量（0~3） */
   pointCount: number;
+  /** 高度（米） */
+  height: number;
   /** 撤销最后一个点 */
   onUndo: () => void;
   /** 关闭绘制充电区域 */
   onClose: () => void;
+  /** 保存 */
+  onSave: () => void;
+  /** 修改高度 */
+  onSetHeight: (h: number) => void;
 }
 
-/** 绘制充电区域操作小窗（可拖动，提示 + 撤销） */
-export default function ChargingAreaPanel({ pointCount, onUndo, onClose }: Props) {
+/** 绘制充电区域操作小窗（可拖动，提示 + 撤销 + 保存） */
+export default function ChargingAreaPanel({ pointCount, height, onUndo, onClose, onSave, onSetHeight }: Props) {
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
 
@@ -75,10 +81,27 @@ export default function ChargingAreaPanel({ pointCount, onUndo, onClose }: Props
         />
       </div>
       <div style={{ padding: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          <span style={{ fontSize: 12, color: "#333", whiteSpace: "nowrap" }}>高度(m)</span>
+          <InputNumber
+            size="small"
+            min={0.1}
+            max={100}
+            step={0.1}
+            value={height}
+            onChange={(v) => v != null && onSetHeight(v)}
+            style={{ width: 80 }}
+          />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
           <span style={{ flex: 1, fontSize: 12, color: "#333" }}>{tip}</span>
           <Button size="small" icon={<UndoOutlined />} onClick={onUndo} disabled={pointCount === 0}>
             撤销
+          </Button>
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <Button size="small" type="primary" icon={<SaveOutlined />} onClick={onSave} disabled={pointCount < 3}>
+            保存
           </Button>
         </div>
       </div>
