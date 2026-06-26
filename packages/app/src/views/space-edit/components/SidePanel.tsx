@@ -20,6 +20,10 @@ interface Props {
   mapDrawingShown?: Set<string>;
   /** 勾选/取消地图树里的绘制 json（回显屏柜） */
   onToggleDrawing?: (path: string, checked: boolean) => void;
+  /** 已回显的路径 json 集合 */
+  mapPathShown?: Set<string>;
+  /** 勾选/取消可行驶路径 json */
+  onTogglePath?: (path: string, checked: boolean) => void;
 }
 
 const TABS = [
@@ -142,7 +146,7 @@ const TREE_CSS = `
   .side-tree .ant-tree-switcher { width: 16px; flex-shrink: 0; }
 `;
 
-export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, treeKey, loadingFile, onCabinetCheck, mapDrawingShown, onToggleDrawing }: Props) {
+export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, treeKey, loadingFile, onCabinetCheck, mapDrawingShown, onToggleDrawing, mapPathShown, onTogglePath }: Props) {
   const [sideTab, setSideTab] = useState("map");
   const [mapTreeData, setMapTreeData] = useState<TreeNode[]>([]);
   const [deviceTreeData, setDeviceTreeData] = useState<TreeDataNode[]>([]);
@@ -381,6 +385,8 @@ export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, tre
                 onRequestDelete={handleRequestDelete}
                 drawingShown={mapDrawingShown}
                 onToggleDrawing={onToggleDrawing}
+                pathShown={mapPathShown}
+                onTogglePath={onTogglePath}
               />
             )
           ) : sideTab === "device" ? (

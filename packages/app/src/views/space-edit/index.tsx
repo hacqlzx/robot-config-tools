@@ -5,6 +5,7 @@ import * as pc from "playcanvas";
 import { useCabinetDrawing } from "./hooks/useCabinetDrawing";
 import { useChargingAreaDrawing } from "./hooks/useChargingAreaDrawing";
 import { useDeviceAreaDrawing } from "./hooks/useDeviceAreaDrawing";
+import { usePathDrawing } from "./hooks/usePathDrawing";
 import { Spin, App } from "antd";
 import { SimpleOrbitCamera } from "../../playcanvas-core/simple-camera";
 
@@ -22,7 +23,7 @@ import ClipController from "./components/ClipController";
 import CabinetPanel from "./components/CabinetPanel";
 import ChargingAreaPanel from "./components/ChargingAreaPanel";
 import DeviceAreaPanel from "./components/DeviceAreaPanel";
-import { saveCabinetDrawing, loadCabinetItems, loadCabinetItemsFromJson, deleteCabinetItem, saveChargingArea, saveDeviceAreas, loadDeviceAreas, loadAllItemsFromJson, getBoundBayIdsInProject, DRAWING_FILE_NAME, type CabinetItem, type ChargingAreaItem, type DeviceAreaItem } from "./hooks/drawing/drawing-storage";
+import { saveCabinetDrawing, loadCabinetItems, loadCabinetItemsFromJson, deleteCabinetItem, saveChargingArea, saveDeviceAreas, savePathDrawing, loadPathDrawing, loadDeviceAreas, loadAllItemsFromJson, getBoundBayIdsInProject, DRAWING_FILE_NAME, type CabinetItem, type ChargingAreaItem, type DeviceAreaItem } from "./hooks/drawing/drawing-storage";
 import { CabinetViewer } from "./hooks/drawing/CabinetViewer";
 
 export default function SpaceEdit() {
@@ -44,6 +45,7 @@ export default function SpaceEdit() {
   const entitiesRef = useRef<Map<string, pc.Entity>>(new Map());
   const cabinetViewerRef = useRef<CabinetViewer | null>(null);
   const [drawingShown, setDrawingShown] = useState<Set<string>>(new Set());
+  const [pathShown, setPathShown] = useState<Set<string>>(new Set());
   const shownByJsonRef = useRef<Map<string, number[]>>(new Map());
   const savedCabinetRef = useRef<{ item: CabinetItem; jsonPath: string } | null>(null);
   const lasHeadersRef = useRef<Map<string, any>>(new Map());
@@ -66,6 +68,7 @@ export default function SpaceEdit() {
     () => handleSaveDeviceAreas(),
     () => { isAutoSavingRef.current = true; handleSaveDeviceAreas(); },
   );
+  const { pathMode, handleTogglePath, handleForceClose: handleForceClosePath, getPathData, setupPathDrawing, drawingRef: pathDrawingRef } = usePathDrawing();
 
   const autoSaveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoSaveEnabledRef = useRef(false);
@@ -76,26 +79,38 @@ export default function SpaceEdit() {
     if (cabinetMode) handleToggleCabinet();
     if (chargingMode) handleToggleCharging();
     if (deviceAreaMode) handleForceCloseDeviceArea();
-  }, [cabinetMode, chargingMode, deviceAreaMode, handleToggleCabinet, handleToggleCharging, handleForceCloseDeviceArea]);
+    if (pathMode) handleForceClosePath();
+  }, [cabinetMode, chargingMode, deviceAreaMode, pathMode, handleToggleCabinet, handleToggleCharging, handleForceCloseDeviceArea, handleForceClosePath]);
 
   /** 互斥进入绘制模式：打开一个前关闭其他 */
   const toggleCabinetExclusive = useCallback(() => {
     if (chargingMode) handleToggleCharging();
     if (deviceAreaMode) handleForceCloseDeviceArea();
+    if (pathMode) handleForceClosePath();
     handleToggleCabinet();
-  }, [chargingMode, deviceAreaMode, handleToggleCharging, handleForceCloseDeviceArea, handleToggleCabinet]);
+  }, [chargingMode, deviceAreaMode, pathMode, handleToggleCharging, handleForceCloseDeviceArea, handleForceClosePath, handleToggleCabinet]);
 
   const toggleChargingExclusive = useCallback(() => {
     if (cabinetMode) handleToggleCabinet();
     if (deviceAreaMode) handleForceCloseDeviceArea();
+    if (pathMode) handleForceClosePath();
     handleToggleCharging();
-  }, [cabinetMode, deviceAreaMode, handleToggleCabinet, handleForceCloseDeviceArea, handleToggleCharging]);
+  }, [cabinetMode, deviceAreaMode, pathMode, handleToggleCabinet, handleForceCloseDeviceArea, handleForceClosePath, handleToggleCharging]);
 
   const toggleDeviceAreaExclusive = useCallback(() => {
     if (cabinetMode) handleToggleCabinet();
     if (chargingMode) handleToggleCharging();
+    if (pathMode) handleForceClosePath();
     handleToggleDeviceArea();
-  }, [cabinetMode, chargingMode, handleToggleCabinet, handleToggleCharging, handleToggleDeviceArea]);
+  }, [cabinetMode, chargingMode, pathMode, handleToggleCabinet, handleToggleCharging, handleForceClosePath, handleToggleDeviceArea]);
+
+  /** 互斥进入路径模式 */
+  const togglePathExclusive = useCallback(() => {
+    if (cabinetMode) handleToggleCabinet();
+    if (chargingMode) handleToggleCharging();
+    if (deviceAreaMode) handleForceCloseDeviceArea();
+    handleTogglePath();
+  }, [cabinetMode, chargingMode, deviceAreaMode, handleToggleCabinet, handleToggleCharging, handleForceCloseDeviceArea, handleTogglePath]);
 
   /** 按需渲染：标记脏位，rAF 循环检测到后执行一次 app.render() */
   const requestRender = useCallback(() => {
@@ -179,26 +194,39 @@ export default function SpaceEdit() {
     const cabinetCleanup = setupCabinetDrawing(app, camera, requestRender, entitiesRef);
     const chargingCleanup = setupChargingAreaDrawing(app, camera, requestRender, entitiesRef);
     const deviceAreaCleanup = setupDeviceAreaDrawing(app, camera, requestRender, entitiesRef);
+    const pathCleanup = setupPathDrawing(app, camera, requestRender, entitiesRef);
     const viewer = new CabinetViewer(app, camera, requestRender);
     cabinetViewerRef.current = viewer;
+
+    // 互斥选中：路径点选中时取消屏柜、充电区域、设备区选中
+    pathDrawingRef.current?.setSelectChangeCallback((selected) => {
+      if (selected) {
+        viewer.deselect();
+        chargingDrawingRef.current?.deselectBox();
+        deviceAreaDrawingRef.current?.deselectAll();
+      }
+    });
 
     // 互斥选中：屏柜、充电区域、设备区同时只能选中一个
     viewer.setOnSelectChange((cabSelected) => {
       if (cabSelected) {
         chargingDrawingRef.current?.deselectBox();
         deviceAreaDrawingRef.current?.deselectAll();
+        pathDrawingRef.current?.deselectPoint();
       }
     });
     chargingDrawingRef.current?.setOnSelectChange((chargingSelected) => {
       if (chargingSelected) {
         viewer.deselect();
         deviceAreaDrawingRef.current?.deselectAll();
+        pathDrawingRef.current?.deselectPoint();
       }
     });
     deviceAreaDrawingRef.current?.setOnSelectChange((devAreaBoxId) => {
       if (devAreaBoxId) {
         viewer.deselect();
         chargingDrawingRef.current?.deselectBox();
+        pathDrawingRef.current?.deselectPoint();
       }
     });
 
@@ -226,6 +254,7 @@ export default function SpaceEdit() {
       cabinetCleanup();
       chargingCleanup();
       deviceAreaCleanup();
+      pathCleanup();
       viewer.destroy();
       cabinetViewerRef.current = null;
       orbit.destroy();
@@ -534,22 +563,48 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
     }
   }, [message, getBoxDatas]);
 
-  /** 保存全部：充电区域 + 设备区（屏柜已单独保存到JSON） */
+  /** 当前绘制模型路径：优先可见且有路径的模型 */
+  const getCurrentModelPath = useCallback((): string => {
+    for (const [name, ent] of entitiesRef.current) {
+      const p = filePathRef.current.get(name);
+      if (ent.enabled && p) return p;
+    }
+    return filePathRef.current.values().next().value || "";
+  }, []);
+
+  /** 保存可行路径：写入独立的 可行驶路径.json */
+  const handleSavePath = useCallback(async () => {
+    const silent = isAutoSavingRef.current;
+    const api = window.electronAPI;
+    if (!api) { if (!silent) message.warning("仅 Electron 模式下可保存"); return; }
+    const projectName = localStorage.getItem("selectedProject");
+    if (!projectName) { if (!silent) message.warning("请先选择项目"); return; }
+    const data = getPathData();
+    if (!data) return;
+    const modelPath = getCurrentModelPath();
+    if (!modelPath) { if (!silent) message.warning("未找到模型路径，无法保存"); return; }
+    try {
+      await savePathDrawing({ api, projectName, modelPath, data });
+    } catch (e: any) {
+      if (!silent) message.error("保存路径失败: " + (e?.message || e));
+    }
+  }, [message, getPathData, getCurrentModelPath]);
+
+  /** 保存全部：充电区域 + 设备区 + 可行路径（屏柜已单独保存到JSON） */
   const handleSaveAll = useCallback(async () => {
     const silent = isAutoSavingRef.current;
     if (!silent) setSaveStatus("saving");
-    // 抑制内部保存函数的单独提示
     isAutoSavingRef.current = true;
     const drawing = chargingDrawingRef.current;
     if (drawing?.hasBox()) await handleSaveChargingArea();
     await handleSaveDeviceAreas();
+    await handleSavePath();
     isAutoSavingRef.current = false;
     if (!silent) {
       setSaveStatus("saved");
       message.success("保存成功");
       setTimeout(() => setSaveStatus("idle"), 2000);
     }
-    // 手动保存后重置 30s 计时
     if (!silent && autoSaveTimerRef.current) {
       clearInterval(autoSaveTimerRef.current);
       autoSaveTimerRef.current = setInterval(() => {
@@ -557,7 +612,7 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
         handleSaveAll();
       }, 30000);
     }
-  }, [handleSaveChargingArea, handleSaveDeviceAreas, chargingDrawingRef, message]);
+  }, [handleSaveChargingArea, handleSaveDeviceAreas, handleSavePath, chargingDrawingRef, message]);
 
   /** 启动 30s 自动保存 */
   const startAutoSave = useCallback(() => {
@@ -587,15 +642,6 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
     };
   }, [loadedFiles, startAutoSave]);
 
-  /** 当前绘制模型路径：优先可见且有路径的模型 */
-  const getCurrentModelPath = useCallback((): string => {
-    for (const [name, ent] of entitiesRef.current) {
-      const p = filePathRef.current.get(name);
-      if (ent.enabled && p) return p;
-    }
-    return filePathRef.current.values().next().value || "";
-  }, []);
-
   /** 屏柜树勾选变化：读该模型 JSON，按勾选的间隔回显/隐藏屏柜 */
   const handleCabinetCheck = useCallback(async (bayIds: number[]) => {
     const viewer = cabinetViewerRef.current;
@@ -615,6 +661,26 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
     for (const id of viewer.getShownIds()) if (!want.has(id)) viewer.hide(id);
     for (const id of want) if (!viewer.has(id)) viewer.show(byBay.get(id)!, jsonPath);
   }, [getCurrentModelPath]);
+
+  /** 地图树勾选可行驶路径 json：加载/清除路径数据显示 */
+  const handleTogglePathFile = useCallback(async (jsonPath: string, checked: boolean) => {
+    const api = window.electronAPI;
+    if (!api) return;
+    if (checked) {
+      const data = await loadPathDrawing(api, jsonPath);
+      if (data) {
+        pathDrawingRef.current?.loadData(data);
+      }
+      setPathShown((prev) => new Set(prev).add(jsonPath));
+    } else {
+      pathDrawingRef.current?.clear();
+      setPathShown((prev) => {
+        const next = new Set(prev);
+        next.delete(jsonPath);
+        return next;
+      });
+    }
+  }, []);
 
   /** 地图树勾选绘制 json：回显/隐藏其中的屏柜、充电区域、设备区 */
   const handleToggleDrawing = useCallback(async (jsonPath: string, checked: boolean) => {
@@ -694,8 +760,8 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
 
   // 选中交互：绘制屏柜或绘制充电区域时禁用回显屏柜的选中，避免冲突
   useEffect(() => {
-    cabinetViewerRef.current?.setInteractive(!cabinetMode && !chargingMode && !deviceAreaMode);
-  }, [cabinetMode, chargingMode, deviceAreaMode]);
+    cabinetViewerRef.current?.setInteractive(!cabinetMode && !chargingMode && !deviceAreaMode && !pathMode);
+  }, [cabinetMode, chargingMode, deviceAreaMode, pathMode]);
 
   // 设备区模式打开时扫描全项目 JSON 获取已绑间隔 ID
   useEffect(() => {
@@ -727,7 +793,7 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
 
   return (
     <div ref={containerRef} style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      <Toolbar onFileSelect={handleFileSelect} onClipModel={handleClipModel} cabinetMode={cabinetMode} onToggleCabinet={toggleCabinetExclusive} chargingMode={chargingMode} onToggleCharging={toggleChargingExclusive} deviceAreaMode={deviceAreaMode} onToggleDeviceArea={toggleDeviceAreaExclusive} onSaveAll={handleSaveAll} onImportPointTable={handleImportPointTable} importing={importing} />
+      <Toolbar onFileSelect={handleFileSelect} onClipModel={handleClipModel} cabinetMode={cabinetMode} onToggleCabinet={toggleCabinetExclusive} chargingMode={chargingMode} onToggleCharging={toggleChargingExclusive} deviceAreaMode={deviceAreaMode} onToggleDeviceArea={toggleDeviceAreaExclusive} pathMode={pathMode} onTogglePath={togglePathExclusive} onSaveAll={handleSaveAll} onImportPointTable={handleImportPointTable} importing={importing} />
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         <ViewCube onViewChange={handleViewChange} />
         <SidePanel
@@ -739,6 +805,8 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
           onCabinetCheck={handleCabinetCheck}
           mapDrawingShown={drawingShown}
           onToggleDrawing={handleToggleDrawing}
+          mapPathShown={pathShown}
+          onTogglePath={handleTogglePathFile}
         />
         <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
           <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block", position: "absolute", top: 0, left: 0 }} />

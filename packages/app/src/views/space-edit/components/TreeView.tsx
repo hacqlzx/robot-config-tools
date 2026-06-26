@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Dropdown } from "antd";
 import { FolderOutlined, FileOutlined, LoadingOutlined } from "@ant-design/icons";
-import { DRAWING_FILE_NAME } from "../hooks/drawing/drawing-storage";
+import { DRAWING_FILE_NAME, PATH_FILE_NAME } from "../hooks/drawing/drawing-storage";
 
 interface TreeNode {
   name: string;
@@ -27,9 +27,13 @@ interface Props {
   drawingShown?: Set<string>;
   /** 勾选/取消绘制 json（回显屏柜） */
   onToggleDrawing?: (path: string, checked: boolean) => void;
+  /** 已回显的路径 json 集合 */
+  pathShown?: Set<string>;
+  /** 勾选/取消可行驶路径 json */
+  onTogglePath?: (path: string, checked: boolean) => void;
 }
 
-export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, onLoadLas, onToggleVisible, loadChildren, onRequestRename, onRequestDelete, drawingShown, onToggleDrawing }: Props) {
+export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, onLoadLas, onToggleVisible, loadChildren, onRequestRename, onRequestDelete, drawingShown, onToggleDrawing, pathShown, onTogglePath }: Props) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
     const expandAll = (list: TreeNode[]) => {
@@ -68,6 +72,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
 
   const isLas = (name: string) => name.endsWith(".las") || name.endsWith(".laz");
   const isDrawing = (name: string) => name === DRAWING_FILE_NAME;
+  const isPath = (name: string) => name === PATH_FILE_NAME;
 
   /** 合并节点自身的 children 与懒加载的 children */
   const getEffectiveChildren = (node: TreeNode): TreeNode[] | undefined => {
@@ -115,7 +120,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
     if (node.isDir) {
       const children = getEffectiveChildren(node);
       if (!children || children.length === 0) return { checked: false };
-      const states = children.filter((c) => !isDrawing(c.name)).map(getCheckState);
+      const states = children.filter((c) => !isDrawing(c.name) && !isPath(c.name)).map(getCheckState);
       if (states.length === 0) return { checked: false };
       const allChecked = states.every((s) => s.checked);
       const someChecked = states.some((s) => s.checked || s.indeterminate);
@@ -125,6 +130,9 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
     }
     if (isDrawing(node.name)) {
       return { checked: drawingShown?.has(node.path) || false };
+    }
+    if (isPath(node.name)) {
+      return { checked: pathShown?.has(node.path) || false };
     }
     if (isLas(node.name)) {
       return { checked: loadedFiles.has(node.name) };
@@ -139,6 +147,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
       const recurse = async (list: TreeNode[]) => {
         const lasNodes: TreeNode[] = [];
         const drawNodes: TreeNode[] = [];
+        const pathNodes: TreeNode[] = [];
         const collect = (items: TreeNode[]) => {
           items.forEach((child) => {
             if (child.isDir && child.children) {
@@ -147,6 +156,8 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
               lasNodes.push(child);
             } else if (isDrawing(child.name)) {
               drawNodes.push(child);
+            } else if (isPath(child.name)) {
+              pathNodes.push(child);
             }
           });
         };
@@ -164,10 +175,16 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
         for (const child of drawNodes) {
           onToggleDrawing?.(child.path, checked);
         }
+
+        for (const child of pathNodes) {
+          onTogglePath?.(child.path, checked);
+        }
       };
       recurse(children);
     } else if (isDrawing(node.name)) {
       onToggleDrawing?.(node.path, checked);
+    } else if (isPath(node.name)) {
+      onTogglePath?.(node.path, checked);
     } else if (isLas(node.name)) {
       const isLoaded = loadedFiles.has(node.name);
       if (checked) {
@@ -268,6 +285,8 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
                 onRequestDelete={onRequestDelete}
                 drawingShown={drawingShown}
                 onToggleDrawing={onToggleDrawing}
+                pathShown={pathShown}
+                onTogglePath={onTogglePath}
               />
             )}
           </div>

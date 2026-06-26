@@ -1,6 +1,8 @@
 // 空间绘制数据持久化：充电区域、设备区、屏柜 等统一存于模型目录下同一 JSON
 // 文件名固定，按 type 标识区分各类绘制，支持二次编辑（按 type 局部更新，互不影响）
 
+import type { PathPoint, PathSegment, PathData } from "./PathDrawing";
+
 /** 绘制类型标识 */
 export type DrawingType = "cabinet" | "device-area" | "charging-area";
 
@@ -41,6 +43,13 @@ export interface DeviceAreaItem {
   updatedAt: string;
 }
 
+/** 可行路径绘制记录 */
+export interface PathItem {
+  points: PathPoint[];
+  paths: PathSegment[];
+  updatedAt: string;
+}
+
 /** 后续可扩充 device-area 等记录类型 */
 export type DrawingItem = CabinetItem | ChargingAreaItem | DeviceAreaItem;
 
@@ -52,6 +61,9 @@ export interface DrawingFile {
 
 /** 绘制数据文件名（充电区域、设备区、屏柜共用一个文件） */
 export const DRAWING_FILE_NAME = "充电区域、设备区、屏柜.json";
+
+/** 可行路径单独存储文件名 */
+export const PATH_FILE_NAME = "可行驶路径.json";
 
 type ElectronAPI = NonNullable<Window["electronAPI"]>;
 
@@ -69,6 +81,22 @@ function jsonSubPath(modelPath: string): string {
     return rel.replace(/[^/]+$/, DRAWING_FILE_NAME);
   }
   return DRAWING_FILE_NAME;
+}
+
+/** 路径文件绝对路径（读用） */
+function pathAbsPath(modelPath: string): string {
+  return modelPath.replace(/[^\\/]+$/, PATH_FILE_NAME);
+}
+
+/** 路径文件项目相对子路径（写用） */
+function pathSubPath(modelPath: string): string {
+  const norm = modelPath.replace(/\\/g, "/");
+  const idx = norm.indexOf("/地图/");
+  if (idx >= 0) {
+    const rel = norm.slice(idx + 1);
+    return rel.replace(/[^/]+$/, PATH_FILE_NAME);
+  }
+  return PATH_FILE_NAME;
 }
 
 /** 读取现有绘制文件（不存在则返回空结构） */
@@ -248,4 +276,55 @@ export async function deleteCabinetItem(api: ElectronAPI, projectName: string, j
   const bytes = new TextEncoder().encode(JSON.stringify(data, null, 2));
   const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   await api.project.writeFile(projectName, subPathFromJson(jsonPath), buffer);
+}
+
+/** 保存可行路径：写入独立的 可行驶路径.json */
+export async function savePathDrawing(params: {
+  api: ElectronAPI;
+  projectName: string;
+  modelPath: string;
+  data: PathData | null;
+}): Promise<void> {
+  const { api, projectName, modelPath, data } = params;
+  if (!data || data.points.length === 0) {
+    const bytes = new TextEncoder().encode(JSON.stringify(null));
+    const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    await api.project.writeFile(projectName, pathSubPath(modelPath), buffer);
+    return;
+  }
+  const content: PathItem = {
+    points: data.points,
+    paths: data.paths,
+    updatedAt: new Date().toISOString(),
+  };
+  const bytes = new TextEncoder().encode(JSON.stringify(content, null, 2));
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  await api.project.writeFile(projectName, pathSubPath(modelPath), buffer);
+}
+
+/** 读取该模型已保存的可行路径记录 */
+export async function loadPathDrawing(api: ElectronAPI, modelPath: string): Promise<PathData | null> {
+  try {
+    const buf = await api.readLargeFile(pathAbsPath(modelPath));
+    const text = new TextDecoder("utf-8").decode(buf);
+    const data = JSON.parse(text);
+    if (!data) return null;
+    if (Array.isArray(data.points)) {
+      const firstPt = data.points[0];
+      if (firstPt && typeof firstPt === "object" && !Array.isArray(firstPt) && "id" in firstPt) {
+        return {
+          points: (data.points as PathPoint[]).map((p) => ({ id: p.id, x: p.x, y: p.y, z: p.z })),
+          paths: Array.isArray(data.paths) ? (data.paths as PathSegment[]).map((s) => ({
+            id: s.id,
+            from: s.from,
+            to: s.to,
+            bezier: s.bezier,
+          })) : [],
+        };
+      }
+      // 旧格式兼容：{ points: number[][], connections: [number, number][] }
+      return data as any;
+    }
+  } catch {}
+  return null;
 }
