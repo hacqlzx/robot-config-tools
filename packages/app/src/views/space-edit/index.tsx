@@ -322,6 +322,7 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
   /** 从路径加载模型，同时关闭所有绘制状态 */
   const handleLoadLasFromPath = useCallback(async (filePath: string) => {
     closeAllDrawingModes();
+    hasAutoFocusedRef.current = false;
     await loadLasFromPath(filePath);
   }, [closeAllDrawingModes, loadLasFromPath]);
 
@@ -375,6 +376,16 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
 
   const handleFileSelect = async (file: File) => {
     closeAllDrawingModes();
+    // 卸载已有模型
+    entitiesRef.current.forEach((ent) => ent.destroy());
+    entitiesRef.current.clear();
+    lasHeadersRef.current.clear();
+    filePathRef.current.clear();
+    pointStatsRef.current.clear();
+    setLoadedFiles(new Set());
+    modelGroundYRef.current = -Infinity;
+    hasAutoFocusedRef.current = false;
+
     if (window.electronAPI) {
       const sourcePath = window.electronAPI.getFilePath(file);
       const baseName = file.name.replace(/\.[^.]+$/, "");
@@ -885,6 +896,7 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
                   if (oldEnt) { oldEnt.destroy(); entitiesRef.current.delete(clipEntityName); }
                   setLoadedFiles((prev) => { const next = new Set(prev); next.delete(clipEntityName); return next; });
 
+                  hasAutoFocusedRef.current = false;
                   setTimeout(async () => {
                     const project = localStorage.getItem("selectedProject");
                     if (project && window.electronAPI) {
