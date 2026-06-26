@@ -4,7 +4,6 @@ import {
   worldToScreen,
   setSphereColor,
   setLineColor,
-  updateLineEntity,
   createSphere,
   createLine,
 } from "./drawing-utils";
@@ -13,8 +12,10 @@ export interface PathDrawingOptions {
   pointColor?: pc.Color;
   selectedColor?: pc.Color;
   lineColor?: pc.Color;
+  cpColor?: pc.Color;
   snap?: boolean;
   sphereScale?: number;
+  cpScale?: number;
   onChange?: (data: PathData) => void;
   onSelectChange?: (selected: boolean) => void;
 }
@@ -45,9 +46,13 @@ const DEFAULTS = {
   pointColor: new pc.Color(0.3, 0.9, 0.4),
   selectedColor: new pc.Color(1, 0.85, 0.1),
   lineColor: new pc.Color(0.3, 0.9, 0.4),
+  cpColor: new pc.Color(0.5, 0.6, 1.0),
   snap: true,
   sphereScale: 0.12,
+  cpScale: 0.08,
 };
+
+const CURVE_SEGMENTS = 16;
 
 const CLICK_THRESHOLD = 3;
 
@@ -99,6 +104,8 @@ export class PathDrawing {
   private pathIds: string[] = [];
   private bezierParams: ({ cp1: [number, number, number]; cp2: [number, number, number] } | null)[] = [];
   private lines: pc.Entity[] = [];
+  private cpSpheres: { cp1: pc.Entity | null; cp2: pc.Entity | null }[] = [];
+  private curveSegs: pc.Entity[][] = [];
 
   private enabled = false;
   private active = false;
@@ -106,6 +113,7 @@ export class PathDrawing {
   private selectedPathIdx = -1;
   private lastConnectedIdx = -1;
   private isDragging = false;
+  private cpDragging: { pathIdx: number; which: 1 | 2 } | null = null;
   private dragStartScreen: { x: number; y: number } | null = null;
 
   constructor(
@@ -185,6 +193,8 @@ export class PathDrawing {
     this.pathIds.length = 0;
     this.bezierParams.length = 0;
     this.lines.length = 0;
+    this.cpSpheres.length = 0;
+    this.curveSegs.length = 0;
     this.lastConnectedIdx = -1;
 
     if (isOldPathData(data)) {
@@ -228,10 +238,13 @@ export class PathDrawing {
     this.pathIds.length = 0;
     this.bezierParams.length = 0;
     this.lines.length = 0;
+    this.cpSpheres.length = 0;
+    this.curveSegs.length = 0;
     this.selectedPointIdx = -1;
     this.selectedPathIdx = -1;
     this.lastConnectedIdx = -1;
     this.isDragging = false;
+    this.cpDragging = null;
     this.emitChange();
     this.requestRender();
   }
@@ -248,6 +261,7 @@ export class PathDrawing {
     this.lastConnectedIdx = Math.min(this.lastConnectedIdx, this.points.length - 1);
     if (this.selectedPointIdx >= this.points.length) { this.selectedPointIdx = -1; this.selectedPathIdx = -1; }
     if (this.selectedPathIdx >= this.connections.length) this.selectedPathIdx = -1;
+    this.cpDragging = null;
     this.emitChange();
     this.requestRender();
   }
@@ -268,9 +282,12 @@ export class PathDrawing {
     this.pathIds.length = 0;
     this.bezierParams.length = 0;
     this.lines.length = 0;
+    this.cpSpheres.length = 0;
+    this.curveSegs.length = 0;
     this.selectedPointIdx = -1;
     this.selectedPathIdx = -1;
     this.lastConnectedIdx = -1;
+    this.cpDragging = null;
   }
 
   // ============ 内部：点与连线管理 ============
@@ -278,12 +295,126 @@ export class PathDrawing {
   private clearEntities() {
     this.spheres.forEach((e) => e.destroy());
     this.lines.forEach((e) => e.destroy());
+    this.cpSpheres.forEach((cs) => { cs.cp1?.destroy(); cs.cp2?.destroy(); });
+    this.curveSegs.forEach((segs) => segs.forEach((e) => e.destroy()));
     this.spheres.length = 0;
     this.lines.length = 0;
+    this.cpSpheres.length = 0;
+    this.curveSegs.length = 0;
   }
 
   private emitChange() {
     this.opts.onChange?.(this.getData());
+  }
+
+  // ============ 贝塞尔曲线 ============
+
+  private static bezierPoint(t: number, p0: pc.Vec3, cp1: pc.Vec3, cp2: pc.Vec3, p1: pc.Vec3): pc.Vec3 {
+    const mt = 1 - t;
+    return new pc.Vec3(
+      mt * mt * mt * p0.x + 3 * mt * mt * t * cp1.x + 3 * mt * t * t * cp2.x + t * t * t * p1.x,
+      mt * mt * mt * p0.y + 3 * mt * mt * t * cp1.y + 3 * mt * t * t * cp2.y + t * t * t * p1.y,
+      mt * mt * mt * p0.z + 3 * mt * mt * t * cp1.z + 3 * mt * t * t * cp2.z + t * t * t * p1.z,
+    );
+  }
+
+  private getBezierVectors(pathIdx: number): { cp1: pc.Vec3; cp2: pc.Vec3 } | null {
+    const bz = this.bezierParams[pathIdx];
+    const [a, b] = this.connections[pathIdx];
+    const p0 = this.points[a], p1 = this.points[b];
+    if (bz) {
+      return {
+        cp1: new pc.Vec3(bz.cp1[0], bz.cp1[1], bz.cp1[2]),
+        cp2: new pc.Vec3(bz.cp2[0], bz.cp2[1], bz.cp2[2]),
+      };
+    }
+    const v33 = p1.clone().sub(p0).mulScalar(1 / 3);
+    const v66 = p1.clone().sub(p0).mulScalar(2 / 3);
+    return { cp1: p0.clone().add(v33), cp2: p0.clone().add(v66) };
+  }
+
+  private buildCurve(i: number) {
+    this.lines[i]?.destroy();
+    this.curveSegs[i]?.forEach((e) => e.destroy());
+    const [a, b] = this.connections[i];
+    const bvs = this.getBezierVectors(i);
+    if (!bvs) return;
+    const segs: pc.Entity[] = [];
+    let prev = this.points[a];
+    for (let s = 1; s <= CURVE_SEGMENTS; s++) {
+      const t = s / CURVE_SEGMENTS;
+      const pt = PathDrawing.bezierPoint(t, this.points[a], bvs.cp1, bvs.cp2, this.points[b]);
+      const color = this.selectedPathIdx === i ? this.opts.selectedColor : this.opts.lineColor;
+      segs.push(createLine(this.app, prev, pt, color));
+      prev = pt;
+    }
+    this.curveSegs[i] = segs;
+    this.lines[i] = segs[0]; // keep for compatibility
+  }
+
+  private showCpSpheres(i: number) {
+    this.hideCpSpheres(i);
+    const bvs = this.getBezierVectors(i);
+    if (!bvs) return;
+    const cs = this.cpSpheres[i];
+    cs.cp1 = createSphere(this.app, bvs.cp1, this.opts.cpColor, this.opts.cpScale);
+    cs.cp2 = createSphere(this.app, bvs.cp2, this.opts.cpColor, this.opts.cpScale);
+  }
+
+  private hideCpSpheres(i: number) {
+    const cs = this.cpSpheres[i];
+    cs?.cp1?.destroy();
+    cs?.cp2?.destroy();
+    if (cs) { cs.cp1 = null; cs.cp2 = null; }
+  }
+
+  private worldPosForCp(dragging: { pathIdx: number; which: 1 | 2 }, clientX: number, clientY: number): pc.Vec3 | null {
+    const camComp = this.camera.camera;
+    if (!camComp) return null;
+    const [a, b] = this.connections[dragging.pathIdx];
+    const planeY = (this.points[a].y + this.points[b].y) / 2;
+    const rect = this.canvas.getBoundingClientRect();
+    const sx = clientX - rect.left;
+    const sy = clientY - rect.top;
+    const from = this.camera.getPosition();
+    const to = new pc.Vec3();
+    camComp.screenToWorld(sx, sy, 0.5, to);
+    const dir = new pc.Vec3().sub2(to, from).normalize();
+    if (Math.abs(dir.y) < 0.0001) return null;
+    const t = (planeY - from.y) / dir.y;
+    if (t <= 0) return null;
+    return from.clone().add(dir.mulScalar(t));
+  }
+
+  private hitTestCp(sx: number, sy: number): { pathIdx: number; which: 1 | 2 } | null {
+    if (this.selectedPathIdx < 0) return null;
+    const i = this.selectedPathIdx;
+    const cs = this.cpSpheres[i];
+    const hitTest = (sphere: pc.Entity | null): boolean => {
+      if (!sphere) return false;
+      const pos = sphere.getLocalPosition();
+      const camComp = this.camera.camera;
+      if (!camComp) return false;
+      const viewMat = this.camera.getWorldTransform().clone().invert();
+      const vpMat = new pc.Mat4().mul2(camComp.projectionMatrix, viewMat);
+      const ss = worldToScreen(pos, vpMat, this.gd.width, this.gd.height);
+      if (!ss) return false;
+      return (ss.sx - sx) ** 2 + (ss.sy - sy) ** 2 < 100;
+    };
+    if (hitTest(cs.cp1)) return { pathIdx: i, which: 1 };
+    if (hitTest(cs.cp2)) return { pathIdx: i, which: 2 };
+    return null;
+  }
+
+  private syncBezierParams(i: number) {
+    const cs = this.cpSpheres[i];
+    if (!cs?.cp1 || !cs?.cp2) return;
+    const p1 = cs.cp1.getLocalPosition();
+    const p2 = cs.cp2.getLocalPosition();
+    this.bezierParams[i] = {
+      cp1: [p1.x, p1.y, p1.z],
+      cp2: [p2.x, p2.y, p2.z],
+    };
   }
 
   private hitTestSphere(sx: number, sy: number): number {
@@ -321,8 +452,9 @@ export class PathDrawing {
   }
 
   private _unselPath() {
-    if (this.selectedPathIdx >= 0 && this.selectedPathIdx < this.lines.length) {
-      setLineColor(this.lines[this.selectedPathIdx], this.opts.lineColor);
+    if (this.selectedPathIdx >= 0 && this.selectedPathIdx < this.curveSegs.length) {
+      this.curveSegs[this.selectedPathIdx]?.forEach((e) => setLineColor(e, this.opts.lineColor));
+      this.hideCpSpheres(this.selectedPathIdx);
     }
     this.selectedPathIdx = -1;
   }
@@ -330,8 +462,9 @@ export class PathDrawing {
   private _selPath(idx: number) {
     this._unselPoint();
     this._unselPath();
-    if (idx >= 0 && idx < this.lines.length) {
-      setLineColor(this.lines[idx], this.opts.selectedColor);
+    if (idx >= 0 && idx < this.curveSegs.length) {
+      this.curveSegs[idx]?.forEach((e) => setLineColor(e, this.opts.selectedColor));
+      this.showCpSpheres(idx);
       this.selectedPathIdx = idx;
     }
     this.opts.onSelectChange?.(this.selectedPathIdx >= 0);
@@ -363,22 +496,34 @@ export class PathDrawing {
     let bestD2 = 60;
     for (let i = 0; i < this.connections.length; i++) {
       const [a, b] = this.connections[i];
-      const sa = worldToScreen(this.points[a], vpMat, this.gd.width, this.gd.height);
-      const sb = worldToScreen(this.points[b], vpMat, this.gd.width, this.gd.height);
-      if (!sa || !sb) continue;
-      const d2 = pointToSegmentDistSq(sx, sy, sa.sx, sa.sy, sb.sx, sb.sy);
-      if (d2 < bestD2) { bestD2 = d2; bestIdx = i; }
+      const bvs = this.getBezierVectors(i);
+      if (!bvs) continue;
+      const samples: { sx: number; sy: number }[] = [];
+      for (let s = 0; s <= CURVE_SEGMENTS; s++) {
+        const t = s / CURVE_SEGMENTS;
+        const pt = PathDrawing.bezierPoint(t, this.points[a], bvs.cp1, bvs.cp2, this.points[b]);
+        const ss = worldToScreen(pt, vpMat, this.gd.width, this.gd.height);
+        if (ss) samples.push(ss);
+      }
+      for (let j = 1; j < samples.length; j++) {
+        const d2 = pointToSegmentDistSq(sx, sy, samples[j - 1].sx, samples[j - 1].sy, samples[j].sx, samples[j].sy);
+        if (d2 < bestD2) { bestD2 = d2; bestIdx = i; }
+      }
     }
     return bestIdx;
   }
 
   /** 删除路径（保留前后停靠点） */
   private deletePath(idx: number) {
-    this.lines[idx].destroy();
+    this.lines[idx]?.destroy();
+    this.curveSegs[idx]?.forEach((e) => e.destroy());
+    this.hideCpSpheres(idx);
     this.connections.splice(idx, 1);
     this.pathIds.splice(idx, 1);
     this.bezierParams.splice(idx, 1);
     this.lines.splice(idx, 1);
+    this.cpSpheres.splice(idx, 1);
+    this.curveSegs.splice(idx, 1);
     this._unselAll();
     this.emitChange();
     this.requestRender();
@@ -428,10 +573,14 @@ export class PathDrawing {
   ) {
     if (from === to) return;
     if (this.hasConnection(from, to)) return;
+    const idx = this.connections.length;
     this.connections.push([from, to]);
     this.pathIds.push(id || genId());
     this.bezierParams.push(bezier || null);
-    this.lines.push(createLine(this.app, this.points[from], this.points[to], this.opts.lineColor));
+    this.lines.push(null as any);
+    this.cpSpheres.push({ cp1: null, cp2: null });
+    this.curveSegs.push([]);
+    this.buildCurve(idx);
     this.emitChange();
   }
 
@@ -443,11 +592,15 @@ export class PathDrawing {
     for (let i = this.connections.length - 1; i >= 0; i--) {
       const [a, b] = this.connections[i];
       if (a === idx || b === idx) {
-        this.lines[i].destroy();
+        this.lines[i]?.destroy();
+        this.curveSegs[i]?.forEach((e) => e.destroy());
+        this.hideCpSpheres(i);
         this.connections.splice(i, 1);
         this.pathIds.splice(i, 1);
         this.bezierParams.splice(i, 1);
         this.lines.splice(i, 1);
+        this.cpSpheres.splice(i, 1);
+        this.curveSegs.splice(i, 1);
       }
     }
   }
@@ -456,7 +609,7 @@ export class PathDrawing {
     for (let i = 0; i < this.connections.length; i++) {
       const [a, b] = this.connections[i];
       if (a === idx || b === idx) {
-        updateLineEntity(this.lines[i], this.points[a], this.points[b]);
+        this.buildCurve(i);
       }
     }
   }
@@ -511,6 +664,14 @@ export class PathDrawing {
     const sy = e.clientY - rect.top;
 
     if (!this.active) {
+      const hitCp = this.hitTestCp(sx, sy);
+      if (hitCp) {
+        this.cpDragging = hitCp;
+        (window as any).__drawingDragging = true;
+        this.dragStartScreen = { x: e.clientX, y: e.clientY };
+        this.requestRender();
+        return;
+      }
       const hitPt = this.hitTestSphere(sx, sy);
       const hitLn = this.hitTestLine(sx, sy);
       if (hitPt >= 0) {
@@ -535,6 +696,19 @@ export class PathDrawing {
   };
 
   private onMouseMove = (e: MouseEvent) => {
+    if (this.cpDragging) {
+      const pos = this.worldPosForCp(this.cpDragging, e.clientX, e.clientY);
+      if (pos) {
+        const cs = this.cpSpheres[this.cpDragging.pathIdx];
+        const which = this.cpDragging.which === 1 ? cs.cp1 : cs.cp2;
+        which?.setLocalPosition(pos);
+        this.syncBezierParams(this.cpDragging.pathIdx);
+        this.buildCurve(this.cpDragging.pathIdx);
+        this.emitChange();
+        this.requestRender();
+      }
+      return;
+    }
     if (!this.isDragging || this.selectedPointIdx < 0) return;
     const pos = this.getDragPosition(e.clientX, e.clientY);
     if (pos) {
@@ -544,7 +718,15 @@ export class PathDrawing {
   };
 
   private onMouseUp = (e: MouseEvent) => {
-    if (!this.enabled) { this.isDragging = false; this.dragStartScreen = null; return; }
+    if (!this.enabled) { this.isDragging = false; this.cpDragging = null; this.dragStartScreen = null; return; }
+
+    if (this.cpDragging) {
+      this.cpDragging = null;
+      (window as any).__drawingDragging = false;
+      this.dragStartScreen = null;
+      this.requestRender();
+      return;
+    }
 
     if (this.isDragging && this.selectedPointIdx >= 0) {
       this.isDragging = false;
@@ -598,6 +780,7 @@ export class PathDrawing {
 
   private cancelDrag = () => {
     this.isDragging = false;
+    this.cpDragging = null;
     (window as any).__drawingDragging = false;
     this.dragStartScreen = null;
   };
