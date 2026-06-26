@@ -85,6 +85,14 @@ export function setSphereColor(sphere: pc.Entity, color: pc.Color) {
   sm.update();
 }
 
+/** 设置连线实体颜色 */
+export function setLineColor(line: pc.Entity, color: pc.Color) {
+  const sm = line.render!.material as pc.StandardMaterial;
+  sm.diffuse = color;
+  sm.emissive = color;
+  sm.update();
+}
+
 /** 更新连线实体：用拉伸的 box 在两点之间呈现一条线段 */
 export function updateLineEntity(line: pc.Entity, from: pc.Vec3, to: pc.Vec3, thickness = 0.05) {
   const mid = new pc.Vec3().add2(from, to).mulScalar(0.5);

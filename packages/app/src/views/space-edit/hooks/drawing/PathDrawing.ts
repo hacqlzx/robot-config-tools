@@ -3,6 +3,7 @@ import {
   screenPickLas,
   worldToScreen,
   setSphereColor,
+  setLineColor,
   updateLineEntity,
   createSphere,
   createLine,
@@ -61,6 +62,21 @@ function isOldPathData(data: any): data is { points: number[][]; connections: [n
   return Array.isArray(pt) && typeof pt[0] === "number";
 }
 
+function pointToSegmentDistSq(
+  px: number, py: number,
+  ax: number, ay: number,
+  bx: number, by: number,
+): number {
+  const dx = bx - ax, dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return (px - ax) ** 2 + (py - ay) ** 2;
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  const nearX = ax + t * dx;
+  const nearY = ay + t * dy;
+  return (px - nearX) ** 2 + (py - nearY) ** 2;
+}
+
 /**
  * 可行路径绘制（框架无关）
  *
@@ -86,7 +102,8 @@ export class PathDrawing {
 
   private enabled = false;
   private active = false;
-  private selectedIdx = -1;
+  private selectedPointIdx = -1;
+  private selectedPathIdx = -1;
   private lastConnectedIdx = -1;
   private isDragging = false;
   private dragStartScreen: { x: number; y: number } | null = null;
@@ -109,6 +126,7 @@ export class PathDrawing {
     this.canvas.addEventListener("mousedown", this.onMouseDown);
     window.addEventListener("mousemove", this.onMouseMove);
     window.addEventListener("mouseup", this.onMouseUp);
+    window.addEventListener("keydown", this.onKeyDown);
     this.canvas.addEventListener("mouseleave", this.cancelDrag);
     document.addEventListener("mouseleave", this.cancelDrag);
     window.addEventListener("blur", this.cancelDrag);
@@ -124,7 +142,7 @@ export class PathDrawing {
   /** 切换激活/非激活状态 */
   setActive(v: boolean) {
     this.active = v;
-    this.deselect();
+    this._unselAll();
     this.lastConnectedIdx = -1;
   }
 
@@ -210,7 +228,8 @@ export class PathDrawing {
     this.pathIds.length = 0;
     this.bezierParams.length = 0;
     this.lines.length = 0;
-    this.selectedIdx = -1;
+    this.selectedPointIdx = -1;
+    this.selectedPathIdx = -1;
     this.lastConnectedIdx = -1;
     this.isDragging = false;
     this.emitChange();
@@ -227,7 +246,8 @@ export class PathDrawing {
     this.pointIds.splice(idx, 1);
     this.spheres.splice(idx, 1);
     this.lastConnectedIdx = Math.min(this.lastConnectedIdx, this.points.length - 1);
-    if (this.selectedIdx >= this.points.length) this.selectedIdx = -1;
+    if (this.selectedPointIdx >= this.points.length) { this.selectedPointIdx = -1; this.selectedPathIdx = -1; }
+    if (this.selectedPathIdx >= this.connections.length) this.selectedPathIdx = -1;
     this.emitChange();
     this.requestRender();
   }
@@ -236,6 +256,7 @@ export class PathDrawing {
     this.canvas.removeEventListener("mousedown", this.onMouseDown);
     window.removeEventListener("mousemove", this.onMouseMove);
     window.removeEventListener("mouseup", this.onMouseUp);
+    window.removeEventListener("keydown", this.onKeyDown);
     this.canvas.removeEventListener("mouseleave", this.cancelDrag);
     document.removeEventListener("mouseleave", this.cancelDrag);
     window.removeEventListener("blur", this.cancelDrag);
@@ -247,7 +268,8 @@ export class PathDrawing {
     this.pathIds.length = 0;
     this.bezierParams.length = 0;
     this.lines.length = 0;
-    this.selectedIdx = -1;
+    this.selectedPointIdx = -1;
+    this.selectedPathIdx = -1;
     this.lastConnectedIdx = -1;
   }
 
@@ -280,27 +302,50 @@ export class PathDrawing {
     return bestIdx;
   }
 
-  private deselect() {
-    if (this.selectedIdx >= 0 && this.selectedIdx < this.spheres.length) {
-      setSphereColor(this.spheres[this.selectedIdx], this.opts.pointColor);
+  private _unselPoint() {
+    if (this.selectedPointIdx >= 0 && this.selectedPointIdx < this.spheres.length) {
+      setSphereColor(this.spheres[this.selectedPointIdx], this.opts.pointColor);
     }
-    this.selectedIdx = -1;
+    this.selectedPointIdx = -1;
     this.isDragging = false;
   }
 
-  private select(idx: number) {
-    this.deselect();
+  private _selPoint(idx: number) {
+    this._unselPath();
+    this._unselPoint();
     if (idx >= 0 && idx < this.spheres.length) {
       setSphereColor(this.spheres[idx], this.opts.selectedColor);
-      this.selectedIdx = idx;
+      this.selectedPointIdx = idx;
     }
-    this.opts.onSelectChange?.(this.selectedIdx >= 0);
+    this.opts.onSelectChange?.(this.selectedPointIdx >= 0);
+  }
+
+  private _unselPath() {
+    if (this.selectedPathIdx >= 0 && this.selectedPathIdx < this.lines.length) {
+      setLineColor(this.lines[this.selectedPathIdx], this.opts.lineColor);
+    }
+    this.selectedPathIdx = -1;
+  }
+
+  private _selPath(idx: number) {
+    this._unselPoint();
+    this._unselPath();
+    if (idx >= 0 && idx < this.lines.length) {
+      setLineColor(this.lines[idx], this.opts.selectedColor);
+      this.selectedPathIdx = idx;
+    }
+    this.opts.onSelectChange?.(this.selectedPathIdx >= 0);
+  }
+
+  private _unselAll() {
+    this._unselPoint();
+    this._unselPath();
+    this.opts.onSelectChange?.(false);
   }
 
   /** 取消路径点选中（供外部互斥调用） */
   deselectPoint() {
-    this.deselect();
-    this.opts.onSelectChange?.(false);
+    this._unselAll();
     this.requestRender();
   }
 
@@ -308,6 +353,66 @@ export class PathDrawing {
   setSelectChangeCallback(cb: ((selected: boolean) => void) | undefined) {
     this.opts.onSelectChange = cb;
   }
+
+  private hitTestLine(sx: number, sy: number): number {
+    const camComp = this.camera.camera;
+    if (!camComp || this.connections.length === 0) return -1;
+    const viewMat = this.camera.getWorldTransform().clone().invert();
+    const vpMat = new pc.Mat4().mul2(camComp.projectionMatrix, viewMat);
+    let bestIdx = -1;
+    let bestD2 = 60;
+    for (let i = 0; i < this.connections.length; i++) {
+      const [a, b] = this.connections[i];
+      const sa = worldToScreen(this.points[a], vpMat, this.gd.width, this.gd.height);
+      const sb = worldToScreen(this.points[b], vpMat, this.gd.width, this.gd.height);
+      if (!sa || !sb) continue;
+      const d2 = pointToSegmentDistSq(sx, sy, sa.sx, sa.sy, sb.sx, sb.sy);
+      if (d2 < bestD2) { bestD2 = d2; bestIdx = i; }
+    }
+    return bestIdx;
+  }
+
+  /** 删除路径（保留前后停靠点） */
+  private deletePath(idx: number) {
+    this.lines[idx].destroy();
+    this.connections.splice(idx, 1);
+    this.pathIds.splice(idx, 1);
+    this.bezierParams.splice(idx, 1);
+    this.lines.splice(idx, 1);
+    this._unselAll();
+    this.emitChange();
+    this.requestRender();
+  }
+
+  /** 删除停靠点（同时删除前后关联路径） */
+  private deletePoint(idx: number) {
+    this.removeConnectionsForInner(idx);
+    this.spheres[idx].destroy();
+    this.points.splice(idx, 1);
+    this.pointIds.splice(idx, 1);
+    this.spheres.splice(idx, 1);
+    for (let i = 0; i < this.connections.length; i++) {
+      const [a, b] = this.connections[i];
+      if (a > idx) this.connections[i][0]--;
+      if (b > idx) this.connections[i][1]--;
+    }
+    if (this.lastConnectedIdx > idx) this.lastConnectedIdx--;
+    else if (this.lastConnectedIdx === idx) this.lastConnectedIdx = -1;
+    this._unselAll();
+    this.emitChange();
+    this.requestRender();
+  }
+
+  private onKeyDown = (e: KeyboardEvent) => {
+    if (!this.enabled || this.active) return;
+    if (e.key === "Delete") {
+      if (this.selectedPathIdx >= 0) {
+        this.deletePath(this.selectedPathIdx);
+      } else if (this.selectedPointIdx >= 0) {
+        this.deletePoint(this.selectedPointIdx);
+      }
+    }
+  };
 
   private hasConnection(from: number, to: number): boolean {
     return this.connections.some(
@@ -357,7 +462,7 @@ export class PathDrawing {
   }
 
   private getDragPosition(clientX: number, clientY: number): pc.Vec3 | null {
-    if (this.selectedIdx < 0) return null;
+    if (this.selectedPointIdx < 0) return null;
     const camComp = this.camera.camera;
     if (!camComp) return null;
     const rect = this.canvas.getBoundingClientRect();
@@ -367,7 +472,7 @@ export class PathDrawing {
     const to = new pc.Vec3();
     camComp.screenToWorld(sx, sy, 0.5, to);
     const dir = new pc.Vec3().sub2(to, from).normalize();
-    const planeY = this.points[this.selectedIdx].y;
+    const planeY = this.points[this.selectedPointIdx].y;
     if (Math.abs(dir.y) < 0.0001) return null;
     const t = (planeY - from.y) / dir.y;
     if (t <= 0) return null;
@@ -375,11 +480,12 @@ export class PathDrawing {
   }
 
   private moveSelected(pos: pc.Vec3) {
-    if (this.selectedIdx < 0) return;
-    this.points[this.selectedIdx] = pos.clone();
-    this.spheres[this.selectedIdx].setLocalPosition(pos);
-    this.updateLinesForPoint(this.selectedIdx);
+    if (this.selectedPointIdx < 0) return;
+    this.points[this.selectedPointIdx] = pos.clone();
+    this.spheres[this.selectedPointIdx].setLocalPosition(pos);
+    this.updateLinesForPoint(this.selectedPointIdx);
     this.emitChange();
+    this.requestRender();
   }
 
   private placePoint(pos: pc.Vec3) {
@@ -405,16 +511,22 @@ export class PathDrawing {
     const sy = e.clientY - rect.top;
 
     if (!this.active) {
-      const hitIdx = this.hitTestSphere(sx, sy);
-      if (hitIdx >= 0) {
-        this.select(hitIdx);
+      const hitPt = this.hitTestSphere(sx, sy);
+      const hitLn = this.hitTestLine(sx, sy);
+      if (hitPt >= 0) {
+        this._selPoint(hitPt);
         this.isDragging = true;
         (window as any).__drawingDragging = true;
         this.dragStartScreen = { x: e.clientX, y: e.clientY };
         this.requestRender();
         return;
       }
-      this.deselect();
+      if (hitLn >= 0) {
+        this._selPath(hitLn);
+        this.requestRender();
+        return;
+      }
+      this._unselAll();
       this.requestRender();
       return;
     }
@@ -423,7 +535,7 @@ export class PathDrawing {
   };
 
   private onMouseMove = (e: MouseEvent) => {
-    if (!this.isDragging || this.selectedIdx < 0) return;
+    if (!this.isDragging || this.selectedPointIdx < 0) return;
     const pos = this.getDragPosition(e.clientX, e.clientY);
     if (pos) {
       this.moveSelected(pos);
@@ -434,7 +546,7 @@ export class PathDrawing {
   private onMouseUp = (e: MouseEvent) => {
     if (!this.enabled) { this.isDragging = false; this.dragStartScreen = null; return; }
 
-    if (this.isDragging && this.selectedIdx >= 0) {
+    if (this.isDragging && this.selectedPointIdx >= 0) {
       this.isDragging = false;
       (window as any).__drawingDragging = false;
       if (this.opts.snap) {
@@ -468,7 +580,7 @@ export class PathDrawing {
           this.addConnection(this.lastConnectedIdx, hitIdx);
         }
         this.lastConnectedIdx = hitIdx;
-        this.deselect();
+        this._unselAll();
         this.requestRender();
         this.dragStartScreen = null;
         return;
