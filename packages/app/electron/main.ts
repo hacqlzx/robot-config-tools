@@ -15,9 +15,9 @@ app.commandLine.appendSwitch("use-angle", "d3d11");
 // 禁用 GPU vsync，减少渲染延迟
 app.commandLine.appendSwitch("disable-gpu-vsync");
 
-// 项目存储根目录：开发时指向 monorepo 根下的 project/，生产时指向 userData 下的 project/
+// 项目存储根目录：开发时指向 monorepo 根下的 project/，生产时指向 exe 所在目录下的 project/
 const PROJECT_ROOT = app.isPackaged
-  ? path.join(app.getPath("userData"), "project")
+  ? path.join(path.dirname(app.getPath("exe")), "project")
   : path.resolve(__dirname, "..", "..", "..", "project");
 
 Menu.setApplicationMenu(null);
