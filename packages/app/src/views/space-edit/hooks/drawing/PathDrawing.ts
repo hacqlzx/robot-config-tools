@@ -684,6 +684,8 @@ export class PathDrawing {
       }
       if (hitLn >= 0) {
         this._selPath(hitLn);
+        (window as any).__drawingDragging = true;
+        this.dragStartScreen = { x: e.clientX, y: e.clientY };
         this.requestRender();
         return;
       }
@@ -748,6 +750,7 @@ export class PathDrawing {
     const dy = e.clientY - this.dragStartScreen.y;
     if (Math.sqrt(dx * dx + dy * dy) > CLICK_THRESHOLD) {
       this.dragStartScreen = null;
+      (window as any).__drawingDragging = false;
       return;
     }
 
@@ -776,6 +779,7 @@ export class PathDrawing {
     }
 
     this.dragStartScreen = null;
+    (window as any).__drawingDragging = false;
   };
 
   private cancelDrag = () => {

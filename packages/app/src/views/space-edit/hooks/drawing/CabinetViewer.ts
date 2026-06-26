@@ -243,11 +243,13 @@ export class CabinetViewer {
 
   private onMouseDown = (e: MouseEvent) => {
     if (!this.interactive || e.button !== 0) return;
+    if ((window as any).__clipDragging || (window as any).__drawingDragging) return;
     this.downPos = { x: e.clientX, y: e.clientY };
   };
 
   private onMouseUp = (e: MouseEvent) => {
     if (!this.interactive || e.button !== 0 || !this.downPos) { this.downPos = null; return; }
+    if ((window as any).__clipDragging || (window as any).__drawingDragging) { this.downPos = null; return; }
     const moved = Math.hypot(e.clientX - this.downPos.x, e.clientY - this.downPos.y);
     this.downPos = null;
     if (moved > 4) return;

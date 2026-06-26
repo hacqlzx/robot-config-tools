@@ -191,10 +191,10 @@ export default function SpaceEdit() {
     app.autoRender = false;
     app.start();
     appRef.current = app;
+    const pathCleanup = setupPathDrawing(app, camera, requestRender, entitiesRef);
     const cabinetCleanup = setupCabinetDrawing(app, camera, requestRender, entitiesRef);
     const chargingCleanup = setupChargingAreaDrawing(app, camera, requestRender, entitiesRef);
     const deviceAreaCleanup = setupDeviceAreaDrawing(app, camera, requestRender, entitiesRef);
-    const pathCleanup = setupPathDrawing(app, camera, requestRender, entitiesRef);
     const viewer = new CabinetViewer(app, camera, requestRender);
     cabinetViewerRef.current = viewer;
 
