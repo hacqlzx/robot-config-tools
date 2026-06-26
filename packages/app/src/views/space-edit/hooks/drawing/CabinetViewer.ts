@@ -69,7 +69,6 @@ export class CabinetViewer {
 
   private interactive = true;
   private selected: number | null = null;
-  private menuEl: HTMLDivElement | null = null;
   private downPos: { x: number; y: number } | null = null;
   private onRequestDelete?: (jsonPath: string, bayId: number) => void;
   private onSelectChange?: (selected: boolean) => void;
@@ -83,8 +82,6 @@ export class CabinetViewer {
     this.initLabels();
     this.canvas.addEventListener("mousedown", this.onMouseDown);
     this.canvas.addEventListener("mouseup", this.onMouseUp);
-    this.canvas.addEventListener("contextmenu", this.onContextMenu);
-    document.addEventListener("mousedown", this.onDocMouseDown, true);
     document.addEventListener("keydown", this.onKeyDown);
   }
 
@@ -99,7 +96,7 @@ export class CabinetViewer {
   /** 启用/禁用选中交互（绘制模式下应禁用） */
   setInteractive(v: boolean) {
     this.interactive = v;
-    if (!v) { this.deselect(); this.hideMenu(); }
+    if (!v) { this.deselect(); }
   }
 
   has(bayId: number): boolean {
@@ -151,11 +148,8 @@ export class CabinetViewer {
     if (this.labelRafId) cancelAnimationFrame(this.labelRafId);
     this.canvas.removeEventListener("mousedown", this.onMouseDown);
     this.canvas.removeEventListener("mouseup", this.onMouseUp);
-    this.canvas.removeEventListener("contextmenu", this.onContextMenu);
-    document.removeEventListener("mousedown", this.onDocMouseDown, true);
     document.removeEventListener("keydown", this.onKeyDown);
     this.deselect();
-    this.hideMenu();
     this.clear();
     this.labelContainer?.remove();
     this.labelContainer = null;
@@ -237,40 +231,11 @@ export class CabinetViewer {
     return bestId;
   }
 
-  // ============ 右键菜单 ============
-
-  private showMenu(clientX: number, clientY: number) {
-    const parent = this.canvas.parentElement;
-    if (!parent) return;
-    if (!this.menuEl) {
-      const el = document.createElement("div");
-      el.style.cssText = "position:absolute;z-index:25;background:#fff;border:1px solid #d9d9d9;" +
-        "border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,0.15);padding:4px 0;min-width:80px;" +
-        "font-size:13px;user-select:none;";
-      const del = document.createElement("div");
-      del.textContent = "删除";
-      del.style.cssText = "padding:5px 14px;cursor:pointer;color:#ff4d4f;";
-      del.onmouseenter = () => { del.style.background = "#fff1f0"; };
-      del.onmouseleave = () => { del.style.background = "transparent"; };
-      del.onclick = () => this.deleteSelected();
-      el.appendChild(del);
-      parent.appendChild(el);
-      this.menuEl = el;
-    }
-    const rect = parent.getBoundingClientRect();
-    this.menuEl.style.left = `${clientX - rect.left}px`;
-    this.menuEl.style.top = `${clientY - rect.top}px`;
-    this.menuEl.style.display = "block";
-  }
-
-  private hideMenu() {
-    if (this.menuEl) this.menuEl.style.display = "none";
-  }
+  // ============ 删除 ============
 
   private deleteSelected() {
     if (this.selected == null) return;
     const s = this.shown.get(this.selected);
-    this.hideMenu();
     if (s) this.onRequestDelete?.(s.jsonPath, this.selected);
   }
 
@@ -285,32 +250,11 @@ export class CabinetViewer {
     if (!this.interactive || e.button !== 0 || !this.downPos) { this.downPos = null; return; }
     const moved = Math.hypot(e.clientX - this.downPos.x, e.clientY - this.downPos.y);
     this.downPos = null;
-    if (moved > 4) return; // 拖拽相机，不算点击
+    if (moved > 4) return;
     const rect = this.canvas.getBoundingClientRect();
     const hit = this.hitTest(e.clientX - rect.left, e.clientY - rect.top);
     if (hit != null) this.select(hit);
     else this.deselect();
-    this.hideMenu();
-  };
-
-  private onContextMenu = (e: MouseEvent) => {
-    if (!this.interactive) return;
-    const rect = this.canvas.getBoundingClientRect();
-    const hit = this.hitTest(e.clientX - rect.left, e.clientY - rect.top);
-    if (hit != null) {
-      e.preventDefault();
-      this.select(hit);
-      this.showMenu(e.clientX, e.clientY);
-    } else {
-      this.hideMenu();
-    }
-  };
-
-  /** 点击菜单之外区域隐藏菜单 */
-  private onDocMouseDown = (e: MouseEvent) => {
-    if (this.menuEl && this.menuEl.style.display !== "none" && !this.menuEl.contains(e.target as Node)) {
-      this.hideMenu();
-    }
   };
 
   private onKeyDown = (e: KeyboardEvent) => {

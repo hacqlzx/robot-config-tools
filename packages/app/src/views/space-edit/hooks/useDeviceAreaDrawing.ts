@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import * as pc from "playcanvas";
+import { Modal } from "antd";
 import { DeviceAreaDrawing, DeviceAreaDrawingOptions } from "./drawing/DeviceAreaDrawing";
 
 interface UseDeviceAreaDrawingAPI {
@@ -9,6 +10,7 @@ interface UseDeviceAreaDrawingAPI {
   selectedBoxId: string | null;
   selectedBoxBay: { id: number; name: string; code: string } | null;
   handleToggleDeviceArea: () => void;
+  handleForceCloseDeviceArea: () => void;
   handleUndo: () => void;
   handleBindBay: (bay: { id: number; name: string; code: string }) => void;
   handleUnbind: () => void;
@@ -28,6 +30,7 @@ interface UseDeviceAreaDrawingAPI {
 
 export function useDeviceAreaDrawing(
   onSave?: () => void,
+  onDelete?: () => void,
 ): UseDeviceAreaDrawingAPI {
   const [deviceAreaMode, setDeviceAreaMode] = useState(false);
   const [boxCount, setBoxCount] = useState(0);
@@ -37,6 +40,8 @@ export function useDeviceAreaDrawing(
   const drawingRef = useRef<DeviceAreaDrawing | null>(null);
   const saveCbRef = useRef(onSave);
   saveCbRef.current = onSave;
+  const deleteCbRef = useRef(onDelete);
+  deleteCbRef.current = onDelete;
 
   const setupDeviceAreaDrawing = useCallback((
     app: pc.Application,
@@ -60,6 +65,9 @@ export function useDeviceAreaDrawing(
           setSelectedBoxBay(null);
         }
       },
+      onDelete: () => {
+        deleteCbRef.current?.();
+      },
     });
     drawingRef.current = drawing;
     return () => {
@@ -72,10 +80,32 @@ export function useDeviceAreaDrawing(
     const drawing = drawingRef.current;
     if (!drawing) return;
     drawing.setEnabled(deviceAreaMode);
+    if (!deviceAreaMode) drawing.clearAll();
   }, [deviceAreaMode]);
 
   const handleToggleDeviceArea = useCallback(() => {
-    setDeviceAreaMode((prev) => !prev);
+    setDeviceAreaMode((prev) => {
+      if (prev) {
+        const drawing = drawingRef.current;
+        const hasBoxes = drawing ? drawing.getBoxCount() > 0 : false;
+        if (hasBoxes || boxCount > 0) {
+          Modal.confirm({
+            title: "确认关闭",
+            content: "关闭设备区将清除所有未保存的框和点，是否继续？",
+            okText: "确认关闭",
+            cancelText: "取消",
+            onOk: () => { setDeviceAreaMode(false); },
+          });
+          return prev;
+        }
+      }
+      return !prev;
+    });
+  }, [boxCount]);
+
+  /** 强制关闭设备区（不弹确认，用于互斥切换） */
+  const handleForceCloseDeviceArea = useCallback(() => {
+    setDeviceAreaMode(false);
   }, []);
 
   const handleUndo = useCallback(() => {
@@ -119,7 +149,7 @@ export function useDeviceAreaDrawing(
 
   return {
     deviceAreaMode, boxCount, height, selectedBoxId, selectedBoxBay,
-    handleToggleDeviceArea, handleUndo, handleBindBay, handleUnbind, handleSave, handleSetHeight,
+    handleToggleDeviceArea, handleForceCloseDeviceArea, handleUndo, handleBindBay, handleUnbind, handleSave, handleSetHeight,
     getBoxDatas, getBoundBayIds, loadBoxes,
     setupDeviceAreaDrawing, drawingRef,
   };

@@ -122,6 +122,7 @@ export default function DeviceAreaPanel({
             onChange={(v) => v != null && onSetHeight(v)} style={{ width: 72 }} />
           <Button size="small" icon={<UndoOutlined />} onClick={onUndo} disabled={boxCount === 0}>撤销</Button>
         </div>
+        <div style={{ fontSize: 11, color: "#999", marginBottom: 6 }}>点击3个点生成设备区 → 选中框 → 在下表中绑定间隔</div>
         <Table<DeviceBay>
           size="small"
           rowKey="id"
@@ -132,11 +133,11 @@ export default function DeviceAreaPanel({
           locale={{ emptyText: "暂无可绑定间隔" }}
         />
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 12, color: "#666" }}>
-          <span>已绘制 {boxCount} 个区域</span>
-          <span>{selectedBoxId ? (selectedBoxBay ? `已绑定: ${selectedBoxBay.name}` : "选中框未绑定") : "未选中框"}</span>
+          <span>已绘制 {boxCount} 个区域 | {selectedBoxId ? (selectedBoxBay ? `已绑定: ${selectedBoxBay.name}` : "选中框未绑定") : "点击框选中"}</span>
+          <span style={{ color: "#1677ff", cursor: "help" }} title="方向键平移选中框 / Delete 键删除选中框">ⓘ</span>
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
-          <Button size="small" type="primary" icon={<SaveOutlined />} onClick={onSave}>保存全部</Button>
+          <Button size="small" type="primary" icon={<SaveOutlined />} onClick={onSave}>保存全部设备区</Button>
         </div>
       </div>
     </div>

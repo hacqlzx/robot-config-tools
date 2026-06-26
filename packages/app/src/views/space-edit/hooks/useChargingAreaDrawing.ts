@@ -33,6 +33,7 @@ interface ChargingAreaDrawingAPI {
  */
 export function useChargingAreaDrawing(
   onSaveCharging?: () => void,
+  onDeleteCharging?: () => void,
 ): ChargingAreaDrawingAPI {
   const [chargingMode, setChargingMode] = useState(false);
   const [pointCount, setPointCount] = useState(0);
@@ -41,6 +42,8 @@ export function useChargingAreaDrawing(
   const hasExistingRef = useRef(false);
   const saveCbRef = useRef(onSaveCharging);
   saveCbRef.current = onSaveCharging;
+  const deleteCbRef = useRef(onDeleteCharging);
+  deleteCbRef.current = onDeleteCharging;
 
   const setupChargingAreaDrawing = useCallback((
     app: pc.Application,
@@ -54,6 +57,9 @@ export function useChargingAreaDrawing(
         setPointCount(count);
         if (count === 3) hasExistingRef.current = true;
         else if (count === 0) hasExistingRef.current = false;
+      },
+      onDelete: () => {
+        deleteCbRef.current?.();
       },
     });
     drawingRef.current = drawing;

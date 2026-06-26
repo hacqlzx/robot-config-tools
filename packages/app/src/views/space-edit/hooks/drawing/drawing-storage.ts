@@ -120,12 +120,12 @@ export async function saveChargingArea(params: {
   api: ElectronAPI;
   projectName: string;
   modelPath: string;
-  item: ChargingAreaItem;
+  item: ChargingAreaItem | null;
 }): Promise<void> {
   const { api, projectName, modelPath, item } = params;
   const file = await readDrawingFile(api, modelPath);
   file.items = file.items.filter((it) => it.type !== "charging-area");
-  file.items.push(item);
+  if (item) file.items.push(item);
   await writeDrawingFile(api, projectName, modelPath, file);
 }
 

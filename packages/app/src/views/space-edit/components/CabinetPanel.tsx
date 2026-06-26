@@ -219,6 +219,7 @@ export default function CabinetPanel({ cornerCount, cabinetCount, onUndo, onClos
           />
         )}
 
+        <div style={{ fontSize: 11, color: "#999", marginTop: 8 }}>4个拐角定底面 → 选区域/间隔 → 填名称 → 保存</div>
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
           <Button
             type="primary"

@@ -19,10 +19,12 @@ export interface ChargingAreaDrawingOptions {
   onChange?: (pointCount: number) => void;
   /** 选中状态变化回调 */
   onSelectChange?: (selected: boolean) => void;
+  /** 框被删除时回调 */
+  onDelete?: () => void;
 }
 
 const DEFAULTS = {
-  color: new pc.Color(0.2, 0.6, 1),         // 蓝：充电区域
+  color: new pc.Color(1, 0.55, 0.1),         // 橙：充电区域
   snap: true,
   sphereScale: 0.06,
   lineThickness: 0.01,
@@ -59,7 +61,7 @@ export class ChargingAreaDrawing {
   private entitiesRef: { current: Map<string, pc.Entity> };
   private gd: pc.GraphicsDevice;
   private canvas: HTMLCanvasElement;
-  private opts: Required<Omit<ChargingAreaDrawingOptions, "onChange" | "onSelectChange">> & Pick<ChargingAreaDrawingOptions, "onChange" | "onSelectChange">;
+  private opts: Required<Omit<ChargingAreaDrawingOptions, "onChange" | "onSelectChange" | "onDelete">> & Pick<ChargingAreaDrawingOptions, "onChange" | "onSelectChange" | "onDelete">;
 
   /** 1 点无法确定水平面时使用模型地平面 Y，未设置则回退三点最低 Y */
   private groundY = -Infinity;
@@ -322,7 +324,7 @@ export class ChargingAreaDrawing {
 
     const el = document.createElement("div");
     el.style.cssText = "position:absolute;transform:translate(-50%,-105%);" +
-      "color:#3399ff;font-size:18px;font-weight:700;white-space:nowrap;" +
+      "color:#ff8c00;font-size:18px;font-weight:700;white-space:nowrap;" +
       "text-shadow:0 0 3px #000,0 0 3px #000;pointer-events:none;display:none;";
     el.textContent = "充电区域";
     c.appendChild(el);
@@ -468,6 +470,7 @@ export class ChargingAreaDrawing {
     if (e.key === "Delete" || e.key === "Backspace") {
       e.preventDefault();
       this.destroyBox();
+      this.opts.onDelete?.();
       this.emitChange();
       this.requestRender();
       return;

@@ -10,6 +10,8 @@ export interface DeviceAreaDrawingOptions {
   moveStep?: number;
   onChange?: (boxCount: number) => void;
   onSelectChange?: (boxId: string | null) => void;
+  /** 框被删除时回调 */
+  onDelete?: () => void | Promise<void>;
 }
 
 const DEFAULTS = {
@@ -48,7 +50,7 @@ export class DeviceAreaDrawing {
   private entitiesRef: { current: Map<string, pc.Entity> };
   private gd: pc.GraphicsDevice;
   private canvas: HTMLCanvasElement;
-  private opts: Required<Omit<DeviceAreaDrawingOptions, "onChange" | "onSelectChange">> & Pick<DeviceAreaDrawingOptions, "onChange" | "onSelectChange">;
+  private opts: Required<Omit<DeviceAreaDrawingOptions, "onChange" | "onSelectChange" | "onDelete">> & Pick<DeviceAreaDrawingOptions, "onChange" | "onSelectChange" | "onDelete">;
 
   private points: pc.Vec3[] = [];
   private pointSpheres: pc.Entity[] = [];
@@ -59,7 +61,6 @@ export class DeviceAreaDrawing {
   private dragStartScreen: { x: number; y: number } | null = null;
   private labelContainer: HTMLDivElement | null = null;
   private labelRafId = 0;
-  private menuEl: HTMLDivElement | null = null;
   private groundY = -Infinity;
 
   constructor(
@@ -79,8 +80,6 @@ export class DeviceAreaDrawing {
 
     this.canvas.addEventListener("mousedown", this.onMouseDown);
     window.addEventListener("mouseup", this.onMouseUp);
-    this.canvas.addEventListener("contextmenu", this.onContextMenu);
-    document.addEventListener("mousedown", this.onDocMouseDown, true);
     document.addEventListener("keydown", this.onKeyDown);
     this.initLabels();
   }
@@ -220,11 +219,8 @@ export class DeviceAreaDrawing {
   destroy() {
     this.canvas.removeEventListener("mousedown", this.onMouseDown);
     window.removeEventListener("mouseup", this.onMouseUp);
-    this.canvas.removeEventListener("contextmenu", this.onContextMenu);
-    document.removeEventListener("mousedown", this.onDocMouseDown, true);
     document.removeEventListener("keydown", this.onKeyDown);
     this.clearAll();
-    this.hideMenu();
     this.destroyLabels();
   }
 
@@ -307,6 +303,7 @@ export class DeviceAreaDrawing {
     box.labelEl?.remove();
     this.boxes.splice(idx, 1);
     this.opts.onSelectChange?.(null);
+    this.opts.onDelete?.();
     this.emitChange();
     this.requestRender();
   }
@@ -464,63 +461,13 @@ export class DeviceAreaDrawing {
     return null;
   }
 
-  // ========== 右键菜单 ==========
-
-  private showMenu(clientX: number, clientY: number) {
-    const parent = this.canvas.parentElement;
-    if (!parent) return;
-    if (!this.menuEl) {
-      const el = document.createElement("div");
-      el.style.cssText = "position:absolute;z-index:25;background:#fff;border:1px solid #d9d9d9;" +
-        "border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,0.15);padding:4px 0;min-width:80px;" +
-        "font-size:13px;user-select:none;";
-      const del = document.createElement("div");
-      del.textContent = "删除";
-      del.style.cssText = "padding:5px 14px;cursor:pointer;color:#ff4d4f;";
-      del.onmouseenter = () => { del.style.background = "#fff1f0"; };
-      del.onmouseleave = () => { del.style.background = "transparent"; };
-      del.onclick = () => this.deleteSelected();
-      el.appendChild(del);
-      parent.appendChild(el);
-      this.menuEl = el;
-    }
-    const rect = parent.getBoundingClientRect();
-    this.menuEl.style.left = `${clientX - rect.left}px`;
-    this.menuEl.style.top = `${clientY - rect.top}px`;
-    this.menuEl.style.display = "block";
-  }
-
-  private hideMenu() {
-    if (this.menuEl) this.menuEl.style.display = "none";
-  }
-
   // ========== 事件 ==========
-
-  private onDocMouseDown = (e: MouseEvent) => {
-    if (this.menuEl && e.target !== this.menuEl && !this.menuEl.contains(e.target as Node)) {
-      this.hideMenu();
-    }
-  };
 
   private onMouseDown = (e: MouseEvent) => {
     if (e.button !== 0) return;
     if ((window as any).__clipDragging || (window as any).__drawingDragging) return;
     if (!this.enabled && this.boxes.length === 0) return;
     this.dragStartScreen = { x: e.clientX, y: e.clientY };
-  };
-
-  private onContextMenu = (e: MouseEvent) => {
-    const rect = this.canvas.getBoundingClientRect();
-    const sx = e.clientX - rect.left;
-    const sy = e.clientY - rect.top;
-    const hit = this.hitTestAny(sx, sy);
-    if (hit) {
-      e.preventDefault();
-      this.selectBox(hit);
-      this.showMenu(e.clientX, e.clientY);
-    } else {
-      this.hideMenu();
-    }
   };
 
   private onMouseUp = (e: MouseEvent) => {
