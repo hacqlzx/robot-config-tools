@@ -6,6 +6,31 @@ import { DeviceComponentRepo } from "../repositories/device-component.repo";
 import { DevicePointRepo } from "../repositories/device-point.repo";
 import { ProjectStationRepo } from "../repositories/project-station.repo";
 
+const CODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+/** 生成 32 位大小写字母+数字唯一编码 */
+function generateCode(prefix: string): string {
+  let result = prefix;
+  const randLen = 32 - prefix.length;
+  for (let i = 0; i < randLen; i++) {
+    result += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
+  }
+  return result;
+}
+
+/**
+ * 同名设备编码缓存，仅按名称全路径匹配，不依赖编码/ID。
+ * 电压区: key=voltName
+ * 间隔:   key=voltName|bayName
+ * 主设备: key=voltName|bayName|mainDeviceName
+ * 部件:   key=voltName|bayName|mainDeviceName|componentName
+ * 点位:   不缓存（每行独立生成新编码）
+ */
+const voltCodeCache = new Map<string, string>();
+const bayCodeCache = new Map<string, string>();
+const mainCodeCache = new Map<string, string>();
+const compCodeCache = new Map<string, string>();
+
 /** Excel 每行数据结构（与 excel-parser.ts 共享） */
 export interface PointExcelRow {
   voltName: string;
@@ -93,7 +118,13 @@ export function importPointExcel(
     row.cruiseId = row.cruiseId?.trim() ?? "";
     row.stationName = row.stationName?.trim() ?? "";
     row.stationCode = row.stationCode?.trim() ?? "";
-      // 1. voltage（按名称+厂站+项目 upsert）
+
+      // ====== 编码自动填充 + 逐层 upsert（对齐 Java insertOrUpdate* 模式） ======
+      // 1. 电压区编码
+      if (!row.voltCode) {
+        const exist = voltCodeCache.get(row.voltName);
+        row.voltCode = exist || generateCode("V");
+      }
       const volt = voltageRepo.upsert({
         voltName: row.voltName,
         voltCode: row.voltCode ?? "",
@@ -106,8 +137,15 @@ export function importPointExcel(
         createBy: "import",
         updateBy: "import",
       });
+      row.voltCode = volt.voltCode;
+      voltCodeCache.set(row.voltName, volt.voltCode);
 
-      // 2. bay（按名称+电压+项目 upsert）
+      // 2. 间隔编码
+      const bayCacheKey = row.voltName + "|" + row.bayName;
+      if (!row.bayCode) {
+        const exist = bayCodeCache.get(bayCacheKey);
+        row.bayCode = exist || generateCode("B");
+      }
       const bay = bayRepo.upsert({
         bayName: row.bayName,
         bayType: row.bayType ?? "",
@@ -125,8 +163,15 @@ export function importPointExcel(
         createBy: "import",
         updateBy: "import",
       });
+      row.bayCode = bay.bayCode;
+      bayCodeCache.set(bayCacheKey, bay.bayCode);
 
-      // 3. main device（按名称+间隔+项目 upsert）
+      // 3. 主设备编码
+      const mainCacheKey = row.voltName + "|" + row.bayName + "|" + row.mainDeviceName;
+      if (!row.mainDeviceCode) {
+        const exist = mainCodeCache.get(mainCacheKey);
+        row.mainDeviceCode = exist || generateCode("MD");
+      }
       const main = mainRepo.upsert({
         mainDeviceName: row.mainDeviceName,
         mainDeviceType: row.mainDeviceType ?? 29,
@@ -160,8 +205,15 @@ export function importPointExcel(
         createBy: "import",
         updateBy: "import",
       });
+      row.mainDeviceCode = main.mainDeviceCode;
+      mainCodeCache.set(mainCacheKey, main.mainDeviceCode);
 
-      // 4. component（按名称+主设备+项目 upsert）
+      // 4. 部件编码
+      const compCacheKey = row.voltName + "|" + row.bayName + "|" + row.mainDeviceName + "|" + row.componentName;
+      if (!row.componentCode) {
+        const exist = compCodeCache.get(compCacheKey);
+        row.componentCode = exist || generateCode("C");
+      }
       const comp = compRepo.upsert({
         componentName: row.componentName,
         componentType: row.componentType ?? "",
@@ -188,11 +240,15 @@ export function importPointExcel(
         createBy: "import",
         updateBy: "import",
       });
+      row.componentCode = comp.componentCode;
+      compCodeCache.set(compCacheKey, comp.componentCode);
 
-      // 5. point（按 pointCode 查重，cruiseId 仅作传参字段）
+      // 5. 点位编码（不缓存，每行独立）
       if (!row.pointCode) {
-        result.errors.push(`行 "${row.pointName}": pointCode 为空，跳过`);
-        continue;
+        row.pointCode = generateCode("P");
+      }
+      if (!row.cruiseId) {
+        row.cruiseId = generateCode("CRU");
       }
 
       const existingPoint = pointRepo.findByPointCode(row.pointCode, projectName);

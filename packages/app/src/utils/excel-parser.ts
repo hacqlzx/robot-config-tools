@@ -165,7 +165,7 @@ export function parsePointExcel(file: File): Promise<{ rows: PointExcelRow[]; st
           row.cruiseId = row.cruiseId?.trim() ?? "";
 
           // 必填校验
-          if (!row.voltName || !row.bayName || !row.mainDeviceName || !row.componentName || !row.pointName || !row.pointCode) {
+          if (!row.voltName || !row.bayName || !row.mainDeviceName || !row.componentName || !row.pointName) {
             errors.push(`第 ${r + 1} 行: 缺少必填字段`);
             continue;
           }
