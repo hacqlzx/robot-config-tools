@@ -81,8 +81,8 @@ const COLUMN_MAP: Record<string, string> = {
 
 /**
  * 解析 Excel 点位表
- * 第 1 行（index 0）= 表头，数据从第 2 行（index 1）开始
- * 模板无说明行
+ * 自动检测：若第 2 行含表头字段，则第 1 行为描述行，表头在行 2，数据从行 3 起
+ * 否则表头在行 1，数据从行 2 起
  */
 export function parsePointExcel(file: File): Promise<{ rows: PointExcelRow[]; stationName: string }> {
   return new Promise((resolve, reject) => {
@@ -103,17 +103,25 @@ export function parsePointExcel(file: File): Promise<{ rows: PointExcelRow[]; st
           return;
         }
 
-        const headers = jsonData[0] as string[];
+        // 自动检测是否有描述行：若行 2 中可匹配 COLUMN_MAP 的字段数 > 0，说明行 1 是描述
+        const row1 = jsonData[0] as string[];
+        const row2 = jsonData.length > 1 ? (jsonData[1] as string[]) : [];
+        const row1Headers = row1.filter((c) => COLUMN_MAP[c?.trim() ?? ""]).length;
+        const row2Headers = row2.filter((c) => COLUMN_MAP[c?.trim() ?? ""]).length;
+        const hasDescRow = row2Headers > row1Headers && row2Headers > 0;
+        const headerRow = hasDescRow ? row2 : row1;
+        const dataStart = hasDescRow ? 2 : 1;
+
         const rows: PointExcelRow[] = [];
         const errors: string[] = [];
         let stationName = "";
 
-        for (let r = 1; r < jsonData.length; r++) {
+        for (let r = dataStart; r < jsonData.length; r++) {
           const rawRow = jsonData[r] as any[];
           const row: any = {};
 
-          for (let c = 0; c < headers.length; c++) {
-            const key = COLUMN_MAP[headers[c]?.trim() ?? ""];
+          for (let c = 0; c < headerRow.length; c++) {
+            const key = COLUMN_MAP[headerRow[c]?.trim() ?? ""];
             if (key) {
               row[key] = rawRow[c] ?? "";
             }

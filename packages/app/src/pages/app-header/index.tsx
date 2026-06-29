@@ -113,6 +113,7 @@ export default function AppHeader() {
       messageApi.success(`项目 "${projectName.trim()}" 创建成功`);
       setProjectName("");
       setAddProjectOpen(false);
+      await loadProjects();
     } catch (e: any) {
       messageApi.error(e?.message || "创建项目失败");
     }

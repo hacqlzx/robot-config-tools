@@ -64,7 +64,7 @@ export default function SpaceEdit() {
     () => handleSaveChargingArea(),
     () => { isAutoSavingRef.current = true; handleSaveChargingArea(); },
   );
-  const { deviceAreaMode, boxCount: deviceAreaBoxCount, height: deviceAreaHeight, selectedBoxId: deviceAreaSelectedBoxId, selectedBoxBay: deviceAreaSelectedBoxBay, handleToggleDeviceArea, handleForceCloseDeviceArea, handleUndo: handleDeviceAreaUndo, handleBindBay: handleDeviceAreaBindBay, handleUnbind: handleDeviceAreaUnbind, handleSave: handleDeviceAreaSave, handleSetHeight: handleDeviceAreaSetHeight, getBoxDatas, getBoundBayIds, loadBoxes, setupDeviceAreaDrawing, drawingRef: deviceAreaDrawingRef } = useDeviceAreaDrawing(
+  const { deviceAreaMode, boxCount: deviceAreaBoxCount, height: deviceAreaHeight, selectedBoxId: deviceAreaSelectedBoxId, selectedBoxBay: deviceAreaSelectedBoxBay, handleToggleDeviceArea, handleForceCloseDeviceArea, handleUndo: handleDeviceAreaUndo, handleBindBay: handleDeviceAreaBindBay, handleUnbind: handleDeviceAreaUnbind, handleSave: handleDeviceAreaSave, handleSetHeight: handleDeviceAreaSetHeight, getBoxDatas, getBoundBayIds, loadBoxes, setupDeviceAreaDrawing, drawingRef: deviceAreaDrawingRef, markSaved: markDeviceAreaSaved } = useDeviceAreaDrawing(
     () => handleSaveDeviceAreas(),
     () => { isAutoSavingRef.current = true; handleSaveDeviceAreas(); },
   );
@@ -569,10 +569,11 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
     try {
       await saveDeviceAreas({ api, projectName, modelPath, items });
       if (!silent) message.success("保存成功");
+      markDeviceAreaSaved();
     } catch (e: any) {
       message.error("保存设备区失败: " + (e?.message || e));
     }
-  }, [message, getBoxDatas]);
+  }, [message, getBoxDatas, markDeviceAreaSaved]);
 
   /** 当前绘制模型路径：优先可见且有路径的模型 */
   const getCurrentModelPath = useCallback((): string => {
@@ -783,6 +784,32 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
     getBoundBayIdsInProject(api, projectName).then((ids) => {
       projectBoundBayIdsRef.current = ids;
     });
+  }, [deviceAreaMode]);
+
+  const drawingShownRef = useRef(drawingShown);
+  drawingShownRef.current = drawingShown;
+
+  useEffect(() => {
+    if (deviceAreaMode) return;
+    const api = window.electronAPI;
+    if (!api) return;
+    const drawing = deviceAreaDrawingRef.current;
+    if (!drawing) return;
+
+    const reloadSaved = async () => {
+      const allItems: DeviceAreaItem[] = [];
+      for (const jsonPath of drawingShownRef.current) {
+        const items = await loadAllItemsFromJson(api, jsonPath);
+        const das = items.filter((it): it is DeviceAreaItem => it.type === "device-area");
+        allItems.push(...das);
+      }
+      if (allItems.length > 0) {
+        drawing.loadBoxes(allItems.map((it) => ({
+          id: it.id, verts: it.geometry.verts, height: it.height, bay: it.bay,
+        })));
+      }
+    };
+    reloadSaved();
   }, [deviceAreaMode]);
 
   // 关闭屏柜弹窗时把已保存的屏柜转为回显保留（未保存的由绘制器清除）
