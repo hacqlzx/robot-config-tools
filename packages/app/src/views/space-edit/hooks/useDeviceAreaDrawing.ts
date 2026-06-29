@@ -26,6 +26,7 @@ interface UseDeviceAreaDrawingAPI {
     entitiesRef: { current: Map<string, pc.Entity> },
   ) => () => void;
   drawingRef: React.MutableRefObject<DeviceAreaDrawing | null>;
+  markSaved: () => void;
 }
 
 export function useDeviceAreaDrawing(
@@ -38,6 +39,8 @@ export function useDeviceAreaDrawing(
   const [selectedBoxBay, setSelectedBoxBay] = useState<{ id: number; name: string; code: string } | null>(null);
   const [height, setHeight] = useState(2);
   const drawingRef = useRef<DeviceAreaDrawing | null>(null);
+  const dirtyRef = useRef(false);
+  const isLoadingRef = useRef(false);
   const saveCbRef = useRef(onSave);
   saveCbRef.current = onSave;
   const deleteCbRef = useRef(onDelete);
@@ -53,6 +56,9 @@ export function useDeviceAreaDrawing(
       snap: true,
       onChange: (count) => {
         setBoxCount(count);
+        if (!isLoadingRef.current) {
+          dirtyRef.current = true;
+        }
       },
       onSelectChange: (boxId) => {
         setSelectedBoxId(boxId);
@@ -80,31 +86,32 @@ export function useDeviceAreaDrawing(
     const drawing = drawingRef.current;
     if (!drawing) return;
     drawing.setEnabled(deviceAreaMode);
-    if (!deviceAreaMode) drawing.clearAll();
   }, [deviceAreaMode]);
 
   const handleToggleDeviceArea = useCallback(() => {
     setDeviceAreaMode((prev) => {
       if (prev) {
-        const drawing = drawingRef.current;
-        const hasBoxes = drawing ? drawing.getBoxCount() > 0 : false;
-        if (hasBoxes || boxCount > 0) {
+        if (dirtyRef.current) {
           Modal.confirm({
             title: "确认关闭",
             content: "关闭设备区将清除所有未保存的框和点，是否继续？",
             okText: "确认关闭",
             cancelText: "取消",
-            onOk: () => { setDeviceAreaMode(false); },
+            onOk: () => {
+              drawingRef.current?.clearAll();
+              setDeviceAreaMode(false);
+            },
           });
           return prev;
         }
       }
       return !prev;
     });
-  }, [boxCount]);
+  }, []);
 
   /** 强制关闭设备区（不弹确认，用于互斥切换） */
   const handleForceCloseDeviceArea = useCallback(() => {
+    drawingRef.current?.clearAll();
     setDeviceAreaMode(false);
   }, []);
 
@@ -117,6 +124,7 @@ export function useDeviceAreaDrawing(
     if (!drawing) return;
     drawing.bindBayToSelected(bay);
     setSelectedBoxBay(bay);
+    dirtyRef.current = true;
   }, []);
 
   const handleUnbind = useCallback(() => {
@@ -124,15 +132,18 @@ export function useDeviceAreaDrawing(
     if (!drawing) return;
     drawing.unbindSelected();
     setSelectedBoxBay(null);
+    dirtyRef.current = true;
   }, []);
 
   const handleSave = useCallback(() => {
     saveCbRef.current?.();
+    dirtyRef.current = false;
   }, []);
 
   const handleSetHeight = useCallback((h: number) => {
     setHeight(h);
     drawingRef.current?.setHeight(h);
+    dirtyRef.current = true;
   }, []);
 
   const getBoxDatas = useCallback(() => {
@@ -144,13 +155,20 @@ export function useDeviceAreaDrawing(
   }, []);
 
   const loadBoxes = useCallback((datas: { id: string; verts: number[][]; height?: number; bay: { id: number; name: string; code: string } | null }[]) => {
+    isLoadingRef.current = true;
     drawingRef.current?.loadBoxes(datas);
+    isLoadingRef.current = false;
+    dirtyRef.current = false;
+  }, []);
+
+  const markSaved = useCallback(() => {
+    dirtyRef.current = false;
   }, []);
 
   return {
     deviceAreaMode, boxCount, height, selectedBoxId, selectedBoxBay,
     handleToggleDeviceArea, handleForceCloseDeviceArea, handleUndo, handleBindBay, handleUnbind, handleSave, handleSetHeight,
     getBoxDatas, getBoundBayIds, loadBoxes,
-    setupDeviceAreaDrawing, drawingRef,
+    setupDeviceAreaDrawing, drawingRef, markSaved,
   };
 }

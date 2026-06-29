@@ -257,17 +257,16 @@ export class DeviceAreaDrawing {
     const p2 = new pc.Vec3(this.points[1].x, baseY, this.points[1].z);
     const p3 = new pc.Vec3(this.points[2].x, baseY, this.points[2].z);
 
-    const dir1 = new pc.Vec3().sub2(p2, p1);
-    if (dir1.length() < 1e-4) return;
-    dir1.normalize();
-    const normal = new pc.Vec3().cross(new pc.Vec3(0, 1, 0), dir1).normalize();
-    const w = new pc.Vec3().sub2(p3, p1).dot(normal);
-    const off = normal.clone().mulScalar(w);
+    const edge1 = new pc.Vec3().sub2(p2, p1);
+    if (edge1.length() < 1e-4) return;
+    const edge2 = new pc.Vec3().sub2(p3, p2);
+    if (edge2.length() < 1e-4) return;
 
     const c0 = p1.clone();
     const c1 = p2.clone();
-    const c2 = new pc.Vec3().add2(p2, off);
-    const c3 = new pc.Vec3().add2(p1, off);
+    const c2 = p3.clone();
+    const c3 = new pc.Vec3().add2(p1, edge2);
+
     const up = new pc.Vec3(0, this.opts.height, 0);
     const verts = [
       c0, c1, c2, c3,
