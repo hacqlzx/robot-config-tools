@@ -228,7 +228,7 @@ export default function AppHeader() {
         title="新增项目"
         open={addProjectOpen}
         centered
-        maskClosable={false}
+        mask={{ closable: false }}
         okText="确定"
         cancelText="取消"
         onOk={handleCreateProject}
@@ -252,7 +252,7 @@ export default function AppHeader() {
         title="编辑项目"
         open={editProjectOpen}
         centered
-        maskClosable={false}
+        mask={{ closable: false }}
         footer={null}
         onCancel={() => {
           setEditProjectOpen(false);

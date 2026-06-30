@@ -23,6 +23,8 @@ interface Props {
   onRequestRename?: (node: TreeNode) => void;
   /** 右键-删除 */
   onRequestDelete?: (node: TreeNode) => void;
+  /** 右键-打开文件目录 */
+  onRequestOpenDir?: (node: TreeNode) => void;
   /** 已回显的绘制 json 路径集合 */
   drawingShown?: Set<string>;
   /** 勾选/取消绘制 json（回显屏柜） */
@@ -33,7 +35,7 @@ interface Props {
   onTogglePath?: (path: string, checked: boolean) => void;
 }
 
-export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, onLoadLas, onToggleVisible, loadChildren, onRequestRename, onRequestDelete, drawingShown, onToggleDrawing, pathShown, onTogglePath }: Props) {
+export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, onLoadLas, onToggleVisible, loadChildren, onRequestRename, onRequestDelete, onRequestOpenDir, drawingShown, onToggleDrawing, pathShown, onTogglePath }: Props) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
     const expandAll = (list: TreeNode[]) => {
@@ -203,10 +205,12 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
         const isLoading = loadingNodes.has(node.path);
         const menuItems = [
           { key: "rename", label: "重命名" },
+          { key: "openDir", label: "打开文件目录" },
           { key: "delete", label: "删除", danger: true },
         ];
         const onMenuClick = (info: { key: string }) => {
           if (info.key === "rename") onRequestRename?.(node);
+          else if (info.key === "openDir") onRequestOpenDir?.(node);
           else if (info.key === "delete") onRequestDelete?.(node);
         };
 
@@ -283,6 +287,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
                 loadChildren={loadChildren}
                 onRequestRename={onRequestRename}
                 onRequestDelete={onRequestDelete}
+                onRequestOpenDir={onRequestOpenDir}
                 drawingShown={drawingShown}
                 onToggleDrawing={onToggleDrawing}
                 pathShown={pathShown}

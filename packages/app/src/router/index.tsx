@@ -4,8 +4,8 @@ import AppLayout from "../App";
 
 const SpaceEdit = lazy(() => import("../views/space-edit"));
 const ImageEdit = lazy(() => import("../views/image-edit"));
-const ScreenVerify = lazy(() => import("../views/screen-verify"));
 const DeviceVerify = lazy(() => import("../views/device-verify"));
+const ImportExport = lazy(() => import("../views/import-export"));
 const Config = lazy(() => import("../views/config"));
 
 function LazyPage({ children }: { children: React.ReactNode }) {
@@ -20,8 +20,8 @@ const router = createHashRouter([
       { index: true, element: <Navigate to="space-edit" replace /> },
       { path: "space-edit", element: <LazyPage><SpaceEdit /></LazyPage> },
       { path: "image-edit", element: <LazyPage><ImageEdit /></LazyPage> },
-      { path: "screen-verify", element: <LazyPage><ScreenVerify /></LazyPage> },
       { path: "device-verify", element: <LazyPage><DeviceVerify /></LazyPage> },
+      { path: "import-export", element: <LazyPage><ImportExport /></LazyPage> },
       { path: "config", element: <LazyPage><Config /></LazyPage> },
     ],
   },

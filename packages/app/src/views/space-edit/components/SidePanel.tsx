@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Tree, Modal, Input, message } from "antd";
 import type { TreeProps, TreeDataNode } from "antd";
 import TreeView from "./TreeView";
+import { DRAWING_FILE_NAME, PATH_FILE_NAME } from "../hooks/drawing/drawing-storage";
 import type { TreeNode } from "./TreeView";
 
 const MIN_WIDTH = 200;
@@ -258,6 +259,11 @@ export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, tre
     }
   }, [sideTab, loadBayTypeTree]);
 
+  /** 右键-打开文件目录 */
+  const handleRequestOpenDir = useCallback((node: TreeNode) => {
+    window.electronAPI?.project.openDir(node.path);
+  }, []);
+
   /** 右键-删除：直接删除文件/目录并刷新地图树 */
   const handleRequestDelete = useCallback((node: TreeNode) => {
     // 已加载到场景的模型不允许删除（含目录内已加载的子文件）
@@ -273,12 +279,19 @@ export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, tre
     }
     Modal.confirm({
       title: "删除确认",
-      content: `确定删除「${node.name}」？该操作将直接删除文件，不可恢复。`,
+      content: `确定删除「${node.name}」？`,
       okText: "删除",
       okButtonProps: { danger: true },
       cancelText: "取消",
       onOk: async () => {
         try {
+          // 删除前先清除页面上的绘制回显（含子目录）
+          const walkClear = (n: TreeNode) => {
+            if (n.name === DRAWING_FILE_NAME) onToggleDrawing?.(n.path, false);
+            else if (n.name === PATH_FILE_NAME) onTogglePath?.(n.path, false);
+            n.children?.forEach(walkClear);
+          };
+          walkClear(node);
           await window.electronAPI?.project.deletePath(node.path);
           message.success("已删除");
           loadMapTree();
@@ -287,7 +300,7 @@ export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, tre
         }
       },
     });
-  }, [loadMapTree, loadedFiles]);
+  }, [loadMapTree, loadedFiles, onToggleDrawing, onTogglePath]);
 
   /** 右键-重命名：打开弹窗 */
   const handleRequestRename = useCallback((node: TreeNode) => {
@@ -383,6 +396,7 @@ export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, tre
                 onToggleVisible={onToggleVisible}
                 onRequestRename={handleRequestRename}
                 onRequestDelete={handleRequestDelete}
+                onRequestOpenDir={handleRequestOpenDir}
                 drawingShown={mapDrawingShown}
                 onToggleDrawing={onToggleDrawing}
                 pathShown={mapPathShown}

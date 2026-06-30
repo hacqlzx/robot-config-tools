@@ -86,7 +86,7 @@ export default function BackendModal({ open, onClose }: Props) {
       title="连接后台"
       open={open}
       centered
-      maskClosable={false}
+      mask={{ closable: false }}
       footer={null}
       onCancel={onClose}
     >

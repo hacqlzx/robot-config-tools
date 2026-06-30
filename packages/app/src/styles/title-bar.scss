@@ -5,13 +5,25 @@
   height: 48px;
   line-height: 48px;
   flex-shrink: 0;
+  overflow: hidden;
+  position: relative;
+  z-index: 2000; // 始终高于 Modal/Drawer 蒙层(默认1000)与 loading 遮罩，使顶部栏不被遮挡也不被拦截交互
   -webkit-app-region: drag;
   user-select: none;
 }
 
 .app-header__menu {
-  -webkit-app-region: no-drag;
+  -webkit-app-region: drag; // 菜单容器空白区可拖动窗口/双击最大化
   font-size: 15px;
+  flex: 1 1 0; // 宽度由剩余弹性空间决定，放大窗口时随之变宽，避免折叠后锁死出不来
+  min-width: 0;
+
+  // 仅菜单项与溢出项保留可点击，空白处交还给拖拽区
+  .ant-menu-item,
+  .ant-menu-submenu,
+  .ant-menu-overflow-item {
+    -webkit-app-region: no-drag;
+  }
 
   // 全部状态去掉底部指示线
   .ant-menu-item::after {
@@ -31,10 +43,20 @@
   align-items: center;
   gap: 8px;
   margin-left: auto;
+  min-width: 0;
+  flex-shrink: 1;
   -webkit-app-region: no-drag;
+
+  // 项目/机器人选择在空间不足时收缩，给窗口控制按钮让位
+  .ant-select {
+    min-width: 88px;
+    flex-shrink: 1;
+  }
 }
 
 .app-header__controls {
+  display: flex;
+  flex-shrink: 0; // 三个窗口控制按钮始终显示，永不被压缩
   -webkit-app-region: no-drag;
 
   .ant-btn {

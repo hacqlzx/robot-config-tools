@@ -23,6 +23,9 @@ export default function AppLayout() {
           body: { paddingTop: 28 },
         },
       }}
+      message={{
+        top: 60, // 消息提示移到 header(48px) 下方，避免被顶部栏遮挡
+      }}
     >
       <App>
         <Layout style={{ height: "100vh", overflow: "hidden" }}>

@@ -1,13 +1,23 @@
 ﻿import { useRef, useEffect, useState, useCallback } from "react";
-import { parsePointExcel } from "@/utils/excel-parser";
 import { useLasLoader } from "./hooks/useLasLoader";
+import { usePlayCanvas } from "./hooks/usePlayCanvas";
+import { useSaveHandlers } from "./hooks/useSaveHandlers";
+import { useFileOperations } from "./hooks/useFileOperations";
 import * as pc from "playcanvas";
 import { useCabinetDrawing } from "./hooks/useCabinetDrawing";
 import { useChargingAreaDrawing } from "./hooks/useChargingAreaDrawing";
 import { useDeviceAreaDrawing } from "./hooks/useDeviceAreaDrawing";
 import { usePathDrawing } from "./hooks/usePathDrawing";
 import { Spin, App } from "antd";
-import { SimpleOrbitCamera } from "../../playcanvas-core/simple-camera";
+import Toolbar from "./components/Toolbar";
+import ViewCube from "./components/ViewCube";
+import SidePanel from "./components/SidePanel";
+import ClipController from "./components/ClipController";
+import CabinetPanel from "./components/CabinetPanel";
+import ChargingAreaPanel from "./components/ChargingAreaPanel";
+import DeviceAreaPanel from "./components/DeviceAreaPanel";
+import ExportModal from "./components/ExportModal";
+import { loadCabinetItems, deleteCabinetItem, loadPathDrawing, loadAllItemsFromJson, getBoundBayIdsInProject, DRAWING_FILE_NAME, type CabinetItem, type ChargingAreaItem, type DeviceAreaItem } from "./hooks/drawing/drawing-storage";
 
 /** 根据点数和硬件决定加载比例 */
 function getLoadFraction(pointCount: number): number {
@@ -16,22 +26,10 @@ function getLoadFraction(pointCount: number): number {
   return 1;
 }
 
-import Toolbar from "./components/Toolbar";
-import ViewCube from "./components/ViewCube";
-import SidePanel from "./components/SidePanel";
-import ClipController from "./components/ClipController";
-import CabinetPanel from "./components/CabinetPanel";
-import ChargingAreaPanel from "./components/ChargingAreaPanel";
-import DeviceAreaPanel from "./components/DeviceAreaPanel";
-import { saveCabinetDrawing, loadCabinetItems, loadCabinetItemsFromJson, deleteCabinetItem, saveChargingArea, saveDeviceAreas, savePathDrawing, loadPathDrawing, loadDeviceAreas, loadAllItemsFromJson, getBoundBayIdsInProject, DRAWING_FILE_NAME, type CabinetItem, type ChargingAreaItem, type DeviceAreaItem } from "./hooks/drawing/drawing-storage";
-import { CabinetViewer } from "./hooks/drawing/CabinetViewer";
-
 export default function SpaceEdit() {
   const { message } = App.useApp();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const orbitRef = useRef<SimpleOrbitCamera | null>(null);
-  const appRef = useRef<pc.Application | null>(null);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [loadingFile, setLoadingFile] = useState("");
@@ -41,9 +39,9 @@ export default function SpaceEdit() {
   const [treeKey, setTreeKey] = useState(0);
   const [clipMode, setClipMode] = useState(false);
   const [clipEntityName, setClipEntityName] = useState("");
+  const [exportModalOpen, setExportModalOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
   const entitiesRef = useRef<Map<string, pc.Entity>>(new Map());
-  const cabinetViewerRef = useRef<CabinetViewer | null>(null);
   const [drawingShown, setDrawingShown] = useState<Set<string>>(new Set());
   const [pathShown, setPathShown] = useState<Set<string>>(new Set());
   const shownByJsonRef = useRef<Map<string, number[]>>(new Map());
@@ -51,7 +49,6 @@ export default function SpaceEdit() {
   const lasHeadersRef = useRef<Map<string, any>>(new Map());
   const filePathRef = useRef<Map<string, string>>(new Map());
   const pointStatsRef = useRef<Map<string, { total: number; loaded: number }>>(new Map());
-  const renderDirtyRef = useRef(true);
   const modelExtentRef = useRef(10);
   const modelCenterRef = useRef({ x: 0, y: 0, z: 0 });
   const hasAutoFocusedRef = useRef(false);
@@ -59,6 +56,9 @@ export default function SpaceEdit() {
   const projectBoundBayIdsRef = useRef<Set<number>>(new Set());
   const chargingAreaSavedRef = useRef(false);
   const chargedJsonPathRef = useRef("");
+  const isAutoSavingRef = useRef(false);
+
+  // ---- 绘制 Hook ----
   const { cabinetMode, cornerCount, cabinetCount, handleToggleCabinet, handleUndo, setCabinetNames, getCabinetGeometry, setupCabinetDrawing } = useCabinetDrawing();
   const { chargingMode, pointCount: chargingPointCount, height: chargingHeight, handleToggleCharging, handleUndo: handleChargingUndo, handleSave: handleChargingSave, handleSetHeight: handleChargingSetHeight, setupChargingAreaDrawing, drawingRef: chargingDrawingRef, hasExistingRef: chargingExistingRef } = useChargingAreaDrawing(
     () => handleSaveChargingArea(),
@@ -70,11 +70,14 @@ export default function SpaceEdit() {
   );
   const { pathMode, handleTogglePath, handleForceClose: handleForceClosePath, getPathData, setupPathDrawing, drawingRef: pathDrawingRef } = usePathDrawing();
 
-  const autoSaveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const autoSaveEnabledRef = useRef(false);
-  const isAutoSavingRef = useRef(false);
+  // ---- PlayCanvas 引擎 ----
+  const { appRef, orbitRef, cabinetViewerRef, requestRender } = usePlayCanvas({
+    canvasRef, containerRef, entitiesRef,
+    setupCabinetDrawing, setupChargingAreaDrawing, setupDeviceAreaDrawing, setupPathDrawing,
+    chargingDrawingRef, deviceAreaDrawingRef, pathDrawingRef,
+  });
 
-  /** 关闭所有绘制状态和弹窗 */
+  // ---- 绘制模式互斥 ----
   const closeAllDrawingModes = useCallback(() => {
     if (cabinetMode) handleToggleCabinet();
     if (chargingMode) handleToggleCharging();
@@ -82,7 +85,6 @@ export default function SpaceEdit() {
     if (pathMode) handleForceClosePath();
   }, [cabinetMode, chargingMode, deviceAreaMode, pathMode, handleToggleCabinet, handleToggleCharging, handleForceCloseDeviceArea, handleForceClosePath]);
 
-  /** 互斥进入绘制模式：打开一个前关闭其他 */
   const toggleCabinetExclusive = useCallback(() => {
     if (chargingMode) handleToggleCharging();
     if (deviceAreaMode) handleForceCloseDeviceArea();
@@ -104,7 +106,6 @@ export default function SpaceEdit() {
     handleToggleDeviceArea();
   }, [cabinetMode, chargingMode, pathMode, handleToggleCabinet, handleToggleCharging, handleForceClosePath, handleToggleDeviceArea]);
 
-  /** 互斥进入路径模式 */
   const togglePathExclusive = useCallback(() => {
     if (cabinetMode) handleToggleCabinet();
     if (chargingMode) handleToggleCharging();
@@ -112,161 +113,24 @@ export default function SpaceEdit() {
     handleTogglePath();
   }, [cabinetMode, chargingMode, deviceAreaMode, handleToggleCabinet, handleToggleCharging, handleForceCloseDeviceArea, handleTogglePath]);
 
-  /** 按需渲染：标记脏位，rAF 循环检测到后执行一次 app.render() */
-  const requestRender = useCallback(() => {
-    renderDirtyRef.current = true;
-  }, []);
+  // ---- 保存处理器 + 自动保存 ----
+  const {
+    handleSaveCabinet, handleSaveChargingArea, handleSaveDeviceAreas, handleSavePath,
+    handleSaveAll, getCurrentModelPath, startAutoSave, resetAutoSaveTimer,
+  } = useSaveHandlers({
+    entitiesRef, filePathRef, isAutoSavingRef,
+    saveStatusSetter: setSaveStatus, message,
+    savedCabinetRef,
+    getCabinetGeometry, handleToggleCabinet,
+    chargingDrawingRef, chargingMode, handleToggleCharging,
+    getBoxDatas, markDeviceAreaSaved,
+    getPathData,
+  });
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const container = containerRef.current;
-    if (!canvas || !container) return;
-
-    const app = new pc.Application(canvas, {
-      mouse: new pc.Mouse(canvas),
-      touch: new pc.TouchDevice(canvas),
-      keyboard: new pc.Keyboard(window),
-      componentSystems: [
-        pc.AnimComponentSystem,
-        pc.RenderComponentSystem,
-        pc.CameraComponentSystem,
-        pc.LightComponentSystem,
-        pc.GSplatComponentSystem,
-      ],
-      resourceHandlers: [
-        pc.RenderHandler,
-        pc.AnimClipHandler,
-        pc.TextureHandler,
-        pc.CubemapHandler,
-        pc.ContainerHandler,
-        pc.GSplatHandler,
-      ],
-      graphicsDeviceOptions: {
-        preferWebGl2: true,
-        powerPreference: "high-performance",
-        // 按需渲染(autoRender=false)下必须保留绘制缓冲，否则未重绘的帧缓冲被丢弃
-        // 导致画面在正确帧与空帧间交替 → 抖动、远端忽隐忽现、裁切面闪现
-        preserveDrawingBuffer: true,
-      },
-    } as any);
-
-    let rafId: number;
-    const doResize = () => {
-      if (rafId) cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => {
-        const cvs = canvasRef.current;
-        const ct = containerRef.current;
-        if (!cvs || !ct || !app.graphicsDevice) return;
-        const rect = ct.getBoundingClientRect();
-        const w = Math.floor(rect.width);
-        const h = Math.floor(rect.height);
-        if (w > 0 && h > 0 && (cvs.width !== w || cvs.height !== h)) {
-          cvs.width = w;
-          cvs.height = h;
-          app.resizeCanvas(w, h);
-        }
-        renderDirtyRef.current = true;
-      });
-    };
-    const observer = new ResizeObserver(doResize);
-    observer.observe(container);
-    window.addEventListener("resize", doResize);
-    doResize();
-
-    app.scene.ambientLight = new pc.Color(0.3, 0.3, 0.3);
-    const light = new pc.Entity("light");
-    light.addComponent("light", { type: "directional", color: pc.Color.WHITE, intensity: 1 });
-    light.setEulerAngles(45, 45, 0);
-    app.root.addChild(light);
-
-    const camera = new pc.Entity("camera");
-    camera.addComponent("camera", { fov: 60, clearColor: new pc.Color(0.12, 0.12, 0.12) });
-    app.root.addChild(camera);
-
-    const orbit = new SimpleOrbitCamera(app, camera, () => { renderDirtyRef.current = true; });
-    orbitRef.current = orbit;
-    app.graphicsDevice.maxPixelRatio = 1;
-
-    // P0: 关闭持续渲染循环，改用按需渲染
-    app.autoRender = false;
-    app.start();
-    appRef.current = app;
-    const pathCleanup = setupPathDrawing(app, camera, requestRender, entitiesRef);
-    const cabinetCleanup = setupCabinetDrawing(app, camera, requestRender, entitiesRef);
-    const chargingCleanup = setupChargingAreaDrawing(app, camera, requestRender, entitiesRef);
-    const deviceAreaCleanup = setupDeviceAreaDrawing(app, camera, requestRender, entitiesRef);
-    const viewer = new CabinetViewer(app, camera, requestRender);
-    cabinetViewerRef.current = viewer;
-
-    // 互斥选中：路径点选中时取消屏柜、充电区域、设备区选中
-    pathDrawingRef.current?.setSelectChangeCallback((selected) => {
-      if (selected) {
-        viewer.deselect();
-        chargingDrawingRef.current?.deselectBox();
-        deviceAreaDrawingRef.current?.deselectAll();
-      }
-    });
-
-    // 互斥选中：屏柜、充电区域、设备区同时只能选中一个
-    viewer.setOnSelectChange((cabSelected) => {
-      if (cabSelected) {
-        chargingDrawingRef.current?.deselectBox();
-        deviceAreaDrawingRef.current?.deselectAll();
-        pathDrawingRef.current?.deselectPoint();
-      }
-    });
-    chargingDrawingRef.current?.setOnSelectChange((chargingSelected) => {
-      if (chargingSelected) {
-        viewer.deselect();
-        deviceAreaDrawingRef.current?.deselectAll();
-        pathDrawingRef.current?.deselectPoint();
-      }
-    });
-    deviceAreaDrawingRef.current?.setOnSelectChange((devAreaBoxId) => {
-      if (devAreaBoxId) {
-        viewer.deselect();
-        chargingDrawingRef.current?.deselectBox();
-        pathDrawingRef.current?.deselectPoint();
-      }
-    });
-
-    // 统一渲染循环：每帧先更新相机飞行(WASD)，再按需渲染，避免飞行与渲染分属两个 rAF 循环导致顿挫
-    let renderRafId = 0;
-    let lastFrameTime = performance.now();
-    const renderLoop = () => {
-      const now = performance.now();
-      const dt = Math.min((now - lastFrameTime) / 1000, 0.1);
-      lastFrameTime = now;
-      orbitRef.current?.updateFly(dt);
-      if (renderDirtyRef.current) {
-        app.render();
-        renderDirtyRef.current = false;
-      }
-      renderRafId = requestAnimationFrame(renderLoop);
-    };
-    renderRafId = requestAnimationFrame(renderLoop);
-
-    return () => {
-      window.removeEventListener("resize", doResize);
-      observer.disconnect();
-      if (rafId) cancelAnimationFrame(rafId);
-      if (renderRafId) cancelAnimationFrame(renderRafId);
-      cabinetCleanup();
-      chargingCleanup();
-      deviceAreaCleanup();
-      pathCleanup();
-      viewer.destroy();
-      cabinetViewerRef.current = null;
-      orbit.destroy();
-      app.destroy();
-    };
-  }, []);
-
-  // 大模型显示比例：渲染后更新 uDisplayRatio
+  // ---- 大模型显示比例 ----
   useEffect(() => {
     if (loadedFiles.size === 0) return;
     entitiesRef.current.forEach((ent) => {
-      // 只对 GSplat 实体应用显示比例，pointcloud 已通过 stride 控制 GPU 预算
       if (!ent.gsplat) return;
       const mi = ent.render?.meshInstances?.[0];
       if (mi?.material) {
@@ -278,27 +142,26 @@ export default function SpaceEdit() {
       }
     });
     requestRender();
-  }, [loadedFiles]);
+  }, [loadedFiles, requestRender]);
 
-const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" | "上" | "下") => {
+  // ---- 视角 / 焦点 ----
+  const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" | "上" | "下") => {
     const orbit = orbitRef.current;
     if (!orbit) return;
     const c = modelCenterRef.current;
     const ext = modelExtentRef.current;
-    console.log("[视角] 方向:", direction, "中心:", c.x.toFixed(1), c.y.toFixed(1), c.z.toFixed(1), "范围:", ext.toFixed(1));
     orbit.lookAt.set(c.x, c.y, c.z);
     orbit.distance = ext * 1.5;
     orbit.setViewDirection(direction);
     orbit.updateCamera();
     requestRender();
-  }, [])
+  }, [requestRender]);
 
-  /** 将相机焦点移到指定位置 */const focusOnModel = useCallback((centerX: number, centerY: number, centerZ: number, extent: number) => {
+  const focusOnModel = useCallback((centerX: number, centerY: number, centerZ: number, extent: number) => {
     modelExtentRef.current = extent;
     modelCenterRef.current = { x: centerX, y: centerY, z: centerZ };
     const orbit = orbitRef.current;
     if (orbit) {
-      // 把场景尺寸告知相机，近/远裁剪面由 updateCamera 随距离实时维护，避免大模型被裁剪面切掉
       orbit.sceneRadius = Math.max(orbit.sceneRadius, extent);
       orbit.sceneCenter.set(centerX, centerY, centerZ);
       orbit.maxDistance = Math.max(orbit.maxDistance, extent * 5);
@@ -310,8 +173,9 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
       orbit.updateCamera();
       requestRender();
     }
-  }, [])
+  }, [requestRender]);
 
+  // ---- 点云加载 ----
   const { loadLas, loadPly, loadLasFromPath } = useLasLoader({
     appRef, entitiesRef, lasHeadersRef, filePathRef, pointStatsRef, modelGroundYRef,
     requestRender, focusOnModel,
@@ -319,342 +183,27 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
     setLoadedFiles, setTreeKey,
   });
 
-  /** 从路径加载模型，同时关闭所有绘制状态 */
-  const handleLoadLasFromPath = useCallback(async (filePath: string) => {
-    closeAllDrawingModes();
-    hasAutoFocusedRef.current = false;
-    await loadLasFromPath(filePath);
-  }, [closeAllDrawingModes, loadLasFromPath]);
+  // ---- 文件操作 ----
+  const { handleLoadLasFromPath, handleImportPointTable, handleFileSelect, handleToggleVisible, handleClipModel } = useFileOperations({
+    entitiesRef, lasHeadersRef, filePathRef, pointStatsRef, modelGroundYRef, hasAutoFocusedRef,
+    loadLas, loadPly, loadLasFromPath, requestRender, closeAllDrawingModes,
+    setImporting, setLoadedFiles, setTreeKey, setClipEntityName, setClipMode, message,
+  });
 
-  /** 点表 Excel 导入 */
-  const handleImportPointTable = async (file: File) => {
-    setImporting(true);
-    try {
-      const { rows, stationName } = await parsePointExcel(file);
-
-      if (rows.length === 0) {
-        message.warning("Excel 中无有效数据行");
-        setImporting(false);
-        return;
-      }
-
-      if (!stationName) {
-        message.warning("Excel 中未找到厂站名称");
-        setImporting(false);
-        return;
-      }
-
-      const api = (window as any).electronAPI;
-      if (!api) {
-        message.warning("仅 Electron 模式下可用");
-        setImporting(false);
-        return;
-      }
-
-      // 用站名生成 stationCode
-      const stationCode = stationName.substring(0, 10) + Date.now().toString().slice(-4);
-
-      // 获取当前项目名
-      const projectName = localStorage.getItem("selectedProject") || "默认项目";
-
-      console.log("[点表导入] 项目:", projectName, "站名:", stationName, "开始导入", rows.length, "行...");
-      await api.startBatch();
-      const result = await api.importPoints(rows, stationName, stationCode, projectName);
-      await api.endBatch();
-
-      console.log("[点表导入] 导入完成:", result);
-      message.success("导入成功: " + result.inserted + " 新增, " + result.updated + " 更新");
-      if (result.errors.length > 0) {
-        message.warning("错误: " + result.errors.slice(0, 3).join("; "));
-      }
-    } catch (e: any) {
-      message.error("导入失败: " + e.message);
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  const handleFileSelect = async (file: File) => {
-    closeAllDrawingModes();
-    // 卸载已有模型
-    entitiesRef.current.forEach((ent) => ent.destroy());
-    entitiesRef.current.clear();
-    lasHeadersRef.current.clear();
-    filePathRef.current.clear();
-    pointStatsRef.current.clear();
-    setLoadedFiles(new Set());
-    modelGroundYRef.current = -Infinity;
-    hasAutoFocusedRef.current = false;
-
-    if (window.electronAPI) {
-      const sourcePath = window.electronAPI.getFilePath(file);
-      const baseName = file.name.replace(/\.[^.]+$/, "");
-      const selectedProject = localStorage.getItem("selectedProject");
-      if (sourcePath && selectedProject) {
-        try {
-          await window.electronAPI.project.importFile(selectedProject, sourcePath, baseName);
-        } catch (err: any) {
-          console.error("文件导入失败:", err.message);
-        }
-      }
-    }
-
-    const ext = file.name.toLowerCase().split(".").pop();
-    if (ext === "las" || ext === "laz") {
-      loadLas(file);
-    } else {
-      loadPly(file);
-    }
-    setLoadedFiles((prev) => new Set([...prev, file.name]));
-    setTreeKey((k) => k + 1);
-  };
-
-  const handleToggleVisible = useCallback((filePath: string) => {
-    const entityName = filePath.split(/[\\/]/).pop() || filePath;
-    const entity = entitiesRef.current.get(entityName);
-    if (!entity) {
-      closeAllDrawingModes();
-      loadLasFromPath(filePath);
-      return;
-    }
-    // 实体存在 → 卸载
-    entity.destroy();
-    entitiesRef.current.delete(entityName);
-    lasHeadersRef.current.delete(entityName);
-    filePathRef.current.delete(entityName);
-    pointStatsRef.current.delete(entityName);
-    setLoadedFiles((prev) => {
-      const next = new Set(prev);
-      next.delete(entityName);
-      return next;
-    });
-    requestRender();
-  }, [loadLasFromPath, closeAllDrawingModes]);
-
-
-  const handleClipModel = useCallback(() => {
-    const entries = Array.from(entitiesRef.current.entries());
-    if (entries.length === 0) {
-      message.warning("请先加载模型");
-      return;
-    }
-
-    entries.forEach(([key, ent]) => {
-      if (!ent.enabled) {
-        ent.destroy();
-        entitiesRef.current.delete(key);
-      }
-    });
-
-    const visible = Array.from(entitiesRef.current.entries());
-    if (visible.length > 1) {
-      message.warning("存在多个可见模型，请只保留一个模型后再裁切");
-      return;
-    }
-    if (visible.length === 0) {
-      message.warning("没有可见模型");
-      return;
-    }
-
-    setClipEntityName(visible[0][0]);
-    setClipMode(true);
-  }, []);
-
-  /** 保存屏柜：写入当前模型目录下的绘制 JSON（按 type 隔离，创建/更新） */
-  const handleSaveCabinet = useCallback(async (data: { area: { id: number; name: string; code: string }; bay: { id: number; name: string; code: string }; rows: { key: string; code: string; name: string }[] }) => {
-    const api = window.electronAPI;
-    if (!api) { message.warning("仅 Electron 模式下可保存"); return; }
-    const projectName = localStorage.getItem("selectedProject");
-    if (!projectName) { message.warning("请先选择项目"); return; }
-    const geometry = getCabinetGeometry();
-    if (!geometry) { message.warning("请先完成屏柜绘制（四点成体）"); return; }
-
-    // 当前绘制模型路径：优先可见且有路径的模型
-    let modelPath = "";
-    for (const [name, ent] of entitiesRef.current) {
-      const p = filePathRef.current.get(name);
-      if (ent.enabled && p) { modelPath = p; break; }
-    }
-    if (!modelPath) {
-      const first = filePathRef.current.values().next().value;
-      if (first) modelPath = first;
-    }
-    if (!modelPath) { message.warning("未找到绘制模型，无法保存"); return; }
-
-    const item: CabinetItem = {
-      id: (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()),
-      type: "cabinet",
-      area: data.area,
-      bay: data.bay,
-      geometry,
-      cabinets: data.rows.map((r) => ({ code: r.code, name: r.name })),
-      updatedAt: new Date().toISOString(),
-    };
-    try {
-      await saveCabinetDrawing({ api, projectName, modelPath, item });
-      savedCabinetRef.current = { item, jsonPath: modelPath.replace(/[^\\/]+$/, DRAWING_FILE_NAME) };
-      message.success(`保存成功（${item.cabinets.length} 个屏柜）`);
-      handleToggleCabinet(); // 保存后自动关闭弹窗
-    } catch (e: any) {
-      message.error("保存失败: " + (e?.message || e));
-    }
-  }, [getCabinetGeometry, message, handleToggleCabinet]);
-
-  /** 保存充电区域：写入当前模型目录下的绘制 JSON。verts=null 表示删除 */
-  const handleSaveChargingArea = useCallback(async () => {
-    const api = window.electronAPI;
-    if (!api) { if (!isAutoSavingRef.current) message.warning("仅 Electron 模式下可保存"); return; }
-    const projectName = localStorage.getItem("selectedProject");
-    if (!projectName) { if (!isAutoSavingRef.current) message.warning("请先选择项目"); return; }
-    const drawing = chargingDrawingRef.current;
-    if (!drawing) return;
-    const verts = drawing.getBoxVerts();
-
-    let modelPath = "";
-    for (const [name, ent] of entitiesRef.current) {
-      const p = filePathRef.current.get(name);
-      if (ent.enabled && p) { modelPath = p; break; }
-    }
-    if (!modelPath) {
-      const first = filePathRef.current.values().next().value;
-      if (first) modelPath = first;
-    }
-    if (!modelPath) return;
-
-    const item: ChargingAreaItem | null = verts ? {
-      id: (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()),
-      type: "charging-area",
-      geometry: { verts },
-      updatedAt: new Date().toISOString(),
-    } : null;
-
-    try {
-      await saveChargingArea({ api, projectName, modelPath, item });
-      if (!isAutoSavingRef.current) message.success("保存成功");
-      if (chargingMode) handleToggleCharging();
-    } catch (e: any) {
-      message.error("保存充电区失败: " + (e?.message || e));
-    }
-  }, [message, chargingDrawingRef, handleToggleCharging, chargingMode]);
-
-  /** 保存设备区：写入当前模型目录下的绘制 JSON */
-  const handleSaveDeviceAreas = useCallback(async () => {
-    const silent = isAutoSavingRef.current;
-    const api = window.electronAPI;
-    if (!api) { if (!silent) message.warning("仅 Electron 模式下可保存"); return; }
-    const projectName = localStorage.getItem("selectedProject");
-    if (!projectName) { if (!silent) message.warning("请先选择项目"); return; }
-    const datas = getBoxDatas();
-
-    let modelPath = "";
-    for (const [name, ent] of entitiesRef.current) {
-      const p = filePathRef.current.get(name);
-      if (ent.enabled && p) { modelPath = p; break; }
-    }
-    if (!modelPath) {
-      const first = filePathRef.current.values().next().value;
-      if (first) modelPath = first;
-    }
-    if (!modelPath) { if (!silent) message.warning("未找到模型路径，无法保存"); return; }
-
-    const items: DeviceAreaItem[] = datas.map((d) => ({
-      id: d.id,
-      type: "device-area" as const,
-      geometry: { verts: d.verts },
-      height: d.height,
-      bay: d.bay,
-      updatedAt: new Date().toISOString(),
-    }));
-
-    try {
-      await saveDeviceAreas({ api, projectName, modelPath, items });
-      if (!silent) message.success("保存成功");
-      markDeviceAreaSaved();
-    } catch (e: any) {
-      message.error("保存设备区失败: " + (e?.message || e));
-    }
-  }, [message, getBoxDatas, markDeviceAreaSaved]);
-
-  /** 当前绘制模型路径：优先可见且有路径的模型 */
-  const getCurrentModelPath = useCallback((): string => {
-    for (const [name, ent] of entitiesRef.current) {
-      const p = filePathRef.current.get(name);
-      if (ent.enabled && p) return p;
-    }
-    return filePathRef.current.values().next().value || "";
-  }, []);
-
-  /** 保存可行路径：写入独立的 可行驶路径.json */
-  const handleSavePath = useCallback(async () => {
-    const silent = isAutoSavingRef.current;
-    const api = window.electronAPI;
-    if (!api) { if (!silent) message.warning("仅 Electron 模式下可保存"); return; }
-    const projectName = localStorage.getItem("selectedProject");
-    if (!projectName) { if (!silent) message.warning("请先选择项目"); return; }
-    const data = getPathData();
-    if (!data) return;
-    const modelPath = getCurrentModelPath();
-    if (!modelPath) { if (!silent) message.warning("未找到模型路径，无法保存"); return; }
-    try {
-      await savePathDrawing({ api, projectName, modelPath, data });
-    } catch (e: any) {
-      if (!silent) message.error("保存路径失败: " + (e?.message || e));
-    }
-  }, [message, getPathData, getCurrentModelPath]);
-
-  /** 保存全部：充电区域 + 设备区 + 可行路径（屏柜已单独保存到JSON） */
-  const handleSaveAll = useCallback(async () => {
-    const silent = isAutoSavingRef.current;
-    if (!silent) setSaveStatus("saving");
-    isAutoSavingRef.current = true;
-    const drawing = chargingDrawingRef.current;
-    if (drawing?.hasBox()) await handleSaveChargingArea();
-    await handleSaveDeviceAreas();
-    await handleSavePath();
-    isAutoSavingRef.current = false;
-    if (!silent) {
-      setSaveStatus("saved");
-      message.success("保存成功");
-      setTimeout(() => setSaveStatus("idle"), 2000);
-    }
-    if (!silent && autoSaveTimerRef.current) {
-      clearInterval(autoSaveTimerRef.current);
-      autoSaveTimerRef.current = setInterval(() => {
-        isAutoSavingRef.current = true;
-        handleSaveAll();
-      }, 30000);
-    }
-  }, [handleSaveChargingArea, handleSaveDeviceAreas, handleSavePath, chargingDrawingRef, message]);
-
-  /** 启动 30s 自动保存 */
-  const startAutoSave = useCallback(() => {
-    if (autoSaveTimerRef.current) clearInterval(autoSaveTimerRef.current);
-    autoSaveEnabledRef.current = true;
-    autoSaveTimerRef.current = setInterval(() => {
-      if (!autoSaveEnabledRef.current) return;
-      isAutoSavingRef.current = true;
-      handleSaveAll();
-    }, 30000);
-  }, [handleSaveAll]);
-
-  // 模型加载后启动自动保存（JSON 已存在或创建后）
+  // ---- 自动保存生命周期 ----
   useEffect(() => {
-    if (loadedFiles.size === 0) {
-      autoSaveEnabledRef.current = false;
-      if (autoSaveTimerRef.current) { clearInterval(autoSaveTimerRef.current); autoSaveTimerRef.current = null; }
-      return;
-    }
-    if (!autoSaveEnabledRef.current) {
-      autoSaveEnabledRef.current = true;
-      startAutoSave();
-    }
-    return () => {
-      autoSaveEnabledRef.current = false;
-      if (autoSaveTimerRef.current) { clearInterval(autoSaveTimerRef.current); autoSaveTimerRef.current = null; }
-    };
+    if (loadedFiles.size === 0) return;
+    startAutoSave();
+    return () => { startAutoSave(); }; // cleanup handled by startAutoSave internals
   }, [loadedFiles, startAutoSave]);
 
-  /** 屏柜树勾选变化：读该模型 JSON，按勾选的间隔回显/隐藏屏柜 */
+  // ---- 手动保存后重置自动保存计时器 ----
+  const handleManualSave = useCallback(async () => {
+    await handleSaveAll();
+    resetAutoSaveTimer();
+  }, [handleSaveAll, resetAutoSaveTimer]);
+
+  // ---- 屏柜树勾选回显 ----
   const handleCabinetCheck = useCallback(async (bayIds: number[]) => {
     const viewer = cabinetViewerRef.current;
     const api = window.electronAPI;
@@ -662,11 +211,7 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
     const modelPath = getCurrentModelPath();
     if (!modelPath) return;
     let items: CabinetItem[] = [];
-    try {
-      items = await loadCabinetItems(api, modelPath);
-    } catch {
-      return;
-    }
+    try { items = await loadCabinetItems(api, modelPath); } catch { return; }
     const byBay = new Map(items.map((it) => [it.bay.id, it]));
     const want = new Set(bayIds.filter((id) => byBay.has(id)));
     const jsonPath = modelPath.replace(/[^\\/]+$/, DRAWING_FILE_NAME);
@@ -674,27 +219,20 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
     for (const id of want) if (!viewer.has(id)) viewer.show(byBay.get(id)!, jsonPath);
   }, [getCurrentModelPath]);
 
-  /** 地图树勾选可行驶路径 json：加载/清除路径数据显示 */
+  // ---- 地图树勾选路径 / 绘制 ----
   const handleTogglePathFile = useCallback(async (jsonPath: string, checked: boolean) => {
     const api = window.electronAPI;
     if (!api) return;
     if (checked) {
       const data = await loadPathDrawing(api, jsonPath);
-      if (data) {
-        pathDrawingRef.current?.loadData(data);
-      }
+      if (data) pathDrawingRef.current?.loadData(data);
       setPathShown((prev) => new Set(prev).add(jsonPath));
     } else {
       pathDrawingRef.current?.clear();
-      setPathShown((prev) => {
-        const next = new Set(prev);
-        next.delete(jsonPath);
-        return next;
-      });
+      setPathShown((prev) => { const next = new Set(prev); next.delete(jsonPath); return next; });
     }
   }, []);
 
-  /** 地图树勾选绘制 json：回显/隐藏其中的屏柜、充电区域、设备区 */
   const handleToggleDrawing = useCallback(async (jsonPath: string, checked: boolean) => {
     const viewer = cabinetViewerRef.current;
     const api = window.electronAPI;
@@ -706,113 +244,78 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
       shownByJsonRef.current.set(jsonPath, cabItems.map((it) => it.bay.id));
       setDrawingShown((prev) => new Set(prev).add(jsonPath));
 
-      const chargingItem = items.find((it): it is ChargingAreaItem => it.type === "charging-area") as ChargingAreaItem | undefined;
+      const chargingItem = items.find((it): it is ChargingAreaItem => it.type === "charging-area");
       if (chargingItem) {
         const drawing = chargingDrawingRef.current;
         if (drawing && !drawing.hasBox()) {
-          drawing.loadBox(chargingItem.geometry.verts);
+          drawing.loadBox((chargingItem as ChargingAreaItem).geometry.verts);
           chargingExistingRef.current = true;
           chargingAreaSavedRef.current = true;
           chargedJsonPathRef.current = jsonPath;
         }
       }
 
-      const deviceAreaItems = items.filter((it): it is DeviceAreaItem => it.type === "device-area");
-      if (deviceAreaItems.length > 0) {
-        const ddrawing = deviceAreaDrawingRef.current;
-        ddrawing?.loadBoxes(deviceAreaItems.map((it) => ({
-          id: it.id, verts: it.geometry.verts, height: it.height, bay: it.bay,
-        })));
+      const das = items.filter((it): it is DeviceAreaItem => it.type === "device-area") as DeviceAreaItem[];
+      if (das.length > 0) {
+        deviceAreaDrawingRef.current?.loadBoxes(das.map((it) => ({ id: it.id, verts: it.geometry.verts, height: it.height, bay: it.bay })));
       }
     } else {
       const ids = shownByJsonRef.current.get(jsonPath) || [];
       ids.forEach((id) => viewer.hide(id));
       shownByJsonRef.current.delete(jsonPath);
-      setDrawingShown((prev) => {
-        const next = new Set(prev);
-        next.delete(jsonPath);
-        return next;
-      });
-
+      setDrawingShown((prev) => { const next = new Set(prev); next.delete(jsonPath); return next; });
       if (chargedJsonPathRef.current === jsonPath) {
-        const drawing = chargingDrawingRef.current;
-        if (drawing?.hasBox()) {
-          drawing.clear();
-        }
+        if (chargingDrawingRef.current?.hasBox()) chargingDrawingRef.current.clear();
         chargingExistingRef.current = false;
         chargingAreaSavedRef.current = false;
         chargedJsonPathRef.current = "";
       }
-
       deviceAreaDrawingRef.current?.clearAll();
     }
   }, []);
 
-  /** 删除回显的屏柜 item：从 JSON 移除并从场景隐藏（勾选态保持） */
+  // ---- 屏柜删除 ----
   const handleDeleteCabinetItem = useCallback(async (jsonPath: string, bayId: number) => {
     const api = window.electronAPI;
     const projectName = localStorage.getItem("selectedProject");
     if (!api || !projectName) return;
-    try {
-      await deleteCabinetItem(api, projectName, jsonPath, bayId);
-    } catch (e: any) {
-      message.error("删除失败: " + (e?.message || e));
-      return;
-    }
+    try { await deleteCabinetItem(api, projectName, jsonPath, bayId); }
+    catch (e: any) { message.error("删除失败: " + (e?.message || e)); return; }
     cabinetViewerRef.current?.hide(bayId);
     const ids = shownByJsonRef.current.get(jsonPath);
     if (ids) shownByJsonRef.current.set(jsonPath, ids.filter((id) => id !== bayId));
     message.success("已删除");
   }, [message]);
 
-  // 绑定删除回调
-  useEffect(() => {
-    cabinetViewerRef.current?.setOnRequestDelete(handleDeleteCabinetItem);
-  }, [handleDeleteCabinetItem]);
+  // ---- 副作用：交互、设备区、屏柜回显 ----
+  useEffect(() => { cabinetViewerRef.current?.setOnRequestDelete(handleDeleteCabinetItem); }, [handleDeleteCabinetItem]);
+  useEffect(() => { cabinetViewerRef.current?.setInteractive(!cabinetMode && !chargingMode && !deviceAreaMode && !pathMode); }, [cabinetMode, chargingMode, deviceAreaMode, pathMode]);
 
-  // 选中交互：绘制屏柜或绘制充电区域时禁用回显屏柜的选中，避免冲突
-  useEffect(() => {
-    cabinetViewerRef.current?.setInteractive(!cabinetMode && !chargingMode && !deviceAreaMode && !pathMode);
-  }, [cabinetMode, chargingMode, deviceAreaMode, pathMode]);
-
-  // 设备区模式打开时扫描全项目 JSON 获取已绑间隔 ID
   useEffect(() => {
     if (!deviceAreaMode) return;
     const api = window.electronAPI;
     if (!api) return;
-    const projectName = localStorage.getItem("selectedProject") || "";
-    getBoundBayIdsInProject(api, projectName).then((ids) => {
-      projectBoundBayIdsRef.current = ids;
-    });
+    getBoundBayIdsInProject(api, localStorage.getItem("selectedProject") || "").then((ids) => { projectBoundBayIdsRef.current = ids; });
   }, [deviceAreaMode]);
 
   const drawingShownRef = useRef(drawingShown);
   drawingShownRef.current = drawingShown;
-
   useEffect(() => {
     if (deviceAreaMode) return;
     const api = window.electronAPI;
     if (!api) return;
     const drawing = deviceAreaDrawingRef.current;
     if (!drawing) return;
-
-    const reloadSaved = async () => {
+    (async () => {
       const allItems: DeviceAreaItem[] = [];
       for (const jsonPath of drawingShownRef.current) {
         const items = await loadAllItemsFromJson(api, jsonPath);
-        const das = items.filter((it): it is DeviceAreaItem => it.type === "device-area");
-        allItems.push(...das);
+        allItems.push(...items.filter((it): it is DeviceAreaItem => it.type === "device-area"));
       }
-      if (allItems.length > 0) {
-        drawing.loadBoxes(allItems.map((it) => ({
-          id: it.id, verts: it.geometry.verts, height: it.height, bay: it.bay,
-        })));
-      }
-    };
-    reloadSaved();
+      if (allItems.length > 0) drawing.loadBoxes(allItems.map((it) => ({ id: it.id, verts: it.geometry.verts, height: it.height, bay: it.bay })));
+    })();
   }, [deviceAreaMode]);
 
-  // 关闭屏柜弹窗时把已保存的屏柜转为回显保留（未保存的由绘制器清除）
   useEffect(() => {
     const viewer = cabinetViewerRef.current;
     if (!cabinetMode) {
@@ -820,41 +323,44 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
       if (saved && viewer) {
         viewer.show(saved.item, saved.jsonPath);
         const ids = shownByJsonRef.current.get(saved.jsonPath) || [];
-        if (!ids.includes(saved.item.bay.id)) {
-          shownByJsonRef.current.set(saved.jsonPath, [...ids, saved.item.bay.id]);
-        }
+        if (!ids.includes(saved.item.bay.id)) shownByJsonRef.current.set(saved.jsonPath, [...ids, saved.item.bay.id]);
         setDrawingShown((prev) => new Set(prev).add(saved.jsonPath));
       }
       savedCabinetRef.current = null;
     }
   }, [cabinetMode]);
 
+  // ==================== JSX ====================
+
   return (
     <div ref={containerRef} style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      <Toolbar onFileSelect={handleFileSelect} onClipModel={handleClipModel} cabinetMode={cabinetMode} onToggleCabinet={toggleCabinetExclusive} chargingMode={chargingMode} onToggleCharging={toggleChargingExclusive} deviceAreaMode={deviceAreaMode} onToggleDeviceArea={toggleDeviceAreaExclusive} pathMode={pathMode} onTogglePath={togglePathExclusive} onSaveAll={handleSaveAll} onImportPointTable={handleImportPointTable} importing={importing} />
+      <Toolbar
+        onFileSelect={handleFileSelect}
+        onClipModel={handleClipModel}
+        cabinetMode={cabinetMode} onToggleCabinet={toggleCabinetExclusive}
+        chargingMode={chargingMode} onToggleCharging={toggleChargingExclusive}
+        deviceAreaMode={deviceAreaMode} onToggleDeviceArea={toggleDeviceAreaExclusive}
+        pathMode={pathMode} onTogglePath={togglePathExclusive}
+        onSaveAll={handleManualSave}
+        onImportPointTable={handleImportPointTable}
+        onExportModel={() => setExportModalOpen(true)}
+        importing={importing}
+      />
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         <ViewCube onViewChange={handleViewChange} />
         <SidePanel
-          treeKey={treeKey}
-          onLoadLas={handleLoadLasFromPath}
+          treeKey={treeKey} onLoadLas={handleLoadLasFromPath}
           onToggleVisible={handleToggleVisible}
-          loadedFiles={loadedFiles}
-          loadingFile={loadingFile}
+          loadedFiles={loadedFiles} loadingFile={loadingFile}
           onCabinetCheck={handleCabinetCheck}
-          mapDrawingShown={drawingShown}
-          onToggleDrawing={handleToggleDrawing}
-          mapPathShown={pathShown}
-          onTogglePath={handleTogglePathFile}
+          mapDrawingShown={drawingShown} onToggleDrawing={handleToggleDrawing}
+          mapPathShown={pathShown} onTogglePath={handleTogglePathFile}
         />
         <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
           <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block", position: "absolute", top: 0, left: 0 }} />
           {saveStatus !== "idle" && (
             <div style={{ position: "absolute", top: 8, left: 8, background: "rgba(0,0,0,0.6)", borderRadius: 4, padding: "4px 10px", display: "flex", alignItems: "center", gap: 6, zIndex: 10, pointerEvents: "none" }}>
-              {saveStatus === "saving" ? (
-                <span style={{ color: "#fff", fontSize: 12 }}>保存中...</span>
-              ) : (
-                <span style={{ color: "#52c41a", fontSize: 12 }}>&#10003; 已保存</span>
-              )}
+              {saveStatus === "saving" ? <span style={{ color: "#fff", fontSize: 12 }}>保存中...</span> : <span style={{ color: "#52c41a", fontSize: 12 }}>&#10003; 已保存</span>}
             </div>
           )}
           {(loading || loadingProgress > 0) && (
@@ -871,58 +377,22 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
               )}
             </div>
           )}
-          {cabinetMode && (
-            <CabinetPanel
-              cornerCount={cornerCount}
-              cabinetCount={cabinetCount}
-              onUndo={handleUndo}
-              onClose={handleToggleCabinet}
-              onSave={handleSaveCabinet}
-              onNamesChange={setCabinetNames}
-            />
-          )}
-          {chargingMode && (
-            <ChargingAreaPanel
-              pointCount={chargingPointCount}
-              height={chargingHeight}
-              onUndo={handleChargingUndo}
-              onClose={handleToggleCharging}
-              onSave={handleChargingSave}
-              onSetHeight={handleChargingSetHeight}
-            />
-          )}
-          {deviceAreaMode && (
-            <DeviceAreaPanel
-              boxCount={deviceAreaBoxCount}
-              height={deviceAreaHeight}
-              selectedBoxId={deviceAreaSelectedBoxId}
-              selectedBoxBay={deviceAreaSelectedBoxBay}
-              boundBayIds={new Set([...getBoundBayIds(), ...projectBoundBayIdsRef.current])}
-              onUndo={handleDeviceAreaUndo}
-              onClose={handleToggleDeviceArea}
-              onSave={handleDeviceAreaSave}
-              onSetHeight={handleDeviceAreaSetHeight}
-              onBindBay={handleDeviceAreaBindBay}
-              onUnbind={handleDeviceAreaUnbind}
-            />
-          )}
+          {cabinetMode && <CabinetPanel cornerCount={cornerCount} cabinetCount={cabinetCount} onUndo={handleUndo} onClose={handleToggleCabinet} onSave={handleSaveCabinet} onNamesChange={setCabinetNames} />}
+          {chargingMode && <ChargingAreaPanel pointCount={chargingPointCount} height={chargingHeight} onUndo={handleChargingUndo} onClose={handleToggleCharging} onSave={handleChargingSave} onSetHeight={handleChargingSetHeight} />}
+          {deviceAreaMode && <DeviceAreaPanel boxCount={deviceAreaBoxCount} height={deviceAreaHeight} selectedBoxId={deviceAreaSelectedBoxId} selectedBoxBay={deviceAreaSelectedBoxBay} boundBayIds={new Set([...getBoundBayIds(), ...projectBoundBayIdsRef.current])} onUndo={handleDeviceAreaUndo} onClose={handleToggleDeviceArea} onSave={handleDeviceAreaSave} onSetHeight={handleDeviceAreaSetHeight} onBindBay={handleDeviceAreaBindBay} onUnbind={handleDeviceAreaUnbind} />}
           {clipMode && appRef.current && (
             <ClipController
-              app={appRef.current}
-              entityName={clipEntityName}
+              app={appRef.current} entityName={clipEntityName}
               lasHeader={lasHeadersRef.current.get(clipEntityName) || null}
               origFilePath={filePathRef.current.get(clipEntityName) || ""}
               onClose={() => setClipMode(false)}
               onProgress={(pct) => { setLoadingProgress(pct); setLoadingText(pct >= 100 ? "" : "正在保存..."); }}
               onComplete={(clipName) => {
-                setTreeKey((k) => k + 1);
-                setLoadingText("");
-                setLoadingProgress(0);
+                setTreeKey((k) => k + 1); setLoadingText(""); setLoadingProgress(0);
                 if (clipName) {
                   const oldEnt = entitiesRef.current.get(clipEntityName);
                   if (oldEnt) { oldEnt.destroy(); entitiesRef.current.delete(clipEntityName); }
                   setLoadedFiles((prev) => { const next = new Set(prev); next.delete(clipEntityName); return next; });
-
                   hasAutoFocusedRef.current = false;
                   setTimeout(async () => {
                     const project = localStorage.getItem("selectedProject");
@@ -944,9 +414,7 @@ const handleViewChange = useCallback((direction: "前" | "后" | "左" | "右" |
           <div style={{ color: "#fff", marginTop: 16, fontSize: 14 }}>正在导入点表...</div>
         </div>
       )}
+      <ExportModal open={exportModalOpen} onClose={() => setExportModalOpen(false)} />
     </div>
   );
 }
-
-
-

@@ -6,8 +6,8 @@ export interface MenuItem {
 
 export const menuConfig: MenuItem[] = [
   { key: '/space-edit', label: '空间编辑' },
-  { key: '/image-edit', label: '图像编辑' },
-  { key: '/screen-verify', label: '屏柜验证图' },
+  { key: '/image-edit', label: '勘察图片标注' },
   { key: '/device-verify', label: '设备验证图' },
-  { key: '/config', label: '配置' }
+  { key: '/import-export', label: '导入导出' },
+  { key: '/config', label: '运维' }
 ];

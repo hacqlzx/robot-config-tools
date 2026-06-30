@@ -15,6 +15,7 @@ interface Props {
   onFileSelect: (file: File) => void;
   onClipModel?: () => void;
   onImportPointTable?: (file: File) => void;
+  onExportModel?: () => void;
   importing?: boolean;
 }
 
@@ -27,10 +28,10 @@ const BUTTONS = [
   { icon: <ThunderboltOutlined style={{ fontSize: 20 }} />, label: "绘制充电区域", action: "charging" as const },
   { icon: <AppstoreOutlined style={{ fontSize: 20 }} />, label: "绘制设备区域", action: "deviceArea" as const },
   { icon: <NodeIndexOutlined style={{ fontSize: 20 }} />, label: "可行路径设定", action: "path" as const },
-  { icon: <ExportOutlined style={{ fontSize: 20 }} />, label: "导出模型" },
+  { icon: <ExportOutlined style={{ fontSize: 20 }} />, label: "导出模型", action: "export" as const },
 ];
 
-export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onToggleCabinet, chargingMode, onToggleCharging, deviceAreaMode, onToggleDeviceArea, pathMode, onTogglePath, onSaveAll, onImportPointTable, importing }: Props) {
+export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onToggleCabinet, chargingMode, onToggleCharging, deviceAreaMode, onToggleDeviceArea, pathMode, onTogglePath, onSaveAll, onImportPointTable, onExportModel, importing }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pointInputRef = useRef<HTMLInputElement>(null);
 
@@ -66,6 +67,7 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
       case "deviceArea": onToggleDeviceArea?.(); break;
       case "path": onTogglePath?.(); break;
       case "saveAll": onSaveAll?.(); break;
+      case "export": onExportModel?.(); break;
     }
   };
 

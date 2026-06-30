@@ -37,6 +37,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.invoke("project:delete-path", targetPath),
     renamePath: (targetPath, newName) =>
       ipcRenderer.invoke("project:rename-path", targetPath, newName),
+    openDir: (targetPath) =>
+      ipcRenderer.invoke("project:open-dir", targetPath),
+    exportFile: (projectName, subPath, destDir) =>
+      ipcRenderer.invoke("project:export-file", projectName, subPath, destDir),
+  },
+  selectDir: () => ipcRenderer.invoke("dialog:select-dir"),
+  onExportProgress: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on("export:progress", handler);
+    return () => ipcRenderer.removeListener("export:progress", handler);
   },
   // ---- 数据库 API ----
   importPoints: (rows, stationName, stationCode, projectName) =>
@@ -46,6 +56,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
         if (!r.ok) throw new Error(r.error);
         return r.data;
       }),
+  exportZip: (projectName, items, destDir) =>
+    ipcRenderer.invoke("project:export-zip", projectName, items, destDir),
   startBatch: () => ipcRenderer.invoke("db:startBatch"),
   endBatch: () => ipcRenderer.invoke("db:endBatch"),
 

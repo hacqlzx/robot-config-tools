@@ -1,9 +1,11 @@
-﻿import { app, BrowserWindow, Menu, ipcMain } from "electron";
+﻿import { app, BrowserWindow, Menu, ipcMain, shell, dialog } from "electron";
 import path from "path";
 import fs from "fs";
 import { exec } from "child_process";
 import { fileURLToPath } from "url";
 import { initDbIpc, closeDbIpc } from "./db-ipc";
+import { getDatabase } from "@robot/database";
+import { generatePointExcel, exportSpaceZip } from "../src/utils/export-points";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -259,7 +261,49 @@ ipcMain.handle("project:rename-path", async (_event, targetPath: string, newName
   }
   fs.renameSync(resolved, newPath);
   return newPath;
-});// GPU 信息诊断：启动时自动写入日志文件，客户出问题时可直接发送此文件排查
+});
+
+// 在文件资源管理器中打开目录（并选中该文件/目录）
+ipcMain.handle("project:open-dir", async (_event, targetPath: string) => {
+  shell.showItemInFolder(targetPath);
+});
+
+// 选择目录对话框
+ipcMain.handle("dialog:select-dir", async () => {
+  const win = BrowserWindow.getFocusedWindow();
+  if (!win) return null;
+  const result = await dialog.showOpenDialog(win, {
+    properties: ["openDirectory"],
+    title: "选择保存目录",
+  });
+  return result.canceled ? null : result.filePaths[0];
+});
+
+// 复制项目内文件到指定目录
+ipcMain.handle("project:export-file", async (_event, projectName: string, subPath: string, destDir: string) => {
+  ensureProjectRoot();
+  const srcPath = path.join(PROJECT_ROOT, projectName, subPath);
+  if (!fs.existsSync(srcPath)) throw new Error("源文件不存在: " + subPath);
+  const fileName = path.basename(srcPath);
+  const destPath = path.join(destDir, fileName);
+  await fs.promises.copyFile(srcPath, destPath);
+  return destPath;
+});
+
+// 导出空间模型为 zip（点表 + 地图 + 配置文件），异步 + 进度回传
+ipcMain.handle("project:export-zip", async (event, projectName: string, items: { type: string; name: string }[], destDir: string) => {
+  const db = getDatabase();
+  const points: any[] = db.prepare("SELECT * FROM device_point WHERE project_name = ?").all(projectName);
+
+  const includePointTable = items.some((it) => it.type === "点表");
+  const mapDirs = items.filter((it) => it.type === "地图").map((it) => it.name);
+
+  return exportSpaceZip(projectName, PROJECT_ROOT, points, mapDirs, includePointTable, destDir,
+    (step, pct) => {
+      event.sender.send("export:progress", { step, pct });
+    }
+  );
+});
 async function logGPUInfo() {
   const logPath = path.join(app.getPath("userData"), "gpu-info.log");
   try {
