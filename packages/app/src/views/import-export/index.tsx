@@ -4,7 +4,7 @@ import { UploadOutlined, DownloadOutlined } from "@ant-design/icons";
 import "./index.scss";
 
 interface IEAction {
-  key: "import" | "export";
+  key: "import" | "export" | "export-log" | "export-error";
   label: string;
   desc?: string;
 }
@@ -103,7 +103,7 @@ export default function ImportExport() {
     return () => observer.disconnect();
   }, []);
 
-  const handleAction = (card: IECard, key: "import" | "export", label: string) => {
+  const handleAction = (card: IECard, key: "import" | "export" | "export-log" | "export-error", label: string) => {
     const verb = key === "import" ? "导入" : "导出";
     message.info(`${verb}「${label || card.title}」（功能待接入）`);
   };

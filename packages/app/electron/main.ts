@@ -5,7 +5,7 @@ import { exec } from "child_process";
 import { fileURLToPath } from "url";
 import { initDbIpc, closeDbIpc } from "./db-ipc";
 import { getDatabase } from "@robot/database";
-import { generatePointExcel, exportSpaceZip } from "../src/utils/export-points";
+import { generatePointExcel, exportSpaceZip } from "./export-points";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
