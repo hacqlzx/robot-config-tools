@@ -249,7 +249,7 @@ export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, tre
 
   useEffect(() => {
     if (sideTab === "cabinet") {
-      loadBayTypeTree("屏柜", setCabinetTreeData);
+      loadBayTypeTree("屏柜区", setCabinetTreeData);
     }
   }, [sideTab, loadBayTypeTree]);
 

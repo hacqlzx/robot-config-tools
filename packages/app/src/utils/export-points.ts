@@ -34,14 +34,14 @@ const INSPECTION_REV: Record<string, string> = {
 };
 
 const EXPORT_COLS = [
-  "*点位名称", "点位编码", "巡检点ID",
+  "*点位名称", "点位编码",
   "*识别类型1", "识别类型2",
   "采集类型", "表计类型", "位置状态类型",
-  "*重要等级",
+  "重要等级",
   "*部件名称", "部件编码",
   "*主设备名称", "主设备编码", "*主设备类型",
   "*相位",
-  "*间隔名称", "间隔编码", "*间隔类型",
+  "*间隔名称", "间隔编码", "间隔类型",
   "*区域", "区域编码",
   "巡视类型1", "巡视类型2", "巡视类型3", "巡视类型4",
   "巡视类型5", "巡视类型6", "巡视类型7", "巡视类型8",
@@ -60,17 +60,17 @@ function generatePointExcel(points: DevicePoint[]): Buffer {
     const recogList = (p.recognitionTypeList || "").split(",").map((s) => RECOGNITION_REV[s.trim()] || s).filter(Boolean);
     const inspects = (p.inspectionSubType || "").split(",").map((s) => INSPECTION_REV[s.trim()] || s).filter(Boolean);
     rows.push({
-      "*点位名称": p.pointName || "", "点位编码": p.pointCode || "", "巡检点ID": p.cruiseId || "",
+      "*点位名称": p.pointName || "", "点位编码": p.pointCode || "",
       "*识别类型1": recogList[0] || "", "*识别类型2": recogList[1] || "",
       "采集类型": SAVE_REV[p.saveTypeList] || (p.saveTypeList ? String(p.saveTypeList) : ""),
       "表计类型": METER_REV[p.meterType] || (p.meterType ? String(p.meterType) : ""),
       "位置状态类型": POS_REV[p.positionStateType] || (p.positionStateType ? String(p.positionStateType) : ""),
-      "*重要等级": LEVEL_REV[p.importantLevel] || (p.importantLevel ? String(p.importantLevel) : ""),
+      "重要等级": LEVEL_REV[p.importantLevel] || (p.importantLevel ? String(p.importantLevel) : ""),
       "*部件名称": p.componentName || "", "部件编码": p.componentCode || "",
       "*主设备名称": p.mainDeviceName || "", "主设备编码": p.mainDeviceCode || "",
       "*主设备类型": DEVICE_TYPE_REV[p.mainDeviceType] || (p.mainDeviceType ? String(p.mainDeviceType) : ""),
       "*相位": PHASE_REV[p.phaseType] || (p.phaseType !== undefined ? String(p.phaseType) : ""),
-      "*间隔名称": p.bayName || "", "间隔编码": p.bayCode || "", "*间隔类型": p.bayType || "",
+      "*间隔名称": p.bayName || "", "间隔编码": p.bayCode || "", "间隔类型": p.bayType || "",
       "*区域": p.voltName || "", "区域编码": p.voltCode || "",
       "巡视类型1": inspects[0] || "", "巡视类型2": inspects[1] || "", "巡视类型3": inspects[2] || "", "巡视类型4": inspects[3] || "",
       "巡视类型5": inspects[4] || "", "巡视类型6": inspects[5] || "", "巡视类型7": inspects[6] || "", "巡视类型8": inspects[7] || "",

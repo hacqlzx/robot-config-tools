@@ -30,7 +30,7 @@ const PHASE_TYPE: Record<string, number> = {
   "主体": 0, "A相": 1, "B相": 2, "C相": 3,
 };
 const BAY_TYPE: Record<string, string> = {
-  "设备区": "设备区", "屏柜": "屏柜", "主变间隔": "主变间隔",
+  "设备区": "设备区", "屏柜区": "屏柜区", "屏柜": "屏柜区", "主变间隔": "主变间隔",
   "站用变间隔": "站用变间隔", "主变低压侧间隔": "主变低压侧间隔",
 };
 
@@ -54,7 +54,6 @@ const INSPECTION_TYPE: Record<string, string> = {
 const COLUMN_MAP: Record<string, string> = {
   "*点位名称": "pointName", "点位名称": "pointName",
   "点位编码": "pointCode",
-  "巡检点ID": "cruiseId",
   "*识别类型1": "recognitionType1", "识别类型1": "recognitionType1",
   "*识别类型2": "recognitionType2", "识别类型2": "recognitionType2",
   "采集类型": "saveTypeList",
@@ -160,9 +159,6 @@ export function parsePointExcel(file: File): Promise<{ rows: PointExcelRow[]; st
 
           // 获取厂站名（取第一个非空值）
           if (!stationName && row.stationName) stationName = String(row.stationName);
-
-          // cruiseId 独立字段，不合并 pointCode
-          row.cruiseId = row.cruiseId?.trim() ?? "";
 
           // 必填校验
           if (!row.voltName || !row.bayName || !row.mainDeviceName || !row.componentName || !row.pointName) {

@@ -1,12 +1,14 @@
 import axios, { AxiosResponse } from "axios";
 import { getCurrentIp } from "../stores/backendStore";
 
-const instance = axios.create({ timeout: 10000 });
+const instance = axios.create({ timeout: 300000 });
 
 // 请求拦截：统一注入 baseURL 和请求头
 instance.interceptors.request.use((config) => {
   config.headers["req-id"] = Date.now().toString() + Math.random().toString(36).slice(2, 8);
-  config.headers["Content-Type"] = "application/json";
+  if (!(config.data instanceof FormData)) {
+    config.headers["Content-Type"] = "application/json";
+  }
 
   const ip = getCurrentIp();
   if (ip) {

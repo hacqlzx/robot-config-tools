@@ -123,3 +123,50 @@ export function getNetworkList() {
 export function editNetwork(data) {
   return http.post("/robot/tool/network/edit", data);
 }
+
+// ========== 导入 ==========
+
+/**
+ * 点表导入（文件上传）
+ * @param {File} file - Excel 文件
+ * @param {number} robotId - 机器人 ID
+ * @param {number} stationId - 厂站 ID
+ */
+export function importDevicePoint(file, robotId, stationId) {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("robotId", String(robotId));
+  formData.append("stationId", String(stationId));
+  return http.post("/robot/tool/file/importDevicePoint", formData);
+}
+
+/**
+ * 通信信息导入（文件上传）
+ * @param {File} file - Excel 文件
+ */
+export function importCommunicateExcel(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  return http.post("/robot/tool/file/importCommunicateExcel", formData);
+}
+
+// ========== 导出 ==========
+
+/**
+ * 空间模型导出
+ * @param {number} robotId - 机器人 ID
+ * @returns 返回 { data: "/robot/robot/..." } 文件路径
+ */
+export function exportSpaceModel(robotId) {
+  return http.get("/robot/tool/file/exportSpaceModel", { robotId });
+}
+
+/** 点表模板下载 */
+export function downLoadExcelTemplate() {
+  return http.get("/robot/tool/file/downLoadExcelTemplate");
+}
+
+/** 通信信息模板下载 */
+export function downloadCommunicateExcel() {
+  return http.get("/robot/tool/file/downloadCommunicateExcel");
+}

@@ -56,7 +56,7 @@ export default function CabinetPanel({ cornerCount, cabinetCount, onUndo, onClos
   const areaOptions = voltList.map((v) => ({ value: v.id, label: v.voltName || "(未命名)" }));
   // 间隔：查所选区域下的屏柜间隔
   const bayOptions = bayList
-    .filter((b) => b.voltId === areaId && b.bayType === "屏柜")
+    .filter((b) => b.voltId === areaId && b.bayType === "屏柜区")
     .map((b) => ({ value: b.id, label: b.bayName || "(未命名)" }));
 
   // 屏柜表格：行数跟随屏柜数量增减，保留已编辑的值
