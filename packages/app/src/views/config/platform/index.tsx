@@ -2,6 +2,7 @@
 import { Card, Form, Input, Button, Select, Tag, message } from "antd";
 import IpInput from "@/components/ip-input";
 import { getRobotInfo, saveRobotInfo, getAnalysisMachineInfo, saveAnalysisMachineInfo, getSuperSystemInfo, saveSuperSystemInfo } from "@/api/config.js";
+import { subscribe } from "@/stores/backendStore";
 
 interface ApiResponse<T> {
   code: number;
@@ -95,6 +96,16 @@ export default function PlatformConfig() {
     fetchBackend();
     fetchAnalysis();
     fetchHost();
+  }, []);
+
+  // IP 切换时重新加载
+  useEffect(() => {
+    return subscribe(() => {
+      fetchBackend();
+      fetchAnalysis();
+      fetchHost();
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleBackendSave = async () => {

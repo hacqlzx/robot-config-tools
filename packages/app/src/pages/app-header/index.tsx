@@ -6,6 +6,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { menuConfig } from "@/config/menu";
 import BackendModal from "@/pages/backend-modal";
 import { getConnectionStatus, subscribe, ConnectionStatus, getCurrentIp } from "@/stores/backendStore";
+import { getAllRobot } from "@/api/config.js";
 
 const menuItems: MenuProps["items"] = menuConfig.map((item) => ({ key: item.key, label: item.label }));
 
@@ -31,6 +32,47 @@ function setStoredProject(name: string | null) {
   }
 }
 
+const SELECTED_ROBOT_KEY = "selectedRobot";
+
+function getStoredRobot(): string | null {
+  try {
+    return localStorage.getItem(SELECTED_ROBOT_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setStoredRobot(name: string | null) {
+  try {
+    if (name) {
+      localStorage.setItem(SELECTED_ROBOT_KEY, name);
+    } else {
+      localStorage.removeItem(SELECTED_ROBOT_KEY);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+const CACHED_ROBOT_LIST_KEY = "cachedRobotList";
+
+function getCachedRobotList(): { label: string; value: string }[] | null {
+  try {
+    const raw = localStorage.getItem(CACHED_ROBOT_LIST_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function setCachedRobotList(list: { label: string; value: string }[]) {
+  try {
+    localStorage.setItem(CACHED_ROBOT_LIST_KEY, JSON.stringify(list));
+  } catch {
+    // ignore
+  }
+}
+
 export default function AppHeader() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -42,6 +84,8 @@ export default function AppHeader() {
   const [editingName, setEditingName] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
   const [selectedProject, setSelectedProject] = useState<string | null>(getStoredProject);
+  const [selectedRobot, setSelectedRobot] = useState<string | null>(getStoredRobot);
+  const [robotOptions, setRobotOptions] = useState<{ label: string; value: string }[]>([]);
   const [connStatus, setConnStatus] = useState<ConnectionStatus>(getConnectionStatus);
   const [messageApi, contextHolder] = message.useMessage();
 
@@ -50,9 +94,44 @@ export default function AppHeader() {
     setStoredProject(selectedProject);
   }, [selectedProject]);
 
+  // 同步 selectedRobot 到 localStorage
   useEffect(() => {
-    return subscribe(() => setConnStatus(getConnectionStatus()));
+    setStoredRobot(selectedRobot);
+  }, [selectedRobot]);
+
+  const loadRobotList = useCallback(async () => {
+    try {
+      const res = await getAllRobot();
+      const body = res.data;
+      if (body.success && body.data) {
+        const list = body.data.map((r: any) => ({ label: r.robotName, value: r.robotName }));
+        setRobotOptions(list);
+        setCachedRobotList(list);
+      }
+    } catch {
+      // ignore
+    }
   }, []);
+
+  // 连接状态变化时更新标记，连接成功自动刷新机器人列表
+  useEffect(() => {
+    return subscribe(() => {
+      const status = getConnectionStatus();
+      setConnStatus(status);
+      if (status === "connected") {
+        loadRobotList();
+      }
+    });
+  }, [loadRobotList]);
+
+  // 初始化：先显示缓存，再拉取最新
+  useEffect(() => {
+    const cached = getCachedRobotList();
+    if (cached) {
+      setRobotOptions(cached);
+    }
+    loadRobotList();
+  }, [loadRobotList]);
 
 
 
@@ -201,7 +280,7 @@ export default function AppHeader() {
           <Button type="text" size="small" icon={<ProjectOutlined />} />
         </Dropdown>
         <Select placeholder="选择项目" style={{ width: 160 }} size="small" value={selectedProject} onChange={(v) => { setSelectedProject(v); }} allowClear options={projects.map((p) => ({ label: p, value: p }))} />
-        <Select placeholder="选择机器人" style={{ width: 120 }} size="small" options={[]} />
+        <Select placeholder="选择机器人" style={{ width: 120 }} size="small" value={selectedRobot} onChange={(v) => { setSelectedRobot(v ?? null); }} allowClear options={robotOptions} />
         <Dropdown menu={{ items: settingMenu }} trigger={["hover"]}>
           <div style={{ position: "relative", display: "inline-flex" }}>
             <Button type="text" size="small" icon={<SettingOutlined />} />

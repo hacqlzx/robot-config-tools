@@ -9,6 +9,7 @@ import {
   setCurrentMap,
   getFacInfo,
 } from "@/api/config.js";
+import { subscribe } from "@/stores/backendStore";
 
 interface MapRecord {
   id: number;
@@ -81,6 +82,15 @@ export default function MapConfig() {
       fetchMaps();
       fetchFacNames();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // IP 切换时重新加载
+  useEffect(() => {
+    return subscribe(() => {
+      fetchMaps();
+      fetchFacNames();
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

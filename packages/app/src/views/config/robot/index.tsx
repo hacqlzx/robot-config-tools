@@ -5,6 +5,7 @@ import { ReloadOutlined, PlusOutlined } from "@ant-design/icons";
 import RobotFormModal from "./RobotFormModal";
 import CameraTableModal, { type CameraVO } from "./CameraTableModal";
 import { getAllRobot, addRobot, updateRobot, deleteRobot, getFacInfo } from "@/api/config.js";
+import { subscribe } from "@/stores/backendStore";
 
 export interface RobotRecord {
   id: number;
@@ -113,6 +114,15 @@ export default function RobotConfig() {
       fetchRobots();
       fetchFacOptions();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // IP 切换时重新加载
+  useEffect(() => {
+    return subscribe(() => {
+      fetchRobots();
+      fetchFacOptions();
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

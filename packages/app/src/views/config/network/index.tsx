@@ -3,6 +3,7 @@ import { Alert, Card, Form, Button, message } from "antd";
 import IpInput from "@/components/ip-input";
 import { getNetworkList, editNetwork } from "@/api/config.js";
 import { NetworkCard } from "./NetworkCard";
+import { subscribe } from "@/stores/backendStore";
 
 export interface NetworkRecord {
   id: number;
@@ -65,6 +66,14 @@ export default function NetworkConfig() {
       fetchedRef.current = true;
       fetchNetworks();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // IP 切换时重新加载
+  useEffect(() => {
+    return subscribe(() => {
+      fetchNetworks();
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
