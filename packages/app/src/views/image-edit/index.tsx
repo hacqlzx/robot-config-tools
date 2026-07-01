@@ -158,12 +158,15 @@ export default function ImageEdit() {
 
   /** 加载任务图像（任务模式：JSON + JPG 拼接） */
   const handleTaskLoad = useCallback(async (taskDir: string) => {
+    console.log("[handleTaskLoad] 开始加载:", taskDir);
     try {
       clearTask();
       setTaskImages([]);
       const items = await loadTask(taskDir);
+      console.log("[handleTaskLoad] 完成, 图片数:", items.length);
       setTaskImages(items);
     } catch (e: any) {
+      console.error("[handleTaskLoad] 失败:", e);
       message.error("加载任务数据失败: " + (e?.message || ""));
     }
   }, [loadTask, clearTask, message]);

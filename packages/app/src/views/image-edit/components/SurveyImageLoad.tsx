@@ -38,11 +38,13 @@ export default function SurveyImageLoad({ open, onClose, onImport, onTaskImport 
   }, [open, currentProject]);
 
   const handleZipFile = (file: File) => {
+    console.log("[SurveyImageLoad] ZIP选择:", file.name, file.size);
     setZipFile(file);
-    return false; // 阻止自动上传
+    return false;
   };
 
   const handleImport = async () => {
+    console.log("[SurveyImageLoad] handleImport, zipFile:", zipFile?.name, "hasMap:", form.getFieldValue("map"));
     try {
       // 如果选了地图，走地图加载
       const hasMap = form.getFieldValue("map");

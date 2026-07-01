@@ -50,10 +50,12 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
     ctx.fillStyle = "#1e1e1e";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    let drawn = 0;
     for (const item of images) {
       if (!item.img || !item.img.complete) continue;
-      try { ctx.drawImage(item.img, item.x, item.y, item.w, item.h); } catch { /* skip */ }
+      try { ctx.drawImage(item.img, item.x, item.y, item.w, item.h); drawn++; } catch { /* skip */ }
     }
+    if (images.length > 0) console.log(`[ImageCanvas] 绘制 ${drawn}/${images.length} 张, canvas=${canvas.width}x${canvas.height}`);
   }, [images, canvasRef, containerRef]);
 
   const getPos = (e: React.MouseEvent) => {

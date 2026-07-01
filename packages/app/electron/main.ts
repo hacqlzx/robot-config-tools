@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 import { initDbIpc, closeDbIpc } from "./db-ipc";
 import { getDatabase } from "@robot/database";
 import { generatePointExcel, exportSpaceZip } from "./export-points";
+import AdmZip from "adm-zip";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -341,13 +342,17 @@ ipcMain.handle("gpu:info", async () => {
 });
 
 // 解压 ZIP 到指定目录
-const AdmZip = require("adm-zip");
 ipcMain.handle("extract-zip", async (_event, zipPath: string, destDir: string) => {
+  console.log("[extract-zip] 开始解压:", zipPath, "→", destDir);
   try {
     const zip = new AdmZip(zipPath);
+    const entries = zip.getEntries();
+    console.log(`[extract-zip] 共 ${entries.length} 个条目`);
     zip.extractAllTo(destDir, true);
+    console.log("[extract-zip] 解压完成:", destDir);
     return { success: true };
   } catch (e: any) {
+    console.error("[extract-zip] 解压失败:", e.message);
     return { success: false, error: e.message };
   }
 });
