@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from "react";
-import { Button, Space, Divider, App, Spin, Radio } from "antd";
+import { Button, Space, Divider, App, Spin, Radio, Select, Input } from "antd";
 import {
   UploadOutlined,
   DownloadOutlined,
@@ -40,6 +40,18 @@ export default function ImageEdit() {
   const rightStartWidthRef = useRef(280);
 
   const [ptzSide, setPtzSide] = useState<"left" | "right">("left");
+  const [bayList, setBayList] = useState<{ id: number; bayName: string }[]>([]);
+  const [selBayId, setSelBayId] = useState<number | undefined>(undefined);
+  const [nameFilter, setNameFilter] = useState("");
+
+  // 拉取当前项目下所有间隔
+  useEffect(() => {
+    const project = localStorage.getItem("selectedProject");
+    if (!project || !window.electronAPI?.db?.bay) return;
+    window.electronAPI.db.bay.list(project).then((list) => {
+      setBayList(list.map((b) => ({ id: b.id, bayName: b.bayName })));
+    }).catch(() => {});
+  }, []);
 
   // 公共 3D 查看器
   const viewerCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -242,6 +254,26 @@ export default function ImageEdit() {
           {/* 点表模块 */}
           <div className="image-edit-point-table" style={{ width: rightWidth, minWidth: 120 }}>
             <div className="image-edit-sider-title">点表模块</div>
+            <div className="image-edit-point-filters">
+              <Select
+                placeholder="请选择间隔"
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                size="small"
+                style={{ width: "100%", marginBottom: 8 }}
+                value={selBayId}
+                onChange={(v) => setSelBayId(v)}
+                options={bayList.map((b) => ({ value: b.id, label: b.bayName }))}
+              />
+              <Input
+                placeholder="名称筛选"
+                allowClear
+                size="small"
+                value={nameFilter}
+                onChange={(e) => setNameFilter(e.target.value)}
+              />
+            </div>
             {/* TODO: 点表内容 */}
           </div>
         </div>

@@ -177,6 +177,11 @@
   justify-content: space-between;
 }
 
+.image-edit-point-filters {
+  padding: 8px 12px;
+  flex-shrink: 0;
+}
+
 .image-edit-right {
   display: flex;
   min-width: 0;
