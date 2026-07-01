@@ -63,6 +63,58 @@
   color: #bfbfbf;
   font-size: 13px;
 }
+
+.map-loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+
+  .ant-spin .ant-spin-dot {
+    color: #fff;
+  }
+}
+
+.map-loading-name {
+  color: #fff;
+  margin-top: 16px;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+.map-loading-bar-wrap {
+  width: 200px;
+  margin-top: 12px;
+}
+
+.map-loading-bar {
+  width: 100%;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.map-loading-bar-fill {
+  height: 100%;
+  background: #fff;
+  border-radius: 2px;
+  transition: width 0.2s;
+}
+
+.map-loading-pct {
+  color: #fff;
+  font-size: 12px;
+  text-align: center;
+  margin-top: 4px;
+}
 .image-edit-resizer {
   flex-shrink: 0;
   width: 4px;

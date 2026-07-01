@@ -109,9 +109,13 @@ export function useDeviceAreaDrawing(
     });
   }, []);
 
-  /** 强制关闭设备区（不弹确认，用于互斥切换） */
+  /** 强制关闭设备区（用于互斥切换），仅清除未保存数据，保留已保存的框 */
   const handleForceCloseDeviceArea = useCallback(() => {
-    drawingRef.current?.clearAll();
+    if (dirtyRef.current) {
+      drawingRef.current?.clearAll();
+    } else {
+      drawingRef.current?.setEnabled(false);
+    }
     setDeviceAreaMode(false);
   }, []);
 

@@ -190,12 +190,12 @@ export default function SpaceEdit() {
     setImporting, setLoadedFiles, setTreeKey, setClipEntityName, setClipMode, message,
   });
 
-  // ---- 自动保存生命周期 ----
-  useEffect(() => {
-    if (loadedFiles.size === 0) return;
-    startAutoSave();
-    return () => { startAutoSave(); }; // cleanup handled by startAutoSave internals
-  }, [loadedFiles, startAutoSave]);
+  // ---- 自动保存生命周期（已关闭） ----
+  // useEffect(() => {
+  //   if (loadedFiles.size === 0) return;
+  //   startAutoSave();
+  //   return () => { startAutoSave(); };
+  // }, [loadedFiles, startAutoSave]);
 
   // ---- 手动保存后重置自动保存计时器 ----
   const handleManualSave = useCallback(async () => {
