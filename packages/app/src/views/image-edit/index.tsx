@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from "react";
-import { Button, Space, Divider, App, Spin, Radio, Select, Input } from "antd";
+import { Button, Space, Divider, App, Spin, Radio, Select, Input, Checkbox } from "antd";
 import {
   UploadOutlined,
   DownloadOutlined,
@@ -43,6 +43,9 @@ export default function ImageEdit() {
   const [bayList, setBayList] = useState<{ id: number; bayName: string }[]>([]);
   const [selBayId, setSelBayId] = useState<number | undefined>(undefined);
   const [nameFilter, setNameFilter] = useState("");
+  const [checkedPoints, setCheckedPoints] = useState<string[]>([]);
+  // TODO: 从接口获取实际巡检点数据
+  const [points] = useState<{ id: string; name: string; marked: boolean }[]>([]);
 
   // 拉取当前项目下所有间隔
   useEffect(() => {
@@ -267,14 +270,31 @@ export default function ImageEdit() {
                 options={bayList.map((b) => ({ value: b.id, label: b.bayName }))}
               />
               <Input
-                placeholder="名称筛选"
+                placeholder="搜索停靠点"
                 allowClear
                 size="small"
                 value={nameFilter}
                 onChange={(e) => setNameFilter(e.target.value)}
               />
             </div>
-            {/* TODO: 点表内容 */}
+            <div className="image-edit-point-list">
+              <Checkbox.Group
+                style={{ width: "100%" }}
+                value={checkedPoints}
+                onChange={(v) => setCheckedPoints(v as string[])}
+              >
+                {points
+                  .filter((p) => !nameFilter || p.name.includes(nameFilter))
+                  .map((p) => (
+                    <div key={p.id} className="image-edit-point-item">
+                      <Checkbox value={p.id}>{p.name}</Checkbox>
+                      <span className={`image-edit-point-status${p.marked ? " marked" : ""}`}>
+                        {p.marked ? "已标" : "未标"}
+                      </span>
+                    </div>
+                  ))}
+              </Checkbox.Group>
+            </div>
           </div>
         </div>
       </div>
