@@ -240,30 +240,8 @@
 
 .image-edit-main-body {
   flex: 1;
-  overflow: auto;
-  padding: 8px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-  gap: 6px;
-  align-content: start;
-}
-
-.image-edit-card {
-  width: 100%;
-  background: #fafafa;
-  border: 1px solid #f0f0f0;
-  border-radius: 6px;
-  display: flex;
-  flex-direction: column;
-}
-
-.image-edit-card-img {
-  width: 100%;
-  aspect-ratio: 4 / 3;
-  background: #f5f5f5;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  overflow: hidden;
+  position: relative;
 }
 
 .image-edit-point-filters {

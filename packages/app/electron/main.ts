@@ -340,8 +340,19 @@ ipcMain.handle("gpu:info", async () => {
   }
 });
 
+// 解压 ZIP 到指定目录
+const AdmZip = require("adm-zip");
+ipcMain.handle("extract-zip", async (_event, zipPath: string, destDir: string) => {
+  try {
+    const zip = new AdmZip(zipPath);
+    zip.extractAllTo(destDir, true);
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e.message };
+  }
+});
+
 app.whenReady().then(async () => {
-  // 启动时记录 GPU 信息到日志文件，方便排查核显/独显颜色渲染问题
   logGPUInfo();
   // 初始化数据库 + 注册 IPC
   await initDbIpc();

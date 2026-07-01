@@ -97,6 +97,7 @@ export function useThreeDViewer({
     setProgress(0);
     try {
       const model = await loaderRef.current.loadLasFromPath(filePath);
+      engineRef.current?.focusOn(model.center[0], model.center[1], model.center[2], model.extent);
       engineRef.current?.requestRender();
       return model;
     } finally {

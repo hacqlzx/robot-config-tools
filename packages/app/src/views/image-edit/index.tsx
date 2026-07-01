@@ -7,11 +7,13 @@ import {
   CameraOutlined,
   HddOutlined,
   CheckCircleOutlined,
-  PictureOutlined,
 } from "@ant-design/icons";
 import SurveyImageLoad from "./components/SurveyImageLoad";
 import { useThreeDViewer } from "@/components/three-d-engine";
 import { useResizable } from "@/components/useResizable";
+import ImageCanvas from "@/components/image-canvas/ImageCanvas";
+import type { ImageItem } from "@/components/image-canvas/ImageCanvas";
+import { useTaskLoader } from "./hooks/useTaskLoader";
 import "./index.scss";
 
 interface TreeNode {
@@ -41,6 +43,10 @@ export default function ImageEdit() {
   });
 
   const [ptzSide, setPtzSide] = useState<"left" | "right">("left");
+  const imageCanvasRef = useRef<HTMLCanvasElement>(null);
+  const imageContainerRef = useRef<HTMLDivElement>(null);
+  const [taskImages, setTaskImages] = useState<ImageItem[]>([]);
+  const { loading: taskLoading, progress: taskProgress, loadTask, updateImagePos, clear: clearTask } = useTaskLoader();
   const [bayList, setBayList] = useState<{ id: number; bayName: string }[]>([]);
   const [selBayId, setSelBayId] = useState<number | undefined>(undefined);
   const [nameFilter, setNameFilter] = useState("");
@@ -80,7 +86,7 @@ export default function ImageEdit() {
   // 公共 3D 查看器
   const viewerCanvasRef = useRef<HTMLCanvasElement>(null);
   const viewerContainerRef = useRef<HTMLDivElement>(null);
-  const { loadFile, loadDrawing, loading, loadingFile, progress, drawingRef } = useThreeDViewer({
+  const { loadFile, loadDrawing, loading, loadingFile, progress, drawingRef, loaderRef } = useThreeDViewer({
     canvasRef: viewerCanvasRef,
     containerRef: viewerContainerRef,
     onSelect: handle3DSelect,
@@ -92,9 +98,17 @@ export default function ImageEdit() {
   // 已加载的地图数据
   const [loadedMap, setLoadedMap] = useState<string | null>(null);
 
+  /** 加载勘察图像（地图模式：LAS + JSON） */
   const handleSurveyLoad = useCallback(async (mapName: string) => {
     const project = localStorage.getItem("selectedProject");
     if (!project || !window.electronAPI?.project) return;
+    // 卸载旧模型
+    loaderRef.current?.destroy();
+    drawingRef.current?.clear();
+    setLoadedMap(null);
+    setSelBayId(undefined);
+    setCheckedPoints([]);
+    setPoints([]);
     try {
       const tree = await window.electronAPI.project.listTree(project, `地图/${mapName}`);
 
@@ -141,6 +155,29 @@ export default function ImageEdit() {
       message.error("加载地图数据失败: " + (e?.message || ""));
     }
   }, [message, loadFile, loadDrawing]);
+
+  /** 加载任务图像（任务模式：JSON + JPG 拼接） */
+  const handleTaskLoad = useCallback(async (taskDir: string) => {
+    try {
+      clearTask();
+      setTaskImages([]);
+      const items = await loadTask(taskDir);
+      setTaskImages(items);
+    } catch (e: any) {
+      message.error("加载任务数据失败: " + (e?.message || ""));
+    }
+  }, [loadTask, clearTask, message]);
+
+  /** 拖拽更新单图位置 */
+  const handleDragImage = useCallback((id: number, x: number, y: number) => {
+    setTaskImages((prev) => {
+      const idx = prev.findIndex((img) => img.id === id);
+      if (idx === -1) return prev;
+      const next = [...prev];
+      next[idx] = { ...next[idx], x, y };
+      return next;
+    });
+  }, []);
 
   const placeholder = (label: string) => {
     message.info(`${label}（功能待接入）`);
@@ -224,14 +261,19 @@ export default function ImageEdit() {
                 <Radio.Button value="right">云台右</Radio.Button>
               </Radio.Group>
             </div>
-            <div className="image-edit-main-body">
-              {[1, 2, 3, 4, 5, 6].map((i) => (
-                <div key={i} className="image-edit-card">
-                  <div className="image-edit-card-img">
-                    <PictureOutlined style={{ fontSize: 32, color: "#bfbfbf" }} />
-                  </div>
+            <div className="image-edit-main-body" ref={imageContainerRef} style={{ position: "relative" }}>
+              <ImageCanvas
+                canvasRef={imageCanvasRef}
+                containerRef={imageContainerRef}
+                images={taskImages}
+                onDragImage={handleDragImage}
+              />
+              {taskLoading && (
+                <div className="map-loading-overlay">
+                  <Spin size="large" />
+                  <div className="map-loading-name">{taskProgress}</div>
                 </div>
-              ))}
+              )}
             </div>
           </div>
           {/* 拖拽手柄 */}
@@ -291,7 +333,7 @@ export default function ImageEdit() {
       </div>
 
       {/* 勘察图像加载弹窗 */}
-      <SurveyImageLoad open={surveyLoadOpen} onClose={() => setSurveyLoadOpen(false)} onImport={handleSurveyLoad} />
+      <SurveyImageLoad open={surveyLoadOpen} onClose={() => setSurveyLoadOpen(false)} onImport={handleSurveyLoad} onTaskImport={handleTaskLoad} />
     </div>
   );
 }

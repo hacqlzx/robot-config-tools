@@ -16,6 +16,7 @@
         "@playcanvas/pcui": "^6.1.4",
         "@playcanvas/splat-transform": "2.1.0",
         "@robot/database": "workspace:*",
+        "adm-zip": "^0.5.18",
         "antd": "^6.4.3",
         "archiver": "^8.0.0",
         "axios": "^1.17.0",
@@ -30,6 +31,7 @@
         "xlsx-js-style": "^1.2.0"
     },
     "devDependencies": {
+        "@types/adm-zip": "^0.5.8",
         "@types/react": "^18.3.3",
         "@types/react-dom": "^18.3.0",
         "@vitejs/plugin-react": "^4.3.1",
