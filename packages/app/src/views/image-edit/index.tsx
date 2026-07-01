@@ -13,7 +13,6 @@ import { useThreeDViewer } from "@/components/three-d-engine";
 import "./index.scss";
 
 const MIN_LEFT = 160;
-const MAX_LEFT = 500;
 
 interface TreeNode {
   name: string;
@@ -25,10 +24,20 @@ interface TreeNode {
 export default function ImageEdit() {
   const { message } = App.useApp();
   const [leftWidth, setLeftWidth] = useState(240);
+
+  useEffect(() => {
+    const w = containerRef.current?.offsetWidth;
+    if (w) setLeftWidth(Math.round(w * 0.35));
+  }, []);
   const [resizing, setResizing] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const startXRef = useRef(0);
   const startWidthRef = useRef(240);
+
+  const [rightWidth, setRightWidth] = useState(280);
+  const [rightResizing, setRightResizing] = useState(false);
+  const rightStartXRef = useRef(0);
+  const rightStartWidthRef = useRef(280);
 
   // 公共 3D 查看器
   const viewerCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -108,7 +117,8 @@ export default function ImageEdit() {
     if (!resizing) return;
     const onMouseMove = (e: MouseEvent) => {
       const delta = e.clientX - startXRef.current;
-      const w = Math.min(MAX_LEFT, Math.max(MIN_LEFT, startWidthRef.current + delta));
+      const maxW = (containerRef.current?.offsetWidth ?? window.innerWidth) / 2;
+      const w = Math.min(maxW, Math.max(MIN_LEFT, startWidthRef.current + delta));
       setLeftWidth(w);
     };
     const onMouseUp = () => {
@@ -121,6 +131,29 @@ export default function ImageEdit() {
       window.removeEventListener("mouseup", onMouseUp);
     };
   }, [resizing]);
+
+  const onRightMouseDown = useCallback((e: React.MouseEvent) => {
+    rightStartXRef.current = e.clientX;
+    rightStartWidthRef.current = rightWidth;
+    setRightResizing(true);
+  }, [rightWidth]);
+
+  useEffect(() => {
+    if (!rightResizing) return;
+    const onMouseMove = (e: MouseEvent) => {
+      const delta = rightStartXRef.current - e.clientX;
+      const maxW = (containerRef.current?.offsetWidth ?? window.innerWidth) * 0.6;
+      const w = Math.min(maxW, Math.max(120, rightStartWidthRef.current + delta));
+      setRightWidth(w);
+    };
+    const onMouseUp = () => setRightResizing(false);
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [rightResizing]);
 
   return (
     <div className={`image-edit-page${resizing ? " is-resizing" : ""}`}>
@@ -164,6 +197,7 @@ export default function ImageEdit() {
       <div className="image-edit-body" ref={containerRef}>
         {/* 左侧：设备区地图 */}
         <div className="image-edit-sider" style={{ width: leftWidth }}>
+          <div className="image-edit-sider-title">设备区地图</div>
           <div className="image-edit-map" ref={viewerContainerRef}>
             <canvas ref={viewerCanvasRef} className="viewer-canvas" />
             {!loadedMap && !loading && (
@@ -189,9 +223,19 @@ export default function ImageEdit() {
         {/* 拖拽手柄 */}
         <div className="image-edit-resizer" onMouseDown={onMouseDown} />
 
-        {/* 右侧：主内容 */}
-        <div className="image-edit-content">
-          {/* TODO: 主内容区 */}
+        {/* 右侧 */}
+        <div className="image-edit-right" style={{ display: "flex", flex: 1, minWidth: 0 }}>
+          {/* 主模块 */}
+          <div className="image-edit-main" style={{ flex: 1, minWidth: 0 }}>
+            {/* TODO: 主内容区 */}
+          </div>
+          {/* 拖拽手柄 */}
+          <div className="image-edit-resizer" onMouseDown={onRightMouseDown} />
+          {/* 点表模块 */}
+          <div className="image-edit-point-table" style={{ width: rightWidth, minWidth: 120 }}>
+            <div className="image-edit-sider-title">点表模块</div>
+            {/* TODO: 点表内容 */}
+          </div>
         </div>
       </div>
 

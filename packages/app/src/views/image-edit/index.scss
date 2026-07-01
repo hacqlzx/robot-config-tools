@@ -36,11 +36,14 @@
 .image-edit-sider {
   flex-shrink: 0;
   border-radius: 4px;
-  overflow: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
 }
 
 .image-edit-map {
-  height: 100%;
+  flex: 1;
   position: relative;
   overflow: hidden;
 }
@@ -135,4 +138,40 @@
   overflow: hidden;
   background: #fff;
   border-radius: 4px;
+}
+
+.image-edit-sider-title {
+  flex-shrink: 0;
+  height: 32px;
+  line-height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  background: #fafafa;
+  border-bottom: 1px solid #f0f0f0;
+  border-radius: 4px 4px 0 0;
+}
+
+.image-edit-right {
+  display: flex;
+  min-width: 0;
+  gap: 4px;
+}
+
+.image-edit-main {
+  background: #fff;
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.image-edit-point-table {
+  flex-shrink: 0;
+  background: #fff;
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
