@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Tree, Modal, Input, message } from "antd";
 import type { TreeProps, TreeDataNode } from "antd";
 import TreeView from "./TreeView";
@@ -10,6 +10,7 @@ const MAX_WIDTH = 520;
 const DEFAULT_WIDTH = 260;
 
 interface Props {
+  panelWidth: number;
   onLoadLas?: (filePath: string) => Promise<void>;
   onToggleVisible?: (filePath: string) => void;
   loadedFiles: Set<string>;
@@ -147,42 +148,16 @@ const TREE_CSS = `
   .side-tree .ant-tree-switcher { width: 16px; flex-shrink: 0; }
 `;
 
-export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, treeKey, loadingFile, onCabinetCheck, mapDrawingShown, onToggleDrawing, mapPathShown, onTogglePath }: Props) {
+export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, loadedFiles, treeKey, loadingFile, onCabinetCheck, mapDrawingShown, onToggleDrawing, mapPathShown, onTogglePath }: Props) {
   const [sideTab, setSideTab] = useState("map");
   const [mapTreeData, setMapTreeData] = useState<TreeNode[]>([]);
   const [deviceTreeData, setDeviceTreeData] = useState<TreeDataNode[]>([]);
   const [cabinetTreeData, setCabinetTreeData] = useState<TreeDataNode[]>([]);
   const [deviceAreaTreeData, setDeviceAreaTreeData] = useState<TreeDataNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(false);
-  const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
+
   const [renameTarget, setRenameTarget] = useState<TreeNode | null>(null);
   const [renameValue, setRenameValue] = useState("");
-
-  const draggingRef = useRef(false);
-  const startXRef = useRef(0);
-  const startWidthRef = useRef(DEFAULT_WIDTH);
-
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      if (!draggingRef.current) return;
-      const delta = e.clientX - startXRef.current;
-      setPanelWidth(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startWidthRef.current + delta)));
-    };
-    const onUp = () => { draggingRef.current = false; };
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-    return () => {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-    };
-  }, []);
-
-  const handleResizeStart = (e: React.MouseEvent) => {
-    e.preventDefault();
-    draggingRef.current = true;
-    startXRef.current = e.clientX;
-    startWidthRef.current = panelWidth;
-  };
 
   const loadMapTree = useCallback(async () => {
     const selectedProject = localStorage.getItem("selectedProject");
@@ -349,21 +324,7 @@ export default function SidePanel({ onLoadLas, onToggleVisible, loadedFiles, tre
         flexDirection: "column",
         overflow: "hidden",
         fontSize: 13,
-        position: "relative",
       }}>
-        {/* 拖拽调整宽度手柄 */}
-        <div
-          onMouseDown={handleResizeStart}
-          style={{
-            position: "absolute",
-            right: -3,
-            top: 0,
-            bottom: 0,
-            width: 6,
-            cursor: "col-resize",
-            zIndex: 10,
-          }}
-        />
         <div style={{ display: "flex", borderBottom: "1px solid #f0f0f0", flexShrink: 0 }}>
           {TABS.map((tab) => (
             <div

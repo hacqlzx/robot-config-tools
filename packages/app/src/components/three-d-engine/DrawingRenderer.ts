@@ -55,6 +55,7 @@ interface BoxItem {
   lines: pc.Entity[];
   label: LabelInfo;
   selected: boolean;
+  bayId: number;
 }
 
 interface CabItem {
@@ -84,6 +85,7 @@ export class DrawingRenderer {
   private canvas: HTMLCanvasElement;
   private downPos: { x: number; y: number } | null = null;
   private allLabels: LabelInfo[] = [];
+  onSelect?: (info: { type: "cabinet" | "device-area" | "charging-area"; bayId: number }) => void;
 
   constructor(app: pc.Application, camera: pc.Entity, requestRender: () => void) {
     this.app = app;
@@ -187,7 +189,7 @@ export class DrawingRenderer {
     this.allLabels.push(li);
 
     this.entities.push(...lines);
-    this.boxes.push({ type: item.type, verts: vs, lines, label: li, selected: false });
+    this.boxes.push({ type: item.type, verts: vs, lines, label: li, selected: false, bayId: item.bay?.id ?? 0 });
   }
 
   private renderPaths(data: { paths: any[]; points: any[] }) {
@@ -434,8 +436,13 @@ export class DrawingRenderer {
     const hit = this.hitTest(sx, sy);
 
     if (hit) {
-      if (hit.type === "box") this.selectBox(hit.item);
-      else this.selectCabinet(hit.item);
+      if (hit.type === "box") {
+        this.selectBox(hit.item);
+        this.onSelect?.({ type: hit.item.type, bayId: hit.item.bayId });
+      } else {
+        this.selectCabinet(hit.item);
+        this.onSelect?.({ type: "cabinet", bayId: hit.item.bayId });
+      }
     } else {
       this.deselectAll();
     }

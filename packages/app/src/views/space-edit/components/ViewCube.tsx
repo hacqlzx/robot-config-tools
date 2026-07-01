@@ -1,4 +1,25 @@
-﻿interface Props {
+﻿import frontRaw from "@/assets/svg/front.svg?raw";
+import backRaw from "@/assets/svg/back.svg?raw";
+import leftRaw from "@/assets/svg/left.svg?raw";
+import rightRaw from "@/assets/svg/right.svg?raw";
+import topRaw from "@/assets/svg/top.svg?raw";
+import bottomRaw from "@/assets/svg/bottom.svg?raw";
+
+function svgDataUri(raw: string) {
+  return `data:image/svg+xml,${encodeURIComponent(raw)}`;
+}
+
+const ICONS: Record<string, string> = {
+  前: svgDataUri(frontRaw),
+  后: svgDataUri(backRaw),
+  左: svgDataUri(leftRaw),
+  右: svgDataUri(rightRaw),
+  上: svgDataUri(topRaw),
+  下: svgDataUri(bottomRaw),
+};
+
+
+interface Props {
   onViewChange?: (direction: "前" | "后" | "左" | "右" | "上" | "下") => void;
 }
 
@@ -15,18 +36,25 @@ export default function ViewCube({ onViewChange }: Props) {
           border-radius: 4px;
           background: transparent;
           cursor: pointer;
-          color: #666;
-          font-size: 12px;
-          font-weight: 500;
           display: flex;
           align-items: center;
           justify-content: center;
           transition: all 0.15s;
+          padding: 3px;
+        }
+        .space-edit-view-btn img {
+          width: 100%;
+          height: 100%;
+          opacity: 0.55;
+          transition: opacity 0.15s;
         }
         .space-edit-view-btn:hover {
           background: #1677ff;
-          color: #fff;
           border-color: #1677ff;
+        }
+        .space-edit-view-btn:hover img {
+          opacity: 1;
+          filter: brightness(10);
         }
       `}</style>
       <div style={{
@@ -44,7 +72,7 @@ export default function ViewCube({ onViewChange }: Props) {
             className="space-edit-view-btn"
             onClick={() => onViewChange?.(v)}
           >
-            {v}
+            <img src={ICONS[v]} alt={v} />
           </button>
         ))}
       </div>

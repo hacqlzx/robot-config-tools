@@ -7,12 +7,12 @@ import {
   CameraOutlined,
   HddOutlined,
   CheckCircleOutlined,
+  PictureOutlined,
 } from "@ant-design/icons";
 import SurveyImageLoad from "./components/SurveyImageLoad";
 import { useThreeDViewer } from "@/components/three-d-engine";
+import { useResizable } from "@/components/useResizable";
 import "./index.scss";
-
-const MIN_LEFT = 160;
 
 interface TreeNode {
   name: string;
@@ -23,29 +23,30 @@ interface TreeNode {
 
 export default function ImageEdit() {
   const { message } = App.useApp();
-  const [leftWidth, setLeftWidth] = useState(240);
-
-  useEffect(() => {
-    const w = containerRef.current?.offsetWidth;
-    if (w) setLeftWidth(Math.round(w * 0.25));
-  }, []);
-  const [resizing, setResizing] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const startXRef = useRef(0);
-  const startWidthRef = useRef(240);
 
-  const [rightWidth, setRightWidth] = useState(280);
-  const [rightResizing, setRightResizing] = useState(false);
-  const rightStartXRef = useRef(0);
-  const rightStartWidthRef = useRef(280);
+  const { width: leftWidth, resizing, onMouseDown } = useResizable({
+    containerRef,
+    initialPercent: 0.25,
+    minWidth: 160,
+    maxPercent: 0.5,
+  });
+
+  const { width: rightWidth, resizing: rightResizing, onMouseDown: onRightMouseDown } = useResizable({
+    containerRef,
+    initialPercent: 0.15,
+    minWidth: 120,
+    maxPercent: 0.6,
+    reverse: true,
+  });
 
   const [ptzSide, setPtzSide] = useState<"left" | "right">("left");
   const [bayList, setBayList] = useState<{ id: number; bayName: string }[]>([]);
   const [selBayId, setSelBayId] = useState<number | undefined>(undefined);
   const [nameFilter, setNameFilter] = useState("");
-  const [checkedPoints, setCheckedPoints] = useState<string[]>([]);
-  // TODO: 从接口获取实际巡检点数据
-  const [points] = useState<{ id: string; name: string; marked: boolean }[]>([]);
+  const [pointTableVisible, setPointTableVisible] = useState(true);
+  const [checkedPoints, setCheckedPoints] = useState<number[]>([]);
+  const [points, setPoints] = useState<{ id: number; pointName: string; demarcateState: number }[]>([]);
 
   // 拉取当前项目下所有间隔
   useEffect(() => {
@@ -56,12 +57,33 @@ export default function ImageEdit() {
     }).catch(() => {});
   }, []);
 
+  // 根据选中间隔查询巡检点
+  useEffect(() => {
+    const project = localStorage.getItem("selectedProject");
+    if (!project || !selBayId || !window.electronAPI?.db?.point) {
+      if (!selBayId) setPoints([]);
+      return;
+    }
+    window.electronAPI.db.point.list(project).then((list) => {
+      setPoints(
+        list
+          .filter((p) => p.bayId === selBayId)
+          .map((p) => ({ id: p.id, pointName: p.pointName, demarcateState: p.demarcateState }))
+      );
+    }).catch(() => setPoints([]));
+  }, [selBayId]);
+
+  const handle3DSelect = useCallback((info: { type: string; bayId: number }) => {
+    if (info.bayId) setSelBayId(info.bayId);
+  }, []);
+
   // 公共 3D 查看器
   const viewerCanvasRef = useRef<HTMLCanvasElement>(null);
   const viewerContainerRef = useRef<HTMLDivElement>(null);
-  const { loadFile, loadDrawing, loading, loadingFile, progress } = useThreeDViewer({
+  const { loadFile, loadDrawing, loading, loadingFile, progress, drawingRef } = useThreeDViewer({
     canvasRef: viewerCanvasRef,
     containerRef: viewerContainerRef,
+    onSelect: handle3DSelect,
   });
 
   // 弹窗状态
@@ -124,56 +146,8 @@ export default function ImageEdit() {
     message.info(`${label}（功能待接入）`);
   };
 
-  const onMouseDown = useCallback((e: React.MouseEvent) => {
-    startXRef.current = e.clientX;
-    startWidthRef.current = leftWidth;
-    setResizing(true);
-  }, [leftWidth]);
-
-  useEffect(() => {
-    if (!resizing) return;
-    const onMouseMove = (e: MouseEvent) => {
-      const delta = e.clientX - startXRef.current;
-      const maxW = (containerRef.current?.offsetWidth ?? window.innerWidth) / 2;
-      const w = Math.min(maxW, Math.max(MIN_LEFT, startWidthRef.current + delta));
-      setLeftWidth(w);
-    };
-    const onMouseUp = () => {
-      setResizing(false);
-    };
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-  }, [resizing]);
-
-  const onRightMouseDown = useCallback((e: React.MouseEvent) => {
-    rightStartXRef.current = e.clientX;
-    rightStartWidthRef.current = rightWidth;
-    setRightResizing(true);
-  }, [rightWidth]);
-
-  useEffect(() => {
-    if (!rightResizing) return;
-    const onMouseMove = (e: MouseEvent) => {
-      const delta = rightStartXRef.current - e.clientX;
-      const maxW = (containerRef.current?.offsetWidth ?? window.innerWidth) * 0.6;
-      const w = Math.min(maxW, Math.max(120, rightStartWidthRef.current + delta));
-      setRightWidth(w);
-    };
-    const onMouseUp = () => setRightResizing(false);
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-  }, [rightResizing]);
-
   return (
-    <div className={`image-edit-page${resizing ? " is-resizing" : ""}`}>
+    <div className={`image-edit-page${resizing || rightResizing ? " is-resizing" : ""}`}>
       {/* 顶部工具栏 */}
       <div className="image-edit-toolbar">
         <Space size={4} wrap>
@@ -214,7 +188,7 @@ export default function ImageEdit() {
       <div className="image-edit-body" ref={containerRef}>
         {/* 左侧：设备区地图 */}
         <div className="image-edit-sider" style={{ width: leftWidth }}>
-          <div className="image-edit-sider-title">设备区地图</div>
+          <div className="image-edit-sider-title"><span className="image-edit-title-text">设备区地图</span></div>
           <div className="image-edit-map" ref={viewerContainerRef}>
             <canvas ref={viewerCanvasRef} className="viewer-canvas" />
             {!loadedMap && !loading && (
@@ -250,14 +224,26 @@ export default function ImageEdit() {
                 <Radio.Button value="right">云台右</Radio.Button>
               </Radio.Group>
             </div>
-            {/* TODO: 主内容区 */}
+            <div className="image-edit-main-body">
+              {[1, 2, 3, 4, 5, 6].map((i) => (
+                <div key={i} className="image-edit-card">
+                  <div className="image-edit-card-img">
+                    <PictureOutlined style={{ fontSize: 32, color: "#bfbfbf" }} />
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
           {/* 拖拽手柄 */}
           <div className="image-edit-resizer" onMouseDown={onRightMouseDown} />
           {/* 点表模块 */}
-          <div className="image-edit-point-table" style={{ width: rightWidth, minWidth: 120 }}>
-            <div className="image-edit-sider-title">点表模块</div>
-            <div className="image-edit-point-filters">
+          {pointTableVisible ? (
+            <div className="image-edit-point-table" style={{ width: rightWidth, minWidth: 120 }}>
+              <div className="image-edit-sider-title">
+                <span className="image-edit-title-text">点表模块</span>
+                <span className="image-edit-toggle-btn" onClick={() => setPointTableVisible(false)}>{'>'}</span>
+              </div>
+              <div className="image-edit-point-filters">
               <Select
                 placeholder="请选择间隔"
                 allowClear
@@ -281,21 +267,26 @@ export default function ImageEdit() {
               <Checkbox.Group
                 style={{ width: "100%" }}
                 value={checkedPoints}
-                onChange={(v) => setCheckedPoints(v as string[])}
+                onChange={(v) => setCheckedPoints(v as number[])}
               >
                 {points
-                  .filter((p) => !nameFilter || p.name.includes(nameFilter))
+                  .filter((p) => !nameFilter || p.pointName.includes(nameFilter))
                   .map((p) => (
                     <div key={p.id} className="image-edit-point-item">
-                      <Checkbox value={p.id}>{p.name}</Checkbox>
-                      <span className={`image-edit-point-status${p.marked ? " marked" : ""}`}>
-                        {p.marked ? "已标" : "未标"}
+                      <Checkbox value={p.id}><span className="image-edit-point-name">{p.pointName}</span></Checkbox>
+                      <span className={`image-edit-point-status${p.demarcateState === 1 ? " marked" : ""}`}>
+                        {p.demarcateState === 1 ? "已标" : "未标"}
                       </span>
                     </div>
                   ))}
               </Checkbox.Group>
             </div>
           </div>
+          ) : (
+            <div className="image-edit-point-table-collapsed">
+              <span className="image-edit-toggle-btn" onClick={() => setPointTableVisible(true)}>{'<'}</span>
+            </div>
+          )}
         </div>
       </div>
 

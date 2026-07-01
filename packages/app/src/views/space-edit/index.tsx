@@ -12,6 +12,7 @@ import { Spin, App } from "antd";
 import Toolbar from "./components/Toolbar";
 import ViewCube from "./components/ViewCube";
 import SidePanel from "./components/SidePanel";
+import { useResizable } from "@/components/useResizable";
 import ClipController from "./components/ClipController";
 import CabinetPanel from "./components/CabinetPanel";
 import ChargingAreaPanel from "./components/ChargingAreaPanel";
@@ -42,6 +43,13 @@ export default function SpaceEdit() {
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
   const entitiesRef = useRef<Map<string, pc.Entity>>(new Map());
+  const { width: panelWidth, resizing, onMouseDown: onResizeStart } = useResizable({
+    containerRef: useRef(null),
+    initialWidth: 260,
+    minWidth: 200,
+    maxWidth: 520,
+    maxPercent: 0,
+  });
   const [drawingShown, setDrawingShown] = useState<Set<string>>(new Set());
   const [pathShown, setPathShown] = useState<Set<string>>(new Set());
   const shownByJsonRef = useRef<Map<string, number[]>>(new Map());
@@ -333,7 +341,7 @@ export default function SpaceEdit() {
   // ==================== JSX ====================
 
   return (
-    <div ref={containerRef} style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div ref={containerRef} style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", overflow: "hidden", userSelect: resizing ? "none" : undefined, cursor: resizing ? "col-resize" : undefined }}>
       <Toolbar
         onFileSelect={handleFileSelect}
         onClipModel={handleClipModel}
@@ -349,6 +357,7 @@ export default function SpaceEdit() {
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
         <ViewCube onViewChange={handleViewChange} />
         <SidePanel
+          panelWidth={panelWidth}
           treeKey={treeKey} onLoadLas={handleLoadLasFromPath}
           onToggleVisible={handleToggleVisible}
           loadedFiles={loadedFiles} loadingFile={loadingFile}
@@ -356,8 +365,24 @@ export default function SpaceEdit() {
           mapDrawingShown={drawingShown} onToggleDrawing={handleToggleDrawing}
           mapPathShown={pathShown} onTogglePath={handleTogglePathFile}
         />
+        <div
+          onMouseDown={onResizeStart}
+          style={{
+            flexShrink: 0,
+            width: 2,
+            margin: "0 2px",
+            cursor: "col-resize",
+            background: "transparent",
+            borderRadius: 1,
+            transition: "background 0.15s",
+          }}
+          onMouseOver={(e) => (e.currentTarget.style.background = "#d9d9d9")}
+          onMouseOut={(e) => (e.currentTarget.style.background = "transparent")}
+        />
         <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
-          <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block", position: "absolute", top: 0, left: 0 }} />
+          <div style={{ position: "absolute", inset: 4, overflow: "hidden", borderRadius: 4 }}>
+            <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block" }} />
+          </div>
           {saveStatus !== "idle" && (
             <div style={{ position: "absolute", top: 8, left: 8, background: "rgba(0,0,0,0.6)", borderRadius: 4, padding: "4px 10px", display: "flex", alignItems: "center", gap: 6, zIndex: 10, pointerEvents: "none" }}>
               {saveStatus === "saving" ? <span style={{ color: "#fff", fontSize: 12 }}>保存中...</span> : <span style={{ color: "#52c41a", fontSize: 12 }}>&#10003; 已保存</span>}

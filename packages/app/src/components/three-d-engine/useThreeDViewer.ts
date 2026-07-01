@@ -39,6 +39,7 @@ interface UseThreeDViewerParams {
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
   containerRef: React.RefObject<HTMLDivElement | null>;
   engineOptions?: ThreeDEngineOptions;
+  onSelect?: (info: { type: "cabinet" | "device-area" | "charging-area"; bayId: number }) => void;
 }
 
 /**
@@ -50,6 +51,7 @@ export function useThreeDViewer({
   canvasRef,
   containerRef,
   engineOptions,
+  onSelect,
 }: UseThreeDViewerParams) {
   const engineRef = useRef<ThreeDEngine | null>(null);
   const loaderRef = useRef<PointCloudLoader | null>(null);
@@ -74,6 +76,7 @@ export function useThreeDViewer({
     loaderRef.current = loader;
 
     const drawing = new DrawingRenderer(engine.app, engine.cameraEntity, () => engine.requestRender());
+    drawing.onSelect = onSelect;
     drawingRef.current = drawing;
 
     return () => {
