@@ -94,7 +94,7 @@ export class ChargingAreaDrawing {
     this.opts = { ...DEFAULTS, ...options };
 
     this.canvas.addEventListener("mousedown", this.onMouseDown);
-    window.addEventListener("mouseup", this.onMouseUp);
+    this.canvas.addEventListener("mouseup", this.onMouseUp);
     document.addEventListener("keydown", this.onKeyDown);
     this.initLabels();
   }
@@ -207,7 +207,7 @@ export class ChargingAreaDrawing {
 
   destroy() {
     this.canvas.removeEventListener("mousedown", this.onMouseDown);
-    window.removeEventListener("mouseup", this.onMouseUp);
+    this.canvas.removeEventListener("mouseup", this.onMouseUp);
     document.removeEventListener("keydown", this.onKeyDown);
     this.destroyBox();
     this.clickLines.forEach((e) => e.destroy());

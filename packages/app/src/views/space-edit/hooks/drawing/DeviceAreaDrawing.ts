@@ -79,7 +79,7 @@ export class DeviceAreaDrawing {
     this.opts = { ...DEFAULTS, ...options };
 
     this.canvas.addEventListener("mousedown", this.onMouseDown);
-    window.addEventListener("mouseup", this.onMouseUp);
+    this.canvas.addEventListener("mouseup", this.onMouseUp);
     document.addEventListener("keydown", this.onKeyDown);
     this.initLabels();
   }
@@ -218,7 +218,7 @@ export class DeviceAreaDrawing {
 
   destroy() {
     this.canvas.removeEventListener("mousedown", this.onMouseDown);
-    window.removeEventListener("mouseup", this.onMouseUp);
+    this.canvas.removeEventListener("mouseup", this.onMouseUp);
     document.removeEventListener("keydown", this.onKeyDown);
     this.clearAll();
     this.destroyLabels();
@@ -463,8 +463,6 @@ export class DeviceAreaDrawing {
   // ========== 事件 ==========
 
   private onMouseDown = (e: MouseEvent) => {
-    if (e.button !== 0) return;
-    if ((window as any).__clipDragging || (window as any).__drawingDragging) return;
     if (!this.enabled && this.boxes.length === 0) return;
     this.dragStartScreen = { x: e.clientX, y: e.clientY };
   };

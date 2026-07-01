@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from "react";
-import { Button, Space, Divider, App } from "antd";
+import { Button, Space, Divider, App, Spin } from "antd";
 import {
   UploadOutlined,
   DownloadOutlined,
@@ -9,12 +9,18 @@ import {
   CheckCircleOutlined,
 } from "@ant-design/icons";
 import SurveyImageLoad from "./components/SurveyImageLoad";
-import { useMiniViewer } from "./hooks/useMiniViewer";
-import { parseLasHeader } from "../../playcanvas-core/io/read/las-reader";
+import { useThreeDViewer } from "@/components/three-d-engine";
 import "./index.scss";
 
 const MIN_LEFT = 160;
 const MAX_LEFT = 500;
+
+interface TreeNode {
+  name: string;
+  path: string;
+  isDir: boolean;
+  children?: TreeNode[];
+}
 
 export default function ImageEdit() {
   const { message } = App.useApp();
@@ -24,10 +30,10 @@ export default function ImageEdit() {
   const startXRef = useRef(0);
   const startWidthRef = useRef(240);
 
-  // Mini 3D 查看器
+  // 公共 3D 查看器
   const viewerCanvasRef = useRef<HTMLCanvasElement>(null);
   const viewerContainerRef = useRef<HTMLDivElement>(null);
-  const { loadLasFromPath, loadJsonFromPath } = useMiniViewer({
+  const { loadFile, loadDrawing, loading, loadingFile, progress } = useThreeDViewer({
     canvasRef: viewerCanvasRef,
     containerRef: viewerContainerRef,
   });
@@ -67,28 +73,17 @@ export default function ImageEdit() {
         return;
       }
 
-      // 先加载第一个 LAS，获取中心坐标
-      const firstLas = lasFiles[0];
-      await loadLasFromPath(firstLas);
-
-      // 从 header 计算中心（用于 JSON 坐标转换）
-      const headerBuf = await window.electronAPI.readFileChunk(firstLas, 0, 4096);
-      const header = parseLasHeader(headerBuf);
-      const cx = (header.minX + header.maxX) / 2;
-      const cy = (header.minY + header.maxY) / 2;
-      const cz = (header.minZ + header.maxZ) / 2;
-
-      // 加载其余 LAS
-      for (let i = 1; i < lasFiles.length; i++) {
-        await loadLasFromPath(lasFiles[i]);
+      // 加载 LAS
+      for (let i = 0; i < lasFiles.length; i++) {
+        await loadFile(lasFiles[i]);
       }
 
       // 加载 JSON 绘制数据
       for (const jsonPath of jsonFiles) {
         try {
-          await loadJsonFromPath(jsonPath, cx, cy, cz);
+          await loadDrawing(jsonPath);
         } catch (e) {
-          console.error("JSON 加载失败:", jsonPath, e);
+          console.error("绘制数据加载失败:", jsonPath, e);
         }
       }
 
@@ -97,7 +92,7 @@ export default function ImageEdit() {
     } catch (e: any) {
       message.error("加载地图数据失败: " + (e?.message || ""));
     }
-  }, [message, loadLasFromPath, loadJsonFromPath]);
+  }, [message, loadFile, loadDrawing]);
 
   const placeholder = (label: string) => {
     message.info(`${label}（功能待接入）`);
@@ -171,8 +166,22 @@ export default function ImageEdit() {
         <div className="image-edit-sider" style={{ width: leftWidth }}>
           <div className="image-edit-map" ref={viewerContainerRef}>
             <canvas ref={viewerCanvasRef} className="viewer-canvas" />
-            {!loadedMap && (
+            {!loadedMap && !loading && (
               <div className="map-empty">请先加载勘察图像</div>
+            )}
+            {loading && (
+              <div className="map-loading-overlay">
+                <Spin size="large" />
+                <div className="map-loading-name">{loadingFile}</div>
+                {progress > 0 && (
+                  <div className="map-loading-bar-wrap">
+                    <div className="map-loading-bar">
+                      <div className="map-loading-bar-fill" style={{ width: `${progress}%` }} />
+                    </div>
+                    <div className="map-loading-pct">{progress}%</div>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         </div>
