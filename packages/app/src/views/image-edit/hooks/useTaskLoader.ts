@@ -7,35 +7,44 @@ interface TaskLoaderState {
   progress: string;
 }
 
-/** 计算网格布局 */
-function computeGrid(
-  images: TaskLoadedImage[],
-  containerW: number,
-): ImageItem[] {
+/** 竖排布局：按 spId 分组，组内按 row → col 排序，组间留间距 */
+function computeLayout(images: TaskLoadedImage[], thumbW = 200): ImageItem[] {
   if (images.length === 0) return [];
-  const leftImgs = images.filter((x) => x.side === "left");
-  const rightImgs = images.filter((x) => x.side === "right");
-  const sideCount = rightImgs.length > 0 ? 2 : 1;
+  const thumbH = thumbW * 0.75;
+  const gap = 6;
+  const groupGap = 14;
 
-  const maxCol = Math.max(...images.map((x) => x.col), 0);
-  const maxRow = Math.max(...images.map((x) => x.row), 0);
-  const totalCols = maxCol + 1;
-  const totalRows = maxRow + 1;
+  // 按 spId 分组，组内按 row, col 排序
+  const groups = new Map<number, TaskLoadedImage[]>();
+  for (const img of images) {
+    if (!groups.has(img.spId)) groups.set(img.spId, []);
+    groups.get(img.spId)!.push(img);
+  }
+  const sortedSps = [...groups.keys()].sort((a, b) => a - b);
 
-  const cellW = (containerW - (sideCount - 1) * 4) / (totalCols * sideCount);
-  const cellH = cellW * 0.75;
+  let yOff = 12;
+  const items: ImageItem[] = [];
 
-  return images.map((img) => {
-    const sideOff = img.side === "right" ? totalCols * cellW + 4 : 0;
-    return {
-      img: img.img,
-      id: img.config.pic_loc[0] + img.config.pic_loc[1] * 100 + img.spId * 10000,
-      x: sideOff + img.col * cellW,
-      y: img.row * cellH,
-      w: cellW,
-      h: cellH,
-    };
-  });
+  for (const spId of sortedSps) {
+    const group = groups.get(spId)!;
+    group.sort((a, b) => a.row - b.row || a.col - b.col);
+
+    for (const img of group) {
+      items.push({
+        img: img.img,
+        id: img.config.pic_loc[0] + img.config.pic_loc[1] * 100 + spId * 10000,
+        x: 12,
+        y: yOff,
+        w: thumbW,
+        h: thumbH,
+        side: img.side,
+        spId,
+      });
+      yOff += thumbH + gap;
+    }
+    if (group.length > 0) yOff += groupGap; // 组间间距
+  }
+  return items;
 }
 
 export function useTaskLoader() {
@@ -55,8 +64,10 @@ export function useTaskLoader() {
 
     const allImages: TaskLoadedImage[] = [];
     for (const fileName of manifest.file_names) {
-      const spDir = fileName.replace(".json", "");
-      console.log(`[TaskLoader] 读取停靠点: ${spDir}`);
+      const parts = fileName.split("_");
+      const cpId = Math.abs(parseInt(parts[1])) || 0;
+      const spDir = String(cpId);
+      console.log(`[TaskLoader] 读取停靠点 SP${cpId}: ${taskDir}/${spDir}/${fileName}`);
       const spBuf = await api.readLargeFile(`${taskDir}/${spDir}/${fileName}`);
       const spConfig: TaskSPConfig = JSON.parse(new TextDecoder().decode(spBuf));
       const imageKeys = Object.keys(spConfig.images).sort();
@@ -85,31 +96,20 @@ export function useTaskLoader() {
         allImages.push({
           img, config: cfg, spId: spConfig.sp_id, spDir,
           col: cfg.pic_loc[0], row: cfg.pic_loc[1], side,
-          x: 0, y: 0, w: 0, h: 0,
+          x: 0, y: 0, w: 200, h: 150,
         });
         loaded++;
       }
     }
 
-    const containerW = window.innerWidth * 0.55;
-    const items = computeGrid(allImages, containerW);
-    console.log(`[TaskLoader] 加载完成: ${items.length} 张图片, 网格宽度=${containerW}, 缩略图=${items[0]?.w.toFixed(0)}x${items[0]?.h.toFixed(0)}`);
+    const items = computeLayout(allImages, 200);
+    console.log(`[TaskLoader] 加载完成: ${items.length} 张图片, 缩略图=200x150`);
     imagesRef.current = items;
     setState({ loading: false, progress: "" });
     return items;
   }, []);
 
-  /** 更新单图拖拽位置 */
-  const updateImagePos = useCallback((id: number, x: number, y: number) => {
-    const idx = imagesRef.current.findIndex((img) => img.id === id);
-    if (idx === -1) return;
-    imagesRef.current[idx] = { ...imagesRef.current[idx], x, y };
-    return [...imagesRef.current];
-  }, []);
+  const clear = useCallback(() => { imagesRef.current = []; }, []);
 
-  const clear = useCallback(() => {
-    imagesRef.current = [];
-  }, []);
-
-  return { ...state, loadTask, updateImagePos, clear };
+  return { ...state, loadTask, clear };
 }

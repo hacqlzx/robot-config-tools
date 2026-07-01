@@ -328,6 +328,8 @@ async function logGPUInfo() {
     fs.writeFileSync(logPath, `GPU info failed: ${err}`, "utf-8");
   }
 }
+// 获取项目存储根目录
+ipcMain.handle("get-project-root", async () => PROJECT_ROOT);
 // GPU 信息 IPC：渲染进程可调用此接口获取当前 GPU 状态
 ipcMain.handle("gpu:info", async () => {
   try {
@@ -347,10 +349,28 @@ ipcMain.handle("extract-zip", async (_event, zipPath: string, destDir: string) =
   try {
     const zip = new AdmZip(zipPath);
     const entries = zip.getEntries();
-    console.log(`[extract-zip] 共 ${entries.length} 个条目`);
+    console.log(`[extract-zip] 共 ${entries.length} 个条目, 前5:`, entries.slice(0, 5).map((e: any) => e.entryName));
     zip.extractAllTo(destDir, true);
     console.log("[extract-zip] 解压完成:", destDir);
-    return { success: true };
+
+    // 记录顶层实际内容
+    const topItems = fs.readdirSync(destDir, { withFileTypes: true });
+    console.log(`[extract-zip] 顶层条目: ${topItems.map(x => `${x.name}(${x.isDirectory() ? 'd' : 'f'})`).join(", ")}`);
+
+    // 在 destDir 下找 json_list.json，找不到则穿透子目录
+    let actualDir = destDir;
+    if (!fs.existsSync(path.join(destDir, "json_list.json"))) {
+      const subDirs = topItems.filter(x => x.isDirectory() && !x.name.startsWith(".") && !x.name.startsWith("__"));
+      for (const d of subDirs) {
+        const candidate = path.join(destDir, d.name);
+        if (fs.existsSync(path.join(candidate, "json_list.json"))) {
+          actualDir = candidate;
+          console.log("[extract-zip] 穿透子目录 →", actualDir);
+          break;
+        }
+      }
+    }
+    return { success: true, actualDir };
   } catch (e: any) {
     console.error("[extract-zip] 解压失败:", e.message);
     return { success: false, error: e.message };

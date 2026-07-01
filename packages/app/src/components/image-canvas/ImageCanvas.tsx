@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState, useCallback } from "react";
 
 export interface ImageItem {
   img: HTMLImageElement;
@@ -7,6 +7,8 @@ export interface ImageItem {
   y: number;
   w: number;
   h: number;
+  side: "left" | "right";
+  spId: number;
 }
 
 interface Props {
@@ -14,12 +16,13 @@ interface Props {
   containerRef: React.RefObject<HTMLDivElement | null>;
   images: ImageItem[];
   visible?: boolean;
-  onDragImage?: (id: number, x: number, y: number) => void;
 }
 
-/** 图片画布：渲染多张图片，支持拖拽 */
-export default function ImageCanvas({ canvasRef, containerRef, images, visible = true, onDragImage }: Props) {
-  const dragRef = useRef<{ id: number; mx: number; my: number; startX: number; startY: number } | null>(null);
+/** 图片画布：支持缩放/平移，图片按传入坐标静态排布 */
+export default function ImageCanvas({ canvasRef, containerRef, images, visible = true }: Props) {
+  const [scale, setScale] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const dragRef = useRef<{ mx: number; my: number; sx: number; sy: number } | null>(null);
 
   // 尺寸适配
   useEffect(() => {
@@ -40,7 +43,7 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
     return () => ro.disconnect();
   }, [containerRef, canvasRef]);
 
-  // 重绘
+  // 重绘（应用 scale + pan 变换）
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -50,47 +53,51 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
     ctx.fillStyle = "#1e1e1e";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    ctx.save();
+    ctx.translate(pan.x, pan.y);
+    ctx.scale(scale, scale);
+
     let drawn = 0;
     for (const item of images) {
       if (!item.img || !item.img.complete) continue;
       try { ctx.drawImage(item.img, item.x, item.y, item.w, item.h); drawn++; } catch { /* skip */ }
     }
-    if (images.length > 0) console.log(`[ImageCanvas] 绘制 ${drawn}/${images.length} 张, canvas=${canvas.width}x${canvas.height}`);
-  }, [images, canvasRef, containerRef]);
+    ctx.restore();
 
-  const getPos = (e: React.MouseEvent) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const rect = canvas.getBoundingClientRect();
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
-  };
-
-  const onMouseDown = (e: React.MouseEvent) => {
-    const { x, y } = getPos(e);
-    for (let i = images.length - 1; i >= 0; i--) {
-      const item = images[i];
-      if (x >= item.x && x <= item.x + item.w && y >= item.y && y <= item.y + item.h) {
-        dragRef.current = { id: item.id, mx: x, my: y, startX: item.x, startY: item.y };
-        return;
-      }
+    // 缩放提示
+    if (scale !== 1) {
+      ctx.fillStyle = "rgba(255,255,255,0.5)";
+      ctx.font = "12px sans-serif";
+      ctx.fillText(`${Math.round(scale * 100)}%`, 8, 20);
     }
-  };
+    if (images.length > 0) console.log(`[ImageCanvas] 绘制 ${drawn}/${images.length} 张, scale=${scale.toFixed(2)}, pan=(${pan.x.toFixed(0)},${pan.y.toFixed(0)})`);
+  }, [images, scale, pan, canvasRef]);
 
+  // 滚轮缩放
+  const onWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -0.1 : 0.1;
+    setScale((s) => Math.max(0.1, Math.min(5, s + delta)));
+  }, []);
+
+  // 画布拖拽平移
+  const onMouseDown = (e: React.MouseEvent) => {
+    dragRef.current = { mx: e.clientX, my: e.clientY, sx: pan.x, sy: pan.y };
+  };
   const onMouseMove = (e: React.MouseEvent) => {
     if (!dragRef.current) return;
-    const { x, y } = getPos(e);
-    const dx = x - dragRef.current.mx;
-    const dy = y - dragRef.current.my;
-    onDragImage?.(dragRef.current.id, dragRef.current.startX + dx, dragRef.current.startY + dy);
+    const dx = e.clientX - dragRef.current.mx;
+    const dy = e.clientY - dragRef.current.my;
+    setPan({ x: dragRef.current.sx + dx, y: dragRef.current.sy + dy });
   };
-
   const onMouseUp = () => { dragRef.current = null; };
 
   return (
-    <div ref={containerRef} style={{ display: visible ? "flex" : "none", flex: 1, position: "relative", overflow: "hidden" }}>
+    <div ref={containerRef} style={{ display: visible ? "flex" : "none", flex: 1, position: "relative", overflow: "hidden", cursor: dragRef.current ? "grabbing" : "grab" }}>
       <canvas
         ref={canvasRef}
         style={{ width: "100%", height: "100%", display: "block" }}
+        onWheel={onWheel}
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}

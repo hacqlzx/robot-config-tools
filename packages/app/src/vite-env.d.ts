@@ -37,7 +37,8 @@ declare global {
       onExportProgress: (callback: (data: { step: string; pct: number }) => void) => () => void;
       importPoints: (rows: any[], stationName: string, stationCode: string, projectName: string) => Promise<{ total: number; inserted: number; updated: number; errors: string[] }>;
       exportZip: (projectName: string, items: { type: string; name: string }[], destDir: string) => Promise<{ zipPath: string; zipName: string; config: any }>;
-      extractZip: (zipPath: string, destDir: string) => Promise<{ success: boolean; error?: string }>;
+      extractZip: (zipPath: string, destDir: string) => Promise<{ success: boolean; error?: string; actualDir?: string }>;
+      getProjectRoot: () => Promise<string>;
       startBatch: () => Promise<void>;
       endBatch: () => Promise<void>;
       db: {

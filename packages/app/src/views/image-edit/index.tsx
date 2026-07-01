@@ -171,16 +171,7 @@ export default function ImageEdit() {
     }
   }, [loadTask, clearTask, message]);
 
-  /** 拖拽更新单图位置 */
-  const handleDragImage = useCallback((id: number, x: number, y: number) => {
-    setTaskImages((prev) => {
-      const idx = prev.findIndex((img) => img.id === id);
-      if (idx === -1) return prev;
-      const next = [...prev];
-      next[idx] = { ...next[idx], x, y };
-      return next;
-    });
-  }, []);
+  const filteredTaskImages = taskImages.filter(img => img.side === ptzSide);
 
   const placeholder = (label: string) => {
     message.info(`${label}（功能待接入）`);
@@ -268,8 +259,7 @@ export default function ImageEdit() {
               <ImageCanvas
                 canvasRef={imageCanvasRef}
                 containerRef={imageContainerRef}
-                images={taskImages}
-                onDragImage={handleDragImage}
+                images={filteredTaskImages}
               />
               {taskLoading && (
                 <div className="map-loading-overlay">
