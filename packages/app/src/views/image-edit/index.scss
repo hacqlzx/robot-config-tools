@@ -142,15 +142,39 @@
 
 .image-edit-sider-title {
   flex-shrink: 0;
-  height: 32px;
-  line-height: 32px;
+  height: 36px;
+  line-height: 36px;
   padding: 0 12px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: #333;
   background: #fafafa;
   border-bottom: 1px solid #f0f0f0;
   border-radius: 4px 4px 0 0;
+
+  &::before {
+    content: "";
+    display: inline-block;
+    width: 3px;
+    height: 16px;
+    background: #1890ff;
+    border-radius: 2px;
+    margin-right: 8px;
+    vertical-align: middle;
+    margin-top: -2px;
+  }
+}
+
+.image-edit-main-header {
+  flex-shrink: 0;
+  height: 36px;
+  line-height: 36px;
+  padding: 0 12px;
+  background: #fafafa;
+  border-bottom: 1px solid #f0f0f0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .image-edit-right {

@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from "react";
-import { Button, Space, Divider, App, Spin } from "antd";
+import { Button, Space, Divider, App, Spin, Radio } from "antd";
 import {
   UploadOutlined,
   DownloadOutlined,
@@ -27,7 +27,7 @@ export default function ImageEdit() {
 
   useEffect(() => {
     const w = containerRef.current?.offsetWidth;
-    if (w) setLeftWidth(Math.round(w * 0.35));
+    if (w) setLeftWidth(Math.round(w * 0.25));
   }, []);
   const [resizing, setResizing] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -38,6 +38,8 @@ export default function ImageEdit() {
   const [rightResizing, setRightResizing] = useState(false);
   const rightStartXRef = useRef(0);
   const rightStartWidthRef = useRef(280);
+
+  const [ptzSide, setPtzSide] = useState<"left" | "right">("left");
 
   // 公共 3D 查看器
   const viewerCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -227,6 +229,12 @@ export default function ImageEdit() {
         <div className="image-edit-right" style={{ display: "flex", flex: 1, minWidth: 0 }}>
           {/* 主模块 */}
           <div className="image-edit-main" style={{ flex: 1, minWidth: 0 }}>
+            <div className="image-edit-main-header">
+              <Radio.Group value={ptzSide} onChange={(e) => setPtzSide(e.target.value)} size="small">
+                <Radio.Button value="left">云台左</Radio.Button>
+                <Radio.Button value="right">云台右</Radio.Button>
+              </Radio.Group>
+            </div>
             {/* TODO: 主内容区 */}
           </div>
           {/* 拖拽手柄 */}
