@@ -56,7 +56,28 @@ export default function ImageEdit() {
   const [points, setPoints] = useState<{ id: number; pointName: string; demarcateState: number }[]>([]);
 
   const [calibrationImage, setCalibrationImage] = useState<ImageItem | null>(null);
+  const [calibratedIds, setCalibratedIds] = useState<Set<number>>(new Set());
   const taskDirRef = useRef<string>("");
+
+  // 加载已标定的图片 ID 集合
+  const refreshCalibratedIds = useCallback(async () => {
+    const td = taskDirRef.current;
+    if (!td || !window.electronAPI?.readLargeFile) return;
+    try {
+      const buf = await window.electronAPI.readLargeFile(`${td}/勘察数据.json`);
+      const json = JSON.parse(new TextDecoder().decode(buf));
+      const ids = new Set<number>();
+      for (const entry of json.data || []) {
+        if (entry.rects && entry.rects.some((r: any) => r.bindings && r.bindings.length > 0)) {
+          ids.add(entry.imageId);
+        }
+      }
+      setCalibratedIds(ids);
+    } catch {
+      setCalibratedIds(new Set());
+    }
+  }, []);
+
   const handleImageDoubleClick = useCallback((item: ImageItem) => {
     setCalibrationImage(item);
   }, []);
@@ -175,6 +196,7 @@ export default function ImageEdit() {
       const items = setSide(ptzSide);
       setTaskImages(items);
       console.log("[handleTaskLoad] 完成, 图片数:", items.length);
+      refreshCalibratedIds();
     } catch (e: any) {
       console.error("[handleTaskLoad] 失败:", e);
       message.error("加载任务数据失败: " + (e?.message || ""));
@@ -276,6 +298,7 @@ export default function ImageEdit() {
                 canvasRef={imageCanvasRef}
                 containerRef={imageContainerRef}
                 images={taskImages}
+                calibratedIds={calibratedIds}
                 onImageDoubleClick={handleImageDoubleClick}
               />
               {taskLoading && (
@@ -352,7 +375,7 @@ export default function ImageEdit() {
           image={calibrationImage}
           taskDir={taskDirRef.current}
           mapName={loadedMap}
-          onBack={() => setCalibrationImage(null)}
+          onBack={() => { setCalibrationImage(null); refreshCalibratedIds(); }}
         />
       )}
     </div>

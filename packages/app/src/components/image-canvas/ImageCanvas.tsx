@@ -18,10 +18,11 @@ interface Props {
   images: ImageItem[];
   visible?: boolean;
   onImageDoubleClick?: (item: ImageItem) => void;
+  calibratedIds?: Set<number>;
 }
 
 /** 图片画布：缩放/平移，rAF 驱动渲染，预缩放缩略图，视口裁剪 */
-export default function ImageCanvas({ canvasRef, containerRef, images, visible = true, onImageDoubleClick }: Props) {
+export default function ImageCanvas({ canvasRef, containerRef, images, visible = true, onImageDoubleClick, calibratedIds }: Props) {
   const [displayScale, setDisplayScale] = useState(1);
   const panRef = useRef({ x: 0, y: 0 });
   const scaleRef = useRef(1);
@@ -29,6 +30,8 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
   const rafIdRef = useRef(0);
   const imagesRef = useRef(images);
   imagesRef.current = images;
+  const calibratedRef = useRef(calibratedIds);
+  calibratedRef.current = calibratedIds;
 
   const thumbScale = 2;
 
@@ -110,6 +113,12 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
 
       const src = cache.get(item.id) || item.img;
       try { ctx.drawImage(src, item.x, item.y, item.w, item.h); drawn++; } catch { /* skip */ }
+      const ids = calibratedRef.current;
+      if (ids && ids.has(item.id)) {
+        ctx.strokeStyle = "#52c41a";
+        ctx.lineWidth = 2 / s;
+        ctx.strokeRect(item.x, item.y, item.w, item.h);
+      }
     }
     ctx.restore();
 
@@ -130,7 +139,7 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
   // images 变化时触发重绘
   useEffect(() => {
     scheduleDraw();
-  }, [images, scheduleDraw]);
+  }, [images, calibratedIds, scheduleDraw]);
 
   // 滚轮缩放
   useEffect(() => {
