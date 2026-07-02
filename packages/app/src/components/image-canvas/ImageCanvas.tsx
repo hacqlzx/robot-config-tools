@@ -18,11 +18,39 @@ interface Props {
   visible?: boolean;
 }
 
-/** 图片画布：支持缩放/平移，图片按传入坐标静态排布 */
+/** 图片画布：缩放/平移，rAF 驱动渲染，预缩放缩略图，视口裁剪 */
 export default function ImageCanvas({ canvasRef, containerRef, images, visible = true }: Props) {
-  const [scale, setScale] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [displayScale, setDisplayScale] = useState(1);
+  const panRef = useRef({ x: 0, y: 0 });
+  const scaleRef = useRef(1);
   const dragRef = useRef<{ mx: number; my: number; sx: number; sy: number } | null>(null);
+  const rafIdRef = useRef(0);
+  const imagesRef = useRef(images);
+  imagesRef.current = images;
+
+  const thumbScale = 2;
+
+  // 预缩放缩略图缓存：id → 2x 缩略尺寸的离屏 canvas，避免每帧从大图缩放，同时保证 2x 内不糊
+  const thumbCacheRef = useRef<Map<number, HTMLCanvasElement>>(new Map());
+
+  // 重建缩略图缓存
+  useEffect(() => {
+    const cache = thumbCacheRef.current;
+    const newIds = new Set(images.map((item) => item.id));
+    for (const id of cache.keys()) {
+      if (!newIds.has(id)) cache.delete(id);
+    }
+    for (const item of images) {
+      if (cache.has(item.id)) continue;
+      if (!item.img || !item.img.complete) continue;
+      const thumb = document.createElement("canvas");
+      thumb.width = item.w * thumbScale;
+      thumb.height = item.h * thumbScale;
+      const tCtx = thumb.getContext("2d");
+      if (tCtx) tCtx.drawImage(item.img, 0, 0, thumb.width, thumb.height);
+      cache.set(item.id, thumb);
+    }
+  }, [images]);
 
   // 尺寸适配
   useEffect(() => {
@@ -36,6 +64,7 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
       if (w <= 0 || h <= 0) return;
       canvas.width = w;
       canvas.height = h;
+      scheduleDraw();
     };
     resize();
     const ro = new ResizeObserver(resize);
@@ -43,52 +72,104 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
     return () => ro.disconnect();
   }, [containerRef, canvasRef]);
 
-  // 重绘（应用 scale + pan 变换）
-  useEffect(() => {
+  // 绘制：从 ref 读取 pan/scale，缩略图 + 视口裁剪
+  const draw = useCallback(() => {
+    rafIdRef.current = 0;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const s = scaleRef.current;
+    const p = panRef.current;
+    const cw = canvas.width;
+    const ch = canvas.height;
+
+    // 视口在世界坐标中的范围
+    const vpLeft = (0 - p.x) / s;
+    const vpTop = (0 - p.y) / s;
+    const vpRight = (cw - p.x) / s;
+    const vpBottom = (ch - p.y) / s;
+
+    ctx.clearRect(0, 0, cw, ch);
     ctx.fillStyle = "#1e1e1e";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, cw, ch);
 
     ctx.save();
-    ctx.translate(pan.x, pan.y);
-    ctx.scale(scale, scale);
+    ctx.translate(p.x, p.y);
+    ctx.scale(s, s);
 
     let drawn = 0;
-    for (const item of images) {
-      if (!item.img || !item.img.complete) continue;
-      try { ctx.drawImage(item.img, item.x, item.y, item.w, item.h); drawn++; } catch { /* skip */ }
+    const imgs = imagesRef.current;
+    const cache = thumbCacheRef.current;
+    for (const item of imgs) {
+      // 视口裁剪
+      if (item.x + item.w < vpLeft || item.x > vpRight) continue;
+      if (item.y + item.h < vpTop || item.y > vpBottom) continue;
+
+      const src = cache.get(item.id) || item.img;
+      try { ctx.drawImage(src, item.x, item.y, item.w, item.h); drawn++; } catch { /* skip */ }
     }
     ctx.restore();
 
-    // 缩放提示
-    if (scale !== 1) {
+    if (s !== 1) {
       ctx.fillStyle = "rgba(255,255,255,0.5)";
       ctx.font = "12px sans-serif";
-      ctx.fillText(`${Math.round(scale * 100)}%`, 8, 20);
+      ctx.fillText(`${Math.round(s * 100)}%`, 8, 20);
     }
-    if (images.length > 0) console.log(`[ImageCanvas] 绘制 ${drawn}/${images.length} 张, scale=${scale.toFixed(2)}, pan=(${pan.x.toFixed(0)},${pan.y.toFixed(0)})`);
-  }, [images, scale, pan, canvasRef]);
+    if (imgs.length > 0) console.log(`[ImageCanvas] 绘制 ${drawn}/${imgs.length} 张, scale=${s.toFixed(2)}`);
+  }, [canvasRef]);
+
+  const scheduleDraw = useCallback(() => {
+    if (!rafIdRef.current) {
+      rafIdRef.current = requestAnimationFrame(draw);
+    }
+  }, [draw]);
+
+  // images 变化时触发重绘
+  useEffect(() => {
+    scheduleDraw();
+  }, [images, scheduleDraw]);
 
   // 滚轮缩放
-  const onWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? -0.1 : 0.1;
-    setScale((s) => Math.max(0.1, Math.min(5, s + delta)));
-  }, []);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
 
-  // 画布拖拽平移
+      const factor = e.deltaY < 0 ? 1.08 : 0.92;
+      const oldScale = scaleRef.current;
+      const oldPan = panRef.current;
+      const newScale = Math.max(0.1, Math.min(5, oldScale * factor));
+
+      const worldX = (mx - oldPan.x) / oldScale;
+      const worldY = (my - oldPan.y) / oldScale;
+      const newPanX = mx - worldX * newScale;
+      const newPanY = my - worldY * newScale;
+
+      scaleRef.current = newScale;
+      panRef.current = { x: newPanX, y: newPanY };
+      setDisplayScale(newScale);
+      scheduleDraw();
+    };
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", onWheel);
+  }, [canvasRef, scheduleDraw]);
+
+  // 拖拽：只更新 ref + 调度绘制，不经过 React state
   const onMouseDown = (e: React.MouseEvent) => {
-    dragRef.current = { mx: e.clientX, my: e.clientY, sx: pan.x, sy: pan.y };
+    dragRef.current = { mx: e.clientX, my: e.clientY, sx: panRef.current.x, sy: panRef.current.y };
   };
   const onMouseMove = (e: React.MouseEvent) => {
     if (!dragRef.current) return;
-    const dx = e.clientX - dragRef.current.mx;
-    const dy = e.clientY - dragRef.current.my;
-    setPan({ x: dragRef.current.sx + dx, y: dragRef.current.sy + dy });
+    panRef.current = {
+      x: dragRef.current.sx + e.clientX - dragRef.current.mx,
+      y: dragRef.current.sy + e.clientY - dragRef.current.my,
+    };
+    scheduleDraw();
   };
   const onMouseUp = () => { dragRef.current = null; };
 
@@ -97,7 +178,6 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
       <canvas
         ref={canvasRef}
         style={{ width: "100%", height: "100%", display: "block" }}
-        onWheel={onWheel}
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}

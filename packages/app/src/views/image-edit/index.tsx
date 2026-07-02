@@ -46,7 +46,7 @@ export default function ImageEdit() {
   const imageCanvasRef = useRef<HTMLCanvasElement>(null);
   const imageContainerRef = useRef<HTMLDivElement>(null);
   const [taskImages, setTaskImages] = useState<ImageItem[]>([]);
-  const { loading: taskLoading, progress: taskProgress, loadTask, updateImagePos, clear: clearTask } = useTaskLoader();
+  const { loading: taskLoading, progress: taskProgress, loadTask, setSide, clear: clearTask } = useTaskLoader();
   const [bayList, setBayList] = useState<{ id: number; bayName: string }[]>([]);
   const [selBayId, setSelBayId] = useState<number | undefined>(undefined);
   const [nameFilter, setNameFilter] = useState("");
@@ -162,16 +162,24 @@ export default function ImageEdit() {
     try {
       clearTask();
       setTaskImages([]);
-      const items = await loadTask(taskDir);
-      console.log("[handleTaskLoad] 完成, 图片数:", items.length);
+      await loadTask(taskDir);
+      // 按当前选中的云台侧计算布局
+      const items = setSide(ptzSide);
       setTaskImages(items);
+      console.log("[handleTaskLoad] 完成, 图片数:", items.length);
     } catch (e: any) {
       console.error("[handleTaskLoad] 失败:", e);
       message.error("加载任务数据失败: " + (e?.message || ""));
     }
-  }, [loadTask, clearTask, message]);
+  }, [loadTask, clearTask, setSide, ptzSide, message]);
 
-  const filteredTaskImages = taskImages.filter(img => img.side === ptzSide);
+  // ptzSide 切换时重新计算布局
+  useEffect(() => {
+    const items = setSide(ptzSide);
+    if (items.length > 0 || taskImages.length > 0) {
+      setTaskImages(items);
+    }
+  }, [ptzSide]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const placeholder = (label: string) => {
     message.info(`${label}（功能待接入）`);
@@ -259,7 +267,7 @@ export default function ImageEdit() {
               <ImageCanvas
                 canvasRef={imageCanvasRef}
                 containerRef={imageContainerRef}
-                images={filteredTaskImages}
+                images={taskImages}
               />
               {taskLoading && (
                 <div className="map-loading-overlay">

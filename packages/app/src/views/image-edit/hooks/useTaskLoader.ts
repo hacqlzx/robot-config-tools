@@ -7,49 +7,62 @@ interface TaskLoaderState {
   progress: string;
 }
 
-/** 竖排布局：按 spId 分组，组内按 row → col 排序，组间留间距 */
-function computeLayout(images: TaskLoadedImage[], thumbW = 200): ImageItem[] {
+/** 布局：按停靠点+组号（spId + pic_loc[1]）分列，列内按序号（pic_loc[0]）从上往下排 */
+function computeLayout(images: TaskLoadedImage[], thumbW = 200, side?: "left" | "right"): ImageItem[] {
   if (images.length === 0) return [];
   const thumbH = thumbW * 0.75;
-  const gap = 6;
-  const groupGap = 14;
+  const colGap = 10;
 
-  // 按 spId 分组，组内按 row, col 排序
-  const groups = new Map<number, TaskLoadedImage[]>();
-  for (const img of images) {
-    if (!groups.has(img.spId)) groups.set(img.spId, []);
-    groups.get(img.spId)!.push(img);
+  // 按云台侧过滤
+  const filtered = side ? images.filter((img) => img.side === side) : images;
+  if (filtered.length === 0) return [];
+
+  // 按 spId + 组号（row = pic_loc[1]）分组，每个停靠点下的组独立一列
+  const groups = new Map<string, TaskLoadedImage[]>();
+  for (const img of filtered) {
+    const key = `${img.spId}_${img.row}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(img);
   }
-  const sortedSps = [...groups.keys()].sort((a, b) => a - b);
 
-  let yOff = 12;
+  // 排序：先 spId，再组号
+  const sortedKeys = [...groups.keys()].sort((a, b) => {
+    const [spA, gA] = a.split("_").map(Number);
+    const [spB, gB] = b.split("_").map(Number);
+    return spA - spB || gA - gB;
+  });
+
+  let xOff = 12;
   const items: ImageItem[] = [];
 
-  for (const spId of sortedSps) {
-    const group = groups.get(spId)!;
-    group.sort((a, b) => a.row - b.row || a.col - b.col);
+  for (const key of sortedKeys) {
+    const [spId, groupId] = key.split("_").map(Number);
+    const group = groups.get(key)!;
+    // 组内按序号（col = pic_loc[0]）从上往下排，无间隙
+    group.sort((a, b) => a.col - b.col);
 
+    let yOff = 12;
     for (const img of group) {
       items.push({
         img: img.img,
-        id: img.config.pic_loc[0] + img.config.pic_loc[1] * 100 + spId * 10000,
-        x: 12,
+        id: img.config.pic_loc[0] + img.config.pic_loc[1] * 100 + img.spId * 10000,
+        x: xOff,
         y: yOff,
         w: thumbW,
         h: thumbH,
         side: img.side,
-        spId,
+        spId: img.spId,
       });
-      yOff += thumbH + gap;
+      yOff += thumbH;
     }
-    if (group.length > 0) yOff += groupGap; // 组间间距
+    xOff += thumbW + colGap;
   }
   return items;
 }
 
 export function useTaskLoader() {
   const [state, setState] = useState<TaskLoaderState>({ loading: false, progress: "" });
-  const imagesRef = useRef<ImageItem[]>([]);
+  const rawImagesRef = useRef<TaskLoadedImage[]>([]);
 
   const loadTask = useCallback(async (taskDir: string): Promise<ImageItem[]> => {
     setState({ loading: true, progress: "读取任务配置..." });
@@ -102,14 +115,21 @@ export function useTaskLoader() {
       }
     }
 
+    rawImagesRef.current = allImages;
     const items = computeLayout(allImages, 200);
     console.log(`[TaskLoader] 加载完成: ${items.length} 张图片, 缩略图=200x150`);
-    imagesRef.current = items;
     setState({ loading: false, progress: "" });
     return items;
   }, []);
 
-  const clear = useCallback(() => { imagesRef.current = []; }, []);
+  /** 按指定云台侧重新计算布局 */
+  const setSide = useCallback((side: "left" | "right") => {
+    const items = computeLayout(rawImagesRef.current, 200, side);
+    console.log(`[TaskLoader] 云台侧切换: ${side}, 图片数: ${items.length}`);
+    return items;
+  }, []);
 
-  return { ...state, loadTask, clear };
+  const clear = useCallback(() => { rawImagesRef.current = []; }, []);
+
+  return { ...state, loadTask, setSide, clear };
 }
