@@ -370,6 +370,20 @@ ipcMain.handle("extract-zip", async (_event, zipPath: string, destDir: string) =
         }
       }
     }
+
+    // 如果 actualDir 是 destDir 的子目录，将内容提上来避免重复目录名
+    if (actualDir !== destDir) {
+      const subItems = fs.readdirSync(actualDir, { withFileTypes: true });
+      for (const item of subItems) {
+        const src = path.join(actualDir, item.name);
+        const dst = path.join(destDir, item.name);
+        fs.renameSync(src, dst);
+      }
+      fs.rmdirSync(actualDir);
+      actualDir = destDir;
+      console.log("[extract-zip] 扁平化目录，去除重复路径 →", actualDir);
+    }
+
     return { success: true, actualDir };
   } catch (e: any) {
     console.error("[extract-zip] 解压失败:", e.message);
