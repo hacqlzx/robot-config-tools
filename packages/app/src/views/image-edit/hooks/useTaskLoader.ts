@@ -8,9 +8,8 @@ interface TaskLoaderState {
 }
 
 /** 布局：按停靠点+组号（spId + pic_loc[1]）分列，列内按序号（pic_loc[0]）从上往下排 */
-function computeLayout(images: TaskLoadedImage[], thumbW = 200, side?: "left" | "right"): ImageItem[] {
+function computeLayout(images: TaskLoadedImage[], thumbW = 200, thumbH = 150, side?: "left" | "right"): ImageItem[] {
   if (images.length === 0) return [];
-  const thumbH = thumbW * 0.75;
   const colGap = 10;
 
   // 按云台侧过滤
@@ -52,6 +51,7 @@ function computeLayout(images: TaskLoadedImage[], thumbW = 200, side?: "left" | 
         h: thumbH,
         side: img.side,
         spId: img.spId,
+        visName: img.config.vis_name,
       });
       yOff += thumbH;
     }
@@ -116,15 +116,25 @@ export function useTaskLoader() {
     }
 
     rawImagesRef.current = allImages;
-    const items = computeLayout(allImages, 200);
-    console.log(`[TaskLoader] 加载完成: ${items.length} 张图片, 缩略图=200x150`);
+    // 读取第一张图的比例作为缩略图比例
+    const firstImg = allImages[0]?.img;
+    const ratio = firstImg ? firstImg.naturalWidth / firstImg.naturalHeight : 4 / 3;
+    const thumbW = 200;
+    const thumbH = Math.round(thumbW / ratio);
+    const items = computeLayout(allImages, thumbW, thumbH);
+    console.log(`[TaskLoader] 加载完成: ${items.length} 张图片, 缩略图=${thumbW}x${thumbH} (比例=${ratio.toFixed(2)})`);
     setState({ loading: false, progress: "" });
     return items;
   }, []);
 
   /** 按指定云台侧重新计算布局 */
   const setSide = useCallback((side: "left" | "right") => {
-    const items = computeLayout(rawImagesRef.current, 200, side);
+    const firstImg = rawImagesRef.current[0]?.img;
+    const thumbW = 200;
+    const thumbH = firstImg
+      ? Math.round(thumbW / (firstImg.naturalWidth / firstImg.naturalHeight))
+      : 150;
+    const items = computeLayout(rawImagesRef.current, thumbW, thumbH, side);
     console.log(`[TaskLoader] 云台侧切换: ${side}, 图片数: ${items.length}`);
     return items;
   }, []);

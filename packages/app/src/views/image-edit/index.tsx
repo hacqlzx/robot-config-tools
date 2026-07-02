@@ -9,6 +9,7 @@ import {
   CheckCircleOutlined,
 } from "@ant-design/icons";
 import SurveyImageLoad from "./components/SurveyImageLoad";
+import CalibrationView from "./components/CalibrationView";
 import { useThreeDViewer } from "@/components/three-d-engine";
 import { useResizable } from "@/components/useResizable";
 import ImageCanvas from "@/components/image-canvas/ImageCanvas";
@@ -53,6 +54,12 @@ export default function ImageEdit() {
   const [pointTableVisible, setPointTableVisible] = useState(true);
   const [checkedPoints, setCheckedPoints] = useState<number[]>([]);
   const [points, setPoints] = useState<{ id: number; pointName: string; demarcateState: number }[]>([]);
+
+  const [calibrationImage, setCalibrationImage] = useState<ImageItem | null>(null);
+  const taskDirRef = useRef<string>("");
+  const handleImageDoubleClick = useCallback((item: ImageItem) => {
+    setCalibrationImage(item);
+  }, []);
 
   // 拉取当前项目下所有间隔
   useEffect(() => {
@@ -159,6 +166,7 @@ export default function ImageEdit() {
   /** 加载任务图像（任务模式：JSON + JPG 拼接） */
   const handleTaskLoad = useCallback(async (taskDir: string) => {
     console.log("[handleTaskLoad] 开始加载:", taskDir);
+    taskDirRef.current = taskDir;
     try {
       clearTask();
       setTaskImages([]);
@@ -268,6 +276,7 @@ export default function ImageEdit() {
                 canvasRef={imageCanvasRef}
                 containerRef={imageContainerRef}
                 images={taskImages}
+                onImageDoubleClick={handleImageDoubleClick}
               />
               {taskLoading && (
                 <div className="map-loading-overlay">
@@ -335,6 +344,17 @@ export default function ImageEdit() {
 
       {/* 勘察图像加载弹窗 */}
       <SurveyImageLoad open={surveyLoadOpen} onClose={() => setSurveyLoadOpen(false)} onImport={handleSurveyLoad} onTaskImport={handleTaskLoad} />
+
+      {/* 标定视图（双击图片进入） */}
+      {calibrationImage && (
+        <CalibrationView
+          key={calibrationImage.id}
+          image={calibrationImage}
+          taskDir={taskDirRef.current}
+          mapName={loadedMap}
+          onBack={() => setCalibrationImage(null)}
+        />
+      )}
     </div>
   );
 }

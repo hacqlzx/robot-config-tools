@@ -9,6 +9,7 @@ export interface ImageItem {
   h: number;
   side: "left" | "right";
   spId: number;
+  visName: string;
 }
 
 interface Props {
@@ -16,10 +17,11 @@ interface Props {
   containerRef: React.RefObject<HTMLDivElement | null>;
   images: ImageItem[];
   visible?: boolean;
+  onImageDoubleClick?: (item: ImageItem) => void;
 }
 
 /** 图片画布：缩放/平移，rAF 驱动渲染，预缩放缩略图，视口裁剪 */
-export default function ImageCanvas({ canvasRef, containerRef, images, visible = true }: Props) {
+export default function ImageCanvas({ canvasRef, containerRef, images, visible = true, onImageDoubleClick }: Props) {
   const [displayScale, setDisplayScale] = useState(1);
   const panRef = useRef({ x: 0, y: 0 });
   const scaleRef = useRef(1);
@@ -91,7 +93,7 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
     const vpBottom = (ch - p.y) / s;
 
     ctx.clearRect(0, 0, cw, ch);
-    ctx.fillStyle = "#1e1e1e";
+    ctx.fillStyle = "#fff";
     ctx.fillRect(0, 0, cw, ch);
 
     ctx.save();
@@ -158,6 +160,34 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
     canvas.addEventListener("wheel", onWheel, { passive: false });
     return () => canvas.removeEventListener("wheel", onWheel);
   }, [canvasRef, scheduleDraw]);
+
+  // 双击检测：屏幕坐标转世界坐标，命中图片后回调
+  const onDoubleClickRef = useRef(onImageDoubleClick);
+  onDoubleClickRef.current = onImageDoubleClick;
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onDblClick = (e: MouseEvent) => {
+      if (!onDoubleClickRef.current) return;
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const s = scaleRef.current;
+      const p = panRef.current;
+      const worldX = (mx - p.x) / s;
+      const worldY = (my - p.y) / s;
+      const imgs = imagesRef.current;
+      for (const item of imgs) {
+        if (worldX >= item.x && worldX <= item.x + item.w && worldY >= item.y && worldY <= item.y + item.h) {
+          onDoubleClickRef.current(item);
+          break;
+        }
+      }
+    };
+    canvas.addEventListener("dblclick", onDblClick);
+    return () => canvas.removeEventListener("dblclick", onDblClick);
+  }, [canvasRef]);
 
   // 拖拽：只更新 ref + 调度绘制，不经过 React state
   const onMouseDown = (e: React.MouseEvent) => {
