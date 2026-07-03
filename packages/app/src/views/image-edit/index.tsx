@@ -371,14 +371,17 @@ export default function ImageEdit() {
                 {points
                   .filter((p) => !nameFilter || p.pointName.includes(nameFilter))
                   .filter((p) => pointFilter === "all" || (pointFilter === "marked" ? calibratedPointCodes.has(p.pointCode) : !calibratedPointCodes.has(p.pointCode)))
-                  .map((p) => (
+                  .map((p) => {
+                    const isCalibrated = calibratedPointCodes.has(p.pointCode);
+                    return (
                     <div key={p.id} className="image-edit-point-item">
                       <Checkbox value={p.id}><span className="image-edit-point-name">{p.pointName}</span></Checkbox>
-                      <span className={`image-edit-point-status${p.demarcateState === 1 ? " marked" : ""}`}>
-                        {p.demarcateState === 1 ? "已标" : "未标"}
+                      <span className={`image-edit-point-status${isCalibrated ? " marked" : " unmarked"}`}>
+                        {isCalibrated ? "已标" : "未标"}
                       </span>
                     </div>
-                  ))}
+                    );
+                  })}
               </Checkbox.Group>
             </div>
           </div>

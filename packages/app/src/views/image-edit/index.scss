@@ -302,13 +302,21 @@
 
 .image-edit-point-status {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  text-align: center;
   color: #999;
-  width: 30px;
-  text-align: right;
+  background: #f5f5f5;
 
   &.marked {
     color: #52c41a;
+    background: #f6ffed;
+  }
+
+  &.unmarked {
+    color: #F59A6D;
+    background: #fff7e6;
   }
 }
 
