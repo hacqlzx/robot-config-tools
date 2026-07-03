@@ -19,10 +19,11 @@ interface Props {
   visible?: boolean;
   onImageDoubleClick?: (item: ImageItem) => void;
   calibrationRects?: Map<number, { x: number; y: number; w: number; h: number }[]>;
+  resetViewRef?: React.MutableRefObject<(() => void) | null>;
 }
 
 /** 图片画布：缩放/平移，rAF 驱动渲染，预缩放缩略图，视口裁剪 */
-export default function ImageCanvas({ canvasRef, containerRef, images, visible = true, onImageDoubleClick, calibrationRects }: Props) {
+export default function ImageCanvas({ canvasRef, containerRef, images, visible = true, onImageDoubleClick, calibrationRects, resetViewRef }: Props) {
   const [displayScale, setDisplayScale] = useState(1);
   const panRef = useRef({ x: 0, y: 0 });
   const scaleRef = useRef(1);
@@ -122,10 +123,40 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
     }
   }, [draw]);
 
-  // images 变化时触发重绘
-  useEffect(() => {
+  // 计算内容范围并适配容器
+  const fitToContent = useCallback(() => {
+    const imgs = imagesRef.current;
+    if (imgs.length === 0) return;
+    const container = containerRef.current;
+    if (!container) return;
+    const cw = container.clientWidth;
+    const ch = container.clientHeight;
+    if (cw <= 0 || ch <= 0) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const item of imgs) {
+      if (item.x < minX) minX = item.x;
+      if (item.y < minY) minY = item.y;
+      if (item.x + item.w > maxX) maxX = item.x + item.w;
+      if (item.y + item.h > maxY) maxY = item.y + item.h;
+    }
+    const contentW = maxX - minX;
+    const contentH = maxY - minY;
+    const pad = 12;
+    const s = Math.min((cw - pad * 2) / contentW, (ch - pad * 2) / contentH);
+    scaleRef.current = s;
+    panRef.current = {
+      x: (cw - contentW * s) / 2 - minX * s,
+      y: (ch - contentH * s) / 2 - minY * s,
+    };
+    setDisplayScale(s);
     scheduleDraw();
-  }, [images, calibrationRects, scheduleDraw]);
+  }, [containerRef, scheduleDraw]);
+
+  // 暴露重置视角方法
+  if (resetViewRef) resetViewRef.current = fitToContent;
+
+  // images 变化时自适应
+  useEffect(() => { fitToContent(); }, [images, fitToContent]);
 
   // 尺寸适配：拖拽中不重设画布缓冲避免闪烁，稳定后对齐
   useEffect(() => {

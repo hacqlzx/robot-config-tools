@@ -62,6 +62,7 @@ export default function ImageEdit() {
   const [calibrationRects, setCalibrationRects] = useState<Map<number, { x: number; y: number; w: number; h: number }[]>>(new Map());
   const [calibratedPointCodes, setCalibratedPointCodes] = useState<Set<string>>(new Set());
   const [calibratedImageCount, setCalibratedImageCount] = useState(0);
+  const resetViewRef = useRef<(() => void) | null>(null);
   const taskDirRef = useRef<string>("");
 
   // 加载已标定的图片 ID 集合 + 已标定点位编码集合
@@ -328,6 +329,7 @@ export default function ImageEdit() {
               <span className="image-edit-header-info">
                 <b>区域：</b>{selBayId ? bayList.find((b) => b.id === selBayId)?.bayName || "—" : "—"}&emsp;|&emsp;全部 {totalImageCount}张&emsp;已标 {calibratedImageCount}张
               </span>
+              <Button size="small" style={{ marginLeft: "auto" }} onClick={() => resetViewRef.current?.()}>重置视角</Button>
             </div>
             <div className="image-edit-main-body" ref={imageContainerRef} style={{ position: "relative" }}>
               <ImageCanvas
@@ -335,6 +337,7 @@ export default function ImageEdit() {
                 containerRef={imageContainerRef}
                 images={taskImages}
                 calibrationRects={calibrationRects}
+                resetViewRef={resetViewRef}
                 onImageDoubleClick={handleImageDoubleClick}
               />
               {taskLoading && (
