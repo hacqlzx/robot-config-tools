@@ -760,7 +760,6 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
     <div className="calibration-view">
       <div className="calibration-toolbar">
         <Space size={8}>
-          <Button icon={<ArrowLeftOutlined />} onClick={onBack}>返回</Button>
           <Button
             type={mode === "move" ? "primary" : "default"}
             icon={<DragOutlined />}
@@ -781,6 +780,7 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
           {`  sp${image.spId}·${image.side === "left" ? "云台左" : "云台右"}`}
           {pendingRect ? "  [待绑定]" : ""}
         </span>
+        <Button icon={<ArrowLeftOutlined />} onClick={onBack} style={{ marginLeft: "auto" }}>返回图像编辑</Button>
       </div>
 
       <div className="calibration-body" ref={bodyRef}>
@@ -813,7 +813,7 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
         {/* 右侧点表 */}
         <div className="calibration-point-table" style={{ width: rightWidth, minWidth: 200 }}>
           <div className="image-edit-sider-title">
-            <span className="image-edit-title-text">点表模块</span>
+            <span className="image-edit-title-text">点表</span>
           </div>
           <div className="image-edit-point-filters">
             <Select

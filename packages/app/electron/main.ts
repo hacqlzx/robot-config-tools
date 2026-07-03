@@ -357,34 +357,26 @@ ipcMain.handle("extract-zip", async (_event, zipPath: string, destDir: string) =
     const topItems = fs.readdirSync(destDir, { withFileTypes: true });
     console.log(`[extract-zip] 顶层条目: ${topItems.map(x => `${x.name}(${x.isDirectory() ? 'd' : 'f'})`).join(", ")}`);
 
-    // 在 destDir 下找 json_list.json，找不到则穿透子目录
-    let actualDir = destDir;
-    if (!fs.existsSync(path.join(destDir, "json_list.json"))) {
-      const subDirs = topItems.filter(x => x.isDirectory() && !x.name.startsWith(".") && !x.name.startsWith("__"));
-      for (const d of subDirs) {
-        const candidate = path.join(destDir, d.name);
-        if (fs.existsSync(path.join(candidate, "json_list.json"))) {
-          actualDir = candidate;
-          console.log("[extract-zip] 穿透子目录 →", actualDir);
-          break;
+    // 始终查找并去除 ZIP 内同名子目录造成的嵌套
+    const subDirs = topItems.filter(x => x.isDirectory() && !x.name.startsWith(".") && !x.name.startsWith("__"));
+    for (const d of subDirs) {
+      const candidate = path.join(destDir, d.name);
+      if (fs.existsSync(path.join(candidate, "json_list.json"))) {
+        // 子目录里有 json_list.json，将内容提上来
+        const subItems = fs.readdirSync(candidate, { withFileTypes: true });
+        for (const item of subItems) {
+          const src = path.join(candidate, item.name);
+          const dst = path.join(destDir, item.name);
+          if (fs.existsSync(dst)) {
+            fs.rmSync(dst, { recursive: true, force: true });
+          }
+          fs.renameSync(src, dst);
         }
+        fs.rmSync(candidate, { recursive: true, force: true });
+        console.log("[extract-zip] 扁平化目录，去除嵌套 →", candidate);
       }
     }
-
-    // 如果 actualDir 是 destDir 的子目录，将内容提上来避免重复目录名
-    if (actualDir !== destDir) {
-      const subItems = fs.readdirSync(actualDir, { withFileTypes: true });
-      for (const item of subItems) {
-        const src = path.join(actualDir, item.name);
-        const dst = path.join(destDir, item.name);
-        fs.renameSync(src, dst);
-      }
-      fs.rmdirSync(actualDir);
-      actualDir = destDir;
-      console.log("[extract-zip] 扁平化目录，去除重复路径 →", actualDir);
-    }
-
-    return { success: true, actualDir };
+    return { success: true, actualDir: destDir };
   } catch (e: any) {
     console.error("[extract-zip] 解压失败:", e.message);
     return { success: false, error: e.message };

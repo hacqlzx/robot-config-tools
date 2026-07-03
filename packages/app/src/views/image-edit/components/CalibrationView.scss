@@ -22,9 +22,12 @@
 }
 
 .calibration-image-name {
-  margin-left: auto;
+  flex: 1;
   font-size: 13px;
   color: #666;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .calibration-body {

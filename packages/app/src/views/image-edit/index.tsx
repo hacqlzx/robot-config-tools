@@ -47,18 +47,21 @@ export default function ImageEdit() {
   const imageCanvasRef = useRef<HTMLCanvasElement>(null);
   const imageContainerRef = useRef<HTMLDivElement>(null);
   const [taskImages, setTaskImages] = useState<ImageItem[]>([]);
-  const { loading: taskLoading, progress: taskProgress, loadTask, setSide, clear: clearTask } = useTaskLoader();
+  const [totalImageCount, setTotalImageCount] = useState(0);
+  const { loading: taskLoading, progress: taskProgress, loadTask, setSide, clear: clearTask, getTotalCount } = useTaskLoader();
   const [bayList, setBayList] = useState<{ id: number; bayName: string }[]>([]);
   const [selBayId, setSelBayId] = useState<number | undefined>(undefined);
   const [nameFilter, setNameFilter] = useState("");
   const [pointFilter, setPointFilter] = useState<"all" | "marked" | "unmarked">("all");
   const [pointTableVisible, setPointTableVisible] = useState(true);
+  const [mapVisible, setMapVisible] = useState(true);
   const [checkedPoints, setCheckedPoints] = useState<number[]>([]);
   const [points, setPoints] = useState<{ id: number; pointCode: string; pointName: string; demarcateState: number }[]>([]);
 
   const [calibrationImage, setCalibrationImage] = useState<ImageItem | null>(null);
   const [calibrationRects, setCalibrationRects] = useState<Map<number, { x: number; y: number; w: number; h: number }[]>>(new Map());
   const [calibratedPointCodes, setCalibratedPointCodes] = useState<Set<string>>(new Set());
+  const [calibratedImageCount, setCalibratedImageCount] = useState(0);
   const taskDirRef = useRef<string>("");
 
   // 加载已标定的图片 ID 集合 + 已标定点位编码集合
@@ -73,15 +76,23 @@ export default function ImageEdit() {
       for (const entry of json.data || []) {
         if (entry.rects && entry.rects.length > 0) {
           map.set(entry.imageId, entry.rects.map((r: any) => ({ x: r.x, y: r.y, w: r.w, h: r.h })));
-          for (const r of entry.rects) {
-            for (const b of r.bindings || []) {
-              codes.add(b.pointCode);
+          const hasBinding = entry.rects.some((r: any) => r.bindings && r.bindings.length > 0);
+          if (hasBinding) {
+            for (const r of entry.rects) {
+              for (const b of r.bindings || []) {
+                codes.add(b.pointCode);
+              }
             }
           }
         }
       }
       setCalibrationRects(map);
       setCalibratedPointCodes(codes);
+      let calCount = 0;
+      for (const entry of json.data || []) {
+        if (entry.rects && entry.rects.some((r: any) => r.bindings && r.bindings.length > 0)) calCount++;
+      }
+      setCalibratedImageCount(calCount);
     } catch {
       setCalibrationRects(new Map());
       setCalibratedPointCodes(new Set());
@@ -205,6 +216,7 @@ export default function ImageEdit() {
       // 按当前选中的云台侧计算布局
       const items = setSide(ptzSide);
       setTaskImages(items);
+      setTotalImageCount(getTotalCount());
       console.log("[handleTaskLoad] 完成, 图片数:", items.length);
       refreshCalibratedRects();
     } catch (e: any) {
@@ -266,9 +278,20 @@ export default function ImageEdit() {
       {/* 主体：左右布局 */}
       <div className="image-edit-body" ref={containerRef}>
         {/* 左侧：设备区地图 */}
-        <div className="image-edit-sider" style={{ width: leftWidth }}>
-          <div className="image-edit-sider-title"><span className="image-edit-title-text">设备区地图</span></div>
-          <div className="image-edit-map" ref={viewerContainerRef}>
+        <div
+          className={`image-edit-sider${mapVisible ? "" : " image-edit-sider-collapsed"}`}
+          style={{ width: mapVisible ? leftWidth : 32, minWidth: 0, overflow: "hidden", transition: "width 0.2s" }}
+          onClick={mapVisible ? undefined : () => setMapVisible(true)}
+        >
+          <div className="image-edit-sider-title" style={{ borderRadius: mapVisible ? "4px 4px 0 0" : 4, justifyContent: mapVisible ? undefined : "center", flex: mapVisible ? undefined : 1 }}>
+            <span className="image-edit-title-text" style={{ display: mapVisible ? "" : "none" }}>设备区地图</span>
+            <span
+              className="image-edit-toggle-btn"
+              onClick={(e) => { setMapVisible(!mapVisible); if (!mapVisible) e.stopPropagation(); }}
+              style={{ marginLeft: mapVisible ? "auto" : 0 }}
+            >{mapVisible ? '<' : '>'}</span>
+          </div>
+          <div className="image-edit-map" ref={viewerContainerRef} style={{ display: mapVisible ? "" : "none" }}>
             <canvas ref={viewerCanvasRef} className="viewer-canvas" />
             {!loadedMap && !loading && (
               <div className="map-empty">请先加载勘察图像</div>
@@ -298,10 +321,13 @@ export default function ImageEdit() {
           {/* 主模块 */}
           <div className="image-edit-main" style={{ flex: 1, minWidth: 0 }}>
             <div className="image-edit-main-header">
-              <Radio.Group value={ptzSide} onChange={(e) => setPtzSide(e.target.value)} size="small">
+              <Radio.Group value={ptzSide} onChange={(e) => setPtzSide(e.target.value)} size="middle">
                 <Radio.Button value="left">云台左</Radio.Button>
                 <Radio.Button value="right">云台右</Radio.Button>
               </Radio.Group>
+              <span className="image-edit-header-info">
+                <b>区域：</b>{selBayId ? bayList.find((b) => b.id === selBayId)?.bayName || "—" : "—"}&emsp;|&emsp;全部 {totalImageCount}张&emsp;已标 {calibratedImageCount}张
+              </span>
             </div>
             <div className="image-edit-main-body" ref={imageContainerRef} style={{ position: "relative" }}>
               <ImageCanvas
@@ -321,11 +347,11 @@ export default function ImageEdit() {
           </div>
           {/* 拖拽手柄 */}
           <div className="image-edit-resizer" onMouseDown={onRightMouseDown} />
-          {/* 点表模块 */}
+          {/* 点表 */}
           {pointTableVisible ? (
             <div className="image-edit-point-table" style={{ width: rightWidth, minWidth: 120 }}>
               <div className="image-edit-sider-title">
-                <span className="image-edit-title-text">点表模块</span>
+                <span className="image-edit-title-text">点表</span>
                 <span className="image-edit-toggle-btn" onClick={() => setPointTableVisible(false)}>{'>'}</span>
               </div>
               <div className="image-edit-point-filters">
@@ -386,8 +412,8 @@ export default function ImageEdit() {
             </div>
           </div>
           ) : (
-            <div className="image-edit-point-table-collapsed">
-              <span className="image-edit-toggle-btn" onClick={() => setPointTableVisible(true)}>{'<'}</span>
+            <div className="image-edit-point-table-collapsed" onClick={() => setPointTableVisible(true)}>
+              {'<'}
             </div>
           )}
         </div>

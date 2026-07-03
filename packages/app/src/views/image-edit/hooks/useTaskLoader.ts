@@ -44,7 +44,7 @@ function computeLayout(images: TaskLoadedImage[], thumbW = 200, thumbH = 150, si
     for (const img of group) {
       items.push({
         img: img.img,
-        id: img.config.pic_loc[0] + img.config.pic_loc[1] * 100 + img.spId * 10000,
+        id: img.config.pic_loc[0] + img.config.pic_loc[1] * 100 + img.spId * 10000 + (img.side === "right" ? 5000 : 0),
         x: xOff,
         y: yOff,
         w: thumbW,
@@ -141,5 +141,7 @@ export function useTaskLoader() {
 
   const clear = useCallback(() => { rawImagesRef.current = []; }, []);
 
-  return { ...state, loadTask, setSide, clear };
+  const getTotalCount = useCallback(() => rawImagesRef.current.length, []);
+
+  return { ...state, loadTask, setSide, clear, getTotalCount };
 }

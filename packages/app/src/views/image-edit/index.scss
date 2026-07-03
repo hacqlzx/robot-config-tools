@@ -179,7 +179,8 @@
   margin-left: auto;
   cursor: pointer;
   color: #999;
-  font-size: 14px;
+  font-size: 16px;
+  font-weight: bold;
   line-height: 1;
   padding: 2px 6px;
   user-select: none;
@@ -189,7 +190,7 @@
 
 .image-edit-point-table-collapsed {
   flex-shrink: 0;
-  width: 28px;
+  width: 32px;
   background: #fafafa;
   border: 1px solid #f0f0f0;
   border-radius: 4px;
@@ -197,11 +198,41 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  writing-mode: vertical-rl;
-  font-size: 14px;
+  font-size: 16px;
+  font-weight: bold;
   color: #999;
+  writing-mode: horizontal-tb;
+  user-select: none;
+  transition: all 0.2s;
 
-  &:hover { color: #333; }
+  &:hover {
+    color: #1677ff;
+    background: #e6f4ff;
+    border-color: #91caff;
+  }
+}
+
+.image-edit-sider-collapsed {
+  flex-shrink: 0;
+  width: 32px;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.2s;
+
+  &:hover {
+    background: #e6f4ff;
+
+    .image-edit-sider-title {
+      background: #e6f4ff;
+      border-color: #91caff;
+    }
+  }
 }
 
 .image-edit-right {
@@ -236,7 +267,15 @@
   border-bottom: 1px solid #f0f0f0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 12px;
+}
+
+.image-edit-header-info {
+  font-size: 13px;
+  color: #555;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .image-edit-main-body {
