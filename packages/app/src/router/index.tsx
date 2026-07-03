@@ -1,8 +1,8 @@
 ﻿import { lazy, Suspense } from "react";
 import { createHashRouter, Navigate } from "react-router-dom";
 import AppLayout from "../App";
+import SpaceEdit from "../views/space-edit";
 
-const SpaceEdit = lazy(() => import("../views/space-edit"));
 const ImageEdit = lazy(() => import("../views/image-edit"));
 const DeviceVerify = lazy(() => import("../views/device-verify"));
 const ImportExport = lazy(() => import("../views/import-export"));
@@ -18,7 +18,7 @@ const router = createHashRouter([
     element: <AppLayout />,
     children: [
       { index: true, element: <Navigate to="space-edit" replace /> },
-      { path: "space-edit", element: <LazyPage><SpaceEdit /></LazyPage> },
+      { path: "space-edit", element: <SpaceEdit /> },
       { path: "image-edit", element: <LazyPage><ImageEdit /></LazyPage> },
       { path: "device-verify", element: <LazyPage><DeviceVerify /></LazyPage> },
       { path: "import-export", element: <LazyPage><ImportExport /></LazyPage> },

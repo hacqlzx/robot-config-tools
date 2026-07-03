@@ -41,6 +41,7 @@ function createWindow() {
 
   const win = new BrowserWindow({
     show: false,
+    backgroundColor: "#f5f5f5",
     frame: false,
     webPreferences: {
       preload: preloadPath,
@@ -54,7 +55,7 @@ function createWindow() {
   });
 
   win.maximize();
-  win.show();
+  win.once("ready-to-show", () => win.show());
 
   // 窗口控制
   ipcMain.on("win:minimize", () => win.minimize());

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { Tree, Modal, Input, message } from "antd";
 import type { TreeProps, TreeDataNode } from "antd";
 import TreeView from "./TreeView";
+import DeviceTree from "@/components/DeviceTree";
 import { DRAWING_FILE_NAME, PATH_FILE_NAME } from "../hooks/drawing/drawing-storage";
 import type { TreeNode } from "./TreeView";
 
@@ -35,55 +36,6 @@ const TABS = [
   { key: "deviceArea", label: "设备区" },
 ];
 
-function upsertChildren(
-  tree: TreeDataNode[],
-  parentKey: React.Key,
-  children: TreeDataNode[],
-): TreeDataNode[] {
-  return tree.map((node) => {
-    if (node.key === parentKey) {
-      if (node.children && node.children.length > 0) return node;
-      return { ...node, children };
-    }
-    if (node.children) {
-      return { ...node, children: upsertChildren(node.children, parentKey, children) };
-    }
-    return node;
-  });
-}
-
-/** 设备台账树：电压 → 间隔 → 主设备 → 部件 */
-function buildDeviceTree(
-  voltList: any[],
-  bayList: any[],
-  mainList: any[],
-  compList: any[],
-): TreeDataNode[] {
-  return voltList.map((v) => ({
-    key: `volt/${v.id}`,
-    title: v.voltName || "(未命名)",
-    children: bayList
-      .filter((b) => b.voltId === v.id)
-      .map((b) => ({
-        key: `bay/${b.id}`,
-        title: b.bayName || "(未命名)",
-        children: mainList
-          .filter((m) => m.bayId === b.id)
-          .map((m) => ({
-            key: `main/${m.id}`,
-            title: m.mainDeviceName || "(未命名)",
-            children: compList
-              .filter((c) => c.mainDeviceId === m.id)
-              .map((c) => ({
-                key: `component/${c.id}`,
-                title: c.componentName || "(未命名)",
-                isLeaf: false,
-              })),
-          })),
-      })),
-  }));
-}
-
 /** 屏柜/设备区树：电压 → 指定类型的间隔 */
 function buildBayTypeTree(voltList: any[], bayList: any[], bayType: string): TreeDataNode[] {
   return voltList
@@ -105,41 +57,6 @@ function buildBayTypeTree(voltList: any[], bayList: any[], bayType: string): Tre
     .filter(Boolean) as TreeDataNode[];
 }
 
-/** 创建懒加载点位回调 */
-function makeLoadPoints(
-  setTreeData: React.Dispatch<React.SetStateAction<TreeDataNode[]>>,
-): TreeProps["loadData"] {
-  return (node) =>
-    new Promise<void>(async (resolve) => {
-      const key = String(node.key);
-      if (!key.startsWith("component/")) {
-        resolve();
-        return;
-      }
-      const componentId = parseInt(key.split("/")[1], 10);
-      if (isNaN(componentId)) {
-        resolve();
-        return;
-      }
-      const projectName = localStorage.getItem("selectedProject");
-      if (!projectName || !window.electronAPI) {
-        resolve();
-        return;
-      }
-      try {
-        const points = await window.electronAPI.db.point.findByComponentId(componentId, projectName);
-        const children: TreeDataNode[] = points.map((p: any) => ({
-          key: `point/${p.id}`,
-          title: p.pointName || "(未命名)",
-          isLeaf: true,
-        }));
-        setTreeData((prev) => upsertChildren(prev, node.key, children));
-      } finally {
-        resolve();
-      }
-    });
-}
-
 const TREE_CSS = `
   .side-tree .ant-tree-treenode { white-space: nowrap; }
   .side-tree .ant-tree-node-content-wrapper { overflow: hidden; flex: 1; min-width: 0; }
@@ -151,7 +68,6 @@ const TREE_CSS = `
 export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, loadedFiles, treeKey, loadingFile, onCabinetCheck, mapDrawingShown, onToggleDrawing, mapPathShown, onTogglePath }: Props) {
   const [sideTab, setSideTab] = useState("map");
   const [mapTreeData, setMapTreeData] = useState<TreeNode[]>([]);
-  const [deviceTreeData, setDeviceTreeData] = useState<TreeDataNode[]>([]);
   const [cabinetTreeData, setCabinetTreeData] = useState<TreeDataNode[]>([]);
   const [deviceAreaTreeData, setDeviceAreaTreeData] = useState<TreeDataNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(false);
@@ -167,26 +83,6 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, load
       setMapTreeData(nodes);
     } catch {
       setMapTreeData([]);
-    }
-  }, []);
-
-  const loadDeviceTree = useCallback(async () => {
-    const projectName = localStorage.getItem("selectedProject");
-    if (!projectName || !window.electronAPI) return;
-    setTreeLoading(true);
-    try {
-      const api = window.electronAPI;
-      const [voltList, bayList, mainList, compList] = await Promise.all([
-        api.db.voltage.list(projectName),
-        api.db.bay.list(projectName),
-        api.db.mainDevice.list(projectName),
-        api.db.component.list(projectName),
-      ]);
-      setDeviceTreeData(buildDeviceTree(voltList, bayList, mainList, compList));
-    } catch {
-      setDeviceTreeData([]);
-    } finally {
-      setTreeLoading(false);
     }
   }, []);
 
@@ -215,12 +111,6 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, load
       return () => clearInterval(timer);
     }
   }, [sideTab, treeKey, loadMapTree]);
-
-  useEffect(() => {
-    if (sideTab === "device") {
-      loadDeviceTree();
-    }
-  }, [sideTab, loadDeviceTree]);
 
   useEffect(() => {
     if (sideTab === "cabinet") {
@@ -299,17 +189,6 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, load
   }, [renameTarget, renameValue, loadMapTree]);
 
   /** 渲染 antd Tree（设备台账或屏柜共用） */
-  const renderAntdTree = (data: TreeDataNode[], loadData: TreeProps["loadData"]) => (
-    <div className="side-tree" style={{ overflow: "hidden" }}>
-      <Tree
-        treeData={data}
-        loadData={loadData}
-        showLine
-        blockNode
-        defaultExpandAll
-      />
-    </div>
-  );
 
   return (
     <>
@@ -364,13 +243,9 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, load
               />
             )
           ) : sideTab === "device" ? (
-            treeLoading ? (
-              <div style={{ color: "#999", textAlign: "center", padding: 16, fontSize: 12 }}>加载中...</div>
-            ) : deviceTreeData.length === 0 ? (
-              <div style={{ color: "#999", textAlign: "center", padding: 16, fontSize: 12 }}>暂无数据</div>
-            ) : (
-              renderAntdTree(deviceTreeData, makeLoadPoints(setDeviceTreeData))
-            )
+            <div className="side-tree" style={{ overflow: "hidden", height: "100%" }}>
+              <DeviceTree />
+            </div>
           ) : sideTab === "cabinet" ? (
             treeLoading ? (
               <div style={{ color: "#999", textAlign: "center", padding: 16, fontSize: 12 }}>加载中...</div>

@@ -4,9 +4,33 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>机器人配置工具</title>
+    <style>
+      #splash {
+        position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column;
+        background: #f5f5f5; font-family: sans-serif; z-index: 9999; transition: opacity 0.3s;
+      }
+      #splash .splash-logo { width: 80px; height: 80px; margin-bottom: 24px; }
+      #splash .splash-spinner {
+        width: 32px; height: 32px; border: 3px solid #e0e0e0; border-top-color: #1677ff;
+        border-radius: 50%; animation: splash-spin 0.8s linear infinite;
+      }
+      @keyframes splash-spin { to { transform: rotate(360deg); } }
+      #splash .splash-text { margin-top: 16px; color: #999; font-size: 13px; }
+    </style>
   </head>
   <body>
+    <div id="splash">
+      <img class="splash-logo" src="/logo.png" onerror="this.style.display='none'" alt="" />
+      <div class="splash-spinner"></div>
+      <div class="splash-text">正在加载...</div>
+    </div>
     <div id="root"></div>
+    <script>
+      window.__removeSplash = function() {
+        var el = document.getElementById('splash');
+        if (el) { el.style.opacity = '0'; setTimeout(function() { el.remove(); }, 300); }
+      };
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
