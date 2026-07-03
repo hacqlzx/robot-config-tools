@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react";
-import { Button, Select, Input, Checkbox, Space, App } from "antd";
+import { Button, Select, Input, Checkbox, Space, App, Segmented } from "antd";
 import {
   ArrowLeftOutlined,
   AimOutlined,
@@ -46,6 +46,8 @@ interface Props {
   onSelBayIdChange: (v: number | undefined) => void;
   nameFilter: string;
   onNameFilterChange: (v: string) => void;
+  pointFilter: "all" | "marked" | "unmarked";
+  onPointFilterChange: (v: "all" | "marked" | "unmarked") => void;
   onBack: () => void;
 }
 
@@ -55,7 +57,7 @@ const AUTO_SAVE_INTERVAL = 500;
 /** 缩放时右下角手柄半边长 */
 const HANDLE_SIZE = 8;
 
-export default function CalibrationView({ image, taskDir, mapName, selBayId, onSelBayIdChange, nameFilter, onNameFilterChange, onBack }: Props) {
+export default function CalibrationView({ image, taskDir, mapName, selBayId, onSelBayIdChange, nameFilter, onNameFilterChange, pointFilter, onPointFilterChange, onBack }: Props) {
   const { message } = App.useApp();
   const [mode, setMode] = useState<"move" | "select">("move");
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -814,6 +816,17 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
             <span className="image-edit-title-text">点表模块</span>
           </div>
           <div className="image-edit-point-filters">
+            <Segmented
+              size="small"
+              value={pointFilter}
+              onChange={(v) => onPointFilterChange(v as "all" | "marked" | "unmarked")}
+              options={[
+                { value: "all", label: "全部" },
+                { value: "marked", label: "已标" },
+                { value: "unmarked", label: "未标" },
+              ]}
+              style={{ width: "100%", marginBottom: 8, border: "1px solid #d9d9d9", borderRadius: 20, padding: 2 }}
+            />
             <Select
               placeholder="请选择间隔"
               allowClear
@@ -836,6 +849,11 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
           <div className="image-edit-point-list">
             {points
               .filter((p) => !nameFilter || p.pointName.includes(nameFilter))
+              .filter((p) => {
+                if (pointFilter === "all") return true;
+                const cnt = getPointBindCount(p.pointCode);
+                return pointFilter === "marked" ? cnt > 0 : cnt === 0;
+              })
               .map((p) => {
                 const bindCount = getPointBindCount(p.pointCode);
                 const isHighlighted = highlightedPointCodes.has(p.pointCode);

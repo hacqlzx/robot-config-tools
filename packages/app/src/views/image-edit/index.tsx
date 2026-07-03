@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from "react";
-import { Button, Space, Divider, App, Spin, Radio, Select, Input, Checkbox } from "antd";
+import { Button, Space, Divider, App, Spin, Radio, Select, Input, Checkbox, Segmented } from "antd";
 import {
   UploadOutlined,
   DownloadOutlined,
@@ -51,6 +51,7 @@ export default function ImageEdit() {
   const [bayList, setBayList] = useState<{ id: number; bayName: string }[]>([]);
   const [selBayId, setSelBayId] = useState<number | undefined>(undefined);
   const [nameFilter, setNameFilter] = useState("");
+  const [pointFilter, setPointFilter] = useState<"all" | "marked" | "unmarked">("all");
   const [pointTableVisible, setPointTableVisible] = useState(true);
   const [checkedPoints, setCheckedPoints] = useState<number[]>([]);
   const [points, setPoints] = useState<{ id: number; pointName: string; demarcateState: number }[]>([]);
@@ -319,6 +320,17 @@ export default function ImageEdit() {
                 <span className="image-edit-toggle-btn" onClick={() => setPointTableVisible(false)}>{'>'}</span>
               </div>
               <div className="image-edit-point-filters">
+              <Segmented
+                size="small"
+                value={pointFilter}
+                onChange={(v) => setPointFilter(v as "all" | "marked" | "unmarked")}
+                options={[
+                  { value: "all", label: "全部" },
+                  { value: "marked", label: "已标" },
+                  { value: "unmarked", label: "未标" },
+                ]}
+                style={{ width: "100%", marginBottom: 8, border: "1px solid #d9d9d9", borderRadius: 20, padding: 2 }}
+              />
               <Select
                 placeholder="请选择间隔"
                 allowClear
@@ -346,6 +358,7 @@ export default function ImageEdit() {
               >
                 {points
                   .filter((p) => !nameFilter || p.pointName.includes(nameFilter))
+                  .filter((p) => pointFilter === "all" || (pointFilter === "marked" ? p.demarcateState === 1 : p.demarcateState === 0))
                   .map((p) => (
                     <div key={p.id} className="image-edit-point-item">
                       <Checkbox value={p.id}><span className="image-edit-point-name">{p.pointName}</span></Checkbox>
@@ -379,6 +392,8 @@ export default function ImageEdit() {
           onSelBayIdChange={setSelBayId}
           nameFilter={nameFilter}
           onNameFilterChange={setNameFilter}
+          pointFilter={pointFilter}
+          onPointFilterChange={setPointFilter}
           onBack={() => { setCalibrationImage(null); refreshCalibratedRects(); }}
         />
       )}
