@@ -115,7 +115,7 @@
 - 左侧设备区地图使用 `components/three-d-engine/useThreeDViewer` 加载 LAS/LAZ 和绘制 JSON。
 - 中间画布是 `components/image-canvas/ImageCanvas.tsx`。
 - 任务加载在 `views/image-edit/hooks/useTaskLoader.ts`，读取任务目录 JSON/JPG，并组装左右云台图像。
-- 右侧点表模块按间隔筛点位，显示标定状态。
+- 右侧点表按间隔筛点位，显示标定状态。
 - `SurveyImageLoad` 负责选择地图或任务数据。
 
 这个区域仍在开发中。开始改之前先看 git 状态，当前已有本地改动可能在 `ImageCanvas.tsx` 和 `useTaskLoader.ts`。

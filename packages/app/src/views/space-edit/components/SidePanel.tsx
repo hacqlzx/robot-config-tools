@@ -142,7 +142,7 @@ function makeLoadPoints(
 
 const TREE_CSS = `
   .side-tree .ant-tree-treenode { white-space: nowrap; }
-  .side-tree .ant-tree-node-content-wrapper { overflow: hidden; flex: 1; min-width: 0; line-height: 22px; min-height: 22px; }
+  .side-tree .ant-tree-node-content-wrapper { overflow: hidden; flex: 1; min-width: 0; }
   .side-tree .ant-tree-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .side-tree .ant-tree-indent-unit { width: 14px; }
   .side-tree .ant-tree-switcher { width: 16px; flex-shrink: 0; }
@@ -304,10 +304,9 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, load
       <Tree
         treeData={data}
         loadData={loadData}
-        showIcon={false}
+        showLine
         blockNode
         defaultExpandAll
-        style={{ fontSize: 12 }}
       />
     </div>
   );
@@ -344,7 +343,7 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, load
             </div>
           ))}
         </div>
-        <div style={{ flex: 1, overflow: "auto", padding: "4px 8px" }}>
+        <div style={{ flex: 1, overflow: "auto", padding: 8 }}>
           {sideTab === "map" ? (
             mapTreeData.length === 0 ? (
               <div style={{ color: "#999", textAlign: "center", padding: 16, fontSize: 12 }}>暂无数据</div>
@@ -381,20 +380,9 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, load
               <div className="side-tree" style={{ overflow: "hidden" }}>
                 <Tree
                   treeData={cabinetTreeData}
-                  showIcon={false}
+                  showLine
                   blockNode
-                  checkable
                   defaultExpandAll
-                  style={{ fontSize: 12 }}
-                  onCheck={(checked) => {
-                    const keys = (Array.isArray(checked) ? checked : checked.checked) as React.Key[];
-                    const bayIds = keys
-                      .map(String)
-                      .filter((k) => k.startsWith("bay/"))
-                      .map((k) => parseInt(k.slice(4), 10))
-                      .filter((n) => !isNaN(n));
-                    onCabinetCheck?.(bayIds);
-                  }}
                 />
               </div>
             )
@@ -407,10 +395,9 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, load
               <div className="side-tree" style={{ overflow: "hidden" }}>
                 <Tree
                   treeData={deviceAreaTreeData}
-                  showIcon={false}
+                  showLine
                   blockNode
                   defaultExpandAll
-                  style={{ fontSize: 12 }}
                 />
               </div>
             )

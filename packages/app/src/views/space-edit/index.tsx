@@ -369,18 +369,30 @@ export default function SpaceEdit() {
           onMouseDown={onResizeStart}
           style={{
             flexShrink: 0,
-            width: 2,
-            margin: "0 2px",
+            width: 8,
             cursor: "col-resize",
-            background: "transparent",
-            borderRadius: 1,
-            transition: "background 0.15s",
+            display: "flex",
+            justifyContent: "center",
           }}
-          onMouseOver={(e) => (e.currentTarget.style.background = "#d9d9d9")}
-          onMouseOut={(e) => (e.currentTarget.style.background = "transparent")}
-        />
+        >
+          <div
+            style={{
+              width: 2,
+              borderRadius: 1,
+              transition: "background 0.15s",
+            }}
+            onMouseOver={(e) => {
+              const el = e.currentTarget;
+              el.style.background = "#d9d9d9";
+              el.parentElement!.style.background = "transparent";
+            }}
+            onMouseOut={(e) => {
+              e.currentTarget.style.background = "transparent";
+            }}
+          />
+        </div>
         <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
-          <div style={{ position: "absolute", inset: 4, overflow: "hidden", borderRadius: 4 }}>
+          <div style={{ position: "absolute", inset: "4px 4px 4px 0", overflow: "hidden", borderRadius: 4 }}>
             <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block" }} />
           </div>
           {saveStatus !== "idle" && (
