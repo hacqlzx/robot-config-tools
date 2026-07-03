@@ -32,6 +32,7 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
   imagesRef.current = images;
   const calibratedRef = useRef(calibrationRects);
   calibratedRef.current = calibrationRects;
+  const resizeTimerRef = useRef(0);
 
   const thumbScale = 2;
 
@@ -56,26 +57,6 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
       cache.set(item.id, thumb);
     }
   }, [images]);
-
-  // 尺寸适配
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    const resize = () => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const w = container.clientWidth;
-      const h = container.clientHeight;
-      if (w <= 0 || h <= 0) return;
-      canvas.width = w;
-      canvas.height = h;
-      scheduleDraw();
-    };
-    resize();
-    const ro = new ResizeObserver(resize);
-    ro.observe(container);
-    return () => ro.disconnect();
-  }, [containerRef, canvasRef]);
 
   // 绘制：从 ref 读取 pan/scale，缩略图 + 视口裁剪
   const draw = useCallback(() => {
@@ -145,6 +126,29 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
   useEffect(() => {
     scheduleDraw();
   }, [images, calibrationRects, scheduleDraw]);
+
+  // 尺寸适配：拖拽中不重设画布缓冲避免闪烁，稳定后对齐
+  useEffect(() => {
+    const container = containerRef.current;
+    const canvas = canvasRef.current;
+    if (!container || !canvas) return;
+    const applySize = () => {
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      if (w <= 0 || h <= 0) return;
+      canvas.width = w;
+      canvas.height = h;
+      scheduleDraw();
+    };
+    applySize();
+    const ro = new ResizeObserver(() => {
+      scheduleDraw();
+      clearTimeout(resizeTimerRef.current);
+      resizeTimerRef.current = window.setTimeout(applySize, 100);
+    });
+    ro.observe(container);
+    return () => { ro.disconnect(); clearTimeout(resizeTimerRef.current); };
+  }, [containerRef, canvasRef, scheduleDraw]);
 
   // 滚轮缩放
   useEffect(() => {

@@ -249,7 +249,7 @@ export default function ImageEdit() {
             勘察图像导出
           </Button>
 
-          <Divider type="vertical" />
+          <Divider orientation="vertical" />
 
           <Button icon={<FileImageOutlined />} onClick={() => placeholder("图像标识加载")}>
             图像标识加载
@@ -258,7 +258,7 @@ export default function ImageEdit() {
             图像标识导出
           </Button>
 
-          <Divider type="vertical" />
+          <Divider orientation="vertical" />
 
           <Button icon={<CameraOutlined />} onClick={() => placeholder("勘察拍照")}>
             勘察拍照
@@ -267,7 +267,7 @@ export default function ImageEdit() {
             屏柜拍照
           </Button>
 
-          <Divider type="vertical" />
+          <Divider orientation="vertical" />
 
           <Button icon={<CheckCircleOutlined />} onClick={() => placeholder("验证任务")}>
             验证任务
@@ -280,7 +280,7 @@ export default function ImageEdit() {
         {/* 左侧：设备区地图 */}
         <div
           className={`image-edit-sider${mapVisible ? "" : " image-edit-sider-collapsed"}`}
-          style={{ width: mapVisible ? leftWidth : 32, minWidth: 0, overflow: "hidden", transition: "width 0.2s" }}
+          style={{ width: mapVisible ? leftWidth : 32, minWidth: 0, overflow: "hidden" }}
           onClick={mapVisible ? undefined : () => setMapVisible(true)}
         >
           <div className="image-edit-sider-title" style={{ borderRadius: mapVisible ? "4px 4px 0 0" : 4, justifyContent: mapVisible ? undefined : "center", flex: mapVisible ? undefined : 1 }}>

@@ -51,23 +51,35 @@ export function useResizable(options: UseResizableOptions) {
   useEffect(() => {
     if (!resizing) return;
 
+    let rafId = 0;
+    let latestClientX = 0;
+
     const onMouseMove = (e: MouseEvent) => {
-      const delta = reverse
-        ? startXRef.current - e.clientX
-        : e.clientX - startXRef.current;
-      const containerW = containerRef.current?.offsetWidth ?? window.innerWidth;
-      const effectiveMax = maxPercent > 0 ? containerW * maxPercent : (maxWidth > 0 ? maxWidth : Infinity);
-      const w = Math.round(Math.min(effectiveMax, Math.max(minWidth, startWidthRef.current + delta)));
-      setWidth(w);
+      latestClientX = e.clientX;
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        const delta = reverse
+          ? startXRef.current - latestClientX
+          : latestClientX - startXRef.current;
+        const containerW = containerRef.current?.offsetWidth ?? window.innerWidth;
+        const effectiveMax = maxPercent > 0 ? containerW * maxPercent : (maxWidth > 0 ? maxWidth : Infinity);
+        const w = Math.round(Math.min(effectiveMax, Math.max(minWidth, startWidthRef.current + delta)));
+        setWidth(w);
+      });
     };
 
-    const onMouseUp = () => setResizing(false);
+    const onMouseUp = () => {
+      setResizing(false);
+      cancelAnimationFrame(rafId);
+    };
 
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
     return () => {
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
+      cancelAnimationFrame(rafId);
     };
   }, [resizing, minWidth, maxWidth, maxPercent, reverse, containerRef]);
 

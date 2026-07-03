@@ -87,7 +87,7 @@ export default function SurveyImageLoad({ open, onClose, onImport, onTaskImport 
   };
 
   return (
-    <Modal title="勘察图像加载" open={open} onCancel={onClose} footer={null} destroyOnClose centered confirmLoading={extracting}>
+    <Modal title="勘察图像加载" open={open} onCancel={onClose} footer={null} destroyOnHidden centered confirmLoading={extracting}>
       <Form form={form} layout="vertical">
         <div style={{ display: "flex", gap: 12 }}>
           <Form.Item label="当前项目" style={{ flex: 1, marginBottom: 24 }}>
