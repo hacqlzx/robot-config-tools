@@ -42,6 +42,10 @@ interface Props {
   image: ImageItem;
   taskDir: string;
   mapName: string | null;
+  selBayId: number | undefined;
+  onSelBayIdChange: (v: number | undefined) => void;
+  nameFilter: string;
+  onNameFilterChange: (v: string) => void;
   onBack: () => void;
 }
 
@@ -51,7 +55,7 @@ const AUTO_SAVE_INTERVAL = 500;
 /** 缩放时右下角手柄半边长 */
 const HANDLE_SIZE = 8;
 
-export default function CalibrationView({ image, taskDir, mapName, onBack }: Props) {
+export default function CalibrationView({ image, taskDir, mapName, selBayId, onSelBayIdChange, nameFilter, onNameFilterChange, onBack }: Props) {
   const { message } = App.useApp();
   const [mode, setMode] = useState<"move" | "select">("move");
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -97,8 +101,6 @@ export default function CalibrationView({ image, taskDir, mapName, onBack }: Pro
 
   // 点表
   const [bayList, setBayList] = useState<{ id: number; bayName: string }[]>([]);
-  const [selBayId, setSelBayId] = useState<number | undefined>(undefined);
-  const [nameFilter, setNameFilter] = useState("");
   const [points, setPoints] = useState<{ id: number; pointCode: string; pointName: string; demarcateState: number }[]>([]);
   const pointsRef = useRef(points);
   pointsRef.current = points;
@@ -820,7 +822,7 @@ export default function CalibrationView({ image, taskDir, mapName, onBack }: Pro
               size="small"
               style={{ width: "100%", marginBottom: 8 }}
               value={selBayId}
-              onChange={(v) => setSelBayId(v)}
+              onChange={(v) => onSelBayIdChange(v)}
               options={bayList.map((b) => ({ value: b.id, label: b.bayName }))}
             />
             <Input
@@ -828,7 +830,7 @@ export default function CalibrationView({ image, taskDir, mapName, onBack }: Pro
               allowClear
               size="small"
               value={nameFilter}
-              onChange={(e) => setNameFilter(e.target.value)}
+              onChange={(e) => onNameFilterChange(e.target.value)}
             />
           </div>
           <div className="image-edit-point-list">

@@ -18,11 +18,11 @@ interface Props {
   images: ImageItem[];
   visible?: boolean;
   onImageDoubleClick?: (item: ImageItem) => void;
-  calibratedIds?: Set<number>;
+  calibrationRects?: Map<number, { x: number; y: number; w: number; h: number }[]>;
 }
 
 /** 图片画布：缩放/平移，rAF 驱动渲染，预缩放缩略图，视口裁剪 */
-export default function ImageCanvas({ canvasRef, containerRef, images, visible = true, onImageDoubleClick, calibratedIds }: Props) {
+export default function ImageCanvas({ canvasRef, containerRef, images, visible = true, onImageDoubleClick, calibrationRects }: Props) {
   const [displayScale, setDisplayScale] = useState(1);
   const panRef = useRef({ x: 0, y: 0 });
   const scaleRef = useRef(1);
@@ -30,8 +30,8 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
   const rafIdRef = useRef(0);
   const imagesRef = useRef(images);
   imagesRef.current = images;
-  const calibratedRef = useRef(calibratedIds);
-  calibratedRef.current = calibratedIds;
+  const calibratedRef = useRef(calibrationRects);
+  calibratedRef.current = calibrationRects;
 
   const thumbScale = 2;
 
@@ -113,11 +113,16 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
 
       const src = cache.get(item.id) || item.img;
       try { ctx.drawImage(src, item.x, item.y, item.w, item.h); drawn++; } catch { /* skip */ }
-      const ids = calibratedRef.current;
-      if (ids && ids.has(item.id)) {
+      // 绘制标定框（缩放到缩略图比例）
+      const rects = calibratedRef.current?.get(item.id);
+      if (rects && item.img.naturalWidth && item.img.naturalHeight) {
+        const sx = item.w / item.img.naturalWidth;
+        const sy = item.h / item.img.naturalHeight;
         ctx.strokeStyle = "#52c41a";
-        ctx.lineWidth = 2 / s;
-        ctx.strokeRect(item.x, item.y, item.w, item.h);
+        ctx.lineWidth = 1.5 / s;
+        for (const r of rects) {
+          ctx.strokeRect(item.x + r.x * sx, item.y + r.y * sy, r.w * sx, r.h * sy);
+        }
       }
     }
     ctx.restore();
@@ -139,7 +144,7 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
   // images 变化时触发重绘
   useEffect(() => {
     scheduleDraw();
-  }, [images, calibratedIds, scheduleDraw]);
+  }, [images, calibrationRects, scheduleDraw]);
 
   // 滚轮缩放
   useEffect(() => {

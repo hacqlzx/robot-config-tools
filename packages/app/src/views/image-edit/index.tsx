@@ -56,25 +56,25 @@ export default function ImageEdit() {
   const [points, setPoints] = useState<{ id: number; pointName: string; demarcateState: number }[]>([]);
 
   const [calibrationImage, setCalibrationImage] = useState<ImageItem | null>(null);
-  const [calibratedIds, setCalibratedIds] = useState<Set<number>>(new Set());
+  const [calibrationRects, setCalibrationRects] = useState<Map<number, { x: number; y: number; w: number; h: number }[]>>(new Map());
   const taskDirRef = useRef<string>("");
 
   // 加载已标定的图片 ID 集合
-  const refreshCalibratedIds = useCallback(async () => {
+  const refreshCalibratedRects = useCallback(async () => {
     const td = taskDirRef.current;
     if (!td || !window.electronAPI?.readLargeFile) return;
     try {
       const buf = await window.electronAPI.readLargeFile(`${td}/勘察数据.json`);
       const json = JSON.parse(new TextDecoder().decode(buf));
-      const ids = new Set<number>();
+      const map = new Map<number, { x: number; y: number; w: number; h: number }[]>();
       for (const entry of json.data || []) {
-        if (entry.rects && entry.rects.some((r: any) => r.bindings && r.bindings.length > 0)) {
-          ids.add(entry.imageId);
+        if (entry.rects && entry.rects.length > 0) {
+          map.set(entry.imageId, entry.rects.map((r: any) => ({ x: r.x, y: r.y, w: r.w, h: r.h })));
         }
       }
-      setCalibratedIds(ids);
+      setCalibrationRects(map);
     } catch {
-      setCalibratedIds(new Set());
+      setCalibrationRects(new Map());
     }
   }, []);
 
@@ -196,7 +196,7 @@ export default function ImageEdit() {
       const items = setSide(ptzSide);
       setTaskImages(items);
       console.log("[handleTaskLoad] 完成, 图片数:", items.length);
-      refreshCalibratedIds();
+      refreshCalibratedRects();
     } catch (e: any) {
       console.error("[handleTaskLoad] 失败:", e);
       message.error("加载任务数据失败: " + (e?.message || ""));
@@ -298,7 +298,7 @@ export default function ImageEdit() {
                 canvasRef={imageCanvasRef}
                 containerRef={imageContainerRef}
                 images={taskImages}
-                calibratedIds={calibratedIds}
+                calibrationRects={calibrationRects}
                 onImageDoubleClick={handleImageDoubleClick}
               />
               {taskLoading && (
@@ -375,7 +375,11 @@ export default function ImageEdit() {
           image={calibrationImage}
           taskDir={taskDirRef.current}
           mapName={loadedMap}
-          onBack={() => { setCalibrationImage(null); refreshCalibratedIds(); }}
+          selBayId={selBayId}
+          onSelBayIdChange={setSelBayId}
+          nameFilter={nameFilter}
+          onNameFilterChange={setNameFilter}
+          onBack={() => { setCalibrationImage(null); refreshCalibratedRects(); }}
         />
       )}
     </div>
