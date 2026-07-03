@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react";
-import { Button, Select, Input, Checkbox, Space, App, Segmented } from "antd";
+import { Button, Select, Input, Checkbox, Space, App } from "antd";
 import {
   ArrowLeftOutlined,
   AimOutlined,
@@ -816,17 +816,6 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
             <span className="image-edit-title-text">点表模块</span>
           </div>
           <div className="image-edit-point-filters">
-            <Segmented
-              size="small"
-              value={pointFilter}
-              onChange={(v) => onPointFilterChange(v as "all" | "marked" | "unmarked")}
-              options={[
-                { value: "all", label: "全部" },
-                { value: "marked", label: "已标" },
-                { value: "unmarked", label: "未标" },
-              ]}
-              style={{ width: "100%", marginBottom: 8, border: "1px solid #d9d9d9", borderRadius: 20, padding: 2 }}
-            />
             <Select
               placeholder="请选择间隔"
               allowClear
@@ -845,6 +834,20 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
               value={nameFilter}
               onChange={(e) => onNameFilterChange(e.target.value)}
             />
+            <div className="point-filter-btns">
+              <span
+                className={`point-filter-btn${pointFilter === "all" ? " active" : ""}`}
+                onClick={() => onPointFilterChange("all")}
+              >全部</span>
+              <span
+                className={`point-filter-btn${pointFilter === "marked" ? " active" : ""}`}
+                onClick={() => onPointFilterChange("marked")}
+              >已标</span>
+              <span
+                className={`point-filter-btn${pointFilter === "unmarked" ? " active" : ""}`}
+                onClick={() => onPointFilterChange("unmarked")}
+              >未标</span>
+            </div>
           </div>
           <div className="image-edit-point-list">
             {points

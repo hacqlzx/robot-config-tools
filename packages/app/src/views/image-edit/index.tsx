@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from "react";
-import { Button, Space, Divider, App, Spin, Radio, Select, Input, Checkbox, Segmented } from "antd";
+import { Button, Space, Divider, App, Spin, Radio, Select, Input, Checkbox } from "antd";
 import {
   UploadOutlined,
   DownloadOutlined,
@@ -54,13 +54,14 @@ export default function ImageEdit() {
   const [pointFilter, setPointFilter] = useState<"all" | "marked" | "unmarked">("all");
   const [pointTableVisible, setPointTableVisible] = useState(true);
   const [checkedPoints, setCheckedPoints] = useState<number[]>([]);
-  const [points, setPoints] = useState<{ id: number; pointName: string; demarcateState: number }[]>([]);
+  const [points, setPoints] = useState<{ id: number; pointCode: string; pointName: string; demarcateState: number }[]>([]);
 
   const [calibrationImage, setCalibrationImage] = useState<ImageItem | null>(null);
   const [calibrationRects, setCalibrationRects] = useState<Map<number, { x: number; y: number; w: number; h: number }[]>>(new Map());
+  const [calibratedPointCodes, setCalibratedPointCodes] = useState<Set<string>>(new Set());
   const taskDirRef = useRef<string>("");
 
-  // 加载已标定的图片 ID 集合
+  // 加载已标定的图片 ID 集合 + 已标定点位编码集合
   const refreshCalibratedRects = useCallback(async () => {
     const td = taskDirRef.current;
     if (!td || !window.electronAPI?.readLargeFile) return;
@@ -68,14 +69,22 @@ export default function ImageEdit() {
       const buf = await window.electronAPI.readLargeFile(`${td}/勘察数据.json`);
       const json = JSON.parse(new TextDecoder().decode(buf));
       const map = new Map<number, { x: number; y: number; w: number; h: number }[]>();
+      const codes = new Set<string>();
       for (const entry of json.data || []) {
         if (entry.rects && entry.rects.length > 0) {
           map.set(entry.imageId, entry.rects.map((r: any) => ({ x: r.x, y: r.y, w: r.w, h: r.h })));
+          for (const r of entry.rects) {
+            for (const b of r.bindings || []) {
+              codes.add(b.pointCode);
+            }
+          }
         }
       }
       setCalibrationRects(map);
+      setCalibratedPointCodes(codes);
     } catch {
       setCalibrationRects(new Map());
+      setCalibratedPointCodes(new Set());
     }
   }, []);
 
@@ -103,7 +112,7 @@ export default function ImageEdit() {
       setPoints(
         list
           .filter((p) => p.bayId === selBayId)
-          .map((p) => ({ id: p.id, pointName: p.pointName, demarcateState: p.demarcateState }))
+          .map((p) => ({ id: p.id, pointCode: p.pointCode, pointName: p.pointName, demarcateState: p.demarcateState }))
       );
     }).catch(() => setPoints([]));
   }, [selBayId]);
@@ -320,17 +329,6 @@ export default function ImageEdit() {
                 <span className="image-edit-toggle-btn" onClick={() => setPointTableVisible(false)}>{'>'}</span>
               </div>
               <div className="image-edit-point-filters">
-              <Segmented
-                size="small"
-                value={pointFilter}
-                onChange={(v) => setPointFilter(v as "all" | "marked" | "unmarked")}
-                options={[
-                  { value: "all", label: "全部" },
-                  { value: "marked", label: "已标" },
-                  { value: "unmarked", label: "未标" },
-                ]}
-                style={{ width: "100%", marginBottom: 8, border: "1px solid #d9d9d9", borderRadius: 20, padding: 2 }}
-              />
               <Select
                 placeholder="请选择间隔"
                 allowClear
@@ -349,6 +347,20 @@ export default function ImageEdit() {
                 value={nameFilter}
                 onChange={(e) => setNameFilter(e.target.value)}
               />
+              <div className="point-filter-btns">
+                <span
+                  className={`point-filter-btn${pointFilter === "all" ? " active" : ""}`}
+                  onClick={() => setPointFilter("all")}
+                >全部</span>
+                <span
+                  className={`point-filter-btn${pointFilter === "marked" ? " active" : ""}`}
+                  onClick={() => setPointFilter("marked")}
+                >已标</span>
+                <span
+                  className={`point-filter-btn${pointFilter === "unmarked" ? " active" : ""}`}
+                  onClick={() => setPointFilter("unmarked")}
+                >未标</span>
+              </div>
             </div>
             <div className="image-edit-point-list">
               <Checkbox.Group
@@ -358,7 +370,7 @@ export default function ImageEdit() {
               >
                 {points
                   .filter((p) => !nameFilter || p.pointName.includes(nameFilter))
-                  .filter((p) => pointFilter === "all" || (pointFilter === "marked" ? p.demarcateState === 1 : p.demarcateState === 0))
+                  .filter((p) => pointFilter === "all" || (pointFilter === "marked" ? calibratedPointCodes.has(p.pointCode) : !calibratedPointCodes.has(p.pointCode)))
                   .map((p) => (
                     <div key={p.id} className="image-edit-point-item">
                       <Checkbox value={p.id}><span className="image-edit-point-name">{p.pointName}</span></Checkbox>
