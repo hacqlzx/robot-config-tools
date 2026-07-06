@@ -165,10 +165,17 @@ export default function AppHeader() {
     try {
       const list = await window.electronAPI.project.list();
       setProjects(list);
+      if (list.length === 0) {
+        setSelectedProject(null);
+        setStoredProject(null);
+      } else if (selectedProject && !list.includes(selectedProject)) {
+        setSelectedProject(null);
+        setStoredProject(null);
+      }
     } catch {
       messageApi.error("加载项目列表失败");
     }
-  }, [messageApi]);
+  }, [messageApi, selectedProject]);
 
   // 初始化加载项目列表
   useEffect(() => {

@@ -18,10 +18,79 @@ app.commandLine.appendSwitch("use-angle", "d3d11");
 // 禁用 GPU vsync，减少渲染延迟
 app.commandLine.appendSwitch("disable-gpu-vsync");
 
-// 项目存储根目录：开发时指向 monorepo 根下的 project/，生产时指向 exe 所在目录下的 project/
-const PROJECT_ROOT = app.isPackaged
-  ? path.join(path.dirname(app.getPath("exe")), "project")
-  : path.resolve(__dirname, "..", "..", "..", "project");
+let PROJECT_ROOT = "";
+
+/**
+ * 首次创建项目时触发目录选择。已配置且路径有效则跳过弹窗。
+ * 返回值：最终使用的 PROJECT_ROOT（可能为新选或已有）
+ */
+async function initProjectRoot() {
+  const configPath = path.join(app.getPath("userData"), "data-path.json");
+  let configuredPath = "";
+  try {
+    if (fs.existsSync(configPath)) {
+      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      configuredPath = config.projectRoot || "";
+    }
+  } catch { /* ignore */ }
+
+  if (!app.isPackaged) {
+    PROJECT_ROOT = path.resolve(__dirname, "..", "..", "..", "project");
+    return PROJECT_ROOT;
+  }
+
+  // 已配置且路径有效 → 直接使用
+  if (configuredPath && fs.existsSync(configuredPath)) {
+    PROJECT_ROOT = configuredPath;
+    return PROJECT_ROOT;
+  }
+
+  // 首次：弹窗选择
+  const { response } = await dialog.showMessageBox({
+    type: "question",
+    title: "选择数据存储目录",
+    message: configuredPath
+      ? `原数据目录已不存在：${configuredPath}\n请重新选择。`
+      : "请选择项目数据存储目录（建议选空间充足的盘符）",
+    buttons: ["选择目录", "暂时跳过"],
+    defaultId: 0,
+  });
+
+  if (response !== 0) {
+    // 跳过：使用 exe 同级作为兜底
+    PROJECT_ROOT = path.join(path.dirname(app.getPath("exe")), "project");
+    if (!fs.existsSync(PROJECT_ROOT)) fs.mkdirSync(PROJECT_ROOT, { recursive: true });
+    return PROJECT_ROOT;
+  }
+
+  const result = await dialog.showOpenDialog({
+    title: "选择数据存储目录",
+    properties: ["openDirectory", "createDirectory"],
+  });
+
+  if (!result.canceled && result.filePaths[0]) {
+    const chosen = result.filePaths[0];
+    const projPath = fs.existsSync(path.join(chosen, "project")) ? path.join(chosen, "project") : chosen;
+    PROJECT_ROOT = projPath;
+    if (!fs.existsSync(projPath)) fs.mkdirSync(projPath, { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({ projectRoot: projPath }, null, 2));
+    return projPath;
+  }
+
+  PROJECT_ROOT = path.join(path.dirname(app.getPath("exe")), "project");
+  if (!fs.existsSync(PROJECT_ROOT)) fs.mkdirSync(PROJECT_ROOT, { recursive: true });
+  return PROJECT_ROOT;
+}
+
+// 暴露设置数据路径的接口
+ipcMain.handle("set-data-path", async (_event, newPath: string) => {
+  const configPath = path.join(app.getPath("userData"), "data-path.json");
+  const projPath = newPath;
+  if (!fs.existsSync(projPath)) fs.mkdirSync(projPath, { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify({ projectRoot: projPath }, null, 2));
+  PROJECT_ROOT = projPath;
+  return true;
+});
 
 Menu.setApplicationMenu(null);
 
@@ -142,6 +211,9 @@ ipcMain.handle("project:list", async () => {
 });
 
 ipcMain.handle("project:create", async (_event, name: string) => {
+  const configPath = path.join(app.getPath("userData"), "data-path.json");
+  // 从未配置过 → 弹出选择
+  if (!fs.existsSync(configPath)) await initProjectRoot();
   ensureProjectRoot();
   const dirPath = path.join(PROJECT_ROOT, name);
   if (fs.existsSync(dirPath)) {
@@ -363,15 +435,16 @@ ipcMain.handle("extract-zip", async (_event, zipPath: string, destDir: string) =
     for (const d of subDirs) {
       const candidate = path.join(destDir, d.name);
       if (fs.existsSync(path.join(candidate, "json_list.json"))) {
-        // 子目录里有 json_list.json，将内容提上来
+        // 子目录里有 json_list.json，将内容合并提上来（不删除已有文件）
         const subItems = fs.readdirSync(candidate, { withFileTypes: true });
         for (const item of subItems) {
           const src = path.join(candidate, item.name);
           const dst = path.join(destDir, item.name);
-          if (fs.existsSync(dst)) {
-            fs.rmSync(dst, { recursive: true, force: true });
+          if (item.isDirectory() && fs.existsSync(dst)) {
+            cpMerge(src, dst);
+          } else {
+            fs.cpSync(src, dst, { recursive: true, force: true });
           }
-          fs.renameSync(src, dst);
         }
         fs.rmSync(candidate, { recursive: true, force: true });
         console.log("[extract-zip] 扁平化目录，去除嵌套 →", candidate);
@@ -384,9 +457,40 @@ ipcMain.handle("extract-zip", async (_event, zipPath: string, destDir: string) =
   }
 });
 
+/** 合并目录：覆盖同名文件，保留独有文件 */
+function cpMerge(src: string, dst: string) {
+  const items = fs.readdirSync(src, { withFileTypes: true });
+  for (const item of items) {
+    const s = path.join(src, item.name);
+    const d = path.join(dst, item.name);
+    if (item.isDirectory()) {
+      if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+      cpMerge(s, d);
+    } else {
+      fs.cpSync(s, d, { force: true });
+    }
+  }
+}
+
 app.whenReady().then(async () => {
   logGPUInfo();
-  // 初始化数据库 + 注册 IPC
+
+  // 尝试读缓存的 project 路径
+  const configPath = path.join(app.getPath("userData"), "data-path.json");
+  try {
+    if (fs.existsSync(configPath)) {
+      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      if (config.projectRoot && fs.existsSync(config.projectRoot)) {
+        PROJECT_ROOT = config.projectRoot;
+      }
+    }
+  } catch { /* ignore */ }
+  if (!PROJECT_ROOT && app.isPackaged) {
+    PROJECT_ROOT = path.join(path.dirname(app.getPath("exe")), "project");
+  } else if (!PROJECT_ROOT) {
+    PROJECT_ROOT = path.resolve(__dirname, "..", "..", "..", "project");
+  }
+
   await initDbIpc();
   createWindow();
 });

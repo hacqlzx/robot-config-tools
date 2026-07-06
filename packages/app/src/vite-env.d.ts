@@ -39,6 +39,7 @@ declare global {
       exportZip: (projectName: string, items: { type: string; name: string }[], destDir: string) => Promise<{ zipPath: string; zipName: string; config: any }>;
       extractZip: (zipPath: string, destDir: string) => Promise<{ success: boolean; error?: string; actualDir?: string }>;
       getProjectRoot: () => Promise<string>;
+      setDataPath: (newPath: string) => Promise<boolean>;
       startBatch: () => Promise<void>;
       endBatch: () => Promise<void>;
       db: {

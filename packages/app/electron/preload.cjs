@@ -61,6 +61,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   /** 解压 ZIP 文件到指定目录 */
   extractZip: (zipPath, destDir) => ipcRenderer.invoke("extract-zip", zipPath, destDir),
   getProjectRoot: () => ipcRenderer.invoke("get-project-root"),
+  setDataPath: (newPath) => ipcRenderer.invoke("set-data-path", newPath),
   startBatch: () => ipcRenderer.invoke("db:startBatch"),
   endBatch: () => ipcRenderer.invoke("db:endBatch"),
 

@@ -76,7 +76,7 @@ export default defineConfig(({ mode }) => {
             build: {
               outDir: 'dist-electron',
               rollupOptions: {
-                external: ['electron', 'sql.js', 'archiver'],
+                external: ['electron', 'sql.js'],
               },
             },
           },

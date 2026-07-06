@@ -154,7 +154,8 @@ let dbPath = "";
 
 function getDataDir(): string {
   if (app.isPackaged) {
-    return path.join(path.dirname(app.getPath("exe")), "data");
+    // 数据库放用户目录，不受安装覆盖
+    return path.join(app.getPath("userData"), "database");
   }
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);

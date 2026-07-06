@@ -1,12 +1,19 @@
-﻿import { Layout, ConfigProvider, App } from "antd";
+﻿import { useEffect } from "react";
+import { Layout, ConfigProvider, App } from "antd";
 import { Outlet } from "react-router-dom";
 import AppHeader from "./pages/app-header";
 import "./styles/global.css";
 import "./styles/title-bar.scss";
 
+declare global { interface Window { __removeSplash?: () => void; } }
+
 const { Content } = Layout;
 
 export default function AppLayout() {
+  useEffect(() => {
+    window.__removeSplash?.();
+  }, []);
+
   return (
     <ConfigProvider
       theme={{

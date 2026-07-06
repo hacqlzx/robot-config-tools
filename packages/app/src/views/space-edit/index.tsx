@@ -392,7 +392,7 @@ export default function SpaceEdit() {
           />
         </div>
         <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
-          <div style={{ position: "absolute", inset: "4px 4px 4px 0", overflow: "hidden", borderRadius: 4 }}>
+          <div style={{ position: "absolute", inset: "8px 8px 8px 0", overflow: "hidden", borderRadius: 4 }}>
             <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block" }} />
           </div>
           {saveStatus !== "idle" && (
