@@ -18,7 +18,7 @@ import CabinetPanel from "./components/CabinetPanel";
 import ChargingAreaPanel from "./components/ChargingAreaPanel";
 import DeviceAreaPanel from "./components/DeviceAreaPanel";
 import ExportModal from "./components/ExportModal";
-import { loadCabinetItems, deleteCabinetItem, loadPathDrawing, loadAllItemsFromJson, getBoundBayIdsInProject, DRAWING_FILE_NAME, type CabinetItem, type ChargingAreaItem, type DeviceAreaItem } from "./hooks/drawing/drawing-storage";
+import { loadCabinetItems, deleteCabinetItem, loadPathDrawing, loadAllItemsFromJson, getBoundBayIdsInProject, DRAWING_FILE_NAME, type CabinetItem, type ChargingAreaItem, type DeviceAreaItem, type DrawingType } from "./hooks/drawing/drawing-storage";
 
 /** 根据点数和硬件决定加载比例 */
 function getLoadFraction(pointCount: number): number {
@@ -121,6 +121,21 @@ export default function SpaceEdit() {
     handleTogglePath();
   }, [cabinetMode, chargingMode, deviceAreaMode, handleToggleCabinet, handleToggleCharging, handleForceCloseDeviceArea, handleTogglePath]);
 
+  const markDrawingFileShown = useCallback((jsonPath: string, type: DrawingType) => {
+    setDrawingShown((prev) => new Set(prev).add(jsonPath));
+    if (type === "charging-area") {
+      chargingExistingRef.current = true;
+      chargingAreaSavedRef.current = true;
+      chargedJsonPathRef.current = jsonPath;
+    }
+    setTreeKey((k) => k + 1);
+  }, []);
+
+  const markPathFileShown = useCallback((jsonPath: string) => {
+    setPathShown((prev) => new Set(prev).add(jsonPath));
+    setTreeKey((k) => k + 1);
+  }, []);
+
   // ---- 保存处理器 + 自动保存 ----
   const {
     handleSaveCabinet, handleSaveChargingArea, handleSaveDeviceAreas, handleSavePath,
@@ -133,6 +148,8 @@ export default function SpaceEdit() {
     chargingDrawingRef, chargingMode, handleToggleCharging,
     getBoxDatas, markDeviceAreaSaved,
     getPathData,
+    onDrawingFileSaved: markDrawingFileShown,
+    onPathFileSaved: markPathFileShown,
   });
 
   // ---- 大模型显示比例 ----
@@ -184,17 +201,17 @@ export default function SpaceEdit() {
   }, [requestRender]);
 
   // ---- 点云加载 ----
-  const { loadLas, loadPly, loadLasFromPath } = useLasLoader({
+  const { loadLasFromPath } = useLasLoader({
     appRef, entitiesRef, lasHeadersRef, filePathRef, pointStatsRef, modelGroundYRef,
     requestRender, focusOnModel,
     setLoading, setLoadingFile, setLoadingText, setLoadingProgress,
-    setLoadedFiles, setTreeKey,
+    setLoadedFiles,
   });
 
   // ---- 文件操作 ----
-  const { handleLoadLasFromPath, handleImportPointTable, handleFileSelect, handleToggleVisible, handleClipModel } = useFileOperations({
+  const { handleLoadLasFromPath, handleImportPointTable, handleFileSelect, handleToggleVisible, handleUnloadModelFromPath, handleClipModel } = useFileOperations({
     entitiesRef, lasHeadersRef, filePathRef, pointStatsRef, modelGroundYRef, hasAutoFocusedRef,
-    loadLas, loadPly, loadLasFromPath, requestRender, closeAllDrawingModes,
+    loadLasFromPath, requestRender, closeAllDrawingModes,
     setImporting, setLoadedFiles, setTreeKey, setClipEntityName, setClipMode, message,
   });
 
@@ -360,6 +377,7 @@ export default function SpaceEdit() {
           panelWidth={panelWidth}
           treeKey={treeKey} onLoadLas={handleLoadLasFromPath}
           onToggleVisible={handleToggleVisible}
+          onUnloadMapFile={handleUnloadModelFromPath}
           loadedFiles={loadedFiles} loadingFile={loadingFile}
           onCabinetCheck={handleCabinetCheck}
           mapDrawingShown={drawingShown} onToggleDrawing={handleToggleDrawing}

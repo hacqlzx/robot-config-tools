@@ -72,7 +72,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
     });
   }, [nodes]);
 
-  const isLas = (name: string) => name.endsWith(".las") || name.endsWith(".laz");
+  const isLas = (name: string) => /\.(las|laz)$/i.test(name);
   const isDrawing = (name: string) => name === DRAWING_FILE_NAME;
   const isPath = (name: string) => name === PATH_FILE_NAME;
 

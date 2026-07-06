@@ -39,6 +39,12 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (!/\.(las|laz)$/i.test(file.name)) {
+      message.warning("仅支持 LAS/LAZ 模型文件");
+      e.target.value = "";
+      return;
+    }
+
     const selectedProject = localStorage.getItem("selectedProject");
     if (!selectedProject) {
       message.warning("请先在顶部菜单栏选择一个项目");
@@ -102,7 +108,7 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
         borderBottom: "1px solid #e8e8e8",
         flexShrink: 0,
       }}>
-        <input ref={fileInputRef} type="file" accept=".ply,.splat,.las,.laz" onChange={handleFile} style={{ display: "none" }} />
+        <input ref={fileInputRef} type="file" accept=".las,.laz" onChange={handleFile} style={{ display: "none" }} />
         <input ref={pointInputRef} type="file" accept=".xlsx,.xls" onChange={handlePointFile} style={{ display: "none" }} />
         {BUTTONS.map(({ icon, label, action }) => {
           const isActive = (action === "cabinet" && cabinetMode) ||

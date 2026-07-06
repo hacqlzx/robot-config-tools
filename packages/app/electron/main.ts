@@ -5,7 +5,7 @@ import { exec } from "child_process";
 import { fileURLToPath } from "url";
 import { initDbIpc, closeDbIpc } from "./db-ipc";
 import { getDatabase } from "@robot/database";
-import { generatePointExcel, exportSpaceZip } from "./export-points";
+import { exportSpaceZip } from "./export-points";
 import AdmZip from "adm-zip";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -19,6 +19,56 @@ app.commandLine.appendSwitch("use-angle", "d3d11");
 app.commandLine.appendSwitch("disable-gpu-vsync");
 
 let PROJECT_ROOT = "";
+
+const SUPPORTED_MAP_EXTS = new Set([".las", ".laz"]);
+
+function assertSafePathSegment(name: string, label: string): string {
+  const value = String(name ?? "").trim();
+  if (!value) throw new Error(`${label}不能为空`);
+  if (value === "." || value === ".." || /[<>:"/\\|?*\x00-\x1F]/.test(value)) {
+    throw new Error(`${label}包含非法字符`);
+  }
+  return value;
+}
+
+function isPathInside(parent: string, target: string): boolean {
+  const parentResolved = path.resolve(parent);
+  const targetResolved = path.resolve(target);
+  const relative = path.relative(parentResolved, targetResolved);
+  return relative === "" || (!!relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function assertInside(parent: string, target: string, action: string): string {
+  const resolved = path.resolve(target);
+  if (!isPathInside(parent, resolved)) {
+    throw new Error(`路径越界，禁止${action}`);
+  }
+  return resolved;
+}
+
+function resolveProjectDir(projectName: string): string {
+  ensureProjectRoot();
+  const safeProjectName = assertSafePathSegment(projectName, "项目名称");
+  const dirPath = path.resolve(PROJECT_ROOT, safeProjectName);
+  return assertInside(PROJECT_ROOT, dirPath, "访问项目");
+}
+
+function resolveProjectPath(projectName: string, ...segments: string[]): string {
+  const projectDir = resolveProjectDir(projectName);
+  const targetPath = path.resolve(projectDir, ...segments);
+  return assertInside(projectDir, targetPath, "访问项目文件");
+}
+
+function resolveProjectRootPath(targetPath: string, action: string): string {
+  ensureProjectRoot();
+  const value = String(targetPath ?? "").trim();
+  if (!value) throw new Error("路径不能为空");
+  if (!path.isAbsolute(value)) {
+    throw new Error(`路径必须是绝对路径，禁止${action}`);
+  }
+  const resolved = path.resolve(value);
+  return assertInside(PROJECT_ROOT, resolved, action);
+}
 
 /**
  * 首次创建项目时触发目录选择。已配置且路径有效则跳过弹窗。
@@ -85,7 +135,9 @@ async function initProjectRoot() {
 // 暴露设置数据路径的接口
 ipcMain.handle("set-data-path", async (_event, newPath: string) => {
   const configPath = path.join(app.getPath("userData"), "data-path.json");
-  const projPath = newPath;
+  const rawPath = String(newPath ?? "").trim();
+  if (!rawPath) throw new Error("数据目录不能为空");
+  const projPath = path.resolve(rawPath);
   if (!fs.existsSync(projPath)) fs.mkdirSync(projPath, { recursive: true });
   fs.writeFileSync(configPath, JSON.stringify({ projectRoot: projPath }, null, 2));
   PROJECT_ROOT = projPath;
@@ -215,31 +267,33 @@ ipcMain.handle("project:create", async (_event, name: string) => {
   // 从未配置过 → 弹出选择
   if (!fs.existsSync(configPath)) await initProjectRoot();
   ensureProjectRoot();
-  const dirPath = path.join(PROJECT_ROOT, name);
+  const safeName = assertSafePathSegment(name, "项目名称");
+  const dirPath = resolveProjectDir(safeName);
   if (fs.existsSync(dirPath)) {
-    throw new Error(`项目 "${name}" 已存在`);
+    throw new Error(`项目 "${safeName}" 已存在`);
   }
   fs.mkdirSync(dirPath);
-  return name;
+  return safeName;
 });
 
 ipcMain.handle("project:rename", async (_event, oldName: string, newName: string) => {
   ensureProjectRoot();
-  const oldPath = path.join(PROJECT_ROOT, oldName);
-  const newPath = path.join(PROJECT_ROOT, newName);
+  const safeNewName = assertSafePathSegment(newName, "项目名称");
+  const oldPath = resolveProjectDir(oldName);
+  const newPath = resolveProjectDir(safeNewName);
   if (!fs.existsSync(oldPath)) {
     throw new Error(`项目 "${oldName}" 不存在`);
   }
   if (fs.existsSync(newPath)) {
-    throw new Error(`项目 "${newName}" 已存在`);
+    throw new Error(`项目 "${safeNewName}" 已存在`);
   }
   fs.renameSync(oldPath, newPath);
-  return newName;
+  return safeNewName;
 });
 
 ipcMain.handle("project:delete", async (_event, name: string) => {
   ensureProjectRoot();
-  const dirPath = path.join(PROJECT_ROOT, name);
+  const dirPath = resolveProjectDir(name);
   if (!fs.existsSync(dirPath)) {
     throw new Error(`项目 "${name}" 不存在`);
   }
@@ -247,19 +301,37 @@ ipcMain.handle("project:delete", async (_event, name: string) => {
   return name;
 });
 
-// 导入模型文件到项目：复制到 project/{projectName}/地图/{fileName}/{fileName}.las
+// 导入模型文件到项目：复制到 project/{projectName}/地图/{fileName}/{fileName}.{las|laz}
 ipcMain.handle("project:import-file", async (_event, projectName: string, sourcePath: string, fileName: string) => {
-  ensureProjectRoot();
-  const mapDir = path.join(PROJECT_ROOT, projectName, "地图");
-  const targetDir = path.join(mapDir, fileName);
-  const targetPath = path.join(targetDir, `${fileName}.las`);
-  if (!fs.existsSync(mapDir)) {
-    fs.mkdirSync(mapDir, { recursive: true });
+  const rawSourcePath = String(sourcePath ?? "").trim();
+  if (!rawSourcePath || !path.isAbsolute(rawSourcePath)) {
+    throw new Error("源模型路径无效");
   }
+  const sourceResolved = path.resolve(rawSourcePath);
+  const ext = path.extname(sourceResolved).toLowerCase();
+  if (!SUPPORTED_MAP_EXTS.has(ext)) {
+    throw new Error("仅支持 LAS/LAZ 模型文件");
+  }
+
+  let sourceStat: Awaited<ReturnType<typeof fs.promises.stat>> | null = null;
+  try {
+    sourceStat = await fs.promises.stat(sourceResolved);
+  } catch {
+    sourceStat = null;
+  }
+  if (!sourceStat?.isFile()) {
+    throw new Error("源模型文件不存在");
+  }
+
+  const safeBaseName = assertSafePathSegment(String(fileName ?? "").replace(/\.[^.]+$/, ""), "地图名称");
+  const targetDir = resolveProjectPath(projectName, "地图", safeBaseName);
+  const targetPath = resolveProjectPath(projectName, "地图", safeBaseName, `${safeBaseName}${ext}`);
   if (!fs.existsSync(targetDir)) {
     fs.mkdirSync(targetDir, { recursive: true });
   }
-  await fs.promises.copyFile(sourcePath, targetPath);
+  if (sourceResolved.toLowerCase() !== targetPath.toLowerCase()) {
+    await fs.promises.copyFile(sourceResolved, targetPath);
+  }
   return targetPath;
 });
 
@@ -283,15 +355,13 @@ function readDirTree(dirPath: string): TreeNode[] {
 }
 
 ipcMain.handle("project:list-tree", async (_event, projectName: string, subDir: string) => {
-  ensureProjectRoot();
-  const targetDir = path.join(PROJECT_ROOT, projectName, subDir);
+  const targetDir = resolveProjectPath(projectName, subDir || "");
   return readDirTree(targetDir);
 });
 
 // 写入文件到项目目录
 ipcMain.handle("project:write-file", async (_event, projectName: string, subPath: string, data: ArrayBuffer) => {
-  ensureProjectRoot();
-  const filePath = path.join(PROJECT_ROOT, projectName, subPath);
+  const filePath = resolveProjectPath(projectName, subPath);
   const dir = path.dirname(filePath);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
@@ -303,10 +373,9 @@ ipcMain.handle("project:write-file", async (_event, projectName: string, subPath
 
 // 删除项目内文件/目录（绝对路径，限项目根内）
 ipcMain.handle("project:delete-path", async (_event, targetPath: string) => {
-  ensureProjectRoot();
-  const resolved = path.resolve(targetPath);
-  if (!resolved.startsWith(path.resolve(PROJECT_ROOT))) {
-    throw new Error("路径越界，禁止删除");
+  const resolved = resolveProjectRootPath(targetPath, "删除");
+  if (path.relative(path.resolve(PROJECT_ROOT), resolved) === "") {
+    throw new Error("禁止删除项目根目录");
   }
   if (!fs.existsSync(resolved)) {
     throw new Error("文件不存在");
@@ -317,19 +386,15 @@ ipcMain.handle("project:delete-path", async (_event, targetPath: string) => {
 
 // 重命名项目内文件/目录（同目录改名，限项目根内）
 ipcMain.handle("project:rename-path", async (_event, targetPath: string, newName: string) => {
-  ensureProjectRoot();
-  const resolved = path.resolve(targetPath);
-  if (!resolved.startsWith(path.resolve(PROJECT_ROOT))) {
-    throw new Error("路径越界，禁止重命名");
+  const resolved = resolveProjectRootPath(targetPath, "重命名");
+  if (path.relative(path.resolve(PROJECT_ROOT), resolved) === "") {
+    throw new Error("禁止重命名项目根目录");
   }
   if (!fs.existsSync(resolved)) {
     throw new Error("文件不存在");
   }
-  const safeName = String(newName).replace(/[\\/]/g, "").trim();
-  if (!safeName) {
-    throw new Error("名称不能为空");
-  }
-  const newPath = path.join(path.dirname(resolved), safeName);
+  const safeName = assertSafePathSegment(newName, "名称");
+  const newPath = assertInside(PROJECT_ROOT, path.resolve(path.dirname(resolved), safeName), "重命名");
   if (fs.existsSync(newPath)) {
     throw new Error("同名文件已存在");
   }
@@ -339,7 +404,8 @@ ipcMain.handle("project:rename-path", async (_event, targetPath: string, newName
 
 // 在文件资源管理器中打开目录（并选中该文件/目录）
 ipcMain.handle("project:open-dir", async (_event, targetPath: string) => {
-  shell.showItemInFolder(targetPath);
+  const resolved = resolveProjectRootPath(targetPath, "打开目录");
+  shell.showItemInFolder(resolved);
 });
 
 // 选择目录对话框
@@ -355,24 +421,32 @@ ipcMain.handle("dialog:select-dir", async () => {
 
 // 复制项目内文件到指定目录
 ipcMain.handle("project:export-file", async (_event, projectName: string, subPath: string, destDir: string) => {
-  ensureProjectRoot();
-  const srcPath = path.join(PROJECT_ROOT, projectName, subPath);
+  const srcPath = resolveProjectPath(projectName, subPath);
   if (!fs.existsSync(srcPath)) throw new Error("源文件不存在: " + subPath);
   const fileName = path.basename(srcPath);
-  const destPath = path.join(destDir, fileName);
+  const rawDestDir = String(destDir ?? "").trim();
+  if (!rawDestDir) throw new Error("目标目录不能为空");
+  const destRoot = path.resolve(rawDestDir);
+  const destPath = path.join(destRoot, fileName);
   await fs.promises.copyFile(srcPath, destPath);
   return destPath;
 });
 
 // 导出空间模型为 zip（点表 + 地图 + 配置文件），异步 + 进度回传
 ipcMain.handle("project:export-zip", async (event, projectName: string, items: { type: string; name: string }[], destDir: string) => {
+  const safeProjectName = assertSafePathSegment(projectName, "项目名称");
+  const rawDestDir = String(destDir ?? "").trim();
+  if (!rawDestDir) throw new Error("目标目录不能为空");
+  const destRoot = path.resolve(rawDestDir);
   const db = getDatabase();
-  const points: any[] = db.prepare("SELECT * FROM device_point WHERE project_name = ?").all(projectName);
+  const points: any[] = db.prepare("SELECT * FROM device_point WHERE project_name = ?").all(safeProjectName);
 
   const includePointTable = items.some((it) => it.type === "点表");
-  const mapDirs = items.filter((it) => it.type === "地图").map((it) => it.name);
+  const mapDirs = items
+    .filter((it) => it.type === "地图")
+    .map((it) => assertSafePathSegment(it.name, "地图名称"));
 
-  return exportSpaceZip(projectName, PROJECT_ROOT, points, mapDirs, includePointTable, destDir,
+  return exportSpaceZip(safeProjectName, PROJECT_ROOT, points, mapDirs, includePointTable, destRoot,
     (step, pct) => {
       event.sender.send("export:progress", { step, pct });
     }

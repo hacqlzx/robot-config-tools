@@ -14,6 +14,7 @@ interface Props {
   panelWidth: number;
   onLoadLas?: (filePath: string) => Promise<void>;
   onToggleVisible?: (filePath: string) => void;
+  onUnloadMapFile?: (filePath: string) => void;
   loadedFiles: Set<string>;
   treeKey: number;
   loadingFile: string;
@@ -65,7 +66,7 @@ const TREE_CSS = `
   .side-tree .ant-tree-switcher { width: 16px; flex-shrink: 0; }
 `;
 
-export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, loadedFiles, treeKey, loadingFile, onCabinetCheck, mapDrawingShown, onToggleDrawing, mapPathShown, onTogglePath }: Props) {
+export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUnloadMapFile, loadedFiles, treeKey, loadingFile, onCabinetCheck, mapDrawingShown, onToggleDrawing, mapPathShown, onTogglePath }: Props) {
   const [sideTab, setSideTab] = useState("map");
   const [mapTreeData, setMapTreeData] = useState<TreeNode[]>([]);
   const [cabinetTreeData, setCabinetTreeData] = useState<TreeDataNode[]>([]);
@@ -131,17 +132,6 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, load
 
   /** 右键-删除：直接删除文件/目录并刷新地图树 */
   const handleRequestDelete = useCallback((node: TreeNode) => {
-    // 已加载到场景的模型不允许删除（含目录内已加载的子文件）
-    const loadedNames: string[] = [];
-    const walk = (n: TreeNode) => {
-      if (!n.isDir && /\.(las|laz)$/i.test(n.name) && loadedFiles.has(n.name)) loadedNames.push(n.name);
-      n.children?.forEach(walk);
-    };
-    walk(node);
-    if (loadedNames.length > 0) {
-      message.warning(`「${loadedNames.join("、")}」已加载到场景，请先在地图中取消勾选后再删除`);
-      return;
-    }
     Modal.confirm({
       title: "删除确认",
       content: `确定删除「${node.name}」？`,
@@ -150,9 +140,10 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, load
       cancelText: "取消",
       onOk: async () => {
         try {
-          // 删除前先清除页面上的绘制回显（含子目录）
+          // 删除前先清除页面上的模型、绘制和路径回显（含子目录）
           const walkClear = (n: TreeNode) => {
-            if (n.name === DRAWING_FILE_NAME) onToggleDrawing?.(n.path, false);
+            if (!n.isDir && /\.(las|laz)$/i.test(n.name) && loadedFiles.has(n.name)) onUnloadMapFile?.(n.path);
+            else if (n.name === DRAWING_FILE_NAME) onToggleDrawing?.(n.path, false);
             else if (n.name === PATH_FILE_NAME) onTogglePath?.(n.path, false);
             n.children?.forEach(walkClear);
           };
@@ -165,7 +156,7 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, load
         }
       },
     });
-  }, [loadMapTree, loadedFiles, onToggleDrawing, onTogglePath]);
+  }, [loadMapTree, loadedFiles, onToggleDrawing, onTogglePath, onUnloadMapFile]);
 
   /** 右键-重命名：打开弹窗 */
   const handleRequestRename = useCallback((node: TreeNode) => {

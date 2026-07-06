@@ -9,8 +9,6 @@ interface UseFileOperationsParams {
   pointStatsRef: React.MutableRefObject<Map<string, { total: number; loaded: number }>>;
   modelGroundYRef: React.MutableRefObject<number>;
   hasAutoFocusedRef: React.MutableRefObject<boolean>;
-  loadLas: (file: File) => Promise<void>;
-  loadPly: (file: File) => Promise<void>;
   loadLasFromPath: (filePath: string) => Promise<void>;
   requestRender: () => void;
   closeAllDrawingModes: () => void;
@@ -24,8 +22,10 @@ interface UseFileOperationsParams {
 
 export function useFileOperations(params: UseFileOperationsParams) {
   const { entitiesRef, lasHeadersRef, filePathRef, pointStatsRef, modelGroundYRef, hasAutoFocusedRef,
-    loadLas, loadPly, loadLasFromPath, requestRender, closeAllDrawingModes,
+    loadLasFromPath, requestRender, closeAllDrawingModes,
     setImporting, setLoadedFiles, setTreeKey, setClipEntityName, setClipMode, message } = params;
+
+  const normalizePath = (value: string) => value.replace(/\\/g, "/").toLowerCase();
 
   /** 从路径加载模型 */
   const handleLoadLasFromPath = useCallback(async (filePath: string) => {
@@ -75,6 +75,21 @@ export function useFileOperations(params: UseFileOperationsParams) {
 
   /** 选择模型文件 */
   const handleFileSelect = useCallback(async (file: File) => {
+    if (!/\.(las|laz)$/i.test(file.name)) {
+      message.warning("仅支持 LAS/LAZ 模型文件");
+      return;
+    }
+
+    const selectedProject = localStorage.getItem("selectedProject");
+    if (!window.electronAPI) {
+      message.warning("模型导入仅 Electron 模式可用");
+      return;
+    }
+    if (!selectedProject) {
+      message.warning("请先在顶部菜单栏选择一个项目");
+      return;
+    }
+
     closeAllDrawingModes();
     entitiesRef.current.forEach((ent) => ent.destroy());
     entitiesRef.current.clear();
@@ -85,32 +100,26 @@ export function useFileOperations(params: UseFileOperationsParams) {
     modelGroundYRef.current = -Infinity;
     hasAutoFocusedRef.current = false;
 
-    if (window.electronAPI) {
+    try {
       const sourcePath = window.electronAPI.getFilePath(file);
+      if (!sourcePath) throw new Error("无法读取源文件路径");
       const baseName = file.name.replace(/\.[^.]+$/, "");
-      const selectedProject = localStorage.getItem("selectedProject");
-      if (sourcePath && selectedProject) {
-        try { await window.electronAPI.project.importFile(selectedProject, sourcePath, baseName); }
-        catch (err: any) { console.error("文件导入失败:", err.message); }
-      }
+      const targetPath = await window.electronAPI.project.importFile(selectedProject, sourcePath, baseName);
+      await loadLasFromPath(targetPath);
+      setTreeKey((k) => k + 1);
+    } catch (err: any) {
+      message.error("模型导入失败: " + (err?.message || err));
     }
+  }, [closeAllDrawingModes, entitiesRef, lasHeadersRef, filePathRef, pointStatsRef, setLoadedFiles, modelGroundYRef, hasAutoFocusedRef, loadLasFromPath, setTreeKey, message]);
 
-    const ext = file.name.toLowerCase().split(".").pop();
-    if (ext === "las" || ext === "laz") loadLas(file);
-    else loadPly(file);
-    setLoadedFiles((prev) => new Set([...prev, file.name]));
-    setTreeKey((k) => k + 1);
-  }, [closeAllDrawingModes, entitiesRef, lasHeadersRef, filePathRef, pointStatsRef, setLoadedFiles, modelGroundYRef, hasAutoFocusedRef, loadLas, loadPly, setTreeKey]);
-
-  /** 切换模型可见性 */
-  const handleToggleVisible = useCallback((filePath: string) => {
+  /** 仅卸载指定路径对应的模型；删除文件前使用，避免误触发加载 */
+  const handleUnloadModelFromPath = useCallback((filePath: string) => {
     const entityName = filePath.split(/[\\/]/).pop() || filePath;
     const entity = entitiesRef.current.get(entityName);
-    if (!entity) {
-      closeAllDrawingModes();
-      loadLasFromPath(filePath);
-      return;
-    }
+    const loadedPath = filePathRef.current.get(entityName);
+    if (!entity) return false;
+    if (loadedPath && normalizePath(loadedPath) !== normalizePath(filePath)) return false;
+
     entity.destroy();
     entitiesRef.current.delete(entityName);
     lasHeadersRef.current.delete(entityName);
@@ -122,7 +131,15 @@ export function useFileOperations(params: UseFileOperationsParams) {
       return next;
     });
     requestRender();
-  }, [entitiesRef, lasHeadersRef, filePathRef, pointStatsRef, loadLasFromPath, closeAllDrawingModes, setLoadedFiles, requestRender]);
+    return true;
+  }, [entitiesRef, lasHeadersRef, filePathRef, pointStatsRef, setLoadedFiles, requestRender]);
+
+  /** 切换模型可见性 */
+  const handleToggleVisible = useCallback((filePath: string) => {
+    if (handleUnloadModelFromPath(filePath)) return;
+    closeAllDrawingModes();
+    loadLasFromPath(filePath);
+  }, [handleUnloadModelFromPath, loadLasFromPath, closeAllDrawingModes]);
 
   /** 裁切模型 */
   const handleClipModel = useCallback(() => {
@@ -141,5 +158,5 @@ export function useFileOperations(params: UseFileOperationsParams) {
     setClipMode(true);
   }, [entitiesRef, setClipEntityName, setClipMode, message]);
 
-  return { handleLoadLasFromPath, handleImportPointTable, handleFileSelect, handleToggleVisible, handleClipModel };
+  return { handleLoadLasFromPath, handleImportPointTable, handleFileSelect, handleToggleVisible, handleUnloadModelFromPath, handleClipModel };
 }

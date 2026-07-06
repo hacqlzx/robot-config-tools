@@ -146,6 +146,7 @@ export default function ImportExport() {
       if (!dir) return;
 
       setUploadingLabel(label);
+      let tempFilePath = "";
       try {
         const response = await fetch(downloadUrl);
         if (!response.ok) throw new Error("下载失败: " + response.status);
@@ -153,14 +154,18 @@ export default function ImportExport() {
 
         const projectName = localStorage.getItem("selectedProject") || "default";
         const tempPath = `_temp/${fileName}`;
-        await window.electronAPI.project.writeFile(projectName, tempPath, buffer);
+        tempFilePath = await window.electronAPI.project.writeFile(projectName, tempPath, buffer);
         await window.electronAPI.project.exportFile(projectName, tempPath, dir);
-        window.electronAPI.project.deletePath(`${projectName}/${tempPath}`);
 
         message.success("下载成功");
       } catch (e: any) {
         message.error("下载失败: " + (e?.message || e));
       } finally {
+        if (tempFilePath) {
+          try {
+            await window.electronAPI.project.deletePath(tempFilePath);
+          } catch {}
+        }
         setUploadingLabel(null);
       }
     } else {

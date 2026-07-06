@@ -1,6 +1,6 @@
 import { useCallback, useRef, useEffect } from "react";
 import * as pc from "playcanvas";
-import { saveCabinetDrawing, saveChargingArea, saveDeviceAreas, savePathDrawing, DRAWING_FILE_NAME, type CabinetItem, type ChargingAreaItem, type DeviceAreaItem } from "../hooks/drawing/drawing-storage";
+import { saveCabinetDrawing, saveChargingArea, saveDeviceAreas, savePathDrawing, DRAWING_FILE_NAME, PATH_FILE_NAME, type CabinetItem, type ChargingAreaItem, type DeviceAreaItem, type DrawingType } from "../hooks/drawing/drawing-storage";
 
 interface UseSaveHandlersParams {
   entitiesRef: React.MutableRefObject<Map<string, pc.Entity>>;
@@ -22,10 +22,15 @@ interface UseSaveHandlersParams {
   markDeviceAreaSaved: () => void;
   /** 路径相关 */
   getPathData: () => any;
+  onDrawingFileSaved?: (jsonPath: string, type: DrawingType) => void;
+  onPathFileSaved?: (jsonPath: string) => void;
 }
 
 export function useSaveHandlers(params: UseSaveHandlersParams) {
   const { entitiesRef, filePathRef, isAutoSavingRef, saveStatusSetter, message } = params;
+
+  const getDrawingJsonPath = (modelPath: string) => modelPath.replace(/[^\\/]+$/, DRAWING_FILE_NAME);
+  const getPathJsonPath = (modelPath: string) => modelPath.replace(/[^\\/]+$/, PATH_FILE_NAME);
 
   /** 当前绘制模型路径：优先可见且有路径的模型 */
   const getCurrentModelPath = useCallback((): string => {
@@ -67,7 +72,9 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     };
     try {
       await saveCabinetDrawing({ api, projectName, modelPath, item });
-      params.savedCabinetRef.current = { item, jsonPath: modelPath.replace(/[^\\/]+$/, DRAWING_FILE_NAME) };
+      const jsonPath = getDrawingJsonPath(modelPath);
+      params.savedCabinetRef.current = { item, jsonPath };
+      params.onDrawingFileSaved?.(jsonPath, "cabinet");
       message.success(`保存成功（${item.cabinets.length} 个屏柜）`);
       params.handleToggleCabinet();
     } catch (e: any) {
@@ -105,6 +112,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
 
     try {
       await saveChargingArea({ api, projectName, modelPath, item });
+      if (item) params.onDrawingFileSaved?.(getDrawingJsonPath(modelPath), "charging-area");
       if (!isAutoSavingRef.current) message.success("保存成功");
       if (params.chargingMode) params.handleToggleCharging();
     } catch (e: any) {
@@ -143,6 +151,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
 
     try {
       await saveDeviceAreas({ api, projectName, modelPath, items });
+      if (items.length > 0) params.onDrawingFileSaved?.(getDrawingJsonPath(modelPath), "device-area");
       if (!silent) message.success("保存成功");
       params.markDeviceAreaSaved();
     } catch (e: any) {
@@ -163,6 +172,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     if (!modelPath) { if (!silent) message.warning("未找到模型路径，无法保存"); return; }
     try {
       await savePathDrawing({ api, projectName, modelPath, data });
+      params.onPathFileSaved?.(getPathJsonPath(modelPath));
     } catch (e: any) {
       if (!silent) message.error("保存路径失败: " + (e?.message || e));
     }
