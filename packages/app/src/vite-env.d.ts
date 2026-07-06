@@ -10,6 +10,39 @@ declare global {
     children?: TreeNode[];
   }
 
+  interface ProjectManifestAsset {
+    id: string;
+    name: string;
+    relativePath: string;
+    createdAt: string;
+    updatedAt: string;
+    [key: string]: unknown;
+  }
+
+  interface ProjectManifest {
+    schemaVersion: number;
+    project: {
+      id: string;
+      name: string;
+      createdAt: string;
+      updatedAt: string;
+    };
+    layout: {
+      version: number;
+      dirs: {
+        maps: string;
+        pointTables: string;
+        surveyImages: string;
+        [key: string]: string;
+      };
+    };
+    assets: {
+      maps: ProjectManifestAsset[];
+      pointTables: ProjectManifestAsset[];
+      surveyTasks: ProjectManifestAsset[];
+    };
+  }
+
   interface Window {
     electronAPI?: {
       platform: string;
@@ -26,6 +59,7 @@ declare global {
         rename: (oldName: string, newName: string) => Promise<string>;
         delete: (name: string) => Promise<string>;
         importFile: (projectName: string, sourcePath: string, fileName: string) => Promise<string>;
+        getManifest: (projectName: string) => Promise<ProjectManifest>;
         listTree: (projectName: string, subDir: string) => Promise<TreeNode[]>;
         writeFile: (projectName: string, subPath: string, data: ArrayBuffer) => Promise<string>;
         deletePath: (targetPath: string) => Promise<boolean>;
