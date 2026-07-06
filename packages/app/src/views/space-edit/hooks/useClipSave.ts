@@ -316,9 +316,14 @@ export async function performClipSave({
     console.log("[裁切] 实际输出点数:", gpuIdx.toLocaleString());
     console.log("[裁切] 与预期一致:", gpuIdx === clippedCount);
 
-    hv.setFloat64(179, mxX, true); hv.setFloat64(187, mnX, true);
-    hv.setFloat64(195, mxY, true); hv.setFloat64(203, mnY, true);
-    hv.setFloat64(211, mxZ, true); hv.setFloat64(219, mnZ, true);
+    // 加载器会用 header bbox 中心作为 floating-origin。裁切文件若写入自身的紧 bbox，
+    // 重新加载时会被重新居中，无法和原模型重合；这里保持原模型中心不变，仅扩展到包含裁切点。
+    const halfX = Math.max(scaleX, Math.abs(mxX - wp.x), Math.abs(mnX - wp.x));
+    const halfLasY = Math.max(scaleY, Math.abs(mxZ - wp.z), Math.abs(mnZ - wp.z));
+    const halfLasZ = Math.max(scaleZ, Math.abs(mxY - wp.y), Math.abs(mnY - wp.y));
+    hv.setFloat64(179, wp.x + halfX, true); hv.setFloat64(187, wp.x - halfX, true);
+    hv.setFloat64(195, wp.z + halfLasY, true); hv.setFloat64(203, wp.z - halfLasY, true);
+    hv.setFloat64(211, wp.y + halfLasZ, true); hv.setFloat64(219, wp.y - halfLasZ, true);
 
     newVb.unlock();
 

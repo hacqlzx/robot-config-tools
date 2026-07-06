@@ -1,6 +1,6 @@
 # robotConfigTools Agent 快速接手指南
 
-生成时间：2026-07-02
+生成时间：2026-07-06
 
 这份文档给后续 agent 快速理解当前项目现状。内容来自现有源码结构，不等同于早期规划稿。
 
@@ -94,6 +94,7 @@
 - `usePlayCanvas`：空间编辑专用 PlayCanvas 初始化。
 - `useLasLoader`：LAS/LAZ/PLY 加载，支持超大点云降采样、RGB 位深检测、地面 Y 推算。
 - `useFileOperations`：导入模型、从项目树加载模型、点表导入、可见性切换、裁切入口。
+- `useClipSave`：裁切保存 LAS 时会保持原模型 floating-origin 对应的 header bbox 中心，仅扩展范围到包含裁切点；不要改成裁切结果自身的紧包围盒，否则重新加载后模型会被居中偏移，无法和原模型重合。
 - `useSaveHandlers`：保存屏柜、充电区域、设备区、可行路径。
 - `useCabinetDrawing`、`useChargingAreaDrawing`、`useDeviceAreaDrawing`、`usePathDrawing`：空间绘制交互。
 - `SidePanel`：地图树、设备台账树、屏柜树、设备区树。
@@ -157,9 +158,4 @@
 
 ## 当前本地状态提醒
 
-在生成本文档前，工作区已有未提交改动：
-
-- `packages/app/src/components/image-canvas/ImageCanvas.tsx`
-- `packages/app/src/views/image-edit/hooks/useTaskLoader.ts`
-
-这些不是本文档生成时修改的内容。后续 agent 不要无意覆盖或回退它们。
+截至 2026-07-06，本说明更新时仅发现 `packages/app/src/views/space-edit/hooks/useClipSave.ts` 存在待提交代码改动，内容是修正裁切 LAS 重新加载后的空间对齐问题。提交或继续改动前仍应先看 `git status --short`，不要无意覆盖用户本地改动。
