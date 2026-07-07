@@ -4,7 +4,8 @@ import type { TreeProps, TreeDataNode } from "antd";
 import TreeView from "./TreeView";
 import DeviceTree from "@/components/DeviceTree";
 import { DRAWING_FILE_NAME, PATH_FILE_NAME } from "../hooks/drawing/drawing-storage";
-import type { TreeNode } from "./TreeView";
+import type { SpaceTreeNode } from "../types";
+import { MAP_DIR_NAME, isLasOrLazFileName } from "../utils/space-paths";
 
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 520;
@@ -68,19 +69,19 @@ const TREE_CSS = `
 
 export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUnloadMapFile, loadedFiles, treeKey, loadingFile, onCabinetCheck, mapDrawingShown, onToggleDrawing, mapPathShown, onTogglePath }: Props) {
   const [sideTab, setSideTab] = useState("map");
-  const [mapTreeData, setMapTreeData] = useState<TreeNode[]>([]);
+  const [mapTreeData, setMapTreeData] = useState<SpaceTreeNode[]>([]);
   const [cabinetTreeData, setCabinetTreeData] = useState<TreeDataNode[]>([]);
   const [deviceAreaTreeData, setDeviceAreaTreeData] = useState<TreeDataNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(false);
 
-  const [renameTarget, setRenameTarget] = useState<TreeNode | null>(null);
+  const [renameTarget, setRenameTarget] = useState<SpaceTreeNode | null>(null);
   const [renameValue, setRenameValue] = useState("");
 
   const loadMapTree = useCallback(async () => {
     const selectedProject = localStorage.getItem("selectedProject");
     if (!selectedProject || !window.electronAPI) return;
     try {
-      const nodes = await window.electronAPI.project.listTree(selectedProject, "地图");
+      const nodes = await window.electronAPI.project.listTree(selectedProject, MAP_DIR_NAME);
       setMapTreeData(nodes);
     } catch {
       setMapTreeData([]);
@@ -126,12 +127,12 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
   }, [sideTab, loadBayTypeTree]);
 
   /** 右键-打开文件目录 */
-  const handleRequestOpenDir = useCallback((node: TreeNode) => {
+  const handleRequestOpenDir = useCallback((node: SpaceTreeNode) => {
     window.electronAPI?.project.openDir(node.path);
   }, []);
 
   /** 右键-删除：直接删除文件/目录并刷新地图树 */
-  const handleRequestDelete = useCallback((node: TreeNode) => {
+  const handleRequestDelete = useCallback((node: SpaceTreeNode) => {
     Modal.confirm({
       title: "删除确认",
       content: `确定删除「${node.name}」？`,
@@ -141,8 +142,8 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
       onOk: async () => {
         try {
           // 删除前先清除页面上的模型、绘制和路径回显（含子目录）
-          const walkClear = (n: TreeNode) => {
-            if (!n.isDir && /\.(las|laz)$/i.test(n.name) && loadedFiles.has(n.name)) onUnloadMapFile?.(n.path);
+          const walkClear = (n: SpaceTreeNode) => {
+            if (!n.isDir && isLasOrLazFileName(n.name) && loadedFiles.has(n.name)) onUnloadMapFile?.(n.path);
             else if (n.name === DRAWING_FILE_NAME) onToggleDrawing?.(n.path, false);
             else if (n.name === PATH_FILE_NAME) onTogglePath?.(n.path, false);
             n.children?.forEach(walkClear);
@@ -159,7 +160,7 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
   }, [loadMapTree, loadedFiles, onToggleDrawing, onTogglePath, onUnloadMapFile]);
 
   /** 右键-重命名：打开弹窗 */
-  const handleRequestRename = useCallback((node: TreeNode) => {
+  const handleRequestRename = useCallback((node: SpaceTreeNode) => {
     setRenameTarget(node);
     setRenameValue(node.name);
   }, []);

@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import { Modal, Checkbox, Divider, Progress, Button, Spin, App } from "antd";
 import { FolderOutlined, FileExcelOutlined } from "@ant-design/icons";
+import { MAP_DIR_NAME, POINT_TABLE_DIR_NAME, POINT_TABLE_FILE_RE } from "../utils/space-paths";
 
 interface Props {
   open: boolean;
@@ -10,7 +11,7 @@ interface Props {
 interface FileItem {
   label: string;
   key: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
   desc?: string;
 }
 
@@ -38,15 +39,15 @@ export default function ExportModal({ open, onClose }: Props) {
 
       // 点表
       try {
-        const ptFiles = await api.project.listTree(projectName, "点表");
-        if (ptFiles.some((f: any) => !f.isDir && /\.(xlsx|xls)$/i.test(f.name))) {
-          items.push({ label: "点表", key: "点表", icon: <FileExcelOutlined style={{ color: "#52c41a", fontSize: 20 }} />, desc: "下发设备台账点表及巡检点位信息" });
+        const ptFiles = await api.project.listTree(projectName, POINT_TABLE_DIR_NAME);
+        if (ptFiles.some((f: any) => !f.isDir && POINT_TABLE_FILE_RE.test(f.name))) {
+          items.push({ label: POINT_TABLE_DIR_NAME, key: POINT_TABLE_DIR_NAME, icon: <FileExcelOutlined style={{ color: "#52c41a", fontSize: 20 }} />, desc: "下发设备台账点表及巡检点位信息" });
         }
       } catch {}
 
       // 地图模型目录
       try {
-        const mapFiles = await api.project.listTree(projectName, "地图");
+        const mapFiles = await api.project.listTree(projectName, MAP_DIR_NAME);
         for (const node of mapFiles) {
           if (node.isDir) {
             items.push({ label: node.name, key: node.name, icon: <FolderOutlined style={{ color: "#faad14", fontSize: 20 }} />, desc: "包含点云模型及导航配置" });
@@ -86,7 +87,7 @@ export default function ExportModal({ open, onClose }: Props) {
 
     const items = files
       .filter((f) => checked.has(f.key))
-      .map((f) => ({ type: f.key === "点表" ? "点表" : "地图", name: f.key === "点表" ? "点表" : f.label }));
+      .map((f) => ({ type: f.key === POINT_TABLE_DIR_NAME ? POINT_TABLE_DIR_NAME : MAP_DIR_NAME, name: f.key === POINT_TABLE_DIR_NAME ? POINT_TABLE_DIR_NAME : f.label }));
 
     try {
       const result = await api.exportZip(projectName, items, dir);

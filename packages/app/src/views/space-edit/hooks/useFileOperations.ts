@@ -1,12 +1,14 @@
 import { useCallback } from "react";
 import * as pc from "playcanvas";
 import { parsePointExcel } from "@/utils/excel-parser";
+import type { ModelPointStats, SpaceMessageApi } from "../types";
+import { POINT_TABLE_DIR_NAME, POINT_TABLE_FILE_RE, isLasOrLazFileName, pointTableFileSubPath, stripModelExtension } from "../utils/space-paths";
 
 interface UseFileOperationsParams {
   entitiesRef: React.MutableRefObject<Map<string, pc.Entity>>;
   lasHeadersRef: React.MutableRefObject<Map<string, any>>;
   filePathRef: React.MutableRefObject<Map<string, string>>;
-  pointStatsRef: React.MutableRefObject<Map<string, { total: number; loaded: number }>>;
+  pointStatsRef: React.MutableRefObject<Map<string, ModelPointStats>>;
   modelGroundYRef: React.MutableRefObject<number>;
   hasAutoFocusedRef: React.MutableRefObject<boolean>;
   loadLasFromPath: (filePath: string) => Promise<void>;
@@ -17,7 +19,7 @@ interface UseFileOperationsParams {
   setTreeKey: React.Dispatch<React.SetStateAction<number>>;
   setClipEntityName: React.Dispatch<React.SetStateAction<string>>;
   setClipMode: React.Dispatch<React.SetStateAction<boolean>>;
-  message: { success: (msg: string) => void; warning: (msg: string) => void; error: (msg: string) => void };
+  message: SpaceMessageApi;
 }
 
 export function useFileOperations(params: UseFileOperationsParams) {
@@ -51,20 +53,21 @@ export function useFileOperations(params: UseFileOperationsParams) {
       const ext = file.name.match(/\.(xlsx|xls)$/i)?.[0] || ".xlsx";
       const savedName = `${stationName}${ext}`;
       try {
-        const pointTableFiles = await api.project.listTree(projectName, "点表");
+        const pointTableFiles = await api.project.listTree(projectName, POINT_TABLE_DIR_NAME);
         for (const node of pointTableFiles) {
-          if (!node.isDir && /\.(xlsx|xls)$/i.test(node.name)) await api.project.deletePath(node.path);
+          if (!node.isDir && POINT_TABLE_FILE_RE.test(node.name)) await api.project.deletePath(node.path);
         }
       } catch {}
       const arrayBuf = await file.arrayBuffer();
-      await api.project.writeFile(projectName, `点表/${savedName}`, arrayBuf);
+      const savedSubPath = pointTableFileSubPath(savedName);
+      await api.project.writeFile(projectName, savedSubPath, arrayBuf);
 
       const stationCode = stationName.substring(0, 10) + Date.now().toString().slice(-4);
       await api.startBatch();
       const result = await api.importPoints(rows, stationName, stationCode, projectName);
       await api.endBatch();
 
-      message.success(`导入成功: ${result.inserted} 新增, ${result.updated} 更新, 文件已保存至 点表/${savedName}`);
+      message.success(`导入成功: ${result.inserted} 新增, ${result.updated} 更新, 文件已保存至 ${savedSubPath}`);
       if (result.errors.length > 0) message.warning("错误: " + result.errors.slice(0, 3).join("; "));
     } catch (e: any) {
       message.error("导入失败: " + e.message);
@@ -75,7 +78,7 @@ export function useFileOperations(params: UseFileOperationsParams) {
 
   /** 选择模型文件 */
   const handleFileSelect = useCallback(async (file: File) => {
-    if (!/\.(las|laz)$/i.test(file.name)) {
+    if (!isLasOrLazFileName(file.name)) {
       message.warning("仅支持 LAS/LAZ 模型文件");
       return;
     }
@@ -103,7 +106,7 @@ export function useFileOperations(params: UseFileOperationsParams) {
     try {
       const sourcePath = window.electronAPI.getFilePath(file);
       if (!sourcePath) throw new Error("无法读取源文件路径");
-      const baseName = file.name.replace(/\.[^.]+$/, "");
+      const baseName = stripModelExtension(file.name);
       const targetPath = await window.electronAPI.project.importFile(selectedProject, sourcePath, baseName);
       await loadLasFromPath(targetPath);
       setTreeKey((k) => k + 1);

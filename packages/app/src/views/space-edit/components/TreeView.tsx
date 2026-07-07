@@ -2,29 +2,24 @@ import { useState, useEffect, useRef } from "react";
 import { Dropdown } from "antd";
 import { FolderOutlined, FileOutlined, LoadingOutlined } from "@ant-design/icons";
 import { DRAWING_FILE_NAME, PATH_FILE_NAME } from "../hooks/drawing/drawing-storage";
-
-interface TreeNode {
-  name: string;
-  path: string;
-  isDir: boolean;
-  children?: TreeNode[];
-}
+import type { SpaceTreeNode } from "../types";
+import { isLasOrLazFileName } from "../utils/space-paths";
 
 interface Props {
-  nodes: TreeNode[];
+  nodes: SpaceTreeNode[];
   depth?: number;
   loadedFiles: Set<string>;
   loadingFile: string;
   onLoadLas?: (filePath: string) => Promise<void>;
   onToggleVisible?: (filePath: string) => void;
   /** 懒加载子节点，返回的 children 会被合并到对应节点下 */
-  loadChildren?: (node: TreeNode) => Promise<TreeNode[]>;
+  loadChildren?: (node: SpaceTreeNode) => Promise<SpaceTreeNode[]>;
   /** 右键-重命名 */
-  onRequestRename?: (node: TreeNode) => void;
+  onRequestRename?: (node: SpaceTreeNode) => void;
   /** 右键-删除 */
-  onRequestDelete?: (node: TreeNode) => void;
+  onRequestDelete?: (node: SpaceTreeNode) => void;
   /** 右键-打开文件目录 */
-  onRequestOpenDir?: (node: TreeNode) => void;
+  onRequestOpenDir?: (node: SpaceTreeNode) => void;
   /** 已回显的绘制 json 路径集合 */
   drawingShown?: Set<string>;
   /** 勾选/取消绘制 json（回显屏柜） */
@@ -38,7 +33,7 @@ interface Props {
 export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, onLoadLas, onToggleVisible, loadChildren, onRequestRename, onRequestDelete, onRequestOpenDir, drawingShown, onToggleDrawing, pathShown, onTogglePath }: Props) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
-    const expandAll = (list: TreeNode[]) => {
+    const expandAll = (list: SpaceTreeNode[]) => {
       list.forEach((node) => {
         if (node.isDir) {
           init[node.path] = true;
@@ -50,7 +45,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
     return init;
   });
 
-  const [lazyChildren, setLazyChildren] = useState<Record<string, TreeNode[]>>({});
+  const [lazyChildren, setLazyChildren] = useState<Record<string, SpaceTreeNode[]>>({});
   const [loadingNodes, setLoadingNodes] = useState<Set<string>>(new Set());
   const loadedRef = useRef<Set<string>>(new Set());
 
@@ -59,7 +54,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
     setExpanded((prev) => {
       const next = { ...prev };
       let changed = false;
-      const expandNew = (list: TreeNode[]) => {
+      const expandNew = (list: SpaceTreeNode[]) => {
         list.forEach((node) => {
           if (node.isDir) {
             if (!(node.path in next)) { next[node.path] = true; changed = true; }
@@ -72,19 +67,19 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
     });
   }, [nodes]);
 
-  const isLas = (name: string) => /\.(las|laz)$/i.test(name);
+  const isLas = isLasOrLazFileName;
   const isDrawing = (name: string) => name === DRAWING_FILE_NAME;
   const isPath = (name: string) => name === PATH_FILE_NAME;
 
   /** 合并节点自身的 children 与懒加载的 children */
-  const getEffectiveChildren = (node: TreeNode): TreeNode[] | undefined => {
+  const getEffectiveChildren = (node: SpaceTreeNode): SpaceTreeNode[] | undefined => {
     if (node.children && node.children.length > 0) return node.children;
     const lazy = lazyChildren[node.path];
     if (lazy && lazy.length > 0) return lazy;
     return node.children;
   };
 
-  const handleExpand = async (node: TreeNode) => {
+  const handleExpand = async (node: SpaceTreeNode) => {
     const isExpanded = expanded[node.path];
 
     // 折叠
@@ -118,7 +113,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
     }
   };
 
-  const getCheckState = (node: TreeNode): { checked: boolean; indeterminate?: boolean } => {
+  const getCheckState = (node: SpaceTreeNode): { checked: boolean; indeterminate?: boolean } => {
     if (node.isDir) {
       const children = getEffectiveChildren(node);
       if (!children || children.length === 0) return { checked: false };
@@ -142,15 +137,15 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
     return { checked: false };
   };
 
-  const handleCheck = (node: TreeNode, checked: boolean) => {
+  const handleCheck = (node: SpaceTreeNode, checked: boolean) => {
     if (node.isDir) {
       const children = getEffectiveChildren(node);
       if (!children) return;
-      const recurse = async (list: TreeNode[]) => {
-        const lasNodes: TreeNode[] = [];
-        const drawNodes: TreeNode[] = [];
-        const pathNodes: TreeNode[] = [];
-        const collect = (items: TreeNode[]) => {
+      const recurse = async (list: SpaceTreeNode[]) => {
+        const lasNodes: SpaceTreeNode[] = [];
+        const drawNodes: SpaceTreeNode[] = [];
+        const pathNodes: SpaceTreeNode[] = [];
+        const collect = (items: SpaceTreeNode[]) => {
           items.forEach((child) => {
             if (child.isDir && child.children) {
               collect(child.children);
@@ -301,4 +296,4 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
   );
 }
 
-export type { TreeNode };
+export type { SpaceTreeNode as TreeNode };

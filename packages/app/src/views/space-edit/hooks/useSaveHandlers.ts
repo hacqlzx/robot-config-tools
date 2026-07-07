@@ -1,13 +1,16 @@
 import { useCallback, useRef, useEffect } from "react";
 import * as pc from "playcanvas";
 import { saveCabinetDrawing, saveChargingArea, saveDeviceAreas, savePathDrawing, DRAWING_FILE_NAME, PATH_FILE_NAME, type CabinetItem, type ChargingAreaItem, type DeviceAreaItem, type DrawingType } from "../hooks/drawing/drawing-storage";
+import type { SaveStatus, SpaceMessageApi } from "../types";
+import { getCurrentModelPathFromRefs } from "../utils/model-state";
+import { mapSiblingFilePath } from "../utils/space-paths";
 
 interface UseSaveHandlersParams {
   entitiesRef: React.MutableRefObject<Map<string, pc.Entity>>;
   filePathRef: React.MutableRefObject<Map<string, string>>;
   isAutoSavingRef: React.MutableRefObject<boolean>;
-  saveStatusSetter: React.Dispatch<React.SetStateAction<"idle" | "saving" | "saved">>;
-  message: { success: (msg: string) => void; warning: (msg: string) => void; error: (msg: string) => void };
+  saveStatusSetter: React.Dispatch<React.SetStateAction<SaveStatus>>;
+  message: SpaceMessageApi;
   /** 屏柜保存后回显：设置此 ref 供 cabinetMode useEffect 消费 */
   savedCabinetRef: React.MutableRefObject<{ item: CabinetItem; jsonPath: string } | null>;
   /** 屏柜绘制相关 */
@@ -29,16 +32,12 @@ interface UseSaveHandlersParams {
 export function useSaveHandlers(params: UseSaveHandlersParams) {
   const { entitiesRef, filePathRef, isAutoSavingRef, saveStatusSetter, message } = params;
 
-  const getDrawingJsonPath = (modelPath: string) => modelPath.replace(/[^\\/]+$/, DRAWING_FILE_NAME);
-  const getPathJsonPath = (modelPath: string) => modelPath.replace(/[^\\/]+$/, PATH_FILE_NAME);
+  const getDrawingJsonPath = (modelPath: string) => mapSiblingFilePath(modelPath, DRAWING_FILE_NAME);
+  const getPathJsonPath = (modelPath: string) => mapSiblingFilePath(modelPath, PATH_FILE_NAME);
 
   /** 当前绘制模型路径：优先可见且有路径的模型 */
   const getCurrentModelPath = useCallback((): string => {
-    for (const [name, ent] of entitiesRef.current) {
-      const p = filePathRef.current.get(name);
-      if (ent.enabled && p) return p;
-    }
-    return filePathRef.current.values().next().value || "";
+    return getCurrentModelPathFromRefs(entitiesRef.current, filePathRef.current);
   }, [entitiesRef, filePathRef]);
 
   /** 保存屏柜 */
@@ -50,15 +49,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     const geometry = params.getCabinetGeometry();
     if (!geometry) { message.warning("请先完成屏柜绘制（四点成体）"); return; }
 
-    let modelPath = "";
-    for (const [name, ent] of entitiesRef.current) {
-      const p = filePathRef.current.get(name);
-      if (ent.enabled && p) { modelPath = p; break; }
-    }
-    if (!modelPath) {
-      const first = filePathRef.current.values().next().value;
-      if (first) modelPath = first;
-    }
+    const modelPath = getCurrentModelPath();
     if (!modelPath) { message.warning("未找到绘制模型，无法保存"); return; }
 
     const item: CabinetItem = {
@@ -80,7 +71,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     } catch (e: any) {
       message.error("保存失败: " + (e?.message || e));
     }
-  }, [entitiesRef, filePathRef, message, params]);
+  }, [getCurrentModelPath, message, params]);
 
   /** 保存充电区域 */
   const handleSaveChargingArea = useCallback(async () => {
@@ -92,15 +83,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     if (!drawing) return;
     const verts = drawing.getBoxVerts();
 
-    let modelPath = "";
-    for (const [name, ent] of entitiesRef.current) {
-      const p = filePathRef.current.get(name);
-      if (ent.enabled && p) { modelPath = p; break; }
-    }
-    if (!modelPath) {
-      const first = filePathRef.current.values().next().value;
-      if (first) modelPath = first;
-    }
+    const modelPath = getCurrentModelPath();
     if (!modelPath) return;
 
     const item: ChargingAreaItem | null = verts ? {
@@ -118,7 +101,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     } catch (e: any) {
       message.error("保存充电区失败: " + (e?.message || e));
     }
-  }, [entitiesRef, filePathRef, isAutoSavingRef, message, params]);
+  }, [getCurrentModelPath, isAutoSavingRef, message, params]);
 
   /** 保存设备区 */
   const handleSaveDeviceAreas = useCallback(async () => {
@@ -129,15 +112,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     if (!projectName) { if (!silent) message.warning("请先选择项目"); return; }
     const datas = params.getBoxDatas();
 
-    let modelPath = "";
-    for (const [name, ent] of entitiesRef.current) {
-      const p = filePathRef.current.get(name);
-      if (ent.enabled && p) { modelPath = p; break; }
-    }
-    if (!modelPath) {
-      const first = filePathRef.current.values().next().value;
-      if (first) modelPath = first;
-    }
+    const modelPath = getCurrentModelPath();
     if (!modelPath) { if (!silent) message.warning("未找到模型路径，无法保存"); return; }
 
     const items: DeviceAreaItem[] = datas.map((d) => ({
@@ -157,7 +132,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     } catch (e: any) {
       message.error("保存设备区失败: " + (e?.message || e));
     }
-  }, [entitiesRef, filePathRef, isAutoSavingRef, message, params]);
+  }, [getCurrentModelPath, isAutoSavingRef, message, params]);
 
   /** 保存可行路径 */
   const handleSavePath = useCallback(async () => {
@@ -194,7 +169,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
       const modelPath = getCurrentModelPath();
       if (!modelPath) return;
       try {
-        const buf = await window.electronAPI?.readLargeFile?.(modelPath.replace(/[^\\/]+$/, DRAWING_FILE_NAME));
+        const buf = await window.electronAPI?.readLargeFile?.(getDrawingJsonPath(modelPath));
         if (!buf) return;
       } catch {
         return; // JSON 不存在，跳过自动保存

@@ -1,6 +1,7 @@
 ﻿import { useRef } from "react";
 import { UploadOutlined, TableOutlined, SaveOutlined, ScissorOutlined, BorderOutlined, ThunderboltOutlined, AppstoreOutlined, NodeIndexOutlined, ExportOutlined } from "@ant-design/icons";
 import { message } from "antd";
+import { MODEL_FILE_ACCEPT, POINT_TABLE_FILE_ACCEPT, isLasOrLazFileName } from "../utils/space-paths";
 
 interface Props {
   cabinetMode?: boolean;
@@ -39,7 +40,7 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!/\.(las|laz)$/i.test(file.name)) {
+    if (!isLasOrLazFileName(file.name)) {
       message.warning("仅支持 LAS/LAZ 模型文件");
       e.target.value = "";
       return;
@@ -108,8 +109,8 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
         borderBottom: "1px solid #e8e8e8",
         flexShrink: 0,
       }}>
-        <input ref={fileInputRef} type="file" accept=".las,.laz" onChange={handleFile} style={{ display: "none" }} />
-        <input ref={pointInputRef} type="file" accept=".xlsx,.xls" onChange={handlePointFile} style={{ display: "none" }} />
+        <input ref={fileInputRef} type="file" accept={MODEL_FILE_ACCEPT} onChange={handleFile} style={{ display: "none" }} />
+        <input ref={pointInputRef} type="file" accept={POINT_TABLE_FILE_ACCEPT} onChange={handlePointFile} style={{ display: "none" }} />
         {BUTTONS.map(({ icon, label, action }) => {
           const isActive = (action === "cabinet" && cabinetMode) ||
             (action === "charging" && chargingMode) ||

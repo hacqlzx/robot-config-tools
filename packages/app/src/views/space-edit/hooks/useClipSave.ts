@@ -1,6 +1,7 @@
 ﻿import * as pc from "playcanvas";
 import { parseLasHeader, loadLazPerf, getWasmUrl } from "../../../playcanvas-core/io/read/las-reader";
 import { pointcloudVert, pointcloudFrag } from "../../../playcanvas-core/shaders/pointcloud-shader";
+import { MAP_DIR_NAME, mapModelFileSubPath, stripModelExtension } from "../utils/space-paths";
 
 interface Bounds {
   minX: number; maxX: number;
@@ -337,19 +338,20 @@ export async function performClipSave({
     if (originalMeshRef.current) originalMeshRef.current = null;
 
     // 保存到磁盘
-    const baseName = entityName.replace(/\.(las|laz)$/i, "");
+    const baseName = stripModelExtension(entityName);
     let clipName = "";
     setProgress(95); onProgress?.(95);
     if (window.electronAPI) {
       const selectedProject = localStorage.getItem("selectedProject");
       if (selectedProject) {
-        const dirFiles = await window.electronAPI.project.listTree(selectedProject, "地图");
+        const dirFiles = await window.electronAPI.project.listTree(selectedProject, MAP_DIR_NAME);
         const existing = dirFiles.filter((f: any) => f.isDir && new RegExp("^" + baseName + "_\\d+$").test(f.name));
         let idx = 1;
         while (existing.some((f: any) => f.name === baseName + "_" + idx)) idx++;
         clipName = baseName + "_" + idx;
-        await window.electronAPI.project.writeFile(selectedProject, "地图/" + clipName + "/" + clipName + ".las", out.buffer.slice(0, outIdx));
-        console.log("[裁切] 已保存:", "地图/" + clipName + "/" + clipName + ".las");
+        const clipSubPath = mapModelFileSubPath(clipName, ".las");
+        await window.electronAPI.project.writeFile(selectedProject, clipSubPath, out.buffer.slice(0, outIdx));
+        console.log("[裁切] 已保存:", clipSubPath);
         console.log("[裁切] 输出大小:", (outIdx / 1024 / 1024).toFixed(1), "MB");
       }
     }

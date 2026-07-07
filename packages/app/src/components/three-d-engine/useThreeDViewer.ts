@@ -1,7 +1,9 @@
 import { useRef, useEffect, useCallback, useState } from "react";
 import { ThreeDEngine, type ThreeDEngineOptions } from "./ThreeDEngine";
-import { PointCloudLoader, type PointCloudLoaderCallbacks, type LoadedModel } from "./PointCloudLoader";
+import { PointCloudLoader, type LoadedModel } from "./PointCloudLoader";
 import { DrawingRenderer } from "./DrawingRenderer";
+import type { DrawingRenderData } from "./drawing-data";
+import type { FileSource } from "./file-source";
 
 interface UseThreeDEngineParams {
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
@@ -39,6 +41,7 @@ interface UseThreeDViewerParams {
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
   containerRef: React.RefObject<HTMLDivElement | null>;
   engineOptions?: ThreeDEngineOptions;
+  fileSource?: FileSource;
   onSelect?: (info: { type: "cabinet" | "device-area" | "charging-area"; bayId: number }) => void;
 }
 
@@ -51,6 +54,7 @@ export function useThreeDViewer({
   canvasRef,
   containerRef,
   engineOptions,
+  fileSource,
   onSelect,
 }: UseThreeDViewerParams) {
   const engineRef = useRef<ThreeDEngine | null>(null);
@@ -72,10 +76,10 @@ export function useThreeDViewer({
     const loader = new PointCloudLoader(engine.app, {
       onProgress: (pct) => setProgress(pct),
       onFileLoaded: () => {},
-    });
+    }, fileSource);
     loaderRef.current = loader;
 
-    const drawing = new DrawingRenderer(engine.app, engine.cameraEntity, () => engine.requestRender());
+    const drawing = new DrawingRenderer(engine.app, engine.cameraEntity, () => engine.requestRender(), fileSource);
     drawing.onSelect = onSelect;
     drawingRef.current = drawing;
 
@@ -112,9 +116,15 @@ export function useThreeDViewer({
     engineRef.current?.requestRender();
   }, []);
 
+  const loadDrawingData = useCallback((data: DrawingRenderData | unknown) => {
+    drawingRef.current?.loadData(data);
+    engineRef.current?.requestRender();
+  }, []);
+
   return {
     loadFile,
     loadDrawing,
+    loadDrawingData,
     loading,
     loadingFile,
     progress,

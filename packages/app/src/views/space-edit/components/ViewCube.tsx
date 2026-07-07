@@ -4,12 +4,13 @@ import leftRaw from "@/assets/svg/left.svg?raw";
 import rightRaw from "@/assets/svg/right.svg?raw";
 import topRaw from "@/assets/svg/top.svg?raw";
 import bottomRaw from "@/assets/svg/bottom.svg?raw";
+import type { ViewDirection } from "../types";
 
 function svgDataUri(raw: string) {
   return `data:image/svg+xml,${encodeURIComponent(raw)}`;
 }
 
-const ICONS: Record<string, string> = {
+const ICONS: Record<ViewDirection, string> = {
   前: svgDataUri(frontRaw),
   后: svgDataUri(backRaw),
   左: svgDataUri(leftRaw),
@@ -20,10 +21,10 @@ const ICONS: Record<string, string> = {
 
 
 interface Props {
-  onViewChange?: (direction: "前" | "后" | "左" | "右" | "上" | "下") => void;
+  onViewChange?: (direction: ViewDirection) => void;
 }
 
-const DIRECTIONS = ["前", "后", "左", "右", "上", "下"] as const;
+const DIRECTIONS: ViewDirection[] = ["前", "后", "左", "右", "上", "下"];
 
 export default function ViewCube({ onViewChange }: Props) {
   return (

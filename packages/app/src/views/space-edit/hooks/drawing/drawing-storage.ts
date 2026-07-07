@@ -1,6 +1,8 @@
 // 空间绘制数据持久化：充电区域、设备区、屏柜 等统一存于模型目录下同一 JSON
 // 文件名固定，按 type 标识区分各类绘制，支持二次编辑（按 type 局部更新，互不影响）
 
+import type { SpaceTreeNode } from "../../types";
+import { MAP_DIR_NAME, mapSiblingFilePath, mapSiblingSubPath, projectSubPathFromDir } from "../../utils/space-paths";
 import type { PathPoint, PathSegment, PathData } from "./PathDrawing";
 
 /** 绘制类型标识 */
@@ -69,34 +71,22 @@ type ElectronAPI = NonNullable<Window["electronAPI"]>;
 
 /** 由模型绝对路径推导同目录下 JSON 的绝对路径（读用） */
 function jsonAbsPath(modelPath: string): string {
-  return modelPath.replace(/[^\\/]+$/, DRAWING_FILE_NAME);
+  return mapSiblingFilePath(modelPath, DRAWING_FILE_NAME);
 }
 
 /** 由模型绝对路径推导项目相对子路径（写用，writeFile 需要项目相对路径） */
 function jsonSubPath(modelPath: string): string {
-  const norm = modelPath.replace(/\\/g, "/");
-  const idx = norm.indexOf("/地图/");
-  if (idx >= 0) {
-    const rel = norm.slice(idx + 1); // 地图/xxx/xxx.las
-    return rel.replace(/[^/]+$/, DRAWING_FILE_NAME);
-  }
-  return DRAWING_FILE_NAME;
+  return mapSiblingSubPath(modelPath, DRAWING_FILE_NAME);
 }
 
 /** 路径文件绝对路径（读用） */
 function pathAbsPath(modelPath: string): string {
-  return modelPath.replace(/[^\\/]+$/, PATH_FILE_NAME);
+  return mapSiblingFilePath(modelPath, PATH_FILE_NAME);
 }
 
 /** 路径文件项目相对子路径（写用） */
 function pathSubPath(modelPath: string): string {
-  const norm = modelPath.replace(/\\/g, "/");
-  const idx = norm.indexOf("/地图/");
-  if (idx >= 0) {
-    const rel = norm.slice(idx + 1);
-    return rel.replace(/[^/]+$/, PATH_FILE_NAME);
-  }
-  return PATH_FILE_NAME;
+  return mapSiblingSubPath(modelPath, PATH_FILE_NAME);
 }
 
 /** 读取现有绘制文件（不存在则返回空结构） */
@@ -184,7 +174,7 @@ export async function loadDeviceAreas(api: ElectronAPI, modelPath: string): Prom
 }
 
 /** 递归收集目录下所有 JSON 文件中已绑定的间隔 ID（跨模型去重） */
-async function collectBoundBayIds(api: ElectronAPI, nodes: TreeNode[], ids: Set<number>) {
+async function collectBoundBayIds(api: ElectronAPI, nodes: SpaceTreeNode[], ids: Set<number>) {
   for (const node of nodes) {
     if (node.isDir && node.children) {
       await collectBoundBayIds(api, node.children, ids);
@@ -206,18 +196,10 @@ async function collectBoundBayIds(api: ElectronAPI, nodes: TreeNode[], ids: Set<
 export async function getBoundBayIdsInProject(api: ElectronAPI, projectName: string): Promise<Set<number>> {
   const ids = new Set<number>();
   try {
-    const nodes = await api.project.listTree(projectName, "地图");
+    const nodes = await api.project.listTree(projectName, MAP_DIR_NAME);
     await collectBoundBayIds(api, nodes, ids);
   } catch {}
   return ids;
-}
-
-/** TreeNode 类型引用（来自树组件） */
-interface TreeNode {
-  name: string;
-  path: string;
-  isDir: boolean;
-  children?: TreeNode[];
 }
 
 /** 直接按绘制 JSON 的绝对路径读取屏柜记录（地图树勾选 json 时用） */
@@ -257,9 +239,7 @@ export async function loadChargingAreaFromJson(api: ElectronAPI, jsonPath: strin
 
 /** 由绘制 JSON 绝对路径推导项目相对子路径（写回用） */
 function subPathFromJson(jsonPath: string): string {
-  const norm = jsonPath.replace(/\\/g, "/");
-  const idx = norm.indexOf("/地图/");
-  return idx >= 0 ? norm.slice(idx + 1) : DRAWING_FILE_NAME;
+  return projectSubPathFromDir(jsonPath, MAP_DIR_NAME, DRAWING_FILE_NAME);
 }
 
 /** 删除某间隔的屏柜记录并写回 JSON */

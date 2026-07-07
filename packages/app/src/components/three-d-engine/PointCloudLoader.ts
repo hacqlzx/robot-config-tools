@@ -3,6 +3,7 @@ import { pointcloudVert, pointcloudFrag } from "../../playcanvas-core/shaders/po
 import { parseLasHeader, loadLazPerf, getWasmUrl, type LasHeader } from "../../playcanvas-core/io/read/las-reader";
 import { BlobReadFileSystem } from "../../playcanvas-core/io/read/file-systems";
 import { loadGSplatData } from "../../playcanvas-core/io";
+import { electronFileSource, type FileSource } from "./file-source";
 
 const MAX_POINTS = 30_000_000;
 
@@ -65,23 +66,22 @@ export class PointCloudLoader {
   filePaths: Map<string, string> = new Map();
   pointStats: Map<string, { total: number; loaded: number }> = new Map();
   private callbacks: PointCloudLoaderCallbacks;
+  private fileSource: FileSource;
 
-  constructor(app: pc.Application, callbacks?: PointCloudLoaderCallbacks) {
+  constructor(app: pc.Application, callbacks?: PointCloudLoaderCallbacks, fileSource: FileSource = electronFileSource) {
     this.app = app;
     this.callbacks = callbacks || {};
+    this.fileSource = fileSource;
   }
 
   private readFileChunk(filePath: string, offset: number, length: number): Promise<ArrayBuffer> {
-    if (window.electronAPI?.readFileChunk) {
-      return window.electronAPI.readFileChunk(filePath, offset, length);
-    }
-    return window.electronAPI!.readLargeFile!(filePath).then((buf) => buf.slice(offset, offset + length));
+    return this.fileSource.readChunk(filePath, offset, length);
   }
 
   /** 从文件路径加载 LAS/LAZ */
   async loadLasFromPath(filePath: string): Promise<LoadedModel> {
     const fileName = filePath.split(/[\\/]/).pop() || "unknown.las";
-    const headerBuf = await window.electronAPI!.readFileChunk(filePath, 0, 4096);
+    const headerBuf = await this.readFileChunk(filePath, 0, 4096);
     const header = parseLasHeader(headerBuf);
 
     this.lasHeaders.set(fileName, header);
@@ -323,7 +323,7 @@ export class PointCloudLoader {
     const f32 = new Float32Array(vbLock);
     const u8 = new Uint8Array(vbLock);
 
-    const arrayBuffer = await window.electronAPI!.readLargeFile!(filePath);
+    const arrayBuffer = await this.fileSource.readAll(filePath);
 
     const createLazPerf = await loadLazPerf();
     const LazPerf = await createLazPerf({ locateFile: () => getWasmUrl() });

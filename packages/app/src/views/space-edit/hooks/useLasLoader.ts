@@ -1,13 +1,16 @@
 import { useRef, useCallback, useEffect } from "react";
 import * as pc from "playcanvas";
 import { PointCloudLoader } from "../../../components/three-d-engine/PointCloudLoader";
+import type { FileSource } from "../../../components/three-d-engine/file-source";
+import type { ModelPointStats } from "../types";
+import { fileNameFromPath } from "../utils/space-paths";
 
 interface UseLasLoaderParams {
   appRef: React.MutableRefObject<pc.Application | null>;
   entitiesRef: React.MutableRefObject<Map<string, pc.Entity>>;
   lasHeadersRef: React.MutableRefObject<Map<string, any>>;
   filePathRef: React.MutableRefObject<Map<string, string>>;
-  pointStatsRef: React.MutableRefObject<Map<string, { total: number; loaded: number }>>;
+  pointStatsRef: React.MutableRefObject<Map<string, ModelPointStats>>;
   modelGroundYRef: React.MutableRefObject<number>;
   requestRender: () => void;
   focusOnModel: (cx: number, cy: number, cz: number, extent: number) => void;
@@ -16,6 +19,7 @@ interface UseLasLoaderParams {
   setLoadingText: (v: string) => void;
   setLoadingProgress: (v: number) => void;
   setLoadedFiles: React.Dispatch<React.SetStateAction<Set<string>>>;
+  fileSource?: FileSource;
 }
 
 export function useLasLoader({
@@ -23,6 +27,7 @@ export function useLasLoader({
   requestRender, focusOnModel,
   setLoading, setLoadingFile, setLoadingText, setLoadingProgress,
   setLoadedFiles,
+  fileSource,
 }: UseLasLoaderParams) {
   const loaderRef = useRef<PointCloudLoader | null>(null);
 
@@ -33,7 +38,7 @@ export function useLasLoader({
     const loader = new PointCloudLoader(app, {
       onProgress: (pct) => setLoadingProgress(pct),
       onFileLoaded: (name) => {},
-    });
+    }, fileSource);
     loaderRef.current = loader;
     return () => {
       loader.destroy();
@@ -53,7 +58,7 @@ export function useLasLoader({
   const loadLasFromPath = useCallback(async (filePath: string) => {
     const loader = loaderRef.current;
     if (!loader) return;
-    const fileName = filePath.split(/[\\/]/).pop() || "unknown.las";
+    const fileName = fileNameFromPath(filePath) || "unknown.las";
     setLoading(true);
     setLoadingFile(fileName);
     setLoadingText("正在加载模型...");

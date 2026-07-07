@@ -1,5 +1,20 @@
 import * as pc from "playcanvas";
-import { createLine, createSphere, updateLineEntity } from "../../views/space-edit/hooks/drawing/drawing-utils";
+import {
+  isBoxRenderItem,
+  isCabinetRenderItem,
+  isDrawingItemsData,
+  isPathPointObject,
+  isPathRenderData,
+  pointToTuple,
+  type BoxRenderItem,
+  type CabinetRenderItem,
+  type DrawingRenderData,
+  type PathPointValue,
+  type PathRenderData,
+  type PathSegmentValue,
+} from "./drawing-data";
+import { electronFileSource, type FileSource } from "./file-source";
+import { createLine, createSphere, updateLineEntity } from "./render-primitives";
 
 const RED = new pc.Color(1, 0.1, 0.1);
 const GREEN = new pc.Color(0.2, 1, 0.3);
@@ -19,7 +34,7 @@ const GREEN_EDGES: [number, number][] = [
 ];
 const BOX_EDGES: [number, number][] = [...RED_EDGES, ...GREEN_EDGES];
 
-function v3(arr: number[]): pc.Vec3 {
+function v3(arr: [number, number, number] | number[]): pc.Vec3 {
   return new pc.Vec3(arr[0], arr[1], arr[2]);
 }
 
@@ -85,12 +100,14 @@ export class DrawingRenderer {
   private canvas: HTMLCanvasElement;
   private downPos: { x: number; y: number } | null = null;
   private allLabels: LabelInfo[] = [];
+  private fileSource: FileSource;
   onSelect?: (info: { type: "cabinet" | "device-area" | "charging-area"; bayId: number }) => void;
 
-  constructor(app: pc.Application, camera: pc.Entity, requestRender: () => void) {
+  constructor(app: pc.Application, camera: pc.Entity, requestRender: () => void, fileSource: FileSource = electronFileSource) {
     this.app = app;
     this.camera = camera;
     this.requestRender = requestRender;
+    this.fileSource = fileSource;
     this.gd = app.graphicsDevice;
     this.canvas = this.gd.canvas as HTMLCanvasElement;
     this.initLabels();
@@ -99,15 +116,20 @@ export class DrawingRenderer {
   }
 
   async loadJson(filePath: string) {
-    const buf = await window.electronAPI!.readLargeFile!(filePath);
+    const buf = await this.fileSource.readAll(filePath);
     const text = new TextDecoder("utf-8").decode(buf);
-    const data = JSON.parse(text);
+    const data = JSON.parse(text) as unknown;
+    this.loadData(data);
+  }
 
-    if (data.paths && data.points) this.renderPaths(data);
-    if (data.items && Array.isArray(data.items)) {
+  loadData(data: DrawingRenderData | unknown) {
+    if (isPathRenderData(data)) {
+      this.renderPaths(data);
+    }
+    if (isDrawingItemsData(data)) {
       for (const item of data.items) {
-        if (item.type === "cabinet") this.renderCabinet(item);
-        else if (item.type === "device-area" || item.type === "charging-area") this.renderBoxItem(item);
+        if (isCabinetRenderItem(item)) this.renderCabinet(item);
+        else if (isBoxRenderItem(item)) this.renderBoxItem(item);
       }
     }
   }
@@ -134,12 +156,12 @@ export class DrawingRenderer {
 
   // ====== 渲染 ======
 
-  private renderCabinet(item: any) {
-    const verts: number[][] = item.geometry?.verts;
+  private renderCabinet(item: CabinetRenderItem) {
+    const verts = item.geometry?.verts;
     if (!verts || verts.length < 8) return;
     const vs = verts.map(v3);
     const splits: number[] = item.geometry?.splits || [];
-    const cabinets: { code: string; name: string }[] = item.cabinets || [];
+    const cabinets = item.cabinets || [];
     const lines: pc.Entity[] = [];
 
     for (const [a, b] of RED_EDGES) {
@@ -168,8 +190,8 @@ export class DrawingRenderer {
     this.cabinets.push({ bayId: item.bay?.id ?? 0, verts: vs, lines, labelInfos, selected: false });
   }
 
-  private renderBoxItem(item: any) {
-    const verts: number[][] = item.geometry?.verts;
+  private renderBoxItem(item: BoxRenderItem) {
+    const verts = item.geometry?.verts;
     if (!verts || verts.length < 8) return;
     const vs = verts.map(v3);
     const isDevice = item.type === "device-area";
@@ -192,23 +214,52 @@ export class DrawingRenderer {
     this.boxes.push({ type: item.type, verts: vs, lines, label: li, selected: false, bayId: item.bay?.id ?? 0 });
   }
 
-  private renderPaths(data: { paths: any[]; points: any[] }) {
-    for (const pt of data.points) {
-      const p = typeof pt.x === "number" ? v3([pt.x, pt.y, pt.z]) : v3(pt);
+  private renderPaths(data: PathRenderData) {
+    const points = data.points
+      .map((pt) => this.toPathVertex(pt))
+      .filter((pt): pt is { pos: pc.Vec3; id?: string | number } => !!pt);
+    const pointById = new Map<string | number, pc.Vec3>();
+
+    for (const pt of points) {
+      if (pt.id !== undefined) pointById.set(pt.id, pt.pos);
+      const p = pt.pos;
       const sphere = createSphere(this.app, p, PATH_COLOR, PATH_SPHERE_SCALE);
       this.entities.push(sphere);
       this.pathEntities.push(sphere);
     }
     for (const seg of data.paths) {
-      const p1 = data.points[seg.start] ?? data.points.find((p: any) => p.id === seg.from);
-      const p2 = data.points[seg.end] ?? data.points.find((p: any) => p.id === seg.to);
+      const p1 = this.resolvePathPoint(seg, "start", "from", points, pointById);
+      const p2 = this.resolvePathPoint(seg, "end", "to", points, pointById);
       if (!p1 || !p2) continue;
-      const v1 = typeof p1.x === "number" ? v3([p1.x, p1.y, p1.z]) : v3(p1);
-      const v2 = typeof p2.x === "number" ? v3([p2.x, p2.y, p2.z]) : v3(p2);
-      const line = createLine(this.app, v1, v2, PATH_COLOR, PATH_THICKNESS);
+      const line = createLine(this.app, p1, p2, PATH_COLOR, PATH_THICKNESS);
       this.entities.push(line);
       this.pathEntities.push(line);
     }
+  }
+
+  private toPathVertex(point: PathPointValue): { pos: pc.Vec3; id?: string | number } | null {
+    const tuple = pointToTuple(point);
+    if (!tuple) return null;
+    return {
+      pos: v3(tuple),
+      id: isPathPointObject(point) ? point.id : undefined,
+    };
+  }
+
+  private resolvePathPoint(
+    segment: PathSegmentValue,
+    indexKey: "start" | "end",
+    idKey: "from" | "to",
+    points: { pos: pc.Vec3; id?: string | number }[],
+    pointById: Map<string | number, pc.Vec3>,
+  ): pc.Vec3 | null {
+    const index = segment[indexKey];
+    if (typeof index === "number" && points[index]) return points[index].pos;
+
+    const id = segment[idKey];
+    if (id !== undefined) return pointById.get(id) ?? null;
+
+    return null;
   }
 
   // ====== 选中 ======
