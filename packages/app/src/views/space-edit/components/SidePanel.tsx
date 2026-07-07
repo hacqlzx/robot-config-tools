@@ -3,9 +3,9 @@ import { Tree, Modal, Input, message } from "antd";
 import type { TreeProps, TreeDataNode } from "antd";
 import TreeView from "./TreeView";
 import DeviceTree from "@/components/DeviceTree";
-import { DRAWING_FILE_NAME, PATH_FILE_NAME } from "../hooks/drawing/drawing-storage";
+import { isDrawingDataFileName, isReferencePathFileName } from "../hooks/drawing/drawing-storage";
 import type { SpaceTreeNode } from "../types";
-import { MAP_DIR_NAME, isLasOrLazFileName } from "../utils/space-paths";
+import { MAP_DIR_NAME, isLasOrLazFileName, loadedFileKey } from "../utils/space-paths";
 
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 520;
@@ -143,9 +143,9 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
         try {
           // 删除前先清除页面上的模型、绘制和路径回显（含子目录）
           const walkClear = (n: SpaceTreeNode) => {
-            if (!n.isDir && isLasOrLazFileName(n.name) && loadedFiles.has(n.name)) onUnloadMapFile?.(n.path);
-            else if (n.name === DRAWING_FILE_NAME) onToggleDrawing?.(n.path, false);
-            else if (n.name === PATH_FILE_NAME) onTogglePath?.(n.path, false);
+            if (!n.isDir && isLasOrLazFileName(n.name) && loadedFiles.has(loadedFileKey(n.path))) onUnloadMapFile?.(n.path);
+            else if (isDrawingDataFileName(n.name)) onToggleDrawing?.(n.path, false);
+            else if (isReferencePathFileName(n.name)) onTogglePath?.(n.path, false);
             n.children?.forEach(walkClear);
           };
           walkClear(node);

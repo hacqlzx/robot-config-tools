@@ -27,6 +27,9 @@ import {
 } from "./project-manifest";
 import { readDirTree, type TreeNode } from "./project-tree";
 
+const MAP_MODEL_FILE_NAME = "map.las";
+const MAP_INFO_FILE_NAME = "map_info.json";
+
 export async function listProjects(): Promise<string[]> {
   ensureProjectRoot();
   const entries = fs.readdirSync(getProjectRoot(), { withFileTypes: true });
@@ -112,7 +115,7 @@ export async function importProjectModel(projectName: string, sourcePath: string
   const safeBaseName = assertSafePathSegment(String(fileName ?? "").replace(/\.[^.]+$/, ""), "地图名称");
   const manifest = ensureProjectManifest(projectName);
   const targetDir = resolveProjectPath(projectName, manifest.layout.dirs.maps, safeBaseName);
-  const targetPath = resolveProjectPath(projectName, manifest.layout.dirs.maps, safeBaseName, `${safeBaseName}${ext}`);
+  const targetPath = resolveProjectPath(projectName, manifest.layout.dirs.maps, safeBaseName, MAP_MODEL_FILE_NAME);
   if (!fs.existsSync(targetDir)) {
     fs.mkdirSync(targetDir, { recursive: true });
   }
@@ -120,6 +123,13 @@ export async function importProjectModel(projectName: string, sourcePath: string
     await fs.promises.copyFile(sourceResolved, targetPath);
   }
   updateManifestForWrittenFile(projectName, targetPath, Number(sourceStat.size));
+
+  const mapInfoPath = resolveProjectPath(projectName, manifest.layout.dirs.maps, safeBaseName, MAP_INFO_FILE_NAME);
+  if (!fs.existsSync(mapInfoPath)) {
+    const mapInfoText = `${JSON.stringify({ mapName: safeBaseName }, null, 2)}\n`;
+    await fs.promises.writeFile(mapInfoPath, mapInfoText, "utf-8");
+    updateManifestForWrittenFile(projectName, mapInfoPath, Buffer.byteLength(mapInfoText));
+  }
   return targetPath;
 }
 

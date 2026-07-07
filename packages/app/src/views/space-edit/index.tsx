@@ -210,6 +210,9 @@ export default function SpaceEdit() {
   const handleClipComplete = useClipCompletion({
     clipEntityName,
     entitiesRef,
+    lasHeadersRef,
+    filePathRef,
+    pointStatsRef,
     hasAutoFocusedRef,
     setLoadedFiles,
     setTreeKey,

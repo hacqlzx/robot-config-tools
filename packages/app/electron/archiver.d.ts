@@ -9,6 +9,7 @@ declare module "archiver" {
   class Archiver extends Transform {
     pipe<T extends NodeJS.WritableStream>(destination: T, options?: { end?: boolean }): T;
     directory(dirpath: string, destpath: string | false): this;
+    file(filename: string, data: { name: string }): this;
     append(data: string | Buffer, options: { name: string }): this;
     finalize(): Promise<void>;
     on(event: "progress", listener: (progress: ArchiverProgress) => void): this;

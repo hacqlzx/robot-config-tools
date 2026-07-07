@@ -1,5 +1,7 @@
 export const MAP_DIR_NAME = "地图";
 export const POINT_TABLE_DIR_NAME = "点表";
+export const MAP_MODEL_FILE_NAME = "map.las";
+export const MAP_INFO_FILE_NAME = "map_info.json";
 
 export const MODEL_FILE_ACCEPT = ".las,.laz";
 export const POINT_TABLE_FILE_ACCEPT = ".xlsx,.xls";
@@ -14,6 +16,10 @@ export function normalizeProjectPath(value: string): string {
 
 export function fileNameFromPath(filePath: string): string {
   return filePath.split(/[\\/]/).pop() || filePath;
+}
+
+export function loadedFileKey(filePath: string): string {
+  return normalizeProjectPath(filePath).toLowerCase();
 }
 
 export function isLasOrLazFileName(fileName: string): boolean {
@@ -36,9 +42,8 @@ export function mapDirSubPath(mapName?: string): string {
   return mapName ? `${MAP_DIR_NAME}/${mapName}` : MAP_DIR_NAME;
 }
 
-export function mapModelFileSubPath(mapName: string, extension = ".las"): string {
-  const normalizedExtension = extension.startsWith(".") ? extension : `.${extension}`;
-  return `${mapDirSubPath(mapName)}/${mapName}${normalizedExtension}`;
+export function mapModelFileSubPath(mapName: string, _extension = ".las"): string {
+  return `${mapDirSubPath(mapName)}/${MAP_MODEL_FILE_NAME}`;
 }
 
 export function pointTableFileSubPath(fileName: string): string {

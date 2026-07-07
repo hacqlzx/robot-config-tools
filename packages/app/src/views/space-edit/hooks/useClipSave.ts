@@ -1,7 +1,7 @@
 ﻿import * as pc from "playcanvas";
 import { parseLasHeader, loadLazPerf, getWasmUrl } from "../../../playcanvas-core/io/read/las-reader";
 import { pointcloudVert, pointcloudFrag } from "../../../playcanvas-core/shaders/pointcloud-shader";
-import { MAP_DIR_NAME, mapModelFileSubPath, stripModelExtension } from "../utils/space-paths";
+import { MAP_DIR_NAME, MAP_INFO_FILE_NAME, mapDirSubPath, mapModelFileSubPath, stripModelExtension } from "../utils/space-paths";
 
 interface Bounds {
   minX: number; maxX: number;
@@ -347,7 +347,7 @@ export async function performClipSave({
     if (entity.render) entity.render.meshInstances = [newMi];
     if (originalMeshRef.current) originalMeshRef.current = null;
 
-    // 保存到磁盘：每次裁切生成 {原模型名}_N/{原模型名}_N.las，避免覆盖原始模型。
+    // 保存到磁盘：每次裁切生成 {原模型名}_N/map.las，避免覆盖原始模型。
     const baseName = stripModelExtension(entityName);
     let clipName = "";
     setProgress(95); onProgress?.(95);
@@ -361,6 +361,10 @@ export async function performClipSave({
         clipName = baseName + "_" + idx;
         const clipSubPath = mapModelFileSubPath(clipName, ".las");
         await window.electronAPI.project.writeFile(selectedProject, clipSubPath, out.buffer.slice(0, outIdx));
+        const mapInfoText = `${JSON.stringify({ mapName: clipName }, null, 2)}\n`;
+        const mapInfoBytes = new TextEncoder().encode(mapInfoText);
+        const mapInfoBuffer = mapInfoBytes.buffer.slice(mapInfoBytes.byteOffset, mapInfoBytes.byteOffset + mapInfoBytes.byteLength);
+        await window.electronAPI.project.writeFile(selectedProject, `${mapDirSubPath(clipName)}/${MAP_INFO_FILE_NAME}`, mapInfoBuffer);
         console.log("[裁切] 已保存:", clipSubPath);
         console.log("[裁切] 输出大小:", (outIdx / 1024 / 1024).toFixed(1), "MB");
       }

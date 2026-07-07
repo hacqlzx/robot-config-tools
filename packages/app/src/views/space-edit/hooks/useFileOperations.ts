@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import * as pc from "playcanvas";
 import { parsePointExcel } from "@/utils/excel-parser";
 import type { ModelPointStats, SpaceMessageApi } from "../types";
-import { POINT_TABLE_DIR_NAME, POINT_TABLE_FILE_RE, isLasOrLazFileName, pointTableFileSubPath, stripModelExtension } from "../utils/space-paths";
+import { POINT_TABLE_DIR_NAME, POINT_TABLE_FILE_RE, isLasOrLazFileName, loadedFileKey, pointTableFileSubPath, stripModelExtension } from "../utils/space-paths";
 
 interface UseFileOperationsParams {
   entitiesRef: React.MutableRefObject<Map<string, pc.Entity>>;
@@ -121,7 +121,10 @@ export function useFileOperations(params: UseFileOperationsParams) {
 
   /** 仅卸载指定路径对应的模型；删除文件前使用，避免误触发加载 */
   const handleUnloadModelFromPath = useCallback((filePath: string) => {
-    const entityName = filePath.split(/[\\/]/).pop() || filePath;
+    const targetPath = normalizePath(filePath);
+    const entityName = Array.from(filePathRef.current.entries())
+      .find(([, loadedPath]) => normalizePath(loadedPath) === targetPath)?.[0];
+    if (!entityName) return false;
     const entity = entitiesRef.current.get(entityName);
     const loadedPath = filePathRef.current.get(entityName);
     if (!entity) return false;
@@ -135,7 +138,7 @@ export function useFileOperations(params: UseFileOperationsParams) {
     pointStatsRef.current.delete(entityName);
     setLoadedFiles((prev) => {
       const next = new Set(prev);
-      next.delete(entityName);
+      next.delete(loadedFileKey(filePath));
       return next;
     });
     requestRender();

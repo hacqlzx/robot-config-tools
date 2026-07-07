@@ -1,9 +1,18 @@
 import * as XLSX from "xlsx-js-style";
 import type { DevicePoint } from "@robot/database";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import { ZipArchive } from "archiver";
 import { Transform } from "stream";
+
+const MAP_MODEL_FILE_NAME = "map.las";
+const MAP_INFO_FILE_NAME = "map_info.json";
+const AREA_FILE_NAME = "area.json";
+const REFERENCE_PATH_FILE_NAME = "reference_path.txt";
+const LEGACY_AREA_FILE_NAME = "充电区域、设备区、屏柜.json";
+const LEGACY_REFERENCE_PATH_FILE_NAME = "可行驶路径.json";
+const MAP_MODEL_EXT_RE = /\.(las|laz)$/i;
 
 // 逆向映射
 const RECOGNITION_REV: Record<string, string> = {
@@ -128,6 +137,100 @@ function getDirSize(dir: string): number {
   return size;
 }
 
+function listFilesRecursive(dir: string): string[] {
+  const files: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, entry.name);
+    if (entry.isDirectory()) files.push(...listFilesRecursive(p));
+    else files.push(p);
+  }
+  return files;
+}
+
+function toZipPath(...parts: string[]): string {
+  return parts.join("/").replace(/\\/g, "/");
+}
+
+function directChildPriority(root: string, filePath: string): number {
+  const rel = path.relative(root, filePath).replace(/\\/g, "/");
+  const direct = !rel.includes("/");
+  const base = path.basename(filePath).toLowerCase();
+  if (direct && base === MAP_MODEL_FILE_NAME) return 0;
+  if (direct && MAP_MODEL_EXT_RE.test(base)) return 1;
+  return 2;
+}
+
+function buildMapInfo(mapName: string, existingText: string | null): string {
+  let data: Record<string, unknown> = {};
+  if (existingText) {
+    try {
+      const parsed = JSON.parse(existingText);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) data = parsed;
+    } catch {}
+  }
+
+  return `${JSON.stringify({ ...data, mapName }, null, 2)}\n`;
+}
+
+function appendMapContents(archive: ZipArchive, src: string, mapName: string) {
+  const added = new Set<string>();
+  let mapInfoText: string | null = null;
+
+  const files = listFilesRecursive(src).sort((a, b) => {
+    const pa = directChildPriority(src, a);
+    const pb = directChildPriority(src, b);
+    if (pa !== pb) return pa - pb;
+    return a.localeCompare(b);
+  });
+
+  for (const filePath of files) {
+    const rel = path.relative(src, filePath).replace(/\\/g, "/");
+    const base = path.basename(filePath);
+    const lowerBase = base.toLowerCase();
+    const direct = !rel.includes("/");
+
+    if (direct && lowerBase === MAP_INFO_FILE_NAME) {
+      mapInfoText = fs.readFileSync(filePath, "utf-8");
+      continue;
+    }
+
+    let outputRel = rel;
+    if (direct && MAP_MODEL_EXT_RE.test(base)) outputRel = MAP_MODEL_FILE_NAME;
+    else if (base === LEGACY_AREA_FILE_NAME) outputRel = toZipPath(path.dirname(rel) === "." ? "" : path.dirname(rel), AREA_FILE_NAME).replace(/^\//, "");
+    else if (base === LEGACY_REFERENCE_PATH_FILE_NAME) outputRel = toZipPath(path.dirname(rel) === "." ? "" : path.dirname(rel), REFERENCE_PATH_FILE_NAME).replace(/^\//, "");
+
+    if (added.has(outputRel)) continue;
+    added.add(outputRel);
+    archive.file(filePath, { name: outputRel });
+  }
+
+  archive.append(buildMapInfo(mapName, mapInfoText), { name: MAP_INFO_FILE_NAME });
+}
+
+function mapPackageName(projectName: string, timeStr: string, index: number): string {
+  const base = `${projectName}_地图_${timeStr}`;
+  return index === 0 ? base : `${base}_${index + 1}`;
+}
+
+async function createMapZipFile(src: string, mapName: string, tempDir: string): Promise<string> {
+  const zipPath = path.join(tempDir, `${mapName}.zip`);
+  const output = fs.createWriteStream(zipPath);
+  const archive = new ZipArchive({ zlib: { level: 0 } });
+  archive.pipe(output);
+  appendMapContents(archive, src, mapName);
+
+  await Promise.all([
+    archive.finalize(),
+    new Promise<void>((resolve, reject) => {
+      output.on("close", resolve);
+      output.on("error", reject);
+      (archive as any).on("error", reject);
+    }),
+  ]);
+
+  return zipPath;
+}
+
 export interface ExportZipResult {
   zipPath: string;
   zipName: string;
@@ -150,77 +253,88 @@ export async function exportSpaceZip(
   const now = new Date();
   const timeStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
   const zipName = `${stationName}_${mapNames}_${timeStr}`;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "robot-map-export-"));
 
-  // Step 1: 生成点表 Excel（内存中，不写磁盘）
-  let xlsxBuf: Buffer | null = null;
-  if (includePointTable && points.length > 0) {
-    onProgress?.("生成点表...", 1);
-    xlsxBuf = generatePointExcel(points);
-  }
-
-  // Step 2: 计算源文件总大小（直接统计源目录，不复制）
-  onProgress?.("计算文件大小...", 2);
-  let totalSize = 0;
-  if (xlsxBuf) totalSize += xlsxBuf.length;
-  const mapRoot = path.join(projectRoot, projectName, "地图");
-  for (const dirName of mapDirs) {
-    const src = path.join(mapRoot, dirName);
-    if (fs.existsSync(src)) totalSize += getDirSize(src);
-  }
-  const totalMB = totalSize / 1024 / 1024;
-
-  // 自动编号防重名
-  let zipPath = path.join(destDir, `${zipName}.zip`);
-  if (fs.existsSync(zipPath)) {
-    let i = 1;
-    while (fs.existsSync(zipPath)) {
-      zipPath = path.join(destDir, `${zipName}_${i}.zip`);
-      i++;
+  try {
+    // Step 1: 生成点表 Excel（内存中，不写磁盘）
+    let xlsxBuf: Buffer | null = null;
+    if (includePointTable && points.length > 0) {
+      onProgress?.("生成点表...", 1);
+      xlsxBuf = generatePointExcel(points);
     }
-  }
 
-  // Step 3: 流式压缩（直接从源读取，无临时目录）
-  onProgress?.(`压缩中  (共 ${totalMB.toFixed(0)}MB)...`, 3);
-  const output = fs.createWriteStream(zipPath);
-
-  let outBytes = 0;
-  const progressStream = new Transform({
-    transform(chunk, _encoding, cb) {
-      outBytes += chunk.length;
-      const processedMB = outBytes / 1024 / 1024;
-      const pct = totalSize > 0
-        ? 3 + Math.round((outBytes / totalSize) * 96)
-        : 3;
-      onProgress?.(
-        `压缩中  ${processedMB.toFixed(0)}/${totalMB.toFixed(0)}MB`,
-        Math.min(99, pct),
-      );
-      cb(null, chunk);
-    },
-  });
-
-  // store 模式：点云数据再压缩收益极低，仅归档不压缩
-  const archive = new ZipArchive({ zlib: { level: 0 } });
-  archive.pipe(progressStream).pipe(output);
-
-  // 点表：直接追加内存 buffer，不写磁盘
-  if (xlsxBuf) {
-    archive.append(xlsxBuf, { name: `${stationName}_巡检点位.xlsx` });
-  }
-
-  // 地图：直接从源目录读取
-  for (const dirName of mapDirs) {
-    const src = path.join(mapRoot, dirName);
-    if (fs.existsSync(src)) {
-      archive.directory(src, `地图/${dirName}`);
+    // Step 2: 每张地图先归档成独立 zip，外层导出包的 地图/ 下只放这些 zip 文件。
+    onProgress?.("生成地图包...", 2);
+    const mapRoot = path.join(projectRoot, projectName, "地图");
+    const mapZipFiles: { filePath: string; zipName: string }[] = [];
+    for (let i = 0; i < mapDirs.length; i++) {
+      const dirName = mapDirs[i];
+      const src = path.join(mapRoot, dirName);
+      if (fs.existsSync(src)) {
+        const innerMapName = mapPackageName(projectName, timeStr, i);
+        const mapZipPath = await createMapZipFile(src, innerMapName, tempDir);
+        mapZipFiles.push({ filePath: mapZipPath, zipName: `${innerMapName}.zip` });
+      }
     }
+
+    // Step 3: 计算外层导出包需要读取的文件大小。
+    onProgress?.("计算文件大小...", 2);
+    let totalSize = 0;
+    if (xlsxBuf) totalSize += xlsxBuf.length;
+    for (const item of mapZipFiles) totalSize += fs.statSync(item.filePath).size;
+    const totalMB = totalSize / 1024 / 1024;
+
+    // 自动编号防重名
+    let zipPath = path.join(destDir, `${zipName}.zip`);
+    if (fs.existsSync(zipPath)) {
+      let i = 1;
+      while (fs.existsSync(zipPath)) {
+        zipPath = path.join(destDir, `${zipName}_${i}.zip`);
+        i++;
+      }
+    }
+
+    // Step 4: 流式压缩外层导出包。
+    onProgress?.(`压缩中  (共 ${totalMB.toFixed(0)}MB)...`, 3);
+    const output = fs.createWriteStream(zipPath);
+
+    let outBytes = 0;
+    const progressStream = new Transform({
+      transform(chunk, _encoding, cb) {
+        outBytes += chunk.length;
+        const processedMB = outBytes / 1024 / 1024;
+        const pct = totalSize > 0
+          ? 3 + Math.round((outBytes / totalSize) * 96)
+          : 3;
+        onProgress?.(
+          `压缩中  ${processedMB.toFixed(0)}/${totalMB.toFixed(0)}MB`,
+          Math.min(99, pct),
+        );
+        cb(null, chunk);
+      },
+    });
+
+    // store 模式：点云和地图 zip 再压缩收益极低，仅归档不压缩
+    const archive = new ZipArchive({ zlib: { level: 0 } });
+    archive.pipe(progressStream).pipe(output);
+
+    // 点表：直接追加内存 buffer，不写磁盘
+    if (xlsxBuf) {
+      archive.append(xlsxBuf, { name: `${stationName}_巡检点位.xlsx` });
+    }
+
+    for (const item of mapZipFiles) {
+      archive.file(item.filePath, { name: toZipPath("地图", item.zipName) });
+    }
+
+    await Promise.all([
+      archive.finalize(),
+      new Promise<void>((resolve) => output.on("close", resolve)),
+    ]);
+
+    onProgress?.("完成", 100);
+    return { zipPath, zipName: path.basename(zipPath, ".zip") };
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
-
-  await Promise.all([
-    archive.finalize(),
-    new Promise<void>((resolve) => output.on("close", resolve)),
-  ]);
-
-  onProgress?.("完成", 100);
-  return { zipPath, zipName: path.basename(zipPath, ".zip") };
 }

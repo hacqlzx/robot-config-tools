@@ -53,6 +53,13 @@ export interface PointCloudLoaderCallbacks {
   onFileLoaded?: (name: string, path: string) => void;
 }
 
+function entityKeyFromPath(filePath: string): string {
+  const parts = filePath.split(/[\\/]/).filter(Boolean);
+  const fileName = parts[parts.length - 1] || "unknown.las";
+  const parentName = parts[parts.length - 2];
+  return fileName.toLowerCase() === "map.las" && parentName ? parentName : fileName;
+}
+
 /**
  * 点云加载器 — LAS / LAZ / PLY 文件 → GPU 渲染实体
  *
@@ -87,18 +94,18 @@ export class PointCloudLoader {
 
   /** 从文件路径加载 LAS/LAZ */
   async loadLasFromPath(filePath: string): Promise<LoadedModel> {
-    const fileName = filePath.split(/[\\/]/).pop() || "unknown.las";
+    const entityName = entityKeyFromPath(filePath);
     // LAS header 位于文件头部；4096 字节足够覆盖当前 parser 需要的公共头信息。
     const headerBuf = await this.readFileChunk(filePath, 0, 4096);
     const header = parseLasHeader(headerBuf);
 
-    this.lasHeaders.set(fileName, header);
-    this.filePaths.set(fileName, filePath);
+    this.lasHeaders.set(entityName, header);
+    this.filePaths.set(entityName, filePath);
 
     if (isLasCompressed(header.pointFormatId)) {
-      return this.loadLazWasm(filePath, fileName, header);
+      return this.loadLazWasm(filePath, entityName, header);
     }
-    return this.loadLasStreaming(filePath, fileName, header);
+    return this.loadLasStreaming(filePath, entityName, header);
   }
 
   /** 加载 PLY (GSplat) */

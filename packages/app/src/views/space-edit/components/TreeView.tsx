@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import { Dropdown } from "antd";
 import { FolderOutlined, FileOutlined, LoadingOutlined } from "@ant-design/icons";
-import { DRAWING_FILE_NAME, PATH_FILE_NAME } from "../hooks/drawing/drawing-storage";
+import { isDrawingDataFileName, isReferencePathFileName } from "../hooks/drawing/drawing-storage";
 import type { SpaceTreeNode } from "../types";
-import { isLasOrLazFileName } from "../utils/space-paths";
+import { MAP_INFO_FILE_NAME, isLasOrLazFileName, loadedFileKey } from "../utils/space-paths";
 
 interface Props {
   nodes: SpaceTreeNode[];
@@ -68,8 +68,10 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
   }, [nodes]);
 
   const isLas = isLasOrLazFileName;
-  const isDrawing = (name: string) => name === DRAWING_FILE_NAME;
-  const isPath = (name: string) => name === PATH_FILE_NAME;
+  const isDrawing = isDrawingDataFileName;
+  const isPath = isReferencePathFileName;
+  const isHiddenFile = (name: string) => name === MAP_INFO_FILE_NAME;
+  const isVisibleTreeNode = (node: SpaceTreeNode) => node.isDir || !isHiddenFile(node.name);
 
   /** 合并节点自身的 children 与懒加载的 children */
   const getEffectiveChildren = (node: SpaceTreeNode): SpaceTreeNode[] | undefined => {
@@ -117,7 +119,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
     if (node.isDir) {
       const children = getEffectiveChildren(node);
       if (!children || children.length === 0) return { checked: false };
-      const states = children.filter((c) => !isDrawing(c.name) && !isPath(c.name)).map(getCheckState);
+      const states = children.filter((c) => isVisibleTreeNode(c) && !isDrawing(c.name) && !isPath(c.name)).map(getCheckState);
       if (states.length === 0) return { checked: false };
       const allChecked = states.every((s) => s.checked);
       const someChecked = states.some((s) => s.checked || s.indeterminate);
@@ -132,7 +134,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
       return { checked: pathShown?.has(node.path) || false };
     }
     if (isLas(node.name)) {
-      return { checked: loadedFiles.has(node.name) };
+      return { checked: loadedFiles.has(loadedFileKey(node.path)) };
     }
     return { checked: false };
   };
@@ -147,6 +149,9 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
         const pathNodes: SpaceTreeNode[] = [];
         const collect = (items: SpaceTreeNode[]) => {
           items.forEach((child) => {
+            if (!isVisibleTreeNode(child)) {
+              return;
+            }
             if (child.isDir && child.children) {
               collect(child.children);
             } else if (isLas(child.name)) {
@@ -161,7 +166,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
         collect(list);
 
         for (const child of lasNodes) {
-          const isLoaded = loadedFiles.has(child.name);
+          const isLoaded = loadedFiles.has(loadedFileKey(child.path));
           if (checked) {
             if (!isLoaded) await onLoadLas?.(child.path);
           } else {
@@ -183,7 +188,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
     } else if (isPath(node.name)) {
       onTogglePath?.(node.path, checked);
     } else if (isLas(node.name)) {
-      const isLoaded = loadedFiles.has(node.name);
+      const isLoaded = loadedFiles.has(loadedFileKey(node.path));
       if (checked) {
         if (!isLoaded) onLoadLas?.(node.path);
       } else {
@@ -194,7 +199,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
 
   return (
     <>
-      {nodes.map((node) => {
+      {nodes.filter(isVisibleTreeNode).map((node) => {
         const state = getCheckState(node);
         const effectiveChildren = getEffectiveChildren(node);
         const isLoading = loadingNodes.has(node.path);
@@ -266,7 +271,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
               <span style={{ marginLeft: 2, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "default" }}>
                 {node.name}
               </span>
-              {!node.isDir && isLas(node.name) && loadingFile === node.name && (
+              {!node.isDir && isLas(node.name) && loadingFile === loadedFileKey(node.path) && (
                 <LoadingOutlined style={{ color: "#1677ff", fontSize: 14, flexShrink: 0 }} />
               )}
             </div>

@@ -3,7 +3,7 @@ import * as pc from "playcanvas";
 import { PointCloudLoader } from "../../../components/three-d-engine/PointCloudLoader";
 import type { FileSource } from "../../../components/three-d-engine/file-source";
 import type { ModelPointStats } from "../types";
-import { fileNameFromPath } from "../utils/space-paths";
+import { loadedFileKey } from "../utils/space-paths";
 
 interface UseLasLoaderParams {
   appRef: React.MutableRefObject<pc.Application | null>;
@@ -60,9 +60,9 @@ export function useLasLoader({
   const loadLasFromPath = useCallback(async (filePath: string) => {
     const loader = loaderRef.current;
     if (!loader) return;
-    const fileName = fileNameFromPath(filePath) || "unknown.las";
+    const fileKey = loadedFileKey(filePath);
     setLoading(true);
-    setLoadingFile(fileName);
+    setLoadingFile(fileKey);
     setLoadingText("正在加载模型...");
     try {
       const model = await loader.loadLasFromPath(filePath);
@@ -72,7 +72,7 @@ export function useLasLoader({
       // loader 返回的是局部坐标中心，必须直接用于相机聚焦。
       focusOnModel(model.center[0], model.center[1], model.center[2], model.extent);
       requestRender();
-      setLoadedFiles((prev) => new Set([...prev, fileName]));
+      setLoadedFiles((prev) => new Set([...prev, fileKey]));
     } catch (e: any) {
       console.error("LAS 加载失败:", e.message);
     }

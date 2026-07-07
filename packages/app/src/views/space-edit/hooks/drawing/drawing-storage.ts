@@ -2,8 +2,8 @@
 // 文件名固定，按 type 标识区分各类绘制，支持二次编辑（按 type 局部更新，互不影响）。
 //
 // 目录约定：project/{项目}/地图/{地图名}/{地图名}.las
-//   ├─ 充电区域、设备区、屏柜.json   保存 cabinet / charging-area / device-area
-//   └─ 可行驶路径.json               保存路径点和路径段
+//   ├─ area.json              保存 cabinet / charging-area / device-area
+//   └─ reference_path.txt     保存路径点和路径段
 //
 // 注意读写路径不同：readLargeFile 用绝对路径，project.writeFile 用项目相对子路径。
 
@@ -68,16 +68,22 @@ export interface DrawingFile {
 }
 
 /** 绘制数据文件名（充电区域、设备区、屏柜共用一个文件） */
-export const DRAWING_FILE_NAME = "充电区域、设备区、屏柜.json";
+export const DRAWING_FILE_NAME = "area.json";
+export const LEGACY_DRAWING_FILE_NAME = "充电区域、设备区、屏柜.json";
 
 /** 可行路径单独存储文件名 */
-export const PATH_FILE_NAME = "可行驶路径.json";
+export const PATH_FILE_NAME = "reference_path.txt";
+export const LEGACY_PATH_FILE_NAME = "可行驶路径.json";
 
 type ElectronAPI = NonNullable<Window["electronAPI"]>;
 
 /** 由模型绝对路径推导同目录下 JSON 的绝对路径（读用） */
 function jsonAbsPath(modelPath: string): string {
   return mapSiblingFilePath(modelPath, DRAWING_FILE_NAME);
+}
+
+function legacyJsonAbsPath(modelPath: string): string {
+  return mapSiblingFilePath(modelPath, LEGACY_DRAWING_FILE_NAME);
 }
 
 /** 由模型绝对路径推导项目相对子路径（写用，writeFile 需要项目相对路径） */
@@ -90,24 +96,37 @@ function pathAbsPath(modelPath: string): string {
   return mapSiblingFilePath(modelPath, PATH_FILE_NAME);
 }
 
+function legacyPathAbsPath(modelPath: string): string {
+  return mapSiblingFilePath(modelPath, LEGACY_PATH_FILE_NAME);
+}
+
 /** 路径文件项目相对子路径（写用） */
 function pathSubPath(modelPath: string): string {
   return mapSiblingSubPath(modelPath, PATH_FILE_NAME);
 }
 
+export function isDrawingDataFileName(name: string): boolean {
+  return name === DRAWING_FILE_NAME || name === LEGACY_DRAWING_FILE_NAME;
+}
+
+export function isReferencePathFileName(name: string): boolean {
+  return name === PATH_FILE_NAME || name === LEGACY_PATH_FILE_NAME;
+}
+
 /** 读取现有绘制文件（不存在则返回空结构） */
 async function readDrawingFile(api: ElectronAPI, modelPath: string): Promise<DrawingFile> {
-  try {
-    const buf = await api.readLargeFile(jsonAbsPath(modelPath));
-    const text = new TextDecoder("utf-8").decode(buf);
-    const data = JSON.parse(text) as DrawingFile;
-    if (!Array.isArray(data.items)) data.items = [];
-    if (typeof data.version !== "number") data.version = 1;
-    return data;
-  } catch {
-    // 文件不存在或旧文件损坏时不阻断绘制，返回空结构让保存流程重新生成。
-    return { version: 1, items: [] };
+  for (const candidate of [jsonAbsPath(modelPath), legacyJsonAbsPath(modelPath)]) {
+    try {
+      const buf = await api.readLargeFile(candidate);
+      const text = new TextDecoder("utf-8").decode(buf);
+      const data = JSON.parse(text) as DrawingFile;
+      if (!Array.isArray(data.items)) data.items = [];
+      if (typeof data.version !== "number") data.version = 1;
+      return data;
+    } catch {}
   }
+  // 文件不存在或旧文件损坏时不阻断绘制，返回空结构让保存流程重新生成。
+  return { version: 1, items: [] };
 }
 
 /** 写入绘制文件（覆盖） */
@@ -186,7 +205,7 @@ async function collectBoundBayIds(api: ElectronAPI, nodes: SpaceTreeNode[], ids:
   for (const node of nodes) {
     if (node.isDir && node.children) {
       await collectBoundBayIds(api, node.children, ids);
-    } else if (node.name === DRAWING_FILE_NAME) {
+    } else if (isDrawingDataFileName(node.name)) {
       try {
         // 跨地图扫描设备区绑定，用于阻止同一间隔被多个设备区重复绑定。
         const buf = await api.readLargeFile(node.path);
@@ -295,28 +314,30 @@ export async function savePathDrawing(params: {
 
 /** 读取该模型已保存的可行路径记录 */
 export async function loadPathDrawing(api: ElectronAPI, modelPath: string): Promise<PathData | null> {
-  try {
-    const buf = await api.readLargeFile(pathAbsPath(modelPath));
-    const text = new TextDecoder("utf-8").decode(buf);
-    const data = JSON.parse(text);
-    if (!data) return null;
-    if (Array.isArray(data.points)) {
-      const firstPt = data.points[0];
-      if (firstPt && typeof firstPt === "object" && !Array.isArray(firstPt) && "id" in firstPt) {
-        return {
-          points: (data.points as PathPoint[]).map((p) => ({ id: p.id, x: p.x, y: p.y, z: p.z })),
-          paths: Array.isArray(data.paths) ? (data.paths as PathSegment[]).map((s) => ({
-            id: s.id,
-            from: s.from,
-            to: s.to,
-            bezier: s.bezier,
-          })) : [],
-        };
+  for (const candidate of [pathAbsPath(modelPath), legacyPathAbsPath(modelPath)]) {
+    try {
+      const buf = await api.readLargeFile(candidate);
+      const text = new TextDecoder("utf-8").decode(buf);
+      const data = JSON.parse(text);
+      if (!data) return null;
+      if (Array.isArray(data.points)) {
+        const firstPt = data.points[0];
+        if (firstPt && typeof firstPt === "object" && !Array.isArray(firstPt) && "id" in firstPt) {
+          return {
+            points: (data.points as PathPoint[]).map((p) => ({ id: p.id, x: p.x, y: p.y, z: p.z })),
+            paths: Array.isArray(data.paths) ? (data.paths as PathSegment[]).map((s) => ({
+              id: s.id,
+              from: s.from,
+              to: s.to,
+              bezier: s.bezier,
+            })) : [],
+          };
+        }
+        // 旧格式兼容：{ points: number[][], connections: [number, number][] }
+        // 当前项目还没投入使用，但保留这个读取兼容成本很低，也方便早期样例数据回放。
+        return data as any;
       }
-      // 旧格式兼容：{ points: number[][], connections: [number, number][] }
-      // 当前项目还没投入使用，但保留这个读取兼容成本很低，也方便早期样例数据回放。
-      return data as any;
-    }
-  } catch {}
+    } catch {}
+  }
   return null;
 }

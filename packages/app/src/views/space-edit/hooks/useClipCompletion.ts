@@ -1,10 +1,13 @@
 import { useCallback } from "react";
 import * as pc from "playcanvas";
-import { isLasFileName, mapDirSubPath } from "../utils/space-paths";
+import { isLasFileName, loadedFileKey, mapDirSubPath } from "../utils/space-paths";
 
 interface UseClipCompletionParams {
   clipEntityName: string;
   entitiesRef: React.MutableRefObject<Map<string, pc.Entity>>;
+  lasHeadersRef: React.MutableRefObject<Map<string, any>>;
+  filePathRef: React.MutableRefObject<Map<string, string>>;
+  pointStatsRef: React.MutableRefObject<Map<string, any>>;
   hasAutoFocusedRef: React.MutableRefObject<boolean>;
   setLoadedFiles: React.Dispatch<React.SetStateAction<Set<string>>>;
   setTreeKey: React.Dispatch<React.SetStateAction<number>>;
@@ -16,6 +19,9 @@ interface UseClipCompletionParams {
 export function useClipCompletion({
   clipEntityName,
   entitiesRef,
+  lasHeadersRef,
+  filePathRef,
+  pointStatsRef,
   hasAutoFocusedRef,
   setLoadedFiles,
   setTreeKey,
@@ -29,14 +35,18 @@ export function useClipCompletion({
     setLoadingProgress(0);
     if (!clipName) return;
 
+    const oldFilePath = filePathRef.current.get(clipEntityName);
     const oldEnt = entitiesRef.current.get(clipEntityName);
     if (oldEnt) {
       oldEnt.destroy();
       entitiesRef.current.delete(clipEntityName);
     }
+    lasHeadersRef.current.delete(clipEntityName);
+    filePathRef.current.delete(clipEntityName);
+    pointStatsRef.current.delete(clipEntityName);
     setLoadedFiles((prev) => {
       const next = new Set(prev);
-      next.delete(clipEntityName);
+      if (oldFilePath) next.delete(loadedFileKey(oldFilePath));
       return next;
     });
     hasAutoFocusedRef.current = false;
@@ -49,5 +59,5 @@ export function useClipCompletion({
         if (lasFile) loadLasFromPath(lasFile.path);
       }
     }, 500);
-  }, [clipEntityName, entitiesRef, hasAutoFocusedRef, loadLasFromPath, setLoadedFiles, setLoadingProgress, setLoadingText, setTreeKey]);
+  }, [clipEntityName, entitiesRef, filePathRef, hasAutoFocusedRef, lasHeadersRef, loadLasFromPath, pointStatsRef, setLoadedFiles, setLoadingProgress, setLoadingText, setTreeKey]);
 }
