@@ -31,7 +31,8 @@ export function useLasLoader({
 }: UseLasLoaderParams) {
   const loaderRef = useRef<PointCloudLoader | null>(null);
 
-  // 当 app 就绪时初始化 loader，每次 app 变化时重建
+  // 当 app 就绪时初始化 loader。这里仍保留 space-edit 自己的 ref 同步，
+  // 因为裁切、可见性、保存状态都需要直接访问已加载实体和 LAS header。
   useEffect(() => {
     const app = appRef.current;
     if (!app) return;
@@ -49,6 +50,7 @@ export function useLasLoader({
   const syncRefs = () => {
     const loader = loaderRef.current;
     if (!loader) return;
+    // PointCloudLoader 持有真实 Map；同步引用而不是拷贝，避免 remove/destroy 后状态不同步。
     entitiesRef.current = loader.entities;
     lasHeadersRef.current = loader.lasHeaders;
     filePathRef.current = loader.filePaths;
@@ -65,7 +67,9 @@ export function useLasLoader({
     try {
       const model = await loader.loadLasFromPath(filePath);
       syncRefs();
+      // 地面 Y 来自点云高度直方图，用作充电区/设备区默认底面，避免第一点高度漂浮。
       modelGroundYRef.current = model.groundY;
+      // loader 返回的是局部坐标中心，必须直接用于相机聚焦。
       focusOnModel(model.center[0], model.center[1], model.center[2], model.extent);
       requestRender();
       setLoadedFiles((prev) => new Set([...prev, fileName]));

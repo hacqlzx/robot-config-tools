@@ -39,6 +39,12 @@ interface DrawingEditPanelsProps {
   onDeviceAreaUnbind: () => void;
 }
 
+/**
+ * 绘制模式面板分发器。
+ *
+ * 每种绘制模式最多显示一个对应面板；面板只收集业务输入和触发命令，
+ * 真正的 3D 几何编辑由 usePlayCanvas 中注册的 Drawing 类处理。
+ */
 export default function DrawingEditPanels({
   cabinetMode,
   cabinetCornerCount,

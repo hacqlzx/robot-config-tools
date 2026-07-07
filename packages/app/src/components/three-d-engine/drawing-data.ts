@@ -1,3 +1,11 @@
+/**
+ * 公共三维回显层的数据契约。
+ *
+ * 这里刻意只描述“渲染需要的最小形状”，不 import space-edit 的保存类型：
+ * - space-edit 可以继续维护更完整的业务字段和持久化逻辑；
+ * - image-edit / 其他页面也可以把解析后的 manifest 或 JSON 转成这里的形状再渲染；
+ * - DrawingRenderer 只做只读回显和命中选择，不承担业务校验。
+ */
 export type DrawingItemType = "cabinet" | "device-area" | "charging-area";
 
 export interface DrawingBayRef {
@@ -49,10 +57,13 @@ export interface PathPointObject {
 export type PathPointValue = PathPointObject | number[];
 
 export interface PathSegmentValue {
+  /** 旧格式：通过点数组下标连线。 */
   start?: number;
   end?: number;
+  /** 新格式：通过点 id 连线，便于后续路径编辑时保持稳定引用。 */
   from?: string | number;
   to?: string | number;
+  /** 当前公共回显仍按直线显示，字段先保留给空间编辑里的贝塞尔路径。 */
   bezier?: unknown;
 }
 
@@ -89,11 +100,13 @@ export function pointToTuple(point: PathPointValue): [number, number, number] | 
 
 export function isPathRenderData(data: unknown): data is PathRenderData {
   if (!isRecord(data)) return false;
+  // 路径文件的核心特征是 points + paths；具体点/边格式在渲染时再逐条容错。
   return Array.isArray(data.points) && Array.isArray(data.paths);
 }
 
 export function isDrawingItemsData(data: unknown): data is DrawingItemsData {
   if (!isRecord(data)) return false;
+  // 屏柜/设备区/充电区统一存储在 items 数组，type 决定具体渲染方式。
   return Array.isArray(data.items);
 }
 

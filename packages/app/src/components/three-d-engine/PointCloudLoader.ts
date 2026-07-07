@@ -5,13 +5,16 @@ import { BlobReadFileSystem } from "../../playcanvas-core/io/read/file-systems";
 import { loadGSplatData } from "../../playcanvas-core/io";
 import { electronFileSource, type FileSource } from "./file-source";
 
+// 单次上传到 GPU 的点数上限。超过后按 stride 均匀降采样，优先保证可交互性。
 const MAX_POINTS = 30_000_000;
 
 function isLasCompressed(formatId: number): boolean {
+  // LAS 规范中压缩点格式会把最高位标记为 1，因此 >=128 视为 LAZ。
   return formatId >= 128;
 }
 
 function getRgbOffset(formatId: number): number {
+  // 不同 LAS point format 的 RGB 字段偏移不同；这里只处理当前项目使用到的常见格式。
   if (formatId >= 6) return 30;
   if (formatId === 3 || formatId === 5) return 28;
   return 20;
@@ -34,8 +37,11 @@ function findGroundYFromHistogram(hist: Map<number, number>, lminY: number, lmax
 }
 
 export interface LoadedModel {
+  /** 已挂到 app.root 的点云实体，调用方控制显示/隐藏/销毁。 */
   entity: pc.Entity;
+  /** 已转换成 PlayCanvas 局部坐标后的模型中心，用于相机聚焦。 */
   center: [number, number, number];
+  /** 局部包围盒最大边长，用于相机距离和点大小估算。 */
   extent: number;
   totalPoints: number;
   loadedPoints: number;
@@ -75,12 +81,14 @@ export class PointCloudLoader {
   }
 
   private readFileChunk(filePath: string, offset: number, length: number): Promise<ArrayBuffer> {
+    // 统一通过 FileSource 读取，loader 本身不关心 Electron IPC 或其他运行环境。
     return this.fileSource.readChunk(filePath, offset, length);
   }
 
   /** 从文件路径加载 LAS/LAZ */
   async loadLasFromPath(filePath: string): Promise<LoadedModel> {
     const fileName = filePath.split(/[\\/]/).pop() || "unknown.las";
+    // LAS header 位于文件头部；4096 字节足够覆盖当前 parser 需要的公共头信息。
     const headerBuf = await this.readFileChunk(filePath, 0, 4096);
     const header = parseLasHeader(headerBuf);
 
@@ -95,6 +103,8 @@ export class PointCloudLoader {
 
   /** 加载 PLY (GSplat) */
   async loadPly(file: File): Promise<LoadedModel> {
+    // PLY/GSplat 目前只支持浏览器 File 输入，主要保留给 demo/历史能力。
+    // 客户端当前模型导入主路径仍是 LAS/LAZ。
     const fs = new BlobReadFileSystem();
     fs.set(file.name, file);
     const { gsplatData } = await loadGSplatData(file.name, fs);
@@ -142,6 +152,7 @@ export class PointCloudLoader {
 
     let rgbShift = 8;
     if (hasRgb) {
+      // 现场 LAS 可能存 16bit RGB，也可能已经是 8bit。先抽样检测最大值，再决定是否右移 8 位。
       const rgbOff = getRgbOffset(formatId);
       const sampleCount = Math.min(2000, count);
       const sampleBuf = await this.readFileChunk(filePath, pointDataOffset, sampleCount * pointRecordLength);
@@ -154,10 +165,12 @@ export class PointCloudLoader {
       rgbShift = maxRgb > 255 ? 8 : 0;
     }
 
+    // floating origin：用 LAS header 的中心作为局部原点，避免全局坐标过大导致 float32 精度抖动。
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
     const cz = (minZ + maxZ) / 2;
     const extent = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
+    // 点大小随模型尺度和加载点数自适应。点越稀疏，点径越大，避免稀疏点云看起来断裂。
     const pointSize = Math.max(2.0, extent / Math.cbrt(loadCount) * 0.8);
 
     const mat = new pc.ShaderMaterial({
@@ -182,6 +195,9 @@ export class PointCloudLoader {
     const f32 = new Float32Array(vbLock);
     const u8 = new Uint8Array(vbLock);
 
+    // 文件读取和 CPU 写 GPU buffer 分两层切块：
+    // - FILE_CHUNK_POINTS 控制每次 IPC/文件读的字节量；
+    // - GPU_CHUNK 控制每轮同步处理点数，避免长时间阻塞渲染线程。
     const FILE_CHUNK_POINTS = 100000;
     const GPU_CHUNK = 50000;
     let globalIdx = 0;
@@ -212,6 +228,8 @@ export class PointCloudLoader {
           const iz = view.getInt32(ptOff + 8, true);
 
           const base = outputIdx * 4;
+          // 坐标轴转换：LAS 通常是 X/Y/Z，当前 PlayCanvas 场景使用 X/Z 平面为地面、Y 为高度。
+          // 因此 LAS Z -> 场景 Y，LAS Y -> 场景 -Z，并同时减去 floating origin。
           const fx = ix * scaleX + offsetX - cx;
           const fy = iz * scaleZ + offsetZ - cz;
           const fz = -(iy * scaleY + offsetY - cy);
@@ -222,6 +240,7 @@ export class PointCloudLoader {
           if (fy < lminY) lminY = fy; if (fy > lmaxY) lmaxY = fy;
           if (fz < lminZ) lminZ = fz; if (fz > lmaxZ) lmaxZ = fz;
 
+          // 按 0.2m 粒度统计高度分布，用低区最密集高度估算地面，供绘制区域默认高度参考。
           const yBin = Math.round(fy * 5) / 5;
           yHist.set(yBin, (yHist.get(yBin) || 0) + 1);
 
@@ -241,10 +260,12 @@ export class PointCloudLoader {
       }
       globalIdx += pointsInChunk;
       this.callbacks.onProgress?.(Math.round(globalIdx / count * 100));
+      // 主动让出事件循环，让 loading、取消操作和窗口事件有机会响应。
       await new Promise((r) => setTimeout(r, 0));
     }
 
     vb.unlock();
+    // 每个点 16 字节：position 3*float32 + color 4*uint8。显存不足时 lock 可能返回异常大小。
     const expectedBytes = loadCount * 16;
     if (vbLock.byteLength < expectedBytes) {
       throw new Error(`GPU buffer allocation failed: got ${vbLock.byteLength} bytes, expected ${expectedBytes}.`);
@@ -263,6 +284,7 @@ export class PointCloudLoader {
     this.entities.set(fileName, entity);
     this.pointStats.set(fileName, { total: count, loaded: loadCount });
 
+    // 真实范围用实际加载后的点重算，能反映降采样后仍可见的局部包围盒。
     const localCenterX = (lminX + lmaxX) / 2;
     const localCenterY = (lminY + lmaxY) / 2;
     const localCenterZ = (lminZ + lmaxZ) / 2;
@@ -323,11 +345,13 @@ export class PointCloudLoader {
     const f32 = new Float32Array(vbLock);
     const u8 = new Uint8Array(vbLock);
 
+    // LAZ 解压依赖 laz-perf 顺序访问压缩流，当前必须整文件读入 WASM 内存。
     const arrayBuffer = await this.fileSource.readAll(filePath);
 
     const createLazPerf = await loadLazPerf();
     const LazPerf = await createLazPerf({ locateFile: () => getWasmUrl() });
 
+    // 大 LAZ 文件可能超过 laz-perf 初始 heap。先尝试 malloc，失败后扩容再申请。
     let filePtr = LazPerf._malloc(arrayBuffer.byteLength);
     if (!filePtr) {
       const needBytes = arrayBuffer.byteLength;
@@ -343,6 +367,7 @@ export class PointCloudLoader {
     const laszip = new LazPerf.LASZip();
     laszip.open(filePtr, arrayBuffer.byteLength);
 
+    // 实际 point format/length 以 laz-perf 解压器返回为准，避免 header 与压缩流细节不一致。
     const pointLength = laszip.getPointLength();
     const actualFormat = laszip.getPointFormat();
     const pointPtr = LazPerf._malloc(pointLength);
@@ -351,6 +376,7 @@ export class PointCloudLoader {
 
     let rgbShift = 8;
     if (hasRgb) {
+      // 解压流是顺序读取的，抽样检测 RGB 会消耗读取位置，所以单独开一个 LASZip 实例。
       const sLaszip = new LazPerf.LASZip();
       sLaszip.open(filePtr, arrayBuffer.byteLength);
       const sPtr = LazPerf._malloc(pointLength);
@@ -386,6 +412,7 @@ export class PointCloudLoader {
         const iz = LazPerf.HEAP32[wasmOff / 4 + 2];
 
         const base = outputIdx * 4;
+        // 与 LAS 流式路径保持同一套坐标轴转换，保证 LAS/LAZ 加载后的绘制坐标一致。
         const fy = iz * scaleZ + offsetZ - cz;
         f32[base] = ix * scaleX + offsetX - cx;
         f32[base + 1] = fy;
@@ -411,6 +438,7 @@ export class PointCloudLoader {
       if (end < count) await new Promise((r) => setTimeout(r, 0));
     }
 
+    // WASM 侧内存必须手动释放；这里释放顺序与申请顺序无强依赖，但都要覆盖。
     LazPerf._free(pointPtr);
     LazPerf._free(filePtr);
     laszip.delete();

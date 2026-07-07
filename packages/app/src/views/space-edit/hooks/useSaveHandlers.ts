@@ -64,6 +64,8 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     try {
       await saveCabinetDrawing({ api, projectName, modelPath, item });
       const jsonPath = getDrawingJsonPath(modelPath);
+      // 屏柜保存后立即回显给 CabinetViewer。这里用 ref 暂存，等绘制模式关闭后再 show，
+      // 避免编辑态线框和只读回显线框重叠。
       params.savedCabinetRef.current = { item, jsonPath };
       params.onDrawingFileSaved?.(jsonPath, "cabinet");
       message.success(`保存成功（${item.cabinets.length} 个屏柜）`);
@@ -86,6 +88,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     const modelPath = getCurrentModelPath();
     if (!modelPath) return;
 
+    // 充电区域是单例；没有 verts 时传 null，持久化层会删除旧记录。
     const item: ChargingAreaItem | null = verts ? {
       id: (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()),
       type: "charging-area",
@@ -115,6 +118,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     const modelPath = getCurrentModelPath();
     if (!modelPath) { if (!silent) message.warning("未找到模型路径，无法保存"); return; }
 
+    // 设备区可多个，每个框可绑定一个间隔；保存时整体替换当前 JSON 中的 device-area 集合。
     const items: DeviceAreaItem[] = datas.map((d) => ({
       id: d.id,
       type: "device-area" as const,
@@ -153,7 +157,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     }
   }, [isAutoSavingRef, message, params, getCurrentModelPath]);
 
-  // HandleSaveAll uses a ref to avoid circular deps with itself
+  // handleSaveAll 会被定时器调用。用 ref 保存最新函数，避免定时器闭包拿到旧状态。
   const handleSaveAllRef = useRef<() => Promise<void>>(async () => {});
 
   /** 保存全部：充电区域 + 设备区 + 可行路径（屏柜已单独保存到JSON） */
@@ -164,7 +168,8 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     const hasDeviceAreas = params.getBoxDatas().length > 0;
     const hasPath = !!params.getPathData();
 
-    // 自动保存时：无任何数据且 JSON 文件不存在 → 不创建空文件
+    // 自动保存时：无任何数据且 JSON 文件不存在 → 不创建空文件。
+    // 这样新项目只打开地图不会生成空的“充电区域、设备区、屏柜.json”。
     if (silent && !hasCharging && !hasDeviceAreas && !hasPath) {
       const modelPath = getCurrentModelPath();
       if (!modelPath) return;
@@ -190,7 +195,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
   }, [handleSaveChargingArea, handleSaveDeviceAreas, handleSavePath, isAutoSavingRef, saveStatusSetter, message, params, getCurrentModelPath]);
   handleSaveAllRef.current = handleSaveAll;
 
-  // Auto-save timer
+  // 自动保存只负责同步当前编辑态几何，不弹成功提示；手动保存才更新 SaveStatusBadge。
   const autoSaveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoSaveEnabledRef = useRef(false);
 

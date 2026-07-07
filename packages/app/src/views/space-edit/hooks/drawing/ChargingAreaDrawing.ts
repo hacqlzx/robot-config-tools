@@ -53,6 +53,8 @@ interface BoxState {
  *   再向上拉伸默认 1m 生成立体矩形。
  * - 仅一个：再次进入绘制会先清空。
  * - 生成后点击选中（高亮），Delete 删除，方向键前后左右平移。
+ *
+ * 与设备区不同，充电区域是单例；保存时会替换 JSON 中旧的 charging-area 记录。
  */
 export class ChargingAreaDrawing {
   private app: pc.Application;
@@ -153,6 +155,7 @@ export class ChargingAreaDrawing {
 
   /** 从已保存的顶点数据恢复矩形（供回显） */
   loadBox(verts: number[][]) {
+    // 回显时直接使用保存的 8 顶点，不重新按 3 点推导，保证人工调整后的形状不漂移。
     if (verts.length !== 8) return;
     this.destroyBox();
     this.clickLines.forEach((e) => e.destroy());
@@ -196,6 +199,7 @@ export class ChargingAreaDrawing {
     this.opts.height = h;
     const v = this.box.verts;
     const baseY = (v[0].y + v[1].y + v[2].y + v[3].y) / 4;
+    // 只移动顶部 4 点，底面保持在原地；这样高度调整不会改变用户画出的占地区域。
     for (let i = 4; i < 8; i++) v[i].y = baseY + h;
     const thickness = this.selected ? HIGHLIGHT_THICKNESS : this.opts.lineThickness;
     this.box.lines.forEach((line, i) => {
@@ -243,12 +247,14 @@ export class ChargingAreaDrawing {
       this.clickLines.push(createLine(this.app, prev, pos, this.opts.color, this.opts.lineThickness));
     }
     this.points.push(pos.clone());
+    // 三点足够确定一个水平矩形：p1/p2 给出一条边，p3 决定另一侧宽度。
     if (this.points.length === 3) this.buildBox();
     this.emitChange();
   }
 
   /** 3 点 → 平面矩形（忽略高度）→ 拉伸成立体矩形 */
   private buildBox() {
+    // 底面高度优先使用点云估算地面 Y，保证充电区贴地；没有地面估算时回退到三点最低值。
     const baseY = this.groundY !== -Infinity
       ? this.groundY
       : Math.min(this.points[0].y, this.points[1].y, this.points[2].y);
@@ -259,6 +265,7 @@ export class ChargingAreaDrawing {
     const dir1 = new pc.Vec3().sub2(p2, p1);
     if (dir1.length() < 1e-4) return;
     dir1.normalize();
+    // 通过第一条边的水平法线，把第三点投影成矩形宽度，避免用户第三点略歪导致平行四边形。
     const normal = new pc.Vec3().cross(new pc.Vec3(0, 1, 0), dir1).normalize();
     const w = new pc.Vec3().sub2(p3, p1).dot(normal);
     const off = normal.clone().mulScalar(w);

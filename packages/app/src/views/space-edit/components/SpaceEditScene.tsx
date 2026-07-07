@@ -57,6 +57,12 @@ interface SpaceEditSceneProps {
   onClipComplete: (clipName: string) => void;
 }
 
+/**
+ * 空间编辑三维场景的 UI 组合层。
+ *
+ * 这里只负责把 canvas、loading、保存状态、编辑浮层和裁切浮层摆到同一个视口里；
+ * PlayCanvas 初始化、点云加载、绘制状态机和保存逻辑都在 hooks 中，避免组件本身变成业务中枢。
+ */
 export default function SpaceEditScene({
   canvasRef,
   saveStatus,
@@ -106,6 +112,7 @@ export default function SpaceEditScene({
       loadingProgress={loadingProgress}
       loadingText={loadingText}
     >
+      {/* 绘制浮层只在对应模式下显示，实际几何交互由各 Drawing 类监听 canvas 完成。 */}
       <DrawingEditPanels
         cabinetMode={cabinetMode}
         cabinetCornerCount={cabinetCornerCount}
@@ -134,6 +141,7 @@ export default function SpaceEditScene({
         onDeviceAreaBindBay={onDeviceAreaBindBay}
         onDeviceAreaUnbind={onDeviceAreaUnbind}
       />
+      {/* 裁切控制器需要 app/header/filePath 三类三维上下文，因此独立于普通绘制面板。 */}
       <ClipModelPanel
         clipMode={clipMode}
         clipEntityName={clipEntityName}

@@ -5,6 +5,10 @@ import * as pc from "playcanvas";
 /**
  * 屏幕空间拾取 LAS 点：优先返回点击位置 5px 半径内、深度最近的点；
  * 若半径内无点，则回退到整屏距离最近的点。
+ *
+ * 这是编辑态吸附的核心：绘制类拿到鼠标位置后不直接落在射线平面上，
+ * 而是在已加载点云 vertexBuffer 中找屏幕投影最接近的点。
+ * 注意：该函数会遍历当前可见点云顶点，超大点云下应避免在 mousemove 中高频调用。
  */
 export function screenPickLas(
   gd: pc.GraphicsDevice,
@@ -32,6 +36,7 @@ export function screenPickLas(
     if (!vb) return;
     worldVP.mul2(vpMat, ent.getWorldTransform());
     const m = worldVP.data;
+    // lock 只是读取当前 CPU/GPU buffer 的顶点数据；调用完成后必须 unlock。
     const data = vb.lock() as ArrayBuffer;
     const f32 = new Float32Array(data);
     const count = vb.getNumVertices();
@@ -47,11 +52,13 @@ export function screenPickLas(
       const sx = (clipX * invW * 0.5 + 0.5) * screenW;
       const sy = (0.5 - clipY * invW * 0.5) * screenH;
       const d2 = (sx - clickSx) ** 2 + (sy - clickSy) ** 2;
+      // 点击半径内优先选择深度最近的点，避免框到被遮挡的后方点云。
       if (d2 <= RADIUS_SQ && clipW < bestDepth) {
         bestDepth = clipW;
         ent.getWorldTransform().transformPoint(new pc.Vec3(lx, ly, lz), worldPt);
         nearResult = { point: worldPt.clone(), entity: ent };
       }
+      // 半径内没有命中时，回退到全屏最近点，让稀疏点云也能放置。
       if (d2 < bestDistSq) {
         bestDistSq = d2;
         ent.getWorldTransform().transformPoint(new pc.Vec3(lx, ly, lz), worldPt);

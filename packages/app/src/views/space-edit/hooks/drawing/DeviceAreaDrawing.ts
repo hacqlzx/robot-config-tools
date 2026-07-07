@@ -43,6 +43,16 @@ interface BoxInfo {
   labelEl: HTMLDivElement | null;
 }
 
+/**
+ * 设备区绘制（框架无关）
+ *
+ * - 支持多个立体矩形，每个矩形可绑定一个间隔 bay；
+ * - 三点确定底面矩形，再按 height 拉伸出顶部；
+ * - 选中后可调高度、绑定/解绑间隔、Delete 删除；
+ * - DOM 标签显示绑定间隔名称，未绑定时提示“未绑定”。
+ *
+ * 该类只管理编辑态几何和标签，重复绑定校验、保存、树刷新由上层 hook 处理。
+ */
 export class DeviceAreaDrawing {
   private app: pc.Application;
   private camera: pc.Entity;
@@ -52,6 +62,7 @@ export class DeviceAreaDrawing {
   private canvas: HTMLCanvasElement;
   private opts: Required<Omit<DeviceAreaDrawingOptions, "onChange" | "onSelectChange" | "onDelete">> & Pick<DeviceAreaDrawingOptions, "onChange" | "onSelectChange" | "onDelete">;
 
+  // points/clickLines 是当前正在放置的临时 3 点；boxes 是已经成体的设备区集合。
   private points: pc.Vec3[] = [];
   private pointSpheres: pc.Entity[] = [];
   private clickLines: pc.Entity[] = [];
@@ -100,6 +111,7 @@ export class DeviceAreaDrawing {
     box.height = h;
     const v = box.verts;
     const baseY = (v[0].y + v[1].y + v[2].y + v[3].y) / 4;
+    // 高度变化只影响顶部点，避免改变底面吸附到点云后的占地范围。
     for (let i = 4; i < 8; i++) v[i].y = baseY + h;
     const thickness = box.selected ? HIGHLIGHT_THICKNESS : this.opts.lineThickness;
     box.lines.forEach((line, i) => {
@@ -167,6 +179,7 @@ export class DeviceAreaDrawing {
 
   /** 从已保存数据恢复框 */
   loadBoxes(datas: { id: string; verts: number[][]; height?: number; bay: { id: number; name: string; code: string } | null }[]) {
+    // 回显时整体重建 boxes，避免旧实体残留；保存的 8 顶点是权威几何。
     this.clearAll();
     for (const d of datas) {
       if (d.verts.length !== 8) continue;
@@ -243,6 +256,7 @@ export class DeviceAreaDrawing {
     }
     this.points.push(pos.clone());
     if (this.points.length === 3) {
+      // 三点完成后立即成盒，并清掉临时点/线，后续操作都围绕 boxes 集合。
       this.buildBox();
       this.clearPlacement();
     }
@@ -250,6 +264,7 @@ export class DeviceAreaDrawing {
   }
 
   private buildBox() {
+    // 底面高度优先使用点云估算地面 Y，保证设备区贴地；没有地面估算时回退到三点最低值。
     const baseY = this.groundY !== -Infinity
       ? this.groundY
       : Math.min(this.points[0].y, this.points[1].y, this.points[2].y);
@@ -262,6 +277,7 @@ export class DeviceAreaDrawing {
     const edge2 = new pc.Vec3().sub2(p3, p2);
     if (edge2.length() < 1e-4) return;
 
+    // 设备区保留 p1->p2 和 p2->p3 两条边方向，适合用户按设备区边界连续点三点。
     const c0 = p1.clone();
     const c1 = p2.clone();
     const c2 = p3.clone();
@@ -314,6 +330,7 @@ export class DeviceAreaDrawing {
     this.deselectAll();
     box.lines.forEach((line, i) => {
       const [a, b] = BOX_EDGES[i];
+      // 线段是 box 实体缩放出来的，选中态通过重新计算线段厚度实现高亮。
       updateLineEntity(line, box.verts[a], box.verts[b], HIGHLIGHT_THICKNESS);
     });
     box.selected = true;
@@ -338,6 +355,7 @@ export class DeviceAreaDrawing {
     const box = this.boxes.find((b) => b.selected);
     if (!box) return;
     const d = new pc.Vec3(dx, dy, dz);
+    // 方向键移动是整体平移 8 个顶点，不重新吸附点云，避免误改变用户框出的区域。
     box.verts.forEach((v) => v.add(d));
     const thickness = box.selected ? HIGHLIGHT_THICKNESS : this.opts.lineThickness;
     box.lines.forEach((line, i) => {

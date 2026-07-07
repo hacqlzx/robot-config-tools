@@ -49,6 +49,10 @@ interface UseThreeDViewerParams {
  * 统一 3D 查看器 Hook — 引擎 + 点云加载 + 绘制回显 + loading 状态
  *
  * 适用于勘察图片等简单使用场景，空间编辑应使用 useThreeDEngine + 自行管理 loader。
+ *
+ * 这个 Hook 是“只读/轻交互”组合层：调用方给它 canvas 和文件路径，它负责加载点云、
+ * 加载绘制 JSON、聚焦相机和维护 loading。空间编辑页因为有复杂编辑状态、互斥绘制模式、
+ * 保存和裁切流程，所以只复用底层 ThreeDEngine / PointCloudLoader。
  */
 export function useThreeDViewer({
   canvasRef,
@@ -101,6 +105,8 @@ export function useThreeDViewer({
     setProgress(0);
     try {
       const model = await loaderRef.current.loadLasFromPath(filePath);
+      // 点云 loader 返回的是已经做过 floating-origin 后的局部中心和范围。
+      // 聚焦时必须使用这个局部坐标，不要再拿 LAS header 的全局坐标直接喂相机。
       engineRef.current?.focusOn(model.center[0], model.center[1], model.center[2], model.extent);
       engineRef.current?.requestRender();
       return model;
@@ -117,6 +123,8 @@ export function useThreeDViewer({
   }, []);
 
   const loadDrawingData = useCallback((data: DrawingRenderData | unknown) => {
+    // 业务层如果已经按 manifest/文件名解析出数据，可以绕过 loadJson 的文件读取。
+    // 这样 DrawingRenderer 就不需要知道项目目录结构。
     drawingRef.current?.loadData(data);
     engineRef.current?.requestRender();
   }, []);

@@ -35,6 +35,7 @@ export function usePlayCanvas({
   const engineRef = useRef<ThreeDEngine | null>(null);
 
   const requestRender = useCallback(() => {
+    // space-edit 复用公共 ThreeDEngine 的按需渲染机制；所有绘制类只需要调用这个入口。
     engineRef.current?.requestRender();
   }, []);
 
@@ -43,6 +44,7 @@ export function usePlayCanvas({
     const container = containerRef.current;
     if (!canvas || !container) return;
 
+    // 空间编辑使用公共引擎提供 canvas/app/camera/orbit，但编辑状态由本 hook 组装。
     const engine = new ThreeDEngine(canvas);
     engine.observeResize(container);
     engineRef.current = engine;
@@ -51,6 +53,7 @@ export function usePlayCanvas({
     appRef.current = app;
     orbitRef.current = engine.orbit;
 
+    // 绘制工具都绑定到同一个 canvas 和点云实体集合。setup 返回清理函数，保证卸载时移除事件监听。
     const pathCleanup = setupPathDrawing(app, camera, requestRender, entitiesRef);
     const cabinetCleanup = setupCabinetDrawing(app, camera, requestRender, entitiesRef);
     const chargingCleanup = setupChargingAreaDrawing(app, camera, requestRender, entitiesRef);
@@ -58,6 +61,7 @@ export function usePlayCanvas({
     const viewer = new CabinetViewer(app, camera, () => engine.requestRender());
     cabinetViewerRef.current = viewer;
 
+    // 同一时间只允许一种编辑对象处于选中态；否则 Delete、方向键和拖拽都会出现归属歧义。
     pathDrawingRef.current?.setSelectChangeCallback((selected: boolean) => {
       if (selected) {
         viewer.deselect();
@@ -89,6 +93,7 @@ export function usePlayCanvas({
     });
 
     return () => {
+      // 销毁顺序：先清理业务绘制事件，再销毁只读 viewer，最后释放 PlayCanvas app。
       cabinetCleanup();
       chargingCleanup();
       deviceAreaCleanup();

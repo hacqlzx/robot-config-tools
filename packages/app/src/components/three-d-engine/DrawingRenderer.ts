@@ -85,6 +85,9 @@ interface CabItem {
  * 通用绘制渲染器 — 从 JSON 加载并只读展示屏柜 / 充电区域 / 设备区域 / 路径
  *
  * 支持点击选中 / 高亮，HTML 标签 overlay，不包含编辑交互能力。
+ *
+ * 注意：这里渲染的是已经保存好的几何数据，不参与 space-edit 的编辑状态机。
+ * 如果后续要支持编辑，应放在 space-edit 专用 Drawing 类里，避免只读组件反向依赖业务页。
  */
 export class DrawingRenderer {
   app: pc.Application;
@@ -116,6 +119,7 @@ export class DrawingRenderer {
   }
 
   async loadJson(filePath: string) {
+    // 文件读取走 FileSource，便于业务层替换读取方式；解析后的结构再交给 loadData 统一分发。
     const buf = await this.fileSource.readAll(filePath);
     const text = new TextDecoder("utf-8").decode(buf);
     const data = JSON.parse(text) as unknown;
@@ -123,6 +127,7 @@ export class DrawingRenderer {
   }
 
   loadData(data: DrawingRenderData | unknown) {
+    // 同一个地图目录下可能同时存在区域 JSON 和路径 JSON；按数据形状判断具体渲染入口。
     if (isPathRenderData(data)) {
       this.renderPaths(data);
     }
@@ -160,6 +165,7 @@ export class DrawingRenderer {
     const verts = item.geometry?.verts;
     if (!verts || verts.length < 8) return;
     const vs = verts.map(v3);
+    // splits 是沿屏柜宽度方向的 0~1 分隔比例，用于把一个大柜体显示成多个屏柜标签。
     const splits: number[] = item.geometry?.splits || [];
     const cabinets = item.cabinets || [];
     const lines: pc.Entity[] = [];
@@ -177,6 +183,7 @@ export class DrawingRenderer {
       }
     }
 
+    // 标签放在每个分隔段顶部中心，稍微向前偏移，避免文字贴到柜体边线上。
     const centers = cabinetTopCenters(vs, splits);
     const labelInfos: LabelInfo[] = [];
     for (let i = 0; i < centers.length && i < cabinets.length; i++) {
@@ -201,6 +208,7 @@ export class DrawingRenderer {
       lines.push(createLine(this.app, vs[a], vs[b], color, THICKNESS));
     }
 
+    // 设备区/充电区标签放在上表面中心。约定 4~7 是上表面四点，来自空间编辑保存格式。
     const cx = (vs[4].x + vs[5].x + vs[6].x + vs[7].x) / 4;
     const cy = (vs[4].y + vs[5].y + vs[6].y + vs[7].y) / 4;
     const cz = (vs[4].z + vs[5].z + vs[6].z + vs[7].z) / 4;
@@ -215,6 +223,7 @@ export class DrawingRenderer {
   }
 
   private renderPaths(data: PathRenderData) {
+    // 路径文件历史上有两种格式：数组下标连线、id 连线。这里统一转成 Vec3 + 可选 id。
     const points = data.points
       .map((pt) => this.toPathVertex(pt))
       .filter((pt): pt is { pos: pc.Vec3; id?: string | number } => !!pt);
@@ -253,6 +262,7 @@ export class DrawingRenderer {
     points: { pos: pc.Vec3; id?: string | number }[],
     pointById: Map<string | number, pc.Vec3>,
   ): pc.Vec3 | null {
+    // 优先兼容旧格式 start/end 下标，再兼容新格式 from/to id。
     const index = segment[indexKey];
     if (typeof index === "number" && points[index]) return points[index].pos;
 
@@ -269,6 +279,7 @@ export class DrawingRenderer {
     this.deselectAll();
     box.lines.forEach((line, i) => {
       const [a, b] = BOX_EDGES[i];
+      // box 选中时需要重建线段尺寸，因为线段是缩放后的 box，不是材质线宽。
       updateLineEntity(line, box.verts[a], box.verts[b], HIGHLIGHT_THICKNESS);
     });
     box.selected = true;
@@ -280,6 +291,7 @@ export class DrawingRenderer {
     this.deselectAll();
     cab.lines.forEach((line) => {
       const s = line.getLocalScale();
+      // 屏柜线段方向不变，只放大横截面厚度，保留原来的 z 轴长度。
       line.setLocalScale(HIGHLIGHT_THICKNESS, HIGHLIGHT_THICKNESS, s.z);
     });
     cab.selected = true;
@@ -505,6 +517,7 @@ export class DrawingRenderer {
     const parent = this.canvas.parentElement;
     if (!parent) return;
     const c = document.createElement("div");
+    // 标签层跟 canvas 同级绝对定位，不参与 PlayCanvas 渲染；只负责把 3D 点投影成 DOM 位置。
     c.style.cssText = "position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:15;";
     parent.appendChild(c);
     this.labelContainer = c;

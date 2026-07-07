@@ -1,5 +1,11 @@
-// 空间绘制数据持久化：充电区域、设备区、屏柜 等统一存于模型目录下同一 JSON
-// 文件名固定，按 type 标识区分各类绘制，支持二次编辑（按 type 局部更新，互不影响）
+// 空间绘制数据持久化：充电区域、设备区、屏柜 等统一存于模型目录下同一 JSON。
+// 文件名固定，按 type 标识区分各类绘制，支持二次编辑（按 type 局部更新，互不影响）。
+//
+// 目录约定：project/{项目}/地图/{地图名}/{地图名}.las
+//   ├─ 充电区域、设备区、屏柜.json   保存 cabinet / charging-area / device-area
+//   └─ 可行驶路径.json               保存路径点和路径段
+//
+// 注意读写路径不同：readLargeFile 用绝对路径，project.writeFile 用项目相对子路径。
 
 import type { SpaceTreeNode } from "../../types";
 import { MAP_DIR_NAME, mapSiblingFilePath, mapSiblingSubPath, projectSubPathFromDir } from "../../utils/space-paths";
@@ -99,12 +105,14 @@ async function readDrawingFile(api: ElectronAPI, modelPath: string): Promise<Dra
     if (typeof data.version !== "number") data.version = 1;
     return data;
   } catch {
+    // 文件不存在或旧文件损坏时不阻断绘制，返回空结构让保存流程重新生成。
     return { version: 1, items: [] };
   }
 }
 
 /** 写入绘制文件（覆盖） */
 async function writeDrawingFile(api: ElectronAPI, projectName: string, modelPath: string, data: DrawingFile): Promise<void> {
+  // 使用缩进 JSON，方便现场调试和人工比对；文件不大，体积不是主要问题。
   const bytes = new TextEncoder().encode(JSON.stringify(data, null, 2));
   const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   await api.project.writeFile(projectName, jsonSubPath(modelPath), buffer);
@@ -180,6 +188,7 @@ async function collectBoundBayIds(api: ElectronAPI, nodes: SpaceTreeNode[], ids:
       await collectBoundBayIds(api, node.children, ids);
     } else if (node.name === DRAWING_FILE_NAME) {
       try {
+        // 跨地图扫描设备区绑定，用于阻止同一间隔被多个设备区重复绑定。
         const buf = await api.readLargeFile(node.path);
         const data = JSON.parse(new TextDecoder("utf-8").decode(buf)) as DrawingFile;
         for (const it of data.items || []) {
@@ -239,6 +248,7 @@ export async function loadChargingAreaFromJson(api: ElectronAPI, jsonPath: strin
 
 /** 由绘制 JSON 绝对路径推导项目相对子路径（写回用） */
 function subPathFromJson(jsonPath: string): string {
+  // 树节点给的是绝对路径；删除/覆盖 JSON 时要反推项目相对子路径给主进程写入。
   return projectSubPathFromDir(jsonPath, MAP_DIR_NAME, DRAWING_FILE_NAME);
 }
 
@@ -267,6 +277,7 @@ export async function savePathDrawing(params: {
 }): Promise<void> {
   const { api, projectName, modelPath, data } = params;
   if (!data || data.points.length === 0) {
+    // 允许保存空路径，等价于清空当前模型的路径文件内容。
     const bytes = new TextEncoder().encode(JSON.stringify(null));
     const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
     await api.project.writeFile(projectName, pathSubPath(modelPath), buffer);
@@ -303,6 +314,7 @@ export async function loadPathDrawing(api: ElectronAPI, modelPath: string): Prom
         };
       }
       // 旧格式兼容：{ points: number[][], connections: [number, number][] }
+      // 当前项目还没投入使用，但保留这个读取兼容成本很低，也方便早期样例数据回放。
       return data as any;
     }
   } catch {}

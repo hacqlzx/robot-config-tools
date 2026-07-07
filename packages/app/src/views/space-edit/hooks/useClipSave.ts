@@ -24,6 +24,7 @@ interface ClipSaveParams {
   message: { error: (msg: string) => void; warning: (msg: string) => void; success: (msg: string) => void };
 }
 
+// 裁切遍历点云时的批大小。过大会卡住渲染线程，过小会让 IPC/循环开销变高。
 const CHUNK = 200_000;
 
 export async function performClipSave({
@@ -59,6 +60,8 @@ export async function performClipSave({
     console.log("[裁切] 裁切框 Y:", clipBounds.minY.toFixed(1), "~", clipBounds.maxY.toFixed(1));
     console.log("[裁切] 裁切框 Z:", clipBounds.minZ.toFixed(1), "~", clipBounds.maxZ.toFixed(1));
 
+    // LAS 原始整数坐标 -> 当前 PlayCanvas 局部坐标。
+    // 必须和 PointCloudLoader 的坐标轴转换保持一致，否则裁切框与屏幕中的点云不重合。
     const lasToLocal = (ix: number, iy: number, iz: number): [number, number, number] => [
       ix * scaleX + offsetX - wp.x,
       iz * scaleZ + offsetZ - wp.y,
@@ -70,11 +73,13 @@ export async function performClipSave({
       wz >= clipBounds.minZ && wz <= clipBounds.maxZ;
 
     // ── 2. 第一遍：计数（顺便采样 RGB 位深）──
+    // 先数出裁切后点数，才能一次性分配输出 LAS buffer 和 GPU VertexBuffer。
     let clippedCount = 0;
     let maxRgbSample = 0;
     const RGB_SAMPLE = 2000;
 
     if (isComp) {
+      // LAZ 解压只能顺序遍历压缩流；计数和写出各走一遍，逻辑简单且避免保存中间点集占内存。
       const createLazPerf = await loadLazPerf();
       const LazPerf = await createLazPerf({ locateFile: () => getWasmUrl() });
       const arrayBuffer = await window.electronAPI!.readLargeFile(origFilePath);
@@ -108,6 +113,7 @@ export async function performClipSave({
       LazPerf._free(filePtr);
       laszip.delete();
     } else {
+      // LAS 未压缩文件可直接按点记录长度分块读取，不需要整文件进内存。
       const totalBytes = totalCount * pointRecordLength;
       const fileChunkBytes = CHUNK * pointRecordLength;
 
@@ -150,6 +156,7 @@ export async function performClipSave({
     }
 
     // ── 3. 构建输出 ──
+    // 输出统一写 LAS 1.2 + point format 2，保留 XYZ + RGB，方便后续重新加载和导出。
     const outPointLen = 26;
     const headerLen = 227;
     const totalOutSize = headerLen + clippedCount * outPointLen;
@@ -174,6 +181,7 @@ export async function performClipSave({
     hv.setFloat64(155, offsetX, true); hv.setFloat64(163, offsetY, true); hv.setFloat64(171, offsetZ, true);
 
     // ── 4. 第二遍：写入 ──
+    // 同时写两份数据：out 是落盘 LAS，newVb 是当前场景立即显示的裁切结果。
     const vf = new pc.VertexFormat(gd, [
       { semantic: pc.SEMANTIC_POSITION, components: 3, type: pc.TYPE_FLOAT32 },
       { semantic: pc.SEMANTIC_TEXCOORD0, components: 4, type: pc.TYPE_UINT8, normalize: true },
@@ -223,6 +231,7 @@ export async function performClipSave({
         }
         nu[gpuIdx * 16 + 15] = 255;
 
+        // 写回 LAS 时要把 PlayCanvas 局部坐标还原成 LAS 原始坐标轴的整数坐标。
         i32[0] = Math.round((wx + wp.x - offsetX) / scaleX); out.set(u8v, outIdx); outIdx += 4;
         i32[0] = Math.round((-wz + wp.z - offsetY) / scaleY); out.set(u8v, outIdx); outIdx += 4;
         i32[0] = Math.round((wy + wp.y - offsetZ) / scaleZ); out.set(u8v, outIdx); outIdx += 4;
@@ -286,6 +295,7 @@ export async function performClipSave({
           }
           nu[gpuIdx * 16 + 15] = 255;
 
+          // 写回 LAS 时要把 PlayCanvas 局部坐标还原成 LAS 原始坐标轴的整数坐标。
           i32[0] = Math.round((wx + wp.x - offsetX) / scaleX); out.set(u8v, outIdx); outIdx += 4;
           i32[0] = Math.round((-wz + wp.z - offsetY) / scaleY); out.set(u8v, outIdx); outIdx += 4;
           i32[0] = Math.round((wy + wp.y - offsetZ) / scaleZ); out.set(u8v, outIdx); outIdx += 4;
@@ -328,7 +338,7 @@ export async function performClipSave({
 
     newVb.unlock();
 
-    // 更新 GPU 显示
+    // 更新 GPU 显示：保存完成前先把当前实体替换成裁切结果，让用户立即看到结果。
     const newMesh = new pc.Mesh(gd); newMesh.vertexBuffer = newVb;
     newMesh.primitive[0] = { baseVertex: 0, type: pc.PRIMITIVE_POINTS, base: 0, count: clippedCount };
     const newMat = new pc.ShaderMaterial({ uniqueName: "clipped-" + Date.now(), vertexGLSL: pointcloudVert, fragmentGLSL: pointcloudFrag });
@@ -337,7 +347,7 @@ export async function performClipSave({
     if (entity.render) entity.render.meshInstances = [newMi];
     if (originalMeshRef.current) originalMeshRef.current = null;
 
-    // 保存到磁盘
+    // 保存到磁盘：每次裁切生成 {原模型名}_N/{原模型名}_N.las，避免覆盖原始模型。
     const baseName = stripModelExtension(entityName);
     let clipName = "";
     setProgress(95); onProgress?.(95);

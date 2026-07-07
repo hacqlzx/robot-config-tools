@@ -63,6 +63,9 @@ interface Split {
  * - 集齐 4 点：推导 8 顶点（4 红 + 4 绿）框出立方体（3 红边 + 9 绿边），即 1 个屏柜。
  * - 成体后：拖拽任意顶点调整（分隔实时跟随重算）；点击最下方红线在该处插入分隔，
  *   屏柜左右一分为二（红分隔点 + 绿分隔面），每点一次屏柜数 +1。
+ *
+ * 这个类只管理几何交互和临时实体，不直接读写 JSON，也不关心点表/间隔业务。
+ * 保存时由 useSaveHandlers 调 getGeometry() 取 8 顶点和 splits，再组装 CabinetItem。
  */
 export class CabinetDrawing {
   private app: pc.Application;
@@ -74,12 +77,12 @@ export class CabinetDrawing {
   private opts: Required<Omit<CabinetDrawingOptions, "onChange" | "onCabinetCountChange">> &
     Pick<CabinetDrawingOptions, "onChange" | "onCabinetCountChange">;
 
-  // 放点阶段（0~3 点）
+  // 放点阶段（0~3 点）：还没形成完整立方体，只显示用户点击点和红色连线。
   private corners: pc.Vec3[] = [];
   private cornerSpheres: pc.Entity[] = [];
   private clickLines: pc.Entity[] = [];
 
-  // 立方体阶段
+  // 立方体阶段：cube 保存 8 顶点与 12 条棱，splits 保存内部屏柜分隔面。
   private cube: CubeState | null = null;
   private splits: Split[] = [];
 
@@ -145,6 +148,7 @@ export class CabinetDrawing {
 
   /** 撤销：优先撤分隔 → 撤立方体 → 撤角点 */
   undo() {
+    // 撤销顺序按用户最近创建的内容逆序执行：分隔面比立方体晚创建，优先撤分隔。
     if (this.splits.length > 0) {
       const s = this.splits.pop()!;
       s.spheres.forEach((e) => e.destroy());
@@ -154,6 +158,7 @@ export class CabinetDrawing {
       return;
     }
     if (this.cube) {
+      // 从完整立方体退回 3 点态，方便用户重新选择第 4 点修正深度方向。
       const p1 = this.cube.verts[0].clone();
       const p2 = this.cube.verts[1].clone();
       const p3 = this.cube.verts[2].clone();

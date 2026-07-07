@@ -10,6 +10,11 @@ export interface ThreeDEngineOptions {
 
 /**
  * 3D 引擎核心类 — PlayCanvas Application 生命周期管理
+ *
+ * 职责边界：
+ * - 负责 canvas、PlayCanvas Application、相机、灯光、resize、按需渲染；
+ * - 不负责业务文件读取、模型树、点表、空间绘制保存；
+ * - space-edit 如果需要编辑能力，应在这个引擎外组合自己的 Drawing 类。
  */
 export class ThreeDEngine {
   canvas: HTMLCanvasElement;
@@ -17,6 +22,8 @@ export class ThreeDEngine {
   orbit: SimpleOrbitCamera;
   cameraEntity: pc.Entity;
 
+  // 项目里大量交互都是静态查看/编辑，不需要 PlayCanvas 每帧自动渲染。
+  // renderDirty 表示“下一帧需要重绘”，相机移动、加载模型、绘制变化时手动置 true。
   private renderDirty = true;
   private renderRafId = 0;
   private lastTime = 0;
@@ -50,6 +57,7 @@ export class ThreeDEngine {
       graphicsDeviceOptions: {
         preferWebGl2: true,
         powerPreference: "high-performance",
+        // 截图、导出和部分调试场景需要保留上一帧缓冲；代价是显存压力略高。
         preserveDrawingBuffer: true,
       },
     } as any);
@@ -76,6 +84,7 @@ export class ThreeDEngine {
       this.renderDirty = true;
     });
 
+    // 限制像素比，避免高 DPI 屏幕把大点云场景的 fill-rate 压力放大数倍。
     this.app.graphicsDevice.maxPixelRatio = 1;
     this.app.autoRender = false;
     this.app.start();
@@ -88,6 +97,7 @@ export class ThreeDEngine {
     const now = performance.now();
     const dt = Math.min((now - this.lastTime) / 1000, 0.1);
     this.lastTime = now;
+    // 飞行/阻尼相机需要每帧更新，但只有 renderDirty 为 true 时才真正渲染。
     this.orbit.updateFly(dt);
     if (this.renderDirty) {
       this.app.render();
@@ -101,6 +111,8 @@ export class ThreeDEngine {
   };
 
   focusOn(cx: number, cy: number, cz: number, extent: number) {
+    // extent 同时影响相机距离、最大缩放距离和 orbit 的场景半径。
+    // 这里使用“扩张式”设置，避免连续加载多个模型后后加载的小模型缩小可视范围。
     this.orbit.lookAt.set(cx, cy, cz);
     this.orbit.sceneRadius = Math.max(this.orbit.sceneRadius, extent);
     this.orbit.sceneCenter.set(cx, cy, cz);
@@ -119,6 +131,7 @@ export class ThreeDEngine {
         const w = container.clientWidth;
         const h = container.clientHeight;
         if (w === 0 || h === 0) return;
+        // canvas 实际像素和 CSS 尺寸保持一致，由上面的 maxPixelRatio 控制高 DPI 放大。
         this.canvas.width = w;
         this.canvas.height = h;
         this.app.resizeCanvas(w, h);

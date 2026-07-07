@@ -62,6 +62,7 @@ function genId(): string {
 }
 
 function isOldPathData(data: any): data is { points: number[][]; connections: [number, number][] } {
+  // 早期路径格式只有点数组和 connections 下标；新格式改为稳定 id，便于编辑和重排。
   if (!data) return false;
   const pt = data.points?.[0];
   return Array.isArray(pt) && typeof pt[0] === "number";
@@ -87,6 +88,9 @@ function pointToSegmentDistSq(
  *
  * - 激活状态：点击生成点，相邻点自动连线；点到已有点时追加连线（不分叉不创建新点）
  * - 非激活状态：可选中点并拖拽移动；无法放置新点
+ * - 选中路径后可通过控制点编辑贝塞尔曲线；保存时保留 cp1/cp2。
+ *
+ * 路径点仍吸附到当前点云，移动点时也可重新吸附，保证路径落在模型表面附近。
  */
 export class PathDrawing {
   private app: pc.Application;
@@ -100,8 +104,10 @@ export class PathDrawing {
   private points: pc.Vec3[] = [];
   private pointIds: string[] = [];
   private spheres: pc.Entity[] = [];
+  // connections 保存点数组下标；pointIds/pathIds 是持久化用的稳定 id。
   private connections: [number, number][] = [];
   private pathIds: string[] = [];
+  // null 表示直线；有 cp1/cp2 时按三次贝塞尔曲线渲染。
   private bezierParams: ({ cp1: [number, number, number]; cp2: [number, number, number] } | null)[] = [];
   private lines: pc.Entity[] = [];
   private cpSpheres: { cp1: pc.Entity | null; cp2: pc.Entity | null }[] = [];
@@ -185,6 +191,7 @@ export class PathDrawing {
   }
 
   loadData(data: PathData | { points: number[][]; connections: [number, number][] }) {
+    // 加载保存数据时先清空实体和索引，再按格式重建点、线和控制点。
     this.clearEntities();
     this.points.length = 0;
     this.pointIds.length = 0;
@@ -198,6 +205,7 @@ export class PathDrawing {
     this.lastConnectedIdx = -1;
 
     if (isOldPathData(data)) {
+      // 旧格式没有稳定 id，加载时临时生成，保存后会转成新格式。
       for (const [x, y, z] of data.points) {
         const pos = new pc.Vec3(x, y, z);
         this.points.push(pos);
@@ -208,6 +216,7 @@ export class PathDrawing {
         this.addConnectionInternal(from, to);
       }
     } else {
+      // 新格式按 id 建立索引映射，避免点顺序变化后路径连错。
       const indexMap = new Map<string, number>();
       for (const pt of data.points) {
         const idx = this.points.length;
@@ -334,6 +343,7 @@ export class PathDrawing {
   }
 
   private buildCurve(i: number) {
+    // 路径以多个短线段近似贝塞尔曲线。控制点变化或端点移动时，整条曲线重建最简单可靠。
     this.lines[i]?.destroy();
     this.curveSegs[i]?.forEach((e) => e.destroy());
     const [a, b] = this.connections[i];
@@ -349,6 +359,7 @@ export class PathDrawing {
       prev = pt;
     }
     this.curveSegs[i] = segs;
+    // 旧代码部分地方仍按 lines[i] 找“路径实体”，这里保留第一个曲线段做兼容索引。
     this.lines[i] = segs[0]; // keep for compatibility
   }
 
@@ -372,6 +383,7 @@ export class PathDrawing {
     const camComp = this.camera.camera;
     if (!camComp) return null;
     const [a, b] = this.connections[dragging.pathIdx];
+    // 控制点拖拽落在路径两端点中间高度的水平面上，避免控制点被拖到相机射线任意深度。
     const planeY = (this.points[a].y + this.points[b].y) / 2;
     const rect = this.canvas.getBoundingClientRect();
     const sx = clientX - rect.left;
@@ -498,6 +510,7 @@ export class PathDrawing {
       const [a, b] = this.connections[i];
       const bvs = this.getBezierVectors(i);
       if (!bvs) continue;
+      // 命中测试在屏幕空间进行：先采样曲线，再算点击点到每段屏幕线段的距离。
       const samples: { sx: number; sy: number }[] = [];
       for (let s = 0; s <= CURVE_SEGMENTS; s++) {
         const t = s / CURVE_SEGMENTS;
@@ -536,6 +549,7 @@ export class PathDrawing {
     this.points.splice(idx, 1);
     this.pointIds.splice(idx, 1);
     this.spheres.splice(idx, 1);
+    // 点数组删除后，所有大于 idx 的连接下标都要前移一位。
     for (let i = 0; i < this.connections.length; i++) {
       const [a, b] = this.connections[i];
       if (a > idx) this.connections[i][0]--;
@@ -572,6 +586,7 @@ export class PathDrawing {
     bezier?: { cp1: [number, number, number]; cp2: [number, number, number] } | null,
   ) {
     if (from === to) return;
+    // 当前路径不允许重复边，避免用户反复点同一对停靠点导致保存重复路径段。
     if (this.hasConnection(from, to)) return;
     const idx = this.connections.length;
     this.connections.push([from, to]);
@@ -625,6 +640,7 @@ export class PathDrawing {
     const to = new pc.Vec3();
     camComp.screenToWorld(sx, sy, 0.5, to);
     const dir = new pc.Vec3().sub2(to, from).normalize();
+    // 拖动路径点时保持原高度平面，鼠标抬起后再按需吸附到点云最近点。
     const planeY = this.points[this.selectedPointIdx].y;
     if (Math.abs(dir.y) < 0.0001) return null;
     const t = (planeY - from.y) / dir.y;
@@ -647,6 +663,7 @@ export class PathDrawing {
     this.pointIds.push(genId());
     this.spheres.push(createSphere(this.app, pos, this.opts.pointColor, this.opts.sphereScale));
     if (this.lastConnectedIdx >= 0) {
+      // 放置模式下，新点会自动和上一个放置/连接的点连线，形成连续路径。
       this.addConnectionInternal(this.lastConnectedIdx, idx);
     }
     this.lastConnectedIdx = idx;

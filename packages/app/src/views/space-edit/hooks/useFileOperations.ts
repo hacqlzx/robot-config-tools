@@ -27,10 +27,12 @@ export function useFileOperations(params: UseFileOperationsParams) {
     loadLasFromPath, requestRender, closeAllDrawingModes,
     setImporting, setLoadedFiles, setTreeKey, setClipEntityName, setClipMode, message } = params;
 
+  // 主进程返回的路径可能含 Windows 反斜杠；比较路径时统一成小写正斜杠。
   const normalizePath = (value: string) => value.replace(/\\/g, "/").toLowerCase();
 
   /** 从路径加载模型 */
   const handleLoadLasFromPath = useCallback(async (filePath: string) => {
+    // 切换模型前关闭所有绘制模式，避免新旧模型点云坐标混用。
     closeAllDrawingModes();
     hasAutoFocusedRef.current = false;
     await loadLasFromPath(filePath);
@@ -49,7 +51,7 @@ export function useFileOperations(params: UseFileOperationsParams) {
 
       const projectName = localStorage.getItem("selectedProject") || "默认项目";
 
-      // 保存 Excel 到项目点表目录
+      // 保存 Excel 到项目点表目录。当前规则是一个项目保留一份点表文件，新导入会替换旧点表。
       const ext = file.name.match(/\.(xlsx|xls)$/i)?.[0] || ".xlsx";
       const savedName = `${stationName}${ext}`;
       try {
@@ -62,6 +64,7 @@ export function useFileOperations(params: UseFileOperationsParams) {
       const savedSubPath = pointTableFileSubPath(savedName);
       await api.project.writeFile(projectName, savedSubPath, arrayBuf);
 
+      // 数据库导入需要厂站编码；当前客户端未接正式编码源，先按名称+时间尾号生成。
       const stationCode = stationName.substring(0, 10) + Date.now().toString().slice(-4);
       await api.startBatch();
       const result = await api.importPoints(rows, stationName, stationCode, projectName);
@@ -94,6 +97,7 @@ export function useFileOperations(params: UseFileOperationsParams) {
     }
 
     closeAllDrawingModes();
+    // 导入新模型等价于切换当前地图：清空旧 GPU 实体和 loader 侧索引，避免可见性树误操作旧实体。
     entitiesRef.current.forEach((ent) => ent.destroy());
     entitiesRef.current.clear();
     lasHeadersRef.current.clear();
@@ -121,6 +125,7 @@ export function useFileOperations(params: UseFileOperationsParams) {
     const entity = entitiesRef.current.get(entityName);
     const loadedPath = filePathRef.current.get(entityName);
     if (!entity) return false;
+    // 只卸载路径完全匹配的实体，防止同名文件位于不同地图目录时误删。
     if (loadedPath && normalizePath(loadedPath) !== normalizePath(filePath)) return false;
 
     entity.destroy();
@@ -139,6 +144,7 @@ export function useFileOperations(params: UseFileOperationsParams) {
 
   /** 切换模型可见性 */
   const handleToggleVisible = useCallback((filePath: string) => {
+    // 已加载则卸载，未加载则加载。树节点勾选状态由 loadedFiles/实体集合间接反映。
     if (handleUnloadModelFromPath(filePath)) return;
     closeAllDrawingModes();
     loadLasFromPath(filePath);
@@ -149,6 +155,7 @@ export function useFileOperations(params: UseFileOperationsParams) {
     const entries = Array.from(entitiesRef.current.entries());
     if (entries.length === 0) { message.warning("请先加载模型"); return; }
 
+    // 裁切只允许一个可见模型。这里会销毁隐藏实体，减少裁切时误读多个模型的风险。
     entries.forEach(([key, ent]) => {
       if (!ent.enabled) { ent.destroy(); entitiesRef.current.delete(key); }
     });

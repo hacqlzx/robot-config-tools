@@ -64,6 +64,7 @@ export default function SpaceEdit() {
   const isAutoSavingRef = useRef(false);
 
   // ---- 绘制 Hook ----
+  // 这些 hook 只暴露模式状态和 setup 函数；真正的 canvas 事件绑定在 usePlayCanvas 中统一完成。
   const { cabinetMode, cornerCount, cabinetCount, handleToggleCabinet, handleUndo, setCabinetNames, getCabinetGeometry, setupCabinetDrawing } = useCabinetDrawing();
   const { chargingMode, pointCount: chargingPointCount, height: chargingHeight, handleToggleCharging, handleUndo: handleChargingUndo, handleSave: handleChargingSave, handleSetHeight: handleChargingSetHeight, setupChargingAreaDrawing, drawingRef: chargingDrawingRef, hasExistingRef: chargingExistingRef } = useChargingAreaDrawing(
     () => handleSaveChargingArea(),
@@ -77,6 +78,7 @@ export default function SpaceEdit() {
   const projectBoundBayIdsRef = useProjectBoundBayIds(deviceAreaMode);
 
   // ---- PlayCanvas 引擎 ----
+  // usePlayCanvas 是 space-edit 的三维装配点：公共 ThreeDEngine + 四类编辑 Drawing + CabinetViewer。
   const { appRef, orbitRef, cabinetViewerRef, requestRender } = usePlayCanvas({
     canvasRef, containerRef, entitiesRef,
     setupCabinetDrawing, setupChargingAreaDrawing, setupDeviceAreaDrawing, setupPathDrawing,
@@ -104,6 +106,7 @@ export default function SpaceEdit() {
 
   const refreshTree = useCallback(() => setTreeKey((k) => k + 1), []);
 
+  // 地图树里 JSON 的勾选/回显状态独立管理，避免把树组件和三维实体生命周期绑死。
   const {
     drawingShown,
     pathShown,
@@ -122,6 +125,7 @@ export default function SpaceEdit() {
   });
 
   // ---- 保存处理器 + 自动保存 ----
+  // 保存层只从 Drawing 类读取几何快照，然后写入模型同目录 JSON；不会直接操作 canvas。
   const {
     handleSaveCabinet, handleSaveChargingArea, handleSaveDeviceAreas,
     handleSaveAll, resetAutoSaveTimer,
@@ -138,6 +142,7 @@ export default function SpaceEdit() {
   });
 
   // ---- 大模型显示比例 ----
+  // 这里主要保留给 gsplat/历史显示路径。LAS/LAZ 已在 PointCloudLoader 内按 MAX_POINTS 降采样。
   useEffect(() => {
     if (loadedFiles.size === 0) return;
     entitiesRef.current.forEach((ent) => {
@@ -168,6 +173,7 @@ export default function SpaceEdit() {
   }, [requestRender]);
 
   const focusOnModel = useCallback((centerX: number, centerY: number, centerZ: number, extent: number) => {
+    // 首次加载模型自动聚焦；后续加载更多模型只扩展相机范围，不强行打断用户当前视角。
     modelExtentRef.current = extent;
     modelCenterRef.current = { x: centerX, y: centerY, z: centerZ };
     const orbit = orbitRef.current;
@@ -186,6 +192,7 @@ export default function SpaceEdit() {
   }, [requestRender]);
 
   // ---- 点云加载 ----
+  // loadLasFromPath 会同步 entities/headers/path/stat refs，后续裁切、显隐、保存都依赖这些索引。
   const { loadLasFromPath } = useLasLoader({
     appRef, entitiesRef, lasHeadersRef, filePathRef, pointStatsRef, modelGroundYRef,
     requestRender, focusOnModel,
@@ -194,6 +201,7 @@ export default function SpaceEdit() {
   });
 
   // ---- 文件操作 ----
+  // 文件操作负责“项目文件系统 + 三维状态”的桥接，例如导入模型、切换可见性、进入裁切。
   const { handleLoadLasFromPath, handleImportPointTable, handleFileSelect, handleToggleVisible, handleUnloadModelFromPath, handleClipModel } = useFileOperations({
     entitiesRef, lasHeadersRef, filePathRef, pointStatsRef, modelGroundYRef, hasAutoFocusedRef,
     loadLasFromPath, requestRender, closeAllDrawingModes,

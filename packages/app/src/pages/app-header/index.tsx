@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect, useCallback } from "react";
-import { Menu, Button, Select, Dropdown, Modal, Input, Popconfirm, message } from "antd";
-import { MinusOutlined, BorderOutlined, CloseOutlined, SettingOutlined, ProjectOutlined, PlusOutlined, EditOutlined, DeleteOutlined, CheckOutlined } from "@ant-design/icons";
+import { Menu, Button, Select, Dropdown, Modal, Input, Popconfirm, message, Tooltip } from "antd";
+import { MinusOutlined, BorderOutlined, CloseOutlined, SettingOutlined, ProjectOutlined, PlusOutlined, EditOutlined, DeleteOutlined, CheckOutlined, FolderOpenOutlined } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 import { useNavigate, useLocation } from "react-router-dom";
 import { menuConfig } from "@/config/menu";
@@ -11,6 +11,13 @@ import { getAllRobot } from "@/api/config.js";
 const menuItems: MenuProps["items"] = menuConfig.map((item) => ({ key: item.key, label: item.label }));
 
 const SELECTED_PROJECT_KEY = "selectedProject";
+
+function joinProjectPath(root: string, projectName: string): string {
+  if (!root || !projectName) return root || "";
+  const trimmedRoot = root.replace(/[\\/]+$/, "");
+  const separator = root.includes("\\") ? "\\" : "/";
+  return `${trimmedRoot}${separator}${projectName}`;
+}
 
 function getStoredProject(): string | null {
   try {
@@ -81,6 +88,7 @@ export default function AppHeader() {
   const [editProjectOpen, setEditProjectOpen] = useState(false);
   const [projectName, setProjectName] = useState("");
   const [projects, setProjects] = useState<string[]>([]);
+  const [projectRoot, setProjectRoot] = useState("");
   const [editingName, setEditingName] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
   const [selectedProject, setSelectedProject] = useState<string | null>(getStoredProject);
@@ -160,11 +168,27 @@ export default function AppHeader() {
     });
   }, []);
 
+  const loadProjectRoot = useCallback(async () => {
+    if (!window.electronAPI?.getProjectRoot) {
+      setProjectRoot("");
+      return;
+    }
+    try {
+      const root = await window.electronAPI.getProjectRoot();
+      setProjectRoot(root || "");
+    } catch {
+      setProjectRoot("");
+    }
+  }, []);
+
+  const getProjectPath = useCallback((name: string) => joinProjectPath(projectRoot, name), [projectRoot]);
+
   const loadProjects = useCallback(async () => {
     if (!window.electronAPI?.project) return;
     try {
       const list = await window.electronAPI.project.list();
       setProjects(list);
+      await loadProjectRoot();
       if (list.length === 0) {
         setSelectedProject(null);
         setStoredProject(null);
@@ -175,7 +199,7 @@ export default function AppHeader() {
     } catch {
       messageApi.error("加载项目列表失败");
     }
-  }, [messageApi, selectedProject]);
+  }, [loadProjectRoot, messageApi, selectedProject]);
 
   // 初始化加载项目列表
   useEffect(() => {
@@ -195,8 +219,9 @@ export default function AppHeader() {
       return;
     }
     try {
-      await window.electronAPI.project.create(projectName.trim());
-      messageApi.success(`项目 "${projectName.trim()}" 创建成功`);
+      const createdName = await window.electronAPI.project.create(projectName.trim());
+      setSelectedProject(createdName);
+      messageApi.success(`项目 "${createdName}" 创建成功，已切换到该项目`);
       setProjectName("");
       setAddProjectOpen(false);
       await loadProjects();
@@ -222,6 +247,36 @@ export default function AppHeader() {
   const handleSwitchProject = (name: string) => {
     setSelectedProject(name);
     messageApi.success(`已切换到项目 "${name}"`);
+  };
+
+  const handleOpenProjectDir = async (name: string) => {
+    const projectPath = getProjectPath(name);
+    if (!projectPath || !window.electronAPI?.project) {
+      messageApi.warning("项目路径不可用");
+      return;
+    }
+    try {
+      await window.electronAPI.project.openDir(projectPath);
+    } catch (e: any) {
+      messageApi.error(e?.message || "打开目录失败");
+    }
+  };
+
+  const handleChooseProjectRoot = async () => {
+    if (!window.electronAPI?.selectDir || !window.electronAPI?.setDataPath) {
+      messageApi.warning("仅 Electron 环境支持选择保存目录");
+      return;
+    }
+    try {
+      const dir = await window.electronAPI.selectDir();
+      if (!dir) return;
+      await window.electronAPI.setDataPath(dir);
+      messageApi.success("保存目录已更新");
+      await loadProjects();
+      await loadProjectRoot();
+    } catch (e: any) {
+      messageApi.error(e?.message || "保存目录更新失败");
+    }
   };
 
   const handleStartRename = (name: string) => {
@@ -268,15 +323,24 @@ export default function AppHeader() {
       key: "add-project",
       icon: <PlusOutlined />,
       label: "新增项目",
-      onClick: () => setAddProjectOpen(true),
+      onClick: () => {
+        loadProjectRoot();
+        setAddProjectOpen(true);
+      },
     },
     {
       key: "edit-project",
       icon: <EditOutlined />,
       label: "编辑项目",
-      onClick: () => setEditProjectOpen(true),
+      onClick: () => {
+        loadProjects();
+        setEditProjectOpen(true);
+      },
     },
   ];
+
+  const trimmedProjectName = projectName.trim();
+  const addProjectPath = trimmedProjectName ? getProjectPath(trimmedProjectName) : "";
 
   return (
     <div className="app-header" style={{ background: "#fff", borderBottom: "1px solid #f0f0f0" }}>
@@ -331,6 +395,21 @@ export default function AppHeader() {
           onPressEnter={handleCreateProject}
           autoFocus
         />
+        <div style={{ marginTop: 12, fontSize: 12, color: "#666", lineHeight: 1.6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ flexShrink: 0 }}>保存目录：</span>
+            <Tooltip title={projectRoot || "未获取到保存目录"}>
+              <span style={{ minWidth: 0, flex: 1, color: projectRoot ? "#1677ff" : "#999", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{projectRoot || "未获取到保存目录"}</span>
+            </Tooltip>
+            <Button size="small" type="link" onClick={handleChooseProjectRoot} style={{ padding: 0 }}>选择目录</Button>
+          </div>
+          <div>
+            项目路径：
+            <Tooltip title={addProjectPath || "输入项目名称后显示完整路径"}>
+              <span style={{ color: addProjectPath ? "#1677ff" : "#999" }}>{addProjectPath || "输入项目名称后显示完整路径"}</span>
+            </Tooltip>
+          </div>
+        </div>
       </Modal>
 
       {/* 编辑项目弹窗 */}
@@ -338,6 +417,7 @@ export default function AppHeader() {
         title="编辑项目"
         open={editProjectOpen}
         centered
+        width={760}
         mask={{ closable: false }}
         footer={null}
         onCancel={() => {
@@ -348,8 +428,12 @@ export default function AppHeader() {
         {projects.length === 0 ? (
           <div style={{ textAlign: "center", color: "#999", padding: 24 }}>暂无项目</div>
         ) : (
-          projects.map((item) => (
-            <div key={item} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f0f0f0" }}>
+          projects.map((item) => {
+            const displayName = editingName === item ? editingValue.trim() || item : item;
+            const projectPath = getProjectPath(displayName);
+            return (
+            <div key={item} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "8px 0", borderBottom: "1px solid #f0f0f0" }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
               {editingName === item ? (
                 <Input
                   size="small"
@@ -357,11 +441,17 @@ export default function AppHeader() {
                   onChange={(e) => setEditingValue(e.target.value)}
                   onPressEnter={handleConfirmRename}
                   autoFocus
-                  style={{ width: 200 }}
+                  style={{ width: 220 }}
                 />
               ) : (
-                <span>{item}</span>
+                <span style={{ fontWeight: selectedProject === item ? 500 : 400 }}>{item}</span>
               )}
+                <Tooltip title={projectPath}>
+                  <div style={{ marginTop: 2, color: "#8c8c8c", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {projectPath || "项目路径不可用"}
+                  </div>
+                </Tooltip>
+              </div>
               <div style={{ display: "flex", gap: 0, flexShrink: 0 }}>
                 {editingName === item ? (
                   <>
@@ -375,6 +465,7 @@ export default function AppHeader() {
                     ) : (
                       <Button type="link" size="small" onClick={() => handleSwitchProject(item)}>切换</Button>
                     )}
+                    <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={() => handleOpenProjectDir(item)}>打开目录</Button>
                     <Button type="link" size="small" onClick={() => handleStartRename(item)}>重命名</Button>
                     {selectedProject !== item ? (
                       <Popconfirm
@@ -391,7 +482,8 @@ export default function AppHeader() {
                 )}
               </div>
             </div>
-          ))
+            );
+          })
         )}
       </Modal>
 
