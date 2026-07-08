@@ -24,6 +24,18 @@ interface TreeNode {
   children?: TreeNode[];
 }
 
+const SURVEY_DIR_NAME = "勘察数据";
+const CALIBRATION_FILE_NAME = "勘察数据.json";
+
+function getSharedCalibrationFilePath(surveyDir: string): string {
+  const normalized = surveyDir.replace(/[\\/]+$/, "");
+  const parts = normalized.split(/[\\/]/).filter(Boolean);
+  if (parts.length === 0) return "";
+  if (parts[parts.length - 1] === SURVEY_DIR_NAME) return `${normalized}/${CALIBRATION_FILE_NAME}`;
+  const root = normalized.replace(/[\\/][^\\/]+$/, "");
+  return `${root}/${CALIBRATION_FILE_NAME}`;
+}
+
 export default function ImageEdit() {
   const { message } = App.useApp();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -63,14 +75,16 @@ export default function ImageEdit() {
   const [calibratedPointCodes, setCalibratedPointCodes] = useState<Set<string>>(new Set());
   const [calibratedImageCount, setCalibratedImageCount] = useState(0);
   const resetViewRef = useRef<(() => void) | null>(null);
-  const taskDirRef = useRef<string>("");
+  const surveyDirRef = useRef<string>("");
 
   // 加载已标定的图片 ID 集合 + 已标定点位编码集合
   const refreshCalibratedRects = useCallback(async () => {
-    const td = taskDirRef.current;
+    const td = surveyDirRef.current;
     if (!td || !window.electronAPI?.readLargeFile) return;
     try {
-      const buf = await window.electronAPI.readLargeFile(`${td}/勘察数据.json`);
+      const filePath = getSharedCalibrationFilePath(td);
+      if (!filePath) return;
+      const buf = await window.electronAPI.readLargeFile(filePath);
       const json = JSON.parse(new TextDecoder().decode(buf));
       const map = new Map<number, { x: number; y: number; w: number; h: number }[]>();
       const codes = new Set<string>();
@@ -97,6 +111,7 @@ export default function ImageEdit() {
     } catch {
       setCalibrationRects(new Map());
       setCalibratedPointCodes(new Set());
+      setCalibratedImageCount(0);
     }
   }, []);
 
@@ -156,6 +171,14 @@ export default function ImageEdit() {
     loaderRef.current?.destroy();
     drawingRef.current?.clear();
     setLoadedMap(null);
+    surveyDirRef.current = "";
+    clearTask();
+    setTaskImages([]);
+    setTotalImageCount(0);
+    setCalibrationImage(null);
+    setCalibrationRects(new Map());
+    setCalibratedPointCodes(new Set());
+    setCalibratedImageCount(0);
     setSelBayId(undefined);
     setCheckedPoints([]);
     setPoints([]);
@@ -204,16 +227,17 @@ export default function ImageEdit() {
     } catch (e: any) {
       message.error("加载地图数据失败: " + (e?.message || ""));
     }
-  }, [message, loadFile, loadDrawing]);
+  }, [message, loadFile, loadDrawing, clearTask]);
 
   /** 加载任务图像（任务模式：JSON + JPG 拼接） */
   const handleTaskLoad = useCallback(async (taskDir: string) => {
     console.log("[handleTaskLoad] 开始加载:", taskDir);
-    taskDirRef.current = taskDir;
+    surveyDirRef.current = taskDir;
     try {
       clearTask();
       setTaskImages([]);
-      await loadTask(taskDir);
+      const result = await loadTask(taskDir);
+      surveyDirRef.current = result.surveyDir;
       // 按当前选中的云台侧计算布局
       const items = setSide(ptzSide);
       setTaskImages(items);
@@ -224,7 +248,7 @@ export default function ImageEdit() {
       console.error("[handleTaskLoad] 失败:", e);
       message.error("加载任务数据失败: " + (e?.message || ""));
     }
-  }, [loadTask, clearTask, setSide, ptzSide, message]);
+  }, [loadTask, clearTask, setSide, ptzSide, message, refreshCalibratedRects]);
 
   // ptzSide 切换时重新计算布局
   useEffect(() => {
@@ -430,7 +454,7 @@ export default function ImageEdit() {
         <CalibrationView
           key={calibrationImage.id}
           image={calibrationImage}
-          taskDir={taskDirRef.current}
+          taskDir={surveyDirRef.current}
           mapName={loadedMap}
           selBayId={selBayId}
           onSelBayIdChange={setSelBayId}

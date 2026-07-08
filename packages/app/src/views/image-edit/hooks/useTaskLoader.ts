@@ -7,6 +7,12 @@ interface TaskLoaderState {
   progress: string;
 }
 
+export interface TaskLoadResult {
+  items: ImageItem[];
+  surveyDir: string;
+  deviceDir: string;
+}
+
 /** 布局：按停靠点+组号（spId + pic_loc[1]）分列，列内按序号（pic_loc[0]）从上往下排 */
 function computeLayout(images: TaskLoadedImage[], thumbW = 200, thumbH = 150, side?: "left" | "right"): ImageItem[] {
   if (images.length === 0) return [];
@@ -63,12 +69,47 @@ function computeLayout(images: TaskLoadedImage[], thumbW = 200, thumbH = 150, si
 export function useTaskLoader() {
   const [state, setState] = useState<TaskLoaderState>({ loading: false, progress: "" });
   const rawImagesRef = useRef<TaskLoadedImage[]>([]);
+  const resolvedDeviceDirRef = useRef("");
 
-  const loadTask = useCallback(async (taskDir: string): Promise<ImageItem[]> => {
+  const pathJoin = (base: string, child: string) => `${base.replace(/[\\/]+$/, "")}/${child}`;
+
+  const fileExists = useCallback(async (filePath: string): Promise<boolean> => {
+    try {
+      await window.electronAPI!.readLargeFile(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const resolveDeviceTaskDir = useCallback(async (taskDir: string): Promise<string> => {
+    const normalized = taskDir.replace(/[\\/]+$/, "");
+    if (await fileExists(pathJoin(normalized, "json_list.json"))) return normalized;
+    const imgDir = pathJoin(normalized, "img");
+    if (await fileExists(pathJoin(pathJoin(imgDir, "device"), "json_list.json"))) return pathJoin(imgDir, "device");
+    if (await fileExists(pathJoin(imgDir, "json_list.json"))) return imgDir;
+    const deviceDir = pathJoin(normalized, "device");
+    if (await fileExists(pathJoin(deviceDir, "json_list.json"))) return deviceDir;
+    throw new Error("未找到设备区 json_list.json");
+  }, [fileExists]);
+
+  const resolveSurveyDir = (taskDir: string, deviceDir: string): string => {
+    const normalizedTask = taskDir.replace(/[\\/]+$/, "");
+    const normalizedDevice = deviceDir.replace(/[\\/]+$/, "");
+    if (/[\\/]img[\\/]device$/i.test(normalizedDevice)) return normalizedDevice.replace(/[\\/]img[\\/]device$/i, "");
+    if (/[\\/]img$/i.test(normalizedDevice)) return normalizedDevice.replace(/[\\/]img$/i, "");
+    if (/[\\/]device$/i.test(normalizedDevice)) return normalizedDevice.replace(/[\\/]device$/i, "");
+    return normalizedTask;
+  };
+
+  const loadTask = useCallback(async (taskDir: string): Promise<TaskLoadResult> => {
     setState({ loading: true, progress: "读取任务配置..." });
     const api = window.electronAPI!;
+    const deviceDir = await resolveDeviceTaskDir(taskDir);
+    const surveyDir = resolveSurveyDir(taskDir, deviceDir);
+    resolvedDeviceDirRef.current = deviceDir;
 
-    const manifestBuf = await api.readLargeFile(`${taskDir}/json_list.json`);
+    const manifestBuf = await api.readLargeFile(pathJoin(deviceDir, "json_list.json"));
     const manifest: TaskManifest = JSON.parse(new TextDecoder().decode(manifestBuf));
     console.log("[TaskLoader] 任务配置:", manifest.robot_id, "停靠点:", manifest.ordered_sp, "文件:", manifest.file_names);
     if (!manifest.file_names || manifest.file_names.length === 0) {
@@ -80,8 +121,8 @@ export function useTaskLoader() {
       const parts = fileName.split("_");
       const cpId = Math.abs(parseInt(parts[1])) || 0;
       const spDir = String(cpId);
-      console.log(`[TaskLoader] 读取停靠点 SP${cpId}: ${taskDir}/${spDir}/${fileName}`);
-      const spBuf = await api.readLargeFile(`${taskDir}/${spDir}/${fileName}`);
+      console.log(`[TaskLoader] 读取停靠点 SP${cpId}: ${deviceDir}/${spDir}/${fileName}`);
+      const spBuf = await api.readLargeFile(pathJoin(pathJoin(deviceDir, spDir), fileName));
       const spConfig: TaskSPConfig = JSON.parse(new TextDecoder().decode(spBuf));
       const imageKeys = Object.keys(spConfig.images).sort();
       let loaded = 0;
@@ -89,11 +130,10 @@ export function useTaskLoader() {
       for (const key of imageKeys) {
         const cfg = spConfig.images[key] as TaskImageConfig;
         const side = cfg.pic_loc_flag === "right" ? "right" : "left";
-        if (side === "right" && spConfig.layout.right[1] === 0) continue;
 
         setState({ loading: true, progress: `SP${spConfig.sp_id}: ${loaded + 1}/${imageKeys.length}` });
 
-        const imgPath = `${taskDir}/${spDir}/${cfg.vis_name}`;
+        const imgPath = pathJoin(pathJoin(deviceDir, spDir), cfg.vis_name);
         const imgBuf = await api.readLargeFile(imgPath);
         const blob = new Blob([imgBuf]);
         const url = URL.createObjectURL(blob);
@@ -124,8 +164,8 @@ export function useTaskLoader() {
     const items = computeLayout(allImages, thumbW, thumbH);
     console.log(`[TaskLoader] 加载完成: ${items.length} 张图片, 缩略图=${thumbW}x${thumbH} (比例=${ratio.toFixed(2)})`);
     setState({ loading: false, progress: "" });
-    return items;
-  }, []);
+    return { items, surveyDir, deviceDir };
+  }, [resolveDeviceTaskDir]);
 
   /** 按指定云台侧重新计算布局 */
   const setSide = useCallback((side: "left" | "right") => {
@@ -139,9 +179,11 @@ export function useTaskLoader() {
     return items;
   }, []);
 
-  const clear = useCallback(() => { rawImagesRef.current = []; }, []);
+  const clear = useCallback(() => { rawImagesRef.current = []; resolvedDeviceDirRef.current = ""; }, []);
 
   const getTotalCount = useCallback(() => rawImagesRef.current.length, []);
 
-  return { ...state, loadTask, setSide, clear, getTotalCount };
+  const getResolvedDeviceDir = useCallback(() => resolvedDeviceDirRef.current, []);
+
+  return { ...state, loadTask, setSide, clear, getTotalCount, getResolvedDeviceDir };
 }

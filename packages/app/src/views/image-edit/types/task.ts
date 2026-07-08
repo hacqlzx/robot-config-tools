@@ -48,9 +48,10 @@ export interface TaskSPConfig {
 /** json_list.json 任务总配置 */
 export interface TaskManifest {
   camera_params: TaskCameraParams;
-  fac_id: string;
+  fac_id?: string;
   file_names: string[];
-  map_id: string;
+  map_code?: string;
+  map_id?: string;
   ordered_sp: number[];
   robot_id: string;
 }

@@ -57,6 +57,18 @@ const AUTO_SAVE_INTERVAL = 500;
 /** 缩放时右下角手柄半边长 */
 const HANDLE_SIZE = 8;
 
+const SURVEY_DIR_NAME = "勘察数据";
+const CALIBRATION_FILE_NAME = "勘察数据.json";
+
+function getSharedCalibrationFilePath(taskDir: string): string {
+  const normalized = taskDir.replace(/[\\/]+$/, "");
+  const parts = normalized.split(/[\\/]/).filter(Boolean);
+  if (parts.length === 0) return "";
+  if (parts[parts.length - 1] === SURVEY_DIR_NAME) return `${normalized}/${CALIBRATION_FILE_NAME}`;
+  const root = normalized.replace(/[\\/][^\\/]+$/, "");
+  return `${root}/${CALIBRATION_FILE_NAME}`;
+}
+
 export default function CalibrationView({ image, taskDir, mapName, selBayId, onSelBayIdChange, nameFilter, onNameFilterChange, pointFilter, onPointFilterChange, onBack }: Props) {
   const { message } = App.useApp();
   const [mode, setMode] = useState<"move" | "select">("move");
@@ -155,7 +167,9 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
     const loadData = async () => {
       if (!taskDir || !window.electronAPI?.readLargeFile) return;
       try {
-        const buf = await window.electronAPI.readLargeFile(`${taskDir}/勘察数据.json`);
+        const filePath = getSharedCalibrationFilePath(taskDir);
+        if (!filePath) return;
+        const buf = await window.electronAPI.readLargeFile(filePath);
         const json = JSON.parse(new TextDecoder().decode(buf)) as CalibrationFileData;
         allDataRef.current = json.data || [];
         const entry = json.data?.find(
@@ -194,15 +208,15 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
       ],
     };
 
-    // 从绝对路径中提取相对子路径（taskDir 格式: {root}\project\{project}\勘察图\{taskName}）
-    const idx = td.indexOf("勘察图");
-    const relPath = idx !== -1 ? td.slice(idx).replace(/\\/g, "/") : td;
-    const subPath = `${relPath}/勘察数据.json`;
+    // 点表绑定/标定结果是项目级共享数据；导入图片时只覆盖各地图 img，不能覆盖这个文件。
+    const sharedFilePath = getSharedCalibrationFilePath(td);
+    if (!sharedFilePath) return;
+    const subPath = `${SURVEY_DIR_NAME}/${CALIBRATION_FILE_NAME}`;
 
     // 先读取现有文件，合并其他 spId/side 的数据
     const save = async (finalData: CalibrationFileData) => {
       try {
-        const buf = await window.electronAPI!.readLargeFile(`${td}/勘察数据.json`);
+        const buf = await window.electronAPI!.readLargeFile(sharedFilePath);
         const existing = JSON.parse(new TextDecoder().decode(buf)) as CalibrationFileData;
         const other = (existing.data || []).filter(
           (d) => d.imageId !== imageRef.current.id

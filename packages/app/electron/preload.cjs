@@ -62,6 +62,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("project:export-zip", projectName, items, destDir),
   /** 解压 ZIP 文件到指定目录 */
   extractZip: (zipPath, destDir) => ipcRenderer.invoke("extract-zip", zipPath, destDir),
+  importSurveyData: (projectName, mapName, zipPath) =>
+    ipcRenderer.invoke("import-survey-data", projectName, mapName, zipPath),
   getProjectRoot: () => ipcRenderer.invoke("get-project-root"),
   setDataPath: (newPath) => ipcRenderer.invoke("set-data-path", newPath),
   startBatch: () => ipcRenderer.invoke("db:startBatch"),

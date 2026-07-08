@@ -11,7 +11,7 @@ const PROJECT_LAYOUT_VERSION = 1;
 const DEFAULT_PROJECT_DIRS = {
   maps: "地图",
   pointTables: "点表",
-  surveyImages: "勘察图",
+  surveyImages: "勘察数据",
 };
 
 export interface ProjectManifestAsset {
