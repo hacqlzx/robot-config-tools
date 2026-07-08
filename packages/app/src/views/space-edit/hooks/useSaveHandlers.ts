@@ -62,13 +62,13 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
       updatedAt: new Date().toISOString(),
     };
     try {
-      await saveCabinetDrawing({ api, projectName, modelPath, item });
+      const savedItem = await saveCabinetDrawing({ api, projectName, modelPath, item });
       const jsonPath = getDrawingJsonPath(modelPath);
       // 屏柜保存后立即回显给 CabinetViewer。这里用 ref 暂存，等绘制模式关闭后再 show，
       // 避免编辑态线框和只读回显线框重叠。
-      params.savedCabinetRef.current = { item, jsonPath };
+      params.savedCabinetRef.current = { item: savedItem, jsonPath };
       params.onDrawingFileSaved?.(jsonPath, "cabinet");
-      message.success(`保存成功（${item.cabinets.length} 个屏柜）`);
+      message.success(`保存成功（${savedItem.cabinets.length} 个屏柜）`);
       params.handleToggleCabinet();
     } catch (e: any) {
       message.error("保存失败: " + (e?.message || e));

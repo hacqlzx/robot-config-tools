@@ -1,11 +1,7 @@
-// 空间绘制数据持久化：充电区域、设备区、屏柜 等统一存于模型目录下同一 JSON。
-// 文件名固定，按 type 标识区分各类绘制，支持二次编辑（按 type 局部更新，互不影响）。
+// 空间绘制数据持久化。
 //
-// 目录约定：project/{项目}/地图/{地图名}/{地图名}.las
-//   ├─ area.json              保存 cabinet / charging-area / device-area
-//   └─ reference_path.txt     保存路径点和路径段
-//
-// 注意读写路径不同：readLargeFile 用绝对路径，project.writeFile 用项目相对子路径。
+// area.json 对外使用机器人区域协议：一个 flat JSON 数组，每条记录用 type 区分区域。
+// 编辑器内部仍使用 8 顶点结构，读写时在这里完成 pose(4 点字符串) <-> 8 顶点的转换。
 
 import type { SpaceTreeNode } from "../../types";
 import { MAP_DIR_NAME, mapSiblingFilePath, mapSiblingSubPath, projectSubPathFromDir } from "../../utils/space-paths";
@@ -58,13 +54,24 @@ export interface PathItem {
   updatedAt: string;
 }
 
-/** 后续可扩充 device-area 等记录类型 */
 export type DrawingItem = CabinetItem | ChargingAreaItem | DeviceAreaItem;
 
-/** 绘制数据文件结构 */
-export interface DrawingFile {
-  version: number;
-  items: DrawingItem[];
+export interface RobotAreaRecord {
+  id?: string | number;
+  type?: string | number;
+  name?: string;
+  pose?: string;
+  time?: string;
+  ip?: string;
+  port?: string | number;
+  parent_id?: string | number;
+  class_id?: string | number;
+  waste_oil_volume?: string | number;
+  sp_id?: string | number;
+  cp_id?: string | number;
+  start_time?: string;
+  end_time?: string;
+  [key: string]: unknown;
 }
 
 /** 绘制数据文件名（充电区域、设备区、屏柜共用一个文件） */
@@ -75,7 +82,13 @@ export const LEGACY_DRAWING_FILE_NAME = "充电区域、设备区、屏柜.json"
 export const PATH_FILE_NAME = "reference_path.txt";
 export const LEGACY_PATH_FILE_NAME = "可行驶路径.json";
 
+const AREA_TYPE_CABINET_ROW = "1";
+const AREA_TYPE_CABINET = "2";
+const AREA_TYPE_CHARGING = "4";
+const AREA_TYPE_DEVICE = "8";
+
 type ElectronAPI = NonNullable<Window["electronAPI"]>;
+type VecTuple = [number, number, number];
 
 /** 由模型绝对路径推导同目录下 JSON 的绝对路径（读用） */
 function jsonAbsPath(modelPath: string): string {
@@ -113,54 +126,414 @@ export function isReferencePathFileName(name: string): boolean {
   return name === PATH_FILE_NAME || name === LEGACY_PATH_FILE_NAME;
 }
 
-/** 读取现有绘制文件（不存在则返回空结构） */
-async function readDrawingFile(api: ElectronAPI, modelPath: string): Promise<DrawingFile> {
-  for (const candidate of [jsonAbsPath(modelPath), legacyJsonAbsPath(modelPath)]) {
-    try {
-      const buf = await api.readLargeFile(candidate);
-      const text = new TextDecoder("utf-8").decode(buf);
-      const data = JSON.parse(text) as DrawingFile;
-      if (!Array.isArray(data.items)) data.items = [];
-      if (typeof data.version !== "number") data.version = 1;
-      return data;
-    } catch {}
-  }
-  // 文件不存在或旧文件损坏时不阻断绘制，返回空结构让保存流程重新生成。
-  return { version: 1, items: [] };
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-/** 写入绘制文件（覆盖） */
-async function writeDrawingFile(api: ElectronAPI, projectName: string, modelPath: string, data: DrawingFile): Promise<void> {
-  // 使用缩进 JSON，方便现场调试和人工比对；文件不大，体积不是主要问题。
-  const bytes = new TextEncoder().encode(JSON.stringify(data, null, 2));
+function areaType(area: RobotAreaRecord): string {
+  return String(area.type ?? "");
+}
+
+function valueText(value: unknown): string {
+  return value == null ? "" : String(value);
+}
+
+function positiveInt(value: unknown): number | null {
+  const n = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function formatTime(date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function formatCoord(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  const fixed = value.toFixed(6).replace(/\.?0+$/, "");
+  return fixed === "-0" ? "0" : fixed;
+}
+
+function toTuple(value: number[]): VecTuple | null {
+  const [x, y, z] = value;
+  return Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) ? [x, y, z] : null;
+}
+
+function parsePose(pose: unknown): VecTuple[] | null {
+  if (typeof pose !== "string") return null;
+  const points = pose.split(";")
+    .map((part) => part.split(",").map((n) => Number(n.trim())))
+    .map((nums) => (nums.length >= 3 && nums.every(Number.isFinite) ? [nums[0], nums[1], nums[2]] as VecTuple : null));
+  return points.length === 4 && points.every(Boolean) ? points as VecTuple[] : null;
+}
+
+function poseString(points: VecTuple[]): string {
+  return points.map((p) => p.map(formatCoord).join(",")).join(";");
+}
+
+function add(a: VecTuple, b: VecTuple): VecTuple {
+  return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+}
+
+function sub(a: VecTuple, b: VecTuple): VecTuple {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+function lerp(a: VecTuple, b: VecTuple, t: number): VecTuple {
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+}
+
+function dot(a: VecTuple, b: VecTuple): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function vertsToPose(verts: number[][], indices: number[]): string | null {
+  const points = indices.map((idx) => toTuple(verts[idx])).filter(Boolean) as VecTuple[];
+  return points.length === indices.length ? poseString(points) : null;
+}
+
+function cabinetPoseToVerts(points: VecTuple[]): number[][] {
+  const [p0, p1, p2, p6] = points;
+  const up = sub(p2, p1);
+  const depth = sub(p6, p2);
+  const p3 = add(p0, up);
+  const p4 = add(p0, depth);
+  const p5 = add(p1, depth);
+  const p7 = add(p3, depth);
+  return [p0, p1, p2, p3, p4, p5, p6, p7].map((p) => [...p]);
+}
+
+function boxPoseToVerts(points: VecTuple[]): number[][] {
+  const [p0, p1, p5, p6] = points;
+  const up = sub(p5, p1);
+  const depth = sub(p6, p5);
+  const p2 = add(p1, depth);
+  const p3 = add(p0, depth);
+  const p4 = add(p0, up);
+  const p7 = add(p4, depth);
+  return [p0, p1, p2, p3, p4, p5, p6, p7].map((p) => [...p]);
+}
+
+function boxHeightFromPose(points: VecTuple[]): number {
+  const up = sub(points[2], points[1]);
+  return Math.abs(up[1]) || Math.hypot(up[0], up[1], up[2]) || 1;
+}
+
+function cabinetPoseFromVerts(verts: number[][]): string | null {
+  return vertsToPose(verts, [0, 1, 2, 6]);
+}
+
+function boxPoseFromVerts(verts: number[][]): string | null {
+  return vertsToPose(verts, [0, 1, 5, 6]);
+}
+
+function sortedSplitBounds(splits: number[]): number[] {
+  const middle = splits
+    .filter((t) => Number.isFinite(t) && t > 0 && t < 1)
+    .sort((a, b) => a - b);
+  const deduped = middle.filter((t, idx) => idx === 0 || Math.abs(t - middle[idx - 1]) > 1e-6);
+  return [0, ...deduped, 1];
+}
+
+function cabinetSegmentVerts(verts: number[][], leftT: number, rightT: number): number[][] | null {
+  const v = verts.map(toTuple);
+  if (v.some((p) => !p)) return null;
+  const vs = v as VecTuple[];
+  return [
+    lerp(vs[0], vs[1], leftT),
+    lerp(vs[0], vs[1], rightT),
+    lerp(vs[3], vs[2], rightT),
+    lerp(vs[3], vs[2], leftT),
+    lerp(vs[4], vs[5], leftT),
+    lerp(vs[4], vs[5], rightT),
+    lerp(vs[7], vs[6], rightT),
+    lerp(vs[7], vs[6], leftT),
+  ].map((p) => [...p]);
+}
+
+function frontBottomParam(rowVerts: number[][], point: number[]): number | null {
+  const a = toTuple(rowVerts[0]);
+  const b = toTuple(rowVerts[1]);
+  const p = toTuple(point);
+  if (!a || !b || !p) return null;
+  const width = sub(b, a);
+  const len2 = dot(width, width);
+  if (len2 < 1e-9) return null;
+  return clamp01(dot(sub(p, a), width) / len2);
+}
+
+function normalizeAreaData(data: unknown): RobotAreaRecord[] {
+  if (Array.isArray(data)) {
+    return data.filter(isRecord).map((item) => ({ ...item } as RobotAreaRecord));
+  }
+  if (isRecord(data) && Array.isArray(data.items)) {
+    return legacyItemsToRobotAreas(data.items as DrawingItem[]);
+  }
+  return [];
+}
+
+async function readAreaRecordsFromPath(api: ElectronAPI, filePath: string): Promise<RobotAreaRecord[]> {
+  const buf = await api.readLargeFile(filePath);
+  const text = new TextDecoder("utf-8").decode(buf);
+  return normalizeAreaData(JSON.parse(text));
+}
+
+async function readAreaRecords(api: ElectronAPI, modelPath: string): Promise<RobotAreaRecord[]> {
+  for (const candidate of [jsonAbsPath(modelPath), legacyJsonAbsPath(modelPath)]) {
+    try {
+      return await readAreaRecordsFromPath(api, candidate);
+    } catch {}
+  }
+  return [];
+}
+
+async function writeAreaRecords(api: ElectronAPI, projectName: string, modelPath: string, records: RobotAreaRecord[]): Promise<void> {
+  const bytes = new TextEncoder().encode(JSON.stringify(records, null, 2));
   const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   await api.project.writeFile(projectName, jsonSubPath(modelPath), buffer);
 }
 
+function nextAvailableId(used: Set<number>, start = 1, max = Number.MAX_SAFE_INTEGER): number {
+  for (let id = start; id <= max; id++) {
+    if (!used.has(id)) return id;
+  }
+  return Math.max(start, ...Array.from(used)) + 1;
+}
+
+function findCabinetRowForItem(records: RobotAreaRecord[], item: CabinetItem): RobotAreaRecord | null {
+  const itemName = item.bay?.name || "";
+  return records.find((record) =>
+    areaType(record) === AREA_TYPE_CABINET_ROW
+    && itemName
+    && valueText(record.name) === itemName
+  ) ?? null;
+}
+
+function chooseCabinetRowId(records: RobotAreaRecord[], item: CabinetItem, existingRow: RobotAreaRecord | null): number {
+  const existingId = positiveInt(existingRow?.id);
+  if (existingId && existingId <= 99) return existingId;
+
+  const used = new Set<number>();
+  for (const record of records) {
+    if (areaType(record) !== AREA_TYPE_CABINET_ROW) continue;
+    const id = positiveInt(record.id);
+    if (id && (!existingRow || valueText(existingRow.id) !== valueText(record.id))) used.add(id);
+  }
+
+  if (item.bay.id > 0 && item.bay.id <= 99 && !used.has(item.bay.id)) return item.bay.id;
+  return nextAvailableId(used, 1, 99);
+}
+
+function makeCabinetRobotAreas(item: CabinetItem, rowId: number, time: string, existingRow?: RobotAreaRecord | null): RobotAreaRecord[] {
+  const rowPose = cabinetPoseFromVerts(item.geometry.verts);
+  if (!rowPose) return [];
+  const rowIdText = String(rowId);
+  const ip = valueText(existingRow?.ip) || "127.0.0.1";
+  const port = asFiniteNumber(existingRow?.port) ?? 0;
+  const rowName = item.bay?.name || `柜排${rowIdText}`;
+  const records: RobotAreaRecord[] = [{
+    id: rowIdText,
+    ip,
+    name: rowName,
+    port,
+    pose: rowPose,
+    time,
+    type: AREA_TYPE_CABINET_ROW,
+  }];
+
+  const bounds = sortedSplitBounds(item.geometry.splits || []);
+  const count = Math.max(item.cabinets.length, bounds.length - 1);
+  for (let i = 0; i < count; i++) {
+    const left = bounds[i] ?? (i / count);
+    const right = bounds[i + 1] ?? ((i + 1) / count);
+    const segmentVerts = cabinetSegmentVerts(item.geometry.verts, left, right);
+    const pose = segmentVerts ? cabinetPoseFromVerts(segmentVerts) : null;
+    if (!pose) continue;
+    const cabinet = item.cabinets[i];
+    records.push({
+      id: String(rowId * 100 + i + 1),
+      ip,
+      name: cabinet?.name || `屏柜${i + 1}`,
+      parent_id: rowIdText,
+      port,
+      pose,
+      time,
+      type: AREA_TYPE_CABINET,
+    });
+  }
+  return records;
+}
+
+function legacyItemsToRobotAreas(items: DrawingItem[]): RobotAreaRecord[] {
+  const records: RobotAreaRecord[] = [];
+  let cabinetRowId = 1;
+  let deviceId = 1;
+  const time = formatTime();
+
+  for (const item of items || []) {
+    if (item?.type === "cabinet") {
+      const rowId = cabinetRowId++;
+      records.push(...makeCabinetRobotAreas(item, rowId, item.updatedAt || time));
+    } else if (item?.type === "charging-area") {
+      const pose = boxPoseFromVerts(item.geometry?.verts || []);
+      if (pose) {
+        records.push({ id: "1", type: AREA_TYPE_CHARGING, name: "充电区域", pose, time: item.updatedAt || time });
+      }
+    } else if (item?.type === "device-area") {
+      const pose = boxPoseFromVerts(item.geometry?.verts || []);
+      if (pose) {
+        records.push({
+          id: String(deviceId++),
+          type: AREA_TYPE_DEVICE,
+          name: item.bay?.name || `设备区域${deviceId - 1}`,
+          pose,
+          time: item.updatedAt || time,
+        });
+      }
+    }
+  }
+  return records;
+}
+
+function buildCabinetItem(row: RobotAreaRecord, children: RobotAreaRecord[]): CabinetItem | null {
+  const rowPose = parsePose(row.pose);
+  if (!rowPose) return null;
+  const rowVerts = cabinetPoseToVerts(rowPose);
+  const rowId = positiveInt(row.id) ?? 0;
+  const rowName = valueText(row.name) || `柜排${valueText(row.id) || rowId}`;
+
+  const childInfos = children
+    .map((child, index) => {
+      const pose = parsePose(child.pose);
+      const verts = pose ? cabinetPoseToVerts(pose) : null;
+      const start = verts ? frontBottomParam(rowVerts, verts[0]) : null;
+      const end = verts ? frontBottomParam(rowVerts, verts[1]) : null;
+      return { child, index, start, end };
+    })
+    .sort((a, b) => {
+      const ta = a.start ?? (a.index / Math.max(1, children.length));
+      const tb = b.start ?? (b.index / Math.max(1, children.length));
+      if (Math.abs(ta - tb) > 1e-6) return ta - tb;
+      return (positiveInt(a.child.id) ?? a.index) - (positiveInt(b.child.id) ?? b.index);
+    });
+
+  const cabinets = childInfos.length > 0
+    ? childInfos.map(({ child }, idx) => ({ code: "", name: valueText(child.name) || `屏柜${idx + 1}` }))
+    : [{ code: "", name: rowName }];
+  const splits = childInfos.length > 1
+    ? childInfos.slice(0, -1).map((info, idx) => {
+      const fallback = (idx + 1) / childInfos.length;
+      return info.end == null ? fallback : clamp01(info.end);
+    })
+    : [];
+
+  return {
+    id: valueText(row.id) || String(rowId),
+    type: "cabinet",
+    area: { id: 0, name: "", code: "" },
+    bay: { id: rowId, name: rowName, code: "" },
+    geometry: { verts: rowVerts, splits },
+    cabinets,
+    updatedAt: valueText(row.time),
+  };
+}
+
+function robotAreasToDrawingItems(records: RobotAreaRecord[]): DrawingItem[] {
+  const items: DrawingItem[] = [];
+  const childrenByParent = new Map<string, RobotAreaRecord[]>();
+  for (const record of records) {
+    if (areaType(record) !== AREA_TYPE_CABINET) continue;
+    const parentId = valueText(record.parent_id);
+    if (!parentId) continue;
+    const children = childrenByParent.get(parentId) || [];
+    children.push(record);
+    childrenByParent.set(parentId, children);
+  }
+
+  for (const record of records) {
+    const type = areaType(record);
+    if (type === AREA_TYPE_CABINET_ROW) {
+      const item = buildCabinetItem(record, childrenByParent.get(valueText(record.id)) || []);
+      if (item) items.push(item);
+    } else if (type === AREA_TYPE_CHARGING) {
+      const pose = parsePose(record.pose);
+      if (!pose) continue;
+      items.push({
+        id: valueText(record.id) || "1",
+        type: "charging-area",
+        geometry: { verts: boxPoseToVerts(pose) },
+        updatedAt: valueText(record.time),
+      });
+    } else if (type === AREA_TYPE_DEVICE) {
+      const pose = parsePose(record.pose);
+      if (!pose) continue;
+      const name = valueText(record.name);
+      items.push({
+        id: valueText(record.id) || String(items.length + 1),
+        type: "device-area",
+        geometry: { verts: boxPoseToVerts(pose) },
+        height: boxHeightFromPose(pose),
+        bay: name ? { id: 0, name, code: "" } : null,
+        updatedAt: valueText(record.time),
+      });
+    }
+  }
+  return items;
+}
+
 /**
- * 保存屏柜绘制：读现有文件 → 替换同一间隔(bay.id)的 cabinet 记录为当前绘制 → 写回。
- * 其他间隔的屏柜及其他 type（充电区域/设备区）保持不变。第一次没有文件则创建。
+ * 保存屏柜绘制：读现有 area.json → 替换同名柜排及其柜子 → 写回 flat 数组。
+ * 未被当前编辑器处理的其他区域类型会原样保留。
  */
 export async function saveCabinetDrawing(params: {
   api: ElectronAPI;
   projectName: string;
   modelPath: string;
   item: CabinetItem;
-}): Promise<void> {
+}): Promise<CabinetItem> {
   const { api, projectName, modelPath, item } = params;
-  const file = await readDrawingFile(api, modelPath);
-  file.items = file.items.filter((it) => !(it.type === "cabinet" && it.bay.id === item.bay.id));
-  file.items.push(item);
-  await writeDrawingFile(api, projectName, modelPath, file);
+  const records = await readAreaRecords(api, modelPath);
+  const existingRow = findCabinetRowForItem(records, item);
+  const rowId = chooseCabinetRowId(records, item, existingRow);
+  const rowIdText = String(rowId);
+  const rowIdsToRemove = new Set<string>([rowIdText]);
+  if (existingRow?.id != null) rowIdsToRemove.add(valueText(existingRow.id));
+
+  const next = records.filter((record) => {
+    const type = areaType(record);
+    if (type === AREA_TYPE_CABINET_ROW && rowIdsToRemove.has(valueText(record.id))) return false;
+    if (type === AREA_TYPE_CABINET && rowIdsToRemove.has(valueText(record.parent_id))) return false;
+    return true;
+  });
+  const time = formatTime();
+  const cabinetRecords = makeCabinetRobotAreas(item, rowId, time, existingRow);
+  next.push(...cabinetRecords);
+  await writeAreaRecords(api, projectName, modelPath, next);
+
+  return {
+    ...item,
+    id: rowIdText,
+    bay: { id: rowId, name: item.bay.name || `柜排${rowIdText}`, code: item.bay.code },
+    updatedAt: time,
+  };
 }
 
 /** 读取该模型已保存的全部屏柜记录（用于回显） */
 export async function loadCabinetItems(api: ElectronAPI, modelPath: string): Promise<CabinetItem[]> {
-  const file = await readDrawingFile(api, modelPath);
-  return file.items.filter((it): it is CabinetItem => it.type === "cabinet");
+  return robotAreasToDrawingItems(await readAreaRecords(api, modelPath))
+    .filter((it): it is CabinetItem => it.type === "cabinet");
 }
 
-/** 保存充电区域：读现有文件 → 移除旧充电区域记录 → 写入新记录 */
+/** 保存充电区域：读现有 area.json → 移除旧充电区域记录 → 写入新记录 */
 export async function saveChargingArea(params: {
   api: ElectronAPI;
   projectName: string;
@@ -168,19 +541,31 @@ export async function saveChargingArea(params: {
   item: ChargingAreaItem | null;
 }): Promise<void> {
   const { api, projectName, modelPath, item } = params;
-  const file = await readDrawingFile(api, modelPath);
-  file.items = file.items.filter((it) => it.type !== "charging-area");
-  if (item) file.items.push(item);
-  await writeDrawingFile(api, projectName, modelPath, file);
+  const records = await readAreaRecords(api, modelPath);
+  const oldCharging = records.find((record) => areaType(record) === AREA_TYPE_CHARGING);
+  const next = records.filter((record) => areaType(record) !== AREA_TYPE_CHARGING);
+  if (item) {
+    const pose = boxPoseFromVerts(item.geometry.verts);
+    if (pose) {
+      next.push({
+        id: valueText(oldCharging?.id) || "1",
+        type: AREA_TYPE_CHARGING,
+        name: valueText(oldCharging?.name) || "充电区域",
+        pose,
+        time: formatTime(),
+      });
+    }
+  }
+  await writeAreaRecords(api, projectName, modelPath, next);
 }
 
 /** 读取该模型已保存的充电区域记录（用于回显） */
 export async function loadChargingArea(api: ElectronAPI, modelPath: string): Promise<ChargingAreaItem | null> {
-  const file = await readDrawingFile(api, modelPath);
-  return file.items.find((it): it is ChargingAreaItem => it.type === "charging-area") ?? null;
+  const items = robotAreasToDrawingItems(await readAreaRecords(api, modelPath));
+  return items.find((it): it is ChargingAreaItem => it.type === "charging-area") ?? null;
 }
 
-/** 保存设备区域列表：读现有文件 → 移除旧设备区记录 → 写入新记录列表 */
+/** 保存设备区域列表：读现有 area.json → 移除旧设备区记录 → 写入新记录列表 */
 export async function saveDeviceAreas(params: {
   api: ElectronAPI;
   projectName: string;
@@ -188,16 +573,31 @@ export async function saveDeviceAreas(params: {
   items: DeviceAreaItem[];
 }): Promise<void> {
   const { api, projectName, modelPath, items } = params;
-  const file = await readDrawingFile(api, modelPath);
-  file.items = file.items.filter((it) => it.type !== "device-area");
-  for (const item of items) file.items.push(item);
-  await writeDrawingFile(api, projectName, modelPath, file);
+  const records = await readAreaRecords(api, modelPath);
+  const next = records.filter((record) => areaType(record) !== AREA_TYPE_DEVICE);
+  const used = new Set<number>();
+
+  for (const item of items) {
+    let id = positiveInt(item.id);
+    if (!id || used.has(id)) id = nextAvailableId(used);
+    used.add(id);
+    const pose = boxPoseFromVerts(item.geometry.verts);
+    if (!pose) continue;
+    next.push({
+      id: String(id),
+      type: AREA_TYPE_DEVICE,
+      name: item.bay?.name || `设备区域${id}`,
+      pose,
+      time: formatTime(),
+    });
+  }
+  await writeAreaRecords(api, projectName, modelPath, next);
 }
 
 /** 读取该模型已保存的全部设备区记录（用于回显） */
 export async function loadDeviceAreas(api: ElectronAPI, modelPath: string): Promise<DeviceAreaItem[]> {
-  const file = await readDrawingFile(api, modelPath);
-  return file.items.filter((it): it is DeviceAreaItem => it.type === "device-area");
+  return robotAreasToDrawingItems(await readAreaRecords(api, modelPath))
+    .filter((it): it is DeviceAreaItem => it.type === "device-area");
 }
 
 /** 递归收集目录下所有 JSON 文件中已绑定的间隔 ID（跨模型去重） */
@@ -207,13 +607,9 @@ async function collectBoundBayIds(api: ElectronAPI, nodes: SpaceTreeNode[], ids:
       await collectBoundBayIds(api, node.children, ids);
     } else if (isDrawingDataFileName(node.name)) {
       try {
-        // 跨地图扫描设备区绑定，用于阻止同一间隔被多个设备区重复绑定。
-        const buf = await api.readLargeFile(node.path);
-        const data = JSON.parse(new TextDecoder("utf-8").decode(buf)) as DrawingFile;
-        for (const it of data.items || []) {
-          if (it.type === "device-area" && (it as DeviceAreaItem).bay) {
-            ids.add((it as DeviceAreaItem).bay!.id);
-          }
+        const records = await readAreaRecordsFromPath(api, node.path);
+        for (const it of robotAreasToDrawingItems(records)) {
+          if (it.type === "device-area" && it.bay?.id > 0) ids.add(it.bay.id);
         }
       } catch {}
     }
@@ -233,10 +629,8 @@ export async function getBoundBayIdsInProject(api: ElectronAPI, projectName: str
 /** 直接按绘制 JSON 的绝对路径读取屏柜记录（地图树勾选 json 时用） */
 export async function loadCabinetItemsFromJson(api: ElectronAPI, jsonPath: string): Promise<CabinetItem[]> {
   try {
-    const buf = await api.readLargeFile(jsonPath);
-    const data = JSON.parse(new TextDecoder("utf-8").decode(buf)) as DrawingFile;
-    if (!Array.isArray(data.items)) return [];
-    return data.items.filter((it): it is CabinetItem => it.type === "cabinet");
+    return robotAreasToDrawingItems(await readAreaRecordsFromPath(api, jsonPath))
+      .filter((it): it is CabinetItem => it.type === "cabinet");
   } catch {
     return [];
   }
@@ -245,9 +639,7 @@ export async function loadCabinetItemsFromJson(api: ElectronAPI, jsonPath: strin
 /** 直接按绘制 JSON 的绝对路径读取全部记录（地图树勾选 json 时用） */
 export async function loadAllItemsFromJson(api: ElectronAPI, jsonPath: string): Promise<DrawingItem[]> {
   try {
-    const buf = await api.readLargeFile(jsonPath);
-    const data = JSON.parse(new TextDecoder("utf-8").decode(buf)) as DrawingFile;
-    return Array.isArray(data.items) ? data.items : [];
+    return robotAreasToDrawingItems(await readAreaRecordsFromPath(api, jsonPath));
   } catch {
     return [];
   }
@@ -256,10 +648,8 @@ export async function loadAllItemsFromJson(api: ElectronAPI, jsonPath: string): 
 /** 直接按绘制 JSON 的绝对路径读取充电区域记录（地图树勾选 json 时用） */
 export async function loadChargingAreaFromJson(api: ElectronAPI, jsonPath: string): Promise<ChargingAreaItem | null> {
   try {
-    const buf = await api.readLargeFile(jsonPath);
-    const data = JSON.parse(new TextDecoder("utf-8").decode(buf)) as DrawingFile;
-    if (!Array.isArray(data.items)) return null;
-    return data.items.find((it): it is ChargingAreaItem => it.type === "charging-area") ?? null;
+    const items = robotAreasToDrawingItems(await readAreaRecordsFromPath(api, jsonPath));
+    return items.find((it): it is ChargingAreaItem => it.type === "charging-area") ?? null;
   } catch {
     return null;
   }
@@ -267,27 +657,30 @@ export async function loadChargingAreaFromJson(api: ElectronAPI, jsonPath: strin
 
 /** 由绘制 JSON 绝对路径推导项目相对子路径（写回用） */
 function subPathFromJson(jsonPath: string): string {
-  // 树节点给的是绝对路径；删除/覆盖 JSON 时要反推项目相对子路径给主进程写入。
   return projectSubPathFromDir(jsonPath, MAP_DIR_NAME, DRAWING_FILE_NAME);
 }
 
-/** 删除某间隔的屏柜记录并写回 JSON */
+/** 删除某柜排记录及其柜子并写回 JSON */
 export async function deleteCabinetItem(api: ElectronAPI, projectName: string, jsonPath: string, bayId: number): Promise<void> {
-  let data: DrawingFile = { version: 1, items: [] };
+  let records: RobotAreaRecord[] = [];
   try {
-    const buf = await api.readLargeFile(jsonPath);
-    const parsed = JSON.parse(new TextDecoder("utf-8").decode(buf)) as DrawingFile;
-    if (Array.isArray(parsed.items)) data = parsed;
+    records = await readAreaRecordsFromPath(api, jsonPath);
   } catch {
     return;
   }
-  data.items = data.items.filter((it) => !(it.type === "cabinet" && it.bay.id === bayId));
-  const bytes = new TextEncoder().encode(JSON.stringify(data, null, 2));
+  const rowId = String(bayId);
+  const next = records.filter((record) => {
+    const type = areaType(record);
+    if (type === AREA_TYPE_CABINET_ROW && valueText(record.id) === rowId) return false;
+    if (type === AREA_TYPE_CABINET && valueText(record.parent_id) === rowId) return false;
+    return true;
+  });
+  const bytes = new TextEncoder().encode(JSON.stringify(next, null, 2));
   const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   await api.project.writeFile(projectName, subPathFromJson(jsonPath), buffer);
 }
 
-/** 保存可行路径：写入独立的 可行驶路径.json */
+/** 保存可行路径：写入独立的 reference_path.txt */
 export async function savePathDrawing(params: {
   api: ElectronAPI;
   projectName: string;
@@ -334,7 +727,6 @@ export async function loadPathDrawing(api: ElectronAPI, modelPath: string): Prom
           };
         }
         // 旧格式兼容：{ points: number[][], connections: [number, number][] }
-        // 当前项目还没投入使用，但保留这个读取兼容成本很低，也方便早期样例数据回放。
         return data as any;
       }
     } catch {}

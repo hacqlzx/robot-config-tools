@@ -131,7 +131,7 @@ export default function CabinetPanel({ cornerCount, cabinetCount, onUndo, onClos
 
   const tip = cornerCount < 4
     ? `点击屏柜【${STEP_LABELS[cornerCount]}】（${cornerCount + 1}/4）`
-    : "已生成 ✓ 可拖动顶点调整";
+    : "已生成 ✓ 可拖动红色顶点调整";
 
   return (
     <div

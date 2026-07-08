@@ -61,7 +61,7 @@ interface Split {
  *
  * - 放点阶段：依次点击 前左下→前右下→前右上→后右上，相邻红点连红线。
  * - 集齐 4 点：推导 8 顶点（4 红 + 4 绿）框出立方体（3 红边 + 9 绿边），即 1 个屏柜。
- * - 成体后：拖拽任意顶点调整（分隔实时跟随重算）；点击最下方红线在该处插入分隔，
+ * - 成体后：拖拽 4 个红色协议顶点调整（绿色补点自动跟随）；点击最下方红线在该处插入分隔，
  *   屏柜左右一分为二（红分隔点 + 绿分隔面），每点一次屏柜数 +1。
  *
  * 这个类只管理几何交互和临时实体，不直接读写 JSON，也不关心点表/间隔业务。
@@ -318,6 +318,7 @@ export class CabinetDrawing {
     if (!vp) return -1;
     let bestIdx = -1, bestD2 = 100;
     this.cube.verts.forEach((p, i) => {
+      if (!RED_VERTS.has(i)) return;
       const s = this.projectScreen(p, vp);
       if (!s) return;
       const d2 = (s.x - sx) ** 2 + (s.y - sy) ** 2;
@@ -400,14 +401,25 @@ export class CabinetDrawing {
 
   private moveVertex(i: number, pos: pc.Vec3) {
     if (!this.cube) return;
+    if (!RED_VERTS.has(i)) return;
     this.cube.verts[i] = pos.clone();
-    this.cube.spheres[i].setLocalPosition(pos);
+    this.rebuildDerivedVerts();
+    this.cube.verts.forEach((p, idx) => this.cube!.spheres[idx].setLocalPosition(p));
     for (const e of this.cube.edges) {
-      if (e.a === i || e.b === i) {
-        updateLineEntity(e.entity, this.cube.verts[e.a], this.cube.verts[e.b], this.opts.lineThickness);
-      }
+      updateLineEntity(e.entity, this.cube.verts[e.a], this.cube.verts[e.b], this.opts.lineThickness);
     }
     this.refreshSplits();
+  }
+
+  private rebuildDerivedVerts() {
+    if (!this.cube) return;
+    const v = this.cube.verts;
+    const up = new pc.Vec3().sub2(v[2], v[1]);
+    const depth = new pc.Vec3().sub2(v[6], v[2]);
+    v[3] = new pc.Vec3().add2(v[0], up);
+    v[4] = new pc.Vec3().add2(v[0], depth);
+    v[5] = new pc.Vec3().add2(v[1], depth);
+    v[7] = new pc.Vec3().add2(v[3], depth);
   }
 
   // ============ 内部：分隔 ============

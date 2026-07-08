@@ -5,7 +5,9 @@ import {
   isDrawingItemsData,
   isPathPointObject,
   isPathRenderData,
+  isRobotAreaList,
   pointToTuple,
+  robotAreasToDrawingItemsData,
   type BoxRenderItem,
   type CabinetRenderItem,
   type DrawingRenderData,
@@ -131,6 +133,14 @@ export class DrawingRenderer {
     if (isPathRenderData(data)) {
       this.renderPaths(data);
     }
+    if (isRobotAreaList(data)) {
+      const converted = robotAreasToDrawingItemsData(data);
+      for (const item of converted.items) {
+        if (isCabinetRenderItem(item)) this.renderCabinet(item);
+        else if (isBoxRenderItem(item)) this.renderBoxItem(item);
+      }
+      return;
+    }
     if (isDrawingItemsData(data)) {
       for (const item of data.items) {
         if (isCabinetRenderItem(item)) this.renderCabinet(item);
@@ -214,7 +224,7 @@ export class DrawingRenderer {
     const cz = (vs[4].z + vs[5].z + vs[6].z + vs[7].z) / 4;
     const el = this.createLabelEl();
     el.style.color = isDevice ? DEVICE_LABEL_COLOR : "#ff8c00";
-    const name = isDevice ? (item.bay?.name || "未绑定") : "充电区域";
+    const name = isDevice ? (item.name || item.bay?.name || "未绑定") : (item.name || "充电区域");
     const li = { center: new pc.Vec3(cx, cy, cz), name, el };
     this.allLabels.push(li);
 
