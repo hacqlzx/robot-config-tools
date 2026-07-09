@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.invoke("project:export-file", projectName, subPath, destDir),
   },
   selectDir: () => ipcRenderer.invoke("dialog:select-dir"),
+  selectZipFile: () => ipcRenderer.invoke("dialog:select-zip-file"),
   onExportProgress: (callback) => {
     const handler = (_event, data) => callback(data);
     ipcRenderer.on("export:progress", handler);
@@ -64,6 +65,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   extractZip: (zipPath, destDir) => ipcRenderer.invoke("extract-zip", zipPath, destDir),
   importSurveyData: (projectName, mapName, zipPath) =>
     ipcRenderer.invoke("import-survey-data", projectName, mapName, zipPath),
+  exportSurveyData: (projectName, mapName, destDir) =>
+    ipcRenderer.invoke("export-survey-data", projectName, mapName, destDir),
+  exportImageLabels: (projectName, mapName, destDir) =>
+    ipcRenderer.invoke("export-image-labels", projectName, mapName, destDir),
+  importImageLabels: (projectName, mapName, zipPath) =>
+    ipcRenderer.invoke("import-image-labels", projectName, mapName, zipPath),
   getProjectRoot: () => ipcRenderer.invoke("get-project-root"),
   setDataPath: (newPath) => ipcRenderer.invoke("set-data-path", newPath),
   startBatch: () => ipcRenderer.invoke("db:startBatch"),

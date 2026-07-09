@@ -68,11 +68,15 @@ declare global {
         exportFile: (projectName: string, subPath: string, destDir: string) => Promise<string>;
       };
       selectDir: () => Promise<string | null>;
+      selectZipFile: () => Promise<string | null>;
       onExportProgress: (callback: (data: { step: string; pct: number }) => void) => () => void;
       importPoints: (rows: any[], stationName: string, stationCode: string, projectName: string) => Promise<{ total: number; inserted: number; updated: number; errors: string[] }>;
       exportZip: (projectName: string, items: { type: string; name: string }[], destDir: string) => Promise<{ zipPath: string; zipName: string; config: any }>;
       extractZip: (zipPath: string, destDir: string) => Promise<{ success: boolean; error?: string; actualDir?: string }>;
       importSurveyData: (projectName: string, mapName: string, zipPath: string) => Promise<{ success: boolean; error?: string; surveyDir?: string; deviceDir?: string; importedSpIds?: number[] }>;
+      exportSurveyData: (projectName: string, mapName: string, destDir: string) => Promise<{ success: boolean; error?: string; zipPath?: string; zipName?: string }>;
+      exportImageLabels: (projectName: string, mapName: string, destDir: string) => Promise<{ success: boolean; error?: string; zipPath?: string; zipName?: string; exportedCount?: number }>;
+      importImageLabels: (projectName: string, mapName: string, zipPath: string) => Promise<{ success: boolean; error?: string; importedCount?: number; warnings?: string[] }>;
       getProjectRoot: () => Promise<string>;
       setDataPath: (newPath: string) => Promise<boolean>;
       startBatch: () => Promise<void>;

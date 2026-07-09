@@ -1,5 +1,5 @@
 ﻿import { useEffect } from "react";
-import { Layout, ConfigProvider, App } from "antd";
+import { Layout, ConfigProvider, App, message as antdMessage } from "antd";
 import { Outlet } from "react-router-dom";
 import AppHeader from "./pages/app-header";
 import "./styles/global.css";
@@ -7,10 +7,14 @@ import "./styles/title-bar.scss";
 
 declare global { interface Window { __removeSplash?: () => void; } }
 
+export const APP_HEADER_HEIGHT = 48;
+export const MESSAGE_TOP_OFFSET = APP_HEADER_HEIGHT + 12;
+
 const { Content } = Layout;
 
 export default function AppLayout() {
   useEffect(() => {
+    antdMessage.config({ top: MESSAGE_TOP_OFFSET });
     window.__removeSplash?.();
   }, []);
 
@@ -31,13 +35,13 @@ export default function AppLayout() {
         },
       }}
       message={{
-        top: 60, // 消息提示移到 header(48px) 下方，避免被顶部栏遮挡
+        top: MESSAGE_TOP_OFFSET,
       }}
     >
-      <App>
+      <App message={{ top: MESSAGE_TOP_OFFSET }}>
         <Layout style={{ height: "100vh", overflow: "hidden" }}>
           <AppHeader />
-          <Content style={{ height: "calc(100vh - 48px)", padding: 0, background: "#f5f5f5", overflow: "hidden" }}>
+          <Content style={{ height: `calc(100vh - ${APP_HEADER_HEIGHT}px)`, padding: 0, background: "#f5f5f5", overflow: "hidden" }}>
             <div style={{ height: "100%", boxSizing: "border-box" }}>
               <Outlet />
             </div>

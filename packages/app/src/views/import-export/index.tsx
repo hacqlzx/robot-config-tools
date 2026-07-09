@@ -1,7 +1,18 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { App, Button, Card } from "antd";
 import { UploadOutlined, DownloadOutlined } from "@ant-design/icons";
-import { getAllRobot, getFacInfo, importDevicePoint, importCommunicateExcel, exportSpaceModel, downLoadExcelTemplate, downloadCommunicateExcel } from "@/api/config.js";
+import {
+  getAllRobot,
+  getFacInfo,
+  importDevicePoint,
+  importCommunicateExcel,
+  importProspectCalibration,
+  exportSpaceModel,
+  exportProspectImage,
+  exportDeviceCheckImage,
+  downLoadExcelTemplate,
+  downloadCommunicateExcel,
+} from "@/api/config.js";
 import { getCurrentIp } from "@/stores/backendStore";
 import "./index.scss";
 
@@ -115,9 +126,10 @@ export default function ImportExport() {
   }, []);
 
   /** 打开文件选择器 */
-  const pickFile = useCallback((onFile: (file: File) => Promise<void>) => {
+  const pickFile = useCallback((onFile: (file: File) => Promise<void>, accept = ".xlsx,.xls") => {
     const input = fileInputRef.current;
     if (!input) return;
+    input.accept = accept;
     input.onchange = async (e: any) => {
       const file = e.target?.files?.[0];
       if (file) {
@@ -251,28 +263,55 @@ export default function ImportExport() {
     }
   }, [message]);
 
-  /** 空间模型导出 */
-  const handleSpaceModelExport = useCallback(async () => {
+  /** 读取顶部栏选中的机器人 */
+  const getSelectedRobot = useCallback(async () => {
     const selectedRobot = localStorage.getItem("selectedRobot");
     if (!selectedRobot) {
       message.warning("请先在顶部选择机器人");
-      return;
+      return null;
     }
 
+    const robotRes = await getAllRobot();
+    const robotBody = robotRes.data;
+    if (!robotBody.success || !robotBody.data) {
+      message.error("获取机器人列表失败");
+      return null;
+    }
+    const robot = robotBody.data.find((r: any) => r.robotName === selectedRobot);
+    if (!robot) {
+      message.error(`未找到机器人「${selectedRobot}」`);
+      return null;
+    }
+    return robot;
+  }, [message]);
+
+  /** 图像标识导入 */
+  const handleImageLabelImport = useCallback(async (file: File) => {
+    setUploadingLabel("图像标识导入");
+    try {
+      const robot = await getSelectedRobot();
+      if (!robot) return;
+
+      const res = await importProspectCalibration(file, robot.id);
+      const body = res.data;
+      if (body.success) {
+        message.success("图像标识导入成功");
+      } else {
+        message.error(body.message || "图像标识导入失败");
+      }
+    } catch (e: any) {
+      message.error("图像标识导入失败: " + (e?.message || e));
+    } finally {
+      setUploadingLabel(null);
+    }
+  }, [getSelectedRobot, message]);
+
+  /** 空间模型导出 */
+  const handleSpaceModelExport = useCallback(async () => {
     setUploadingLabel("空间模型导出");
     try {
-      const robotRes = await getAllRobot();
-      const robotBody = robotRes.data;
-      if (!robotBody.success || !robotBody.data) {
-        message.error("获取机器人列表失败");
-        return;
-      }
-      const robot = robotBody.data.find((r: any) => r.robotName === selectedRobot);
-      if (!robot) {
-        message.error(`未找到机器人「${selectedRobot}」`);
-        return;
-      }
-
+      const robot = await getSelectedRobot();
+      if (!robot) return;
       const res = await exportSpaceModel(robot.id);
       const body = res.data;
       if (!body.success || !body.data) {
@@ -286,7 +325,49 @@ export default function ImportExport() {
     } finally {
       setUploadingLabel(null);
     }
-  }, [message, downloadFileToDir]);
+  }, [getSelectedRobot, message, downloadFileToDir]);
+
+  /** 勘察图像导出 */
+  const handleSurveyImageExport = useCallback(async () => {
+    setUploadingLabel("勘察图像导出");
+    try {
+      const robot = await getSelectedRobot();
+      if (!robot) return;
+      const res = await exportProspectImage(robot.id);
+      const body = res.data;
+      if (!body.success || !body.data) {
+        message.error(body.message || "获取下载路径失败");
+        return;
+      }
+
+      await downloadFileToDir(body.data, "勘察图像导出");
+    } catch (e: any) {
+      message.error("导出失败: " + (e?.message || e));
+    } finally {
+      setUploadingLabel(null);
+    }
+  }, [getSelectedRobot, message, downloadFileToDir]);
+
+  /** 设备验证图导出 */
+  const handleDeviceCheckImageExport = useCallback(async () => {
+    setUploadingLabel("设备验证图导出");
+    try {
+      const robot = await getSelectedRobot();
+      if (!robot) return;
+      const res = await exportDeviceCheckImage(robot.id);
+      const body = res.data;
+      if (!body.success || !body.data) {
+        message.error(body.message || "获取下载路径失败");
+        return;
+      }
+
+      await downloadFileToDir(body.data, "设备验证图导出");
+    } catch (e: any) {
+      message.error("导出失败: " + (e?.message || e));
+    } finally {
+      setUploadingLabel(null);
+    }
+  }, [getSelectedRobot, message, downloadFileToDir]);
 
   /** 点表模板下载 */
   const handlePatrolPointTemplateDownload = useCallback(async () => {
@@ -334,6 +415,24 @@ export default function ImportExport() {
     // 空间模型导出
     if (card.key === "space-model" && actionKey === "export") {
       handleSpaceModelExport();
+      return;
+    }
+
+    // 勘察图像导出
+    if (card.key === "survey-image" && actionKey === "export") {
+      handleSurveyImageExport();
+      return;
+    }
+
+    // 图像标识导入
+    if (card.key === "survey-image" && actionKey === "import") {
+      pickFile(handleImageLabelImport, ".zip");
+      return;
+    }
+
+    // 设备验证图导出
+    if (card.key === "device-verify" && actionKey === "export") {
+      handleDeviceCheckImageExport();
       return;
     }
 

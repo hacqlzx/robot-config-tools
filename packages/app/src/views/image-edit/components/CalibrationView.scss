@@ -30,6 +30,26 @@
   text-overflow: ellipsis;
 }
 
+.calibration-save-status {
+  min-width: 64px;
+  font-size: 12px;
+  color: #8c8c8c;
+  text-align: right;
+}
+
+.calibration-save-status.saving,
+.calibration-save-status.pending {
+  color: #1677ff;
+}
+
+.calibration-save-status.saved {
+  color: #389e0d;
+}
+
+.calibration-save-status.error {
+  color: #cf1322;
+}
+
 .calibration-body {
   flex: 1;
   display: flex;

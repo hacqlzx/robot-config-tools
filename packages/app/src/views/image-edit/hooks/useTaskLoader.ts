@@ -7,6 +7,9 @@ interface TaskLoaderState {
   progress: string;
 }
 
+const THUMBNAIL_WIDTH = 360;
+const COLUMN_HEADER_SPACE = 48;
+
 export interface TaskLoadResult {
   items: ImageItem[];
   surveyDir: string;
@@ -46,17 +49,23 @@ function computeLayout(images: TaskLoadedImage[], thumbW = 200, thumbH = 150, si
     // 组内按序号（col = pic_loc[0]）从上往下排，无间隙
     group.sort((a, b) => a.col - b.col);
 
-    let yOff = 12;
+    let yOff = COLUMN_HEADER_SPACE;
+    const sideLabel = group[0]?.side === "right" ? "云台右" : "云台左";
+    const columnLabel = `SP${spId} · 组${groupId + 1} · ${sideLabel}`;
     for (const img of group) {
       items.push({
-        img: img.img,
+        imagePath: img.imagePath,
         id: img.config.pic_loc[0] + img.config.pic_loc[1] * 100 + img.spId * 10000 + (img.side === "right" ? 5000 : 0),
         x: xOff,
         y: yOff,
         w: thumbW,
         h: thumbH,
+        naturalWidth: img.naturalWidth,
+        naturalHeight: img.naturalHeight,
         side: img.side,
         spId: img.spId,
+        columnKey: key,
+        columnLabel,
         visName: img.config.vis_name,
       });
       yOff += thumbH;
@@ -72,6 +81,22 @@ export function useTaskLoader() {
   const resolvedDeviceDirRef = useRef("");
 
   const pathJoin = (base: string, child: string) => `${base.replace(/[\\/]+$/, "")}/${child}`;
+
+  const loadImageElement = useCallback(async (imagePath: string, name: string): Promise<HTMLImageElement> => {
+    const imgBuf = await window.electronAPI!.readLargeFile(imagePath);
+    const blob = new Blob([imgBuf]);
+    const url = URL.createObjectURL(blob);
+    try {
+      return await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = () => reject(new Error(`图片加载失败: ${name}`));
+        el.src = url;
+      });
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }, []);
 
   const fileExists = useCallback(async (filePath: string): Promise<boolean> => {
     try {
@@ -117,6 +142,7 @@ export function useTaskLoader() {
     }
 
     const allImages: TaskLoadedImage[] = [];
+    let probedSize: { width: number; height: number } | null = null;
     for (const fileName of manifest.file_names) {
       const parts = fileName.split("_");
       const cpId = Math.abs(parseInt(parts[1])) || 0;
@@ -131,35 +157,35 @@ export function useTaskLoader() {
         const cfg = spConfig.images[key] as TaskImageConfig;
         const side = cfg.pic_loc_flag === "right" ? "right" : "left";
 
-        setState({ loading: true, progress: `SP${spConfig.sp_id}: ${loaded + 1}/${imageKeys.length}` });
+        setState({ loading: true, progress: `解析 SP${spConfig.sp_id}: ${loaded + 1}/${imageKeys.length}` });
 
         const imgPath = pathJoin(pathJoin(deviceDir, spDir), cfg.vis_name);
-        const imgBuf = await api.readLargeFile(imgPath);
-        const blob = new Blob([imgBuf]);
-        const url = URL.createObjectURL(blob);
-
-        const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-          const el = new Image();
-          el.onload = () => resolve(el);
-          el.onerror = () => reject(new Error(`图片加载失败: ${cfg.vis_name}`));
-          el.src = url;
-        });
-
-        URL.revokeObjectURL(url);
+        if (!probedSize) {
+          try {
+            const img = await loadImageElement(imgPath, cfg.vis_name);
+            probedSize = { width: img.naturalWidth, height: img.naturalHeight };
+          } catch (e) {
+            console.warn("[TaskLoader] 探测首张图片尺寸失败:", e);
+          }
+        }
         allImages.push({
-          img, config: cfg, spId: spConfig.sp_id, spDir,
+          imagePath: imgPath,
+          naturalWidth: cfg.width || probedSize?.width,
+          naturalHeight: cfg.width ? cfg.height : probedSize?.height,
+          config: cfg, spId: spConfig.sp_id, spDir,
           col: cfg.pic_loc[0], row: cfg.pic_loc[1], side,
-          x: 0, y: 0, w: 200, h: 150,
+          x: 0, y: 0, w: THUMBNAIL_WIDTH, h: Math.round(THUMBNAIL_WIDTH / ((cfg.width && cfg.height) ? cfg.width / cfg.height : ((probedSize?.width && probedSize?.height) ? probedSize.width / probedSize.height : 4 / 3))),
         });
         loaded++;
       }
     }
 
     rawImagesRef.current = allImages;
-    // 读取第一张图的比例作为缩略图比例
-    const firstImg = allImages[0]?.img;
-    const ratio = firstImg ? firstImg.naturalWidth / firstImg.naturalHeight : 4 / 3;
-    const thumbW = 200;
+    const firstImage = allImages[0];
+    const ratio = firstImage?.naturalWidth && firstImage?.naturalHeight
+      ? firstImage.naturalWidth / firstImage.naturalHeight
+      : 4 / 3;
+    const thumbW = THUMBNAIL_WIDTH;
     const thumbH = Math.round(thumbW / ratio);
     const items = computeLayout(allImages, thumbW, thumbH);
     console.log(`[TaskLoader] 加载完成: ${items.length} 张图片, 缩略图=${thumbW}x${thumbH} (比例=${ratio.toFixed(2)})`);
@@ -169,9 +195,9 @@ export function useTaskLoader() {
 
   /** 按指定云台侧重新计算布局 */
   const setSide = useCallback((side: "left" | "right") => {
-    const firstImg = rawImagesRef.current[0]?.img;
-    const thumbW = 200;
-    const thumbH = firstImg
+    const firstImg = rawImagesRef.current[0];
+    const thumbW = THUMBNAIL_WIDTH;
+    const thumbH = firstImg?.naturalWidth && firstImg?.naturalHeight
       ? Math.round(thumbW / (firstImg.naturalWidth / firstImg.naturalHeight))
       : 150;
     const items = computeLayout(rawImagesRef.current, thumbW, thumbH, side);
@@ -179,11 +205,21 @@ export function useTaskLoader() {
     return items;
   }, []);
 
+  const loadFullImage = useCallback(async (item: ImageItem): Promise<ImageItem & { img: HTMLImageElement }> => {
+    const img = item.img?.complete ? item.img : await loadImageElement(item.imagePath, item.visName);
+    return {
+      ...item,
+      img,
+      naturalWidth: img.naturalWidth,
+      naturalHeight: img.naturalHeight,
+    };
+  }, [loadImageElement]);
+
   const clear = useCallback(() => { rawImagesRef.current = []; resolvedDeviceDirRef.current = ""; }, []);
 
   const getTotalCount = useCallback(() => rawImagesRef.current.length, []);
 
   const getResolvedDeviceDir = useCallback(() => resolvedDeviceDirRef.current, []);
 
-  return { ...state, loadTask, setSide, clear, getTotalCount, getResolvedDeviceDir };
+  return { ...state, loadTask, setSide, clear, getTotalCount, getResolvedDeviceDir, loadFullImage };
 }

@@ -22,6 +22,17 @@ export function registerSystemIpc(): void {
     return result.canceled ? null : result.filePaths[0];
   });
 
+  ipcMain.handle("dialog:select-zip-file", async () => {
+    const win = BrowserWindow.getFocusedWindow();
+    if (!win) return null;
+    const result = await dialog.showOpenDialog(win, {
+      properties: ["openFile"],
+      title: "选择ZIP压缩包",
+      filters: [{ name: "ZIP压缩包", extensions: ["zip"] }],
+    });
+    return result.canceled ? null : result.filePaths[0];
+  });
+
   ipcMain.handle("set-data-path", async (_event, newPath: string) => setDataPath(newPath));
   ipcMain.handle("get-project-root", async () => getProjectRoot());
 

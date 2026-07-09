@@ -9,6 +9,8 @@ import {
   CheckCircleOutlined,
 } from "@ant-design/icons";
 import SurveyImageLoad from "./components/SurveyImageLoad";
+import SurveyImageExport from "./components/SurveyImageExport";
+import ImageLabelTransfer from "./components/ImageLabelTransfer";
 import CalibrationView from "./components/CalibrationView";
 import { useThreeDViewer } from "@/components/three-d-engine";
 import { useResizable } from "@/components/useResizable";
@@ -16,6 +18,8 @@ import ImageCanvas from "@/components/image-canvas/ImageCanvas";
 import type { ImageItem } from "@/components/image-canvas/ImageCanvas";
 import { useTaskLoader } from "./hooks/useTaskLoader";
 import "./index.scss";
+
+type CalibrationImageItem = ImageItem & { img: HTMLImageElement };
 
 interface TreeNode {
   name: string;
@@ -34,6 +38,10 @@ function getSharedCalibrationFilePath(surveyDir: string): string {
   if (parts[parts.length - 1] === SURVEY_DIR_NAME) return `${normalized}/${CALIBRATION_FILE_NAME}`;
   const root = normalized.replace(/[\\/][^\\/]+$/, "");
   return `${root}/${CALIBRATION_FILE_NAME}`;
+}
+
+function getCalibrationEntryMapCode(entry: any, fileMapCode?: string): string {
+  return String(entry?.mapCode || fileMapCode || "");
 }
 
 export default function ImageEdit() {
@@ -60,7 +68,7 @@ export default function ImageEdit() {
   const imageContainerRef = useRef<HTMLDivElement>(null);
   const [taskImages, setTaskImages] = useState<ImageItem[]>([]);
   const [totalImageCount, setTotalImageCount] = useState(0);
-  const { loading: taskLoading, progress: taskProgress, loadTask, setSide, clear: clearTask, getTotalCount } = useTaskLoader();
+  const { loading: taskLoading, progress: taskProgress, loadTask, setSide, clear: clearTask, getTotalCount, loadFullImage } = useTaskLoader();
   const [bayList, setBayList] = useState<{ id: number; bayName: string }[]>([]);
   const [selBayId, setSelBayId] = useState<number | undefined>(undefined);
   const [nameFilter, setNameFilter] = useState("");
@@ -70,15 +78,16 @@ export default function ImageEdit() {
   const [checkedPoints, setCheckedPoints] = useState<number[]>([]);
   const [points, setPoints] = useState<{ id: number; pointCode: string; pointName: string; demarcateState: number }[]>([]);
 
-  const [calibrationImage, setCalibrationImage] = useState<ImageItem | null>(null);
+  const [calibrationImage, setCalibrationImage] = useState<CalibrationImageItem | null>(null);
   const [calibrationRects, setCalibrationRects] = useState<Map<number, { x: number; y: number; w: number; h: number }[]>>(new Map());
   const [calibratedPointCodes, setCalibratedPointCodes] = useState<Set<string>>(new Set());
   const [calibratedImageCount, setCalibratedImageCount] = useState(0);
   const resetViewRef = useRef<(() => void) | null>(null);
   const surveyDirRef = useRef<string>("");
+  const loadedMapRef = useRef<string | null>(null);
 
   // 加载已标定的图片 ID 集合 + 已标定点位编码集合
-  const refreshCalibratedRects = useCallback(async () => {
+  const refreshCalibratedRects = useCallback(async (mapName?: string | null) => {
     const td = surveyDirRef.current;
     if (!td || !window.electronAPI?.readLargeFile) return;
     try {
@@ -86,9 +95,11 @@ export default function ImageEdit() {
       if (!filePath) return;
       const buf = await window.electronAPI.readLargeFile(filePath);
       const json = JSON.parse(new TextDecoder().decode(buf));
+      const currentMapCode = mapName || loadedMapRef.current || json.mapCode || "";
       const map = new Map<number, { x: number; y: number; w: number; h: number }[]>();
       const codes = new Set<string>();
       for (const entry of json.data || []) {
+        if (currentMapCode && getCalibrationEntryMapCode(entry, json.mapCode) !== currentMapCode) continue;
         if (entry.rects && entry.rects.length > 0) {
           map.set(entry.imageId, entry.rects.map((r: any) => ({ x: r.x, y: r.y, w: r.w, h: r.h })));
           const hasBinding = entry.rects.some((r: any) => r.bindings && r.bindings.length > 0);
@@ -105,6 +116,7 @@ export default function ImageEdit() {
       setCalibratedPointCodes(codes);
       let calCount = 0;
       for (const entry of json.data || []) {
+        if (currentMapCode && getCalibrationEntryMapCode(entry, json.mapCode) !== currentMapCode) continue;
         if (entry.rects && entry.rects.some((r: any) => r.bindings && r.bindings.length > 0)) calCount++;
       }
       setCalibratedImageCount(calCount);
@@ -115,9 +127,14 @@ export default function ImageEdit() {
     }
   }, []);
 
-  const handleImageDoubleClick = useCallback((item: ImageItem) => {
-    setCalibrationImage(item);
-  }, []);
+  const handleImageDoubleClick = useCallback(async (item: ImageItem) => {
+    try {
+      const fullImage = await loadFullImage(item);
+      setCalibrationImage(fullImage);
+    } catch (e: any) {
+      message.error("加载原图失败: " + (e?.message || ""));
+    }
+  }, [loadFullImage, message]);
 
   // 拉取当前项目下所有间隔
   useEffect(() => {
@@ -159,6 +176,9 @@ export default function ImageEdit() {
 
   // 弹窗状态
   const [surveyLoadOpen, setSurveyLoadOpen] = useState(false);
+  const [surveyExportOpen, setSurveyExportOpen] = useState(false);
+  const [imageLabelImportOpen, setImageLabelImportOpen] = useState(false);
+  const [imageLabelExportOpen, setImageLabelExportOpen] = useState(false);
 
   // 已加载的地图数据
   const [loadedMap, setLoadedMap] = useState<string | null>(null);
@@ -170,6 +190,7 @@ export default function ImageEdit() {
     // 卸载旧模型
     loaderRef.current?.destroy();
     drawingRef.current?.clear();
+    loadedMapRef.current = null;
     setLoadedMap(null);
     surveyDirRef.current = "";
     clearTask();
@@ -204,6 +225,7 @@ export default function ImageEdit() {
 
       if (lasFiles.length === 0) {
         message.warning("未找到 LAS 点云文件");
+        loadedMapRef.current = mapName;
         setLoadedMap(mapName);
         return;
       }
@@ -223,6 +245,7 @@ export default function ImageEdit() {
       }
 
       message.success(`地图"${mapName}"加载成功`);
+      loadedMapRef.current = mapName;
       setLoadedMap(mapName);
     } catch (e: any) {
       message.error("加载地图数据失败: " + (e?.message || ""));
@@ -243,7 +266,7 @@ export default function ImageEdit() {
       setTaskImages(items);
       setTotalImageCount(getTotalCount());
       console.log("[handleTaskLoad] 完成, 图片数:", items.length);
-      refreshCalibratedRects();
+      refreshCalibratedRects(loadedMapRef.current);
     } catch (e: any) {
       console.error("[handleTaskLoad] 失败:", e);
       message.error("加载任务数据失败: " + (e?.message || ""));
@@ -270,16 +293,16 @@ export default function ImageEdit() {
           <Button icon={<UploadOutlined />} onClick={() => setSurveyLoadOpen(true)}>
             勘察图像加载
           </Button>
-          <Button icon={<DownloadOutlined />} onClick={() => placeholder("勘察图像导出")}>
+          <Button icon={<DownloadOutlined />} onClick={() => setSurveyExportOpen(true)}>
             勘察图像导出
           </Button>
 
           <Divider orientation="vertical" />
 
-          <Button icon={<FileImageOutlined />} onClick={() => placeholder("图像标识加载")}>
+          <Button icon={<FileImageOutlined />} onClick={() => setImageLabelImportOpen(true)}>
             图像标识加载
           </Button>
-          <Button icon={<DownloadOutlined />} onClick={() => placeholder("图像标识导出")}>
+          <Button icon={<DownloadOutlined />} onClick={() => setImageLabelExportOpen(true)}>
             图像标识导出
           </Button>
 
@@ -448,6 +471,24 @@ export default function ImageEdit() {
 
       {/* 勘察图像加载弹窗 */}
       <SurveyImageLoad open={surveyLoadOpen} onClose={() => setSurveyLoadOpen(false)} onImport={handleSurveyLoad} onTaskImport={handleTaskLoad} />
+
+      {/* 勘察图像导出弹窗 */}
+      <SurveyImageExport open={surveyExportOpen} onClose={() => setSurveyExportOpen(false)} />
+
+      {/* 图像标识加载/导出弹窗 */}
+      <ImageLabelTransfer
+        open={imageLabelImportOpen}
+        mode="import"
+        onClose={() => setImageLabelImportOpen(false)}
+        onImported={(mapName) => {
+          if (mapName === loadedMapRef.current) refreshCalibratedRects(mapName);
+        }}
+      />
+      <ImageLabelTransfer
+        open={imageLabelExportOpen}
+        mode="export"
+        onClose={() => setImageLabelExportOpen(false)}
+      />
 
       {/* 标定视图（双击图片进入） */}
       {calibrationImage && (

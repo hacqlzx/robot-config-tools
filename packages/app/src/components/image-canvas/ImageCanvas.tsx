@@ -1,14 +1,19 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 
 export interface ImageItem {
-  img: HTMLImageElement;
+  img?: HTMLImageElement;
+  imagePath: string;
   id: number;
   x: number;
   y: number;
   w: number;
   h: number;
+  naturalWidth?: number;
+  naturalHeight?: number;
   side: "left" | "right";
   spId: number;
+  columnKey?: string;
+  columnLabel?: string;
   visName: string;
 }
 
@@ -17,14 +22,31 @@ interface Props {
   containerRef: React.RefObject<HTMLDivElement | null>;
   images: ImageItem[];
   visible?: boolean;
-  onImageDoubleClick?: (item: ImageItem) => void;
+  onImageDoubleClick?: (item: ImageItem) => void | Promise<void>;
   calibrationRects?: Map<number, { x: number; y: number; w: number; h: number }[]>;
   resetViewRef?: React.MutableRefObject<(() => void) | null>;
 }
 
-/** 图片画布：缩放/平移，rAF 驱动渲染，预缩放缩略图，视口裁剪 */
+interface ThumbEntry {
+  canvas: HTMLCanvasElement;
+  naturalWidth: number;
+  naturalHeight: number;
+  lastUsed: number;
+}
+
+const THUMB_CACHE_SCALE = 4;
+const MAX_THUMB_CACHE_SIZE = 180;
+const MAX_CONCURRENT_LOADS = 3;
+const COLUMN_HEADER_HEIGHT = 28;
+const COLUMN_HEADER_GAP = 8;
+const CALIBRATION_BOX_COLOR = "#00ff3b";
+const CALIBRATION_BOX_WIDTH = 4;
+const CALIBRATION_BOX_HALO_WIDTH = 7;
+
+/** 图片画布：缩放/平移，rAF 驱动渲染，懒加载缩略图缓存，视口裁剪 */
 export default function ImageCanvas({ canvasRef, containerRef, images, visible = true, onImageDoubleClick, calibrationRects, resetViewRef }: Props) {
   const [displayScale, setDisplayScale] = useState(1);
+  const [, setCacheVersion] = useState(0);
   const panRef = useRef({ x: 0, y: 0 });
   const scaleRef = useRef(1);
   const dragRef = useRef<{ mx: number; my: number; sx: number; sy: number } | null>(null);
@@ -34,30 +56,138 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
   const calibratedRef = useRef(calibrationRects);
   calibratedRef.current = calibrationRects;
   const resizeTimerRef = useRef(0);
+  const thumbCacheRef = useRef<Map<string, ThumbEntry>>(new Map());
+  const loadingThumbsRef = useRef<Set<string>>(new Set());
+  const loadQueueRef = useRef<ImageItem[]>([]);
+  const activeLoadsRef = useRef(0);
+  const generationRef = useRef(0);
 
-  const thumbScale = 2;
+  const imageKey = (item: ImageItem) => item.imagePath || String(item.id);
 
-  // 预缩放缩略图缓存：id → 2x 缩略尺寸的离屏 canvas，避免每帧从大图缩放，同时保证 2x 内不糊
-  const thumbCacheRef = useRef<Map<number, HTMLCanvasElement>>(new Map());
+  const drawColumnHeader = (
+    ctx: CanvasRenderingContext2D,
+    label: string,
+    x: number,
+    y: number,
+    w: number,
+  ) => {
+    ctx.save();
+    ctx.fillStyle = "rgba(245, 247, 250, 0.96)";
+    ctx.strokeStyle = "#d9dee7";
+    ctx.lineWidth = 1;
+    ctx.fillRect(x, y, w, COLUMN_HEADER_HEIGHT);
+    ctx.strokeRect(x, y, w, COLUMN_HEADER_HEIGHT);
 
-  // 重建缩略图缓存
-  useEffect(() => {
+    ctx.fillStyle = "#2f3a4a";
+    ctx.font = "13px sans-serif";
+    ctx.textBaseline = "middle";
+    let text = label;
+    const maxTextW = Math.max(20, w - 16);
+    while (ctx.measureText(text).width > maxTextW && text.length > 4) {
+      text = `${text.slice(0, -4)}...`;
+    }
+    ctx.fillText(text, x + 8, y + COLUMN_HEADER_HEIGHT / 2);
+    ctx.restore();
+  };
+
+  const scheduleDraw = useCallback(() => {
+    if (!rafIdRef.current) {
+      rafIdRef.current = requestAnimationFrame(draw);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pruneThumbCache = useCallback(() => {
     const cache = thumbCacheRef.current;
-    const newIds = new Set(images.map((item) => item.id));
-    for (const id of cache.keys()) {
-      if (!newIds.has(id)) cache.delete(id);
+    if (cache.size <= MAX_THUMB_CACHE_SIZE) return;
+    const removable = [...cache.entries()]
+      .sort((a, b) => a[1].lastUsed - b[1].lastUsed)
+      .slice(0, cache.size - MAX_THUMB_CACHE_SIZE);
+    for (const [key] of removable) cache.delete(key);
+  }, []);
+
+  const loadImageElement = useCallback(async (item: ImageItem): Promise<HTMLImageElement> => {
+    if (item.img?.complete) return item.img;
+    if (!item.imagePath) throw new Error("图片路径为空");
+    const buf = await window.electronAPI!.readLargeFile(item.imagePath);
+    const blob = new Blob([buf]);
+    const url = URL.createObjectURL(blob);
+    try {
+      return await new Promise<HTMLImageElement>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error(`图片加载失败: ${item.visName}`));
+        img.src = url;
+      });
+    } finally {
+      URL.revokeObjectURL(url);
     }
-    for (const item of images) {
-      if (cache.has(item.id)) continue;
-      if (!item.img || !item.img.complete) continue;
-      const thumb = document.createElement("canvas");
-      thumb.width = item.w * thumbScale;
-      thumb.height = item.h * thumbScale;
-      const tCtx = thumb.getContext("2d");
-      if (tCtx) tCtx.drawImage(item.img, 0, 0, thumb.width, thumb.height);
-      cache.set(item.id, thumb);
+  }, []);
+
+  const pumpQueue = useCallback(() => {
+    while (activeLoadsRef.current < MAX_CONCURRENT_LOADS && loadQueueRef.current.length > 0) {
+      const item = loadQueueRef.current.shift()!;
+      const key = imageKey(item);
+      if (thumbCacheRef.current.has(key) || loadingThumbsRef.current.has(key)) continue;
+      const generation = generationRef.current;
+      loadingThumbsRef.current.add(key);
+      activeLoadsRef.current++;
+
+      loadImageElement(item)
+        .then((img) => {
+          if (generation !== generationRef.current) return;
+          const ratio = img.naturalWidth > 0 && img.naturalHeight > 0
+            ? img.naturalWidth / img.naturalHeight
+            : item.w / item.h;
+          const targetW = Math.min(img.naturalWidth || item.w * THUMB_CACHE_SCALE, Math.max(item.w * THUMB_CACHE_SCALE, item.w));
+          const targetH = Math.min(img.naturalHeight || Math.round(targetW / ratio), Math.max(Math.round(targetW / ratio), item.h));
+          const thumb = document.createElement("canvas");
+          thumb.width = Math.max(1, Math.round(targetW));
+          thumb.height = Math.max(1, Math.round(targetH));
+          const tCtx = thumb.getContext("2d");
+          if (tCtx) {
+            tCtx.imageSmoothingEnabled = true;
+            tCtx.imageSmoothingQuality = "high";
+            tCtx.drawImage(img, 0, 0, thumb.width, thumb.height);
+          }
+          thumbCacheRef.current.set(key, {
+            canvas: thumb,
+            naturalWidth: img.naturalWidth,
+            naturalHeight: img.naturalHeight,
+            lastUsed: performance.now(),
+          });
+          pruneThumbCache();
+          setCacheVersion((v) => v + 1);
+          scheduleDraw();
+        })
+        .catch((err) => console.warn("[ImageCanvas] 缩略图加载失败:", item.visName, err))
+        .finally(() => {
+          loadingThumbsRef.current.delete(key);
+          activeLoadsRef.current--;
+          pumpQueue();
+        });
     }
-  }, [images]);
+  }, [loadImageElement, pruneThumbCache, scheduleDraw]);
+
+  const requestThumbnail = useCallback((item: ImageItem) => {
+    const key = imageKey(item);
+    if (thumbCacheRef.current.has(key) || loadingThumbsRef.current.has(key)) return;
+    if (loadQueueRef.current.some((queued) => imageKey(queued) === key)) return;
+    loadQueueRef.current.push(item);
+    pumpQueue();
+  }, [pumpQueue]);
+
+  useEffect(() => {
+    generationRef.current++;
+    loadQueueRef.current = [];
+
+    const currentKeys = new Set(images.map(imageKey));
+    for (const [key] of thumbCacheRef.current) {
+      if (!currentKeys.has(key) && thumbCacheRef.current.size > MAX_THUMB_CACHE_SIZE / 2) {
+        thumbCacheRef.current.delete(key);
+      }
+    }
+    scheduleDraw();
+  }, [images, scheduleDraw]);
 
   // 绘制：从 ref 读取 pan/scale，缩略图 + 视口裁剪
   const draw = useCallback(() => {
@@ -85,25 +215,73 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
     ctx.translate(p.x, p.y);
     ctx.scale(s, s);
 
-    let drawn = 0;
     const imgs = imagesRef.current;
     const cache = thumbCacheRef.current;
+    const drawnColumns = new Set<string>();
+
+    for (const item of imgs) {
+      const label = item.columnLabel;
+      if (!label) continue;
+      if (item.x + item.w < vpLeft || item.x > vpRight) continue;
+      const headerY = item.y - COLUMN_HEADER_GAP - COLUMN_HEADER_HEIGHT;
+      if (headerY + COLUMN_HEADER_HEIGHT < vpTop || headerY > vpBottom) continue;
+
+      const key = item.columnKey || `${item.x}`;
+      if (drawnColumns.has(key)) continue;
+      drawnColumns.add(key);
+      drawColumnHeader(ctx, label, item.x, headerY, item.w);
+    }
+
     for (const item of imgs) {
       // 视口裁剪
       if (item.x + item.w < vpLeft || item.x > vpRight) continue;
       if (item.y + item.h < vpTop || item.y > vpBottom) continue;
 
-      const src = cache.get(item.id) || item.img;
-      try { ctx.drawImage(src, item.x, item.y, item.w, item.h); drawn++; } catch { /* skip */ }
+      const key = imageKey(item);
+      const entry = cache.get(key);
+      if (entry) {
+        entry.lastUsed = performance.now();
+        try {
+          ctx.drawImage(entry.canvas, item.x, item.y, item.w, item.h);
+        } catch {
+          // skip corrupt thumb
+        }
+      } else if (item.img?.complete) {
+        try {
+          ctx.drawImage(item.img, item.x, item.y, item.w, item.h);
+        } catch {
+          // skip corrupt image
+        }
+      } else {
+        ctx.fillStyle = "#f5f7fa";
+        ctx.fillRect(item.x, item.y, item.w, item.h);
+        ctx.strokeStyle = "#d9dee7";
+        ctx.lineWidth = 1 / s;
+        ctx.strokeRect(item.x, item.y, item.w, item.h);
+        ctx.fillStyle = "#8c95a3";
+        ctx.font = `${12 / s}px sans-serif`;
+        ctx.fillText("加载中", item.x + 10, item.y + 22);
+        requestThumbnail(item);
+      }
+
       // 绘制标定框（缩放到缩略图比例）
       const rects = calibratedRef.current?.get(item.id);
-      if (rects && item.img.naturalWidth && item.img.naturalHeight) {
-        const sx = item.w / item.img.naturalWidth;
-        const sy = item.h / item.img.naturalHeight;
-        ctx.strokeStyle = "#52c41a";
-        ctx.lineWidth = 1.5 / s;
+      const naturalWidth = entry?.naturalWidth || item.img?.naturalWidth || item.naturalWidth;
+      const naturalHeight = entry?.naturalHeight || item.img?.naturalHeight || item.naturalHeight;
+      if (rects && naturalWidth && naturalHeight) {
+        const sx = item.w / naturalWidth;
+        const sy = item.h / naturalHeight;
         for (const r of rects) {
-          ctx.strokeRect(item.x + r.x * sx, item.y + r.y * sy, r.w * sx, r.h * sy);
+          const x = item.x + r.x * sx;
+          const y = item.y + r.y * sy;
+          const w = r.w * sx;
+          const h = r.h * sy;
+          ctx.strokeStyle = "rgba(0,0,0,0.62)";
+          ctx.lineWidth = CALIBRATION_BOX_HALO_WIDTH / s;
+          ctx.strokeRect(x, y, w, h);
+          ctx.strokeStyle = CALIBRATION_BOX_COLOR;
+          ctx.lineWidth = CALIBRATION_BOX_WIDTH / s;
+          ctx.strokeRect(x, y, w, h);
         }
       }
     }
@@ -114,14 +292,7 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
       ctx.font = "12px sans-serif";
       ctx.fillText(`${Math.round(s * 100)}%`, 8, 20);
     }
-    if (imgs.length > 0) console.log(`[ImageCanvas] 绘制 ${drawn}/${imgs.length} 张, scale=${s.toFixed(2)}`);
-  }, [canvasRef]);
-
-  const scheduleDraw = useCallback(() => {
-    if (!rafIdRef.current) {
-      rafIdRef.current = requestAnimationFrame(draw);
-    }
-  }, [draw]);
+  }, [canvasRef, requestThumbnail]);
 
   // 计算内容范围并适配容器
   const fitToContent = useCallback(() => {
@@ -134,6 +305,9 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
     if (cw <= 0 || ch <= 0) return;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const item of imgs) {
+      if (item.columnLabel) {
+        minY = Math.min(minY, item.y - COLUMN_HEADER_GAP - COLUMN_HEADER_HEIGHT);
+      }
       if (item.x < minX) minX = item.x;
       if (item.y < minY) minY = item.y;
       if (item.x + item.w > maxX) maxX = item.x + item.w;
@@ -229,7 +403,7 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
       const imgs = imagesRef.current;
       for (const item of imgs) {
         if (worldX >= item.x && worldX <= item.x + item.w && worldY >= item.y && worldY <= item.y + item.h) {
-          onDoubleClickRef.current(item);
+          void onDoubleClickRef.current(item);
           break;
         }
       }

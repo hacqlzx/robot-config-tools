@@ -65,6 +65,29 @@ export class DevicePointRepo {
     return this.db.prepare("SELECT * FROM device_point WHERE point_code = ?").get(pointCode) as DevicePoint | undefined;
   }
 
+  findByPath(
+    projectName: string,
+    voltName: string,
+    bayName: string,
+    mainDeviceName: string,
+    componentName: string,
+    pointName: string,
+  ): DevicePoint | undefined {
+    return this.db
+      .prepare(
+        `SELECT * FROM device_point
+         WHERE project_name = ?
+           AND volt_name = ?
+           AND bay_name = ?
+           AND main_device_name = ?
+           AND component_name = ?
+           AND point_name = ?
+         ORDER BY id ASC
+         LIMIT 1`,
+      )
+      .get(projectName, voltName, bayName, mainDeviceName, componentName, pointName) as DevicePoint | undefined;
+  }
+
   findByCalibrationId(calibrationId: string, projectName?: string): DevicePoint | undefined {
     if (projectName) {
       return this.db.prepare("SELECT * FROM device_point WHERE calibration_id = ? AND project_name = ?").get(calibrationId, projectName) as DevicePoint | undefined;

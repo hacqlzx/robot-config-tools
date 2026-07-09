@@ -7,6 +7,7 @@ import { menuConfig } from "@/config/menu";
 import BackendModal from "@/pages/backend-modal";
 import { getConnectionStatus, subscribe, ConnectionStatus, getCurrentIp } from "@/stores/backendStore";
 import { getAllRobot } from "@/api/config.js";
+import { MESSAGE_TOP_OFFSET } from "@/App";
 
 const menuItems: MenuProps["items"] = menuConfig.map((item) => ({ key: item.key, label: item.label }));
 
@@ -95,7 +96,7 @@ export default function AppHeader() {
   const [selectedRobot, setSelectedRobot] = useState<string | null>(getStoredRobot);
   const [robotOptions, setRobotOptions] = useState<{ label: string; value: string }[]>([]);
   const [connStatus, setConnStatus] = useState<ConnectionStatus>(getConnectionStatus);
-  const [messageApi, contextHolder] = message.useMessage();
+  const [messageApi, contextHolder] = message.useMessage({ top: MESSAGE_TOP_OFFSET });
 
   // 同步 selectedProject 到 localStorage
   useEffect(() => {

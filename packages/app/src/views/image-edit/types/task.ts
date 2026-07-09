@@ -3,6 +3,7 @@ export interface TaskImageConfig {
   camera_id: number;
   focus: number;
   height: number;
+  width?: number;
   ir_name: string;
   pan: number;
   pic_loc: [number, number];
@@ -58,8 +59,12 @@ export interface TaskManifest {
 
 /** 加载完成后供渲染使用的图片信息 */
 export interface TaskLoadedImage {
-  /** HTMLImageElement */
-  img: HTMLImageElement;
+  /** 图片绝对路径 */
+  imagePath: string;
+  /** 原图宽度（可选，缩略图懒加载后会拿到准确值） */
+  naturalWidth?: number;
+  /** 原图高度（可选，缩略图懒加载后会拿到准确值） */
+  naturalHeight?: number;
   /** 原始配置 */
   config: TaskImageConfig;
   /** 所属停靠点 ID */

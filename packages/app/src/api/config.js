@@ -150,6 +150,18 @@ export function importCommunicateExcel(file) {
   return http.post("/robot/tool/file/importCommunicateExcel", formData);
 }
 
+/**
+ * 图像标识导入（文件上传）
+ * @param {File} file - 图像标识 zip 文件
+ * @param {number} robotId - 机器人 ID
+ */
+export function importProspectCalibration(file, robotId) {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("robotId", String(robotId));
+  return http.post("/robot/tool/file/importProspectCalibration", formData);
+}
+
 // ========== 导出 ==========
 
 /**
@@ -159,6 +171,24 @@ export function importCommunicateExcel(file) {
  */
 export function exportSpaceModel(robotId) {
   return http.get("/robot/tool/file/exportSpaceModel", { robotId });
+}
+
+/**
+ * 勘察图像导出
+ * @param {number} robotId - 机器人 ID
+ * @returns 返回 { data: "/robot/robot/..." } 文件路径
+ */
+export function exportProspectImage(robotId) {
+  return http.get("/robot/tool/file/exportProspectImage", { robotId });
+}
+
+/**
+ * 设备验证图导出
+ * @param {number} robotId - 机器人 ID
+ * @returns 返回 { data: "/robot/robot/..." } 文件路径
+ */
+export function exportDeviceCheckImage(robotId) {
+  return http.get("/robot/tool/file/exportDeviceCheckImage", { robotId });
 }
 
 /** 点表模板下载 */

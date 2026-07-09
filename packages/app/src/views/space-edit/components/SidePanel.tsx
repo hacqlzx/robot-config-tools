@@ -214,7 +214,7 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
             </div>
           ))}
         </div>
-        <div style={{ flex: 1, overflow: "auto", padding: 8 }}>
+        <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 8 }}>
           {sideTab === "map" ? (
             mapTreeData.length === 0 ? (
               <div style={{ color: "#999", textAlign: "center", padding: 16, fontSize: 12 }}>暂无数据</div>
@@ -235,8 +235,8 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
               />
             )
           ) : sideTab === "device" ? (
-            <div className="side-tree" style={{ overflow: "hidden", height: "100%" }}>
-              <DeviceTree />
+            <div className="side-tree">
+              <DeviceTree defaultExpandLevel={3} />
             </div>
           ) : sideTab === "cabinet" ? (
             treeLoading ? (

@@ -28,8 +28,10 @@ interface RectData {
 
 /** 勘察数据文件结构 */
 interface CalibrationFileData {
-  mapCode: string;
+  version?: number;
+  mapCode?: string;
   data: Array<{
+    mapCode?: string;
     imageId: number;
     imageName: string;
     spId: number;
@@ -39,7 +41,7 @@ interface CalibrationFileData {
 }
 
 interface Props {
-  image: ImageItem;
+  image: ImageItem & { img: HTMLImageElement };
   taskDir: string;
   mapName: string | null;
   selBayId: number | undefined;
@@ -69,6 +71,21 @@ function getSharedCalibrationFilePath(taskDir: string): string {
   return `${root}/${CALIBRATION_FILE_NAME}`;
 }
 
+function getEntryMapCode(entry: CalibrationFileData["data"][number], fileMapCode?: string): string {
+  return String(entry.mapCode || fileMapCode || "");
+}
+
+function normalizeCalibrationEntries(file?: CalibrationFileData): CalibrationFileData["data"] {
+  return (file?.data || []).map((entry) => ({
+    ...entry,
+    mapCode: getEntryMapCode(entry, file?.mapCode),
+  }));
+}
+
+function isSameMapCode(a?: string | null, b?: string | null): boolean {
+  return String(a || "") === String(b || "");
+}
+
 export default function CalibrationView({ image, taskDir, mapName, selBayId, onSelBayIdChange, nameFilter, onNameFilterChange, pointFilter, onPointFilterChange, onBack }: Props) {
   const { message } = App.useApp();
   const [mode, setMode] = useState<"move" | "select">("move");
@@ -77,6 +94,7 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
   const [rects, setRects] = useState<RectData[]>([]);
   const [pendingRect, setPendingRect] = useState<RectData | null>(null);
   const [selectedRectId, setSelectedRectId] = useState<number | null>(null);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "pending" | "saving" | "saved" | "error">("idle");
 
   // 缩放/平移
   const scaleRef = useRef(1);
@@ -110,8 +128,14 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
   selectedRef.current = selectedRectId;
   const taskDirRef = useRef(taskDir);
   taskDirRef.current = taskDir;
+  const mapNameRef = useRef(mapName);
+  mapNameRef.current = mapName;
   // 缓存 JSON 中所有图片的标定数据，用于计算点位总绑定次数
   const allDataRef = useRef<CalibrationFileData["data"]>([]);
+  const saveTimerRef = useRef<number>(0);
+  const saveInFlightRef = useRef(false);
+  const saveQueuedRef = useRef(false);
+  const savedStatusTimerRef = useRef<number>(0);
 
   // 点表
   const [bayList, setBayList] = useState<{ id: number; bayName: string }[]>([]);
@@ -171,9 +195,11 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
         if (!filePath) return;
         const buf = await window.electronAPI.readLargeFile(filePath);
         const json = JSON.parse(new TextDecoder().decode(buf)) as CalibrationFileData;
-        allDataRef.current = json.data || [];
+        const entries = normalizeCalibrationEntries(json);
+        const currentMapCode = mapNameRef.current || json.mapCode || "";
+        allDataRef.current = entries;
         const entry = json.data?.find(
-          (d) => d.imageId === image.id
+          (d) => d.imageId === image.id && isSameMapCode(getEntryMapCode(d, json.mapCode), currentMapCode)
         );
         if (entry?.rects) {
           setRects(entry.rects);
@@ -189,56 +215,96 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
     loadData();
   }, [taskDir, image.spId, image.side]);
 
-  // 自动保存
-  const saveData = useCallback(() => {
+  const buildSaveData = useCallback((rectSnapshot: RectData[]): CalibrationFileData => ({
+    version: 2,
+    mapCode: mapNameRef.current || "",
+    data: [
+      {
+        mapCode: mapNameRef.current || "",
+        imageId: imageRef.current.id,
+        imageName: imageRef.current.visName,
+        spId: imageRef.current.spId,
+        side: imageRef.current.side,
+        rects: rectSnapshot,
+      },
+    ],
+  }), []);
+
+  const saveSnapshot = useCallback(async (rectSnapshot: RectData[]) => {
     const td = taskDirRef.current;
     const project = localStorage.getItem("selectedProject") || "";
     if (!td || !project || !window.electronAPI?.project) return;
-    const allRects = [...rectsRef.current];
-    const fileData: CalibrationFileData = {
-      mapCode: mapName || "",
-      data: [
-        {
-          imageId: imageRef.current.id,
-          imageName: imageRef.current.visName,
-          spId: imageRef.current.spId,
-          side: imageRef.current.side,
-          rects: allRects,
-        },
-      ],
-    };
 
-    // 点表绑定/标定结果是项目级共享数据；导入图片时只覆盖各地图 img，不能覆盖这个文件。
+    // 点表绑定/标定结果是项目级共享数据；导入图片时只覆盖各地图数据目录，不能覆盖这个文件。
     const sharedFilePath = getSharedCalibrationFilePath(td);
     if (!sharedFilePath) return;
     const subPath = `${SURVEY_DIR_NAME}/${CALIBRATION_FILE_NAME}`;
+    const finalData = buildSaveData(rectSnapshot);
 
     // 先读取现有文件，合并其他 spId/side 的数据
-    const save = async (finalData: CalibrationFileData) => {
-      try {
-        const buf = await window.electronAPI!.readLargeFile(sharedFilePath);
-        const existing = JSON.parse(new TextDecoder().decode(buf)) as CalibrationFileData;
-        const other = (existing.data || []).filter(
-          (d) => d.imageId !== imageRef.current.id
-        );
-        finalData.data = [...other, finalData.data[0]];
-      } catch {
-        // 文件不存在
-      }
-      const content = JSON.stringify(finalData, null, 2);
-      await window.electronAPI!.project.writeFile(project, subPath, new TextEncoder().encode(content));
-      allDataRef.current = finalData.data;
-      console.log("[Calibration] 保存成功:", subPath);
-    };
+    try {
+      const buf = await window.electronAPI!.readLargeFile(sharedFilePath);
+      const existing = JSON.parse(new TextDecoder().decode(buf)) as CalibrationFileData;
+      const currentMapCode = mapNameRef.current || existing.mapCode || "";
+      const other = normalizeCalibrationEntries(existing).filter(
+        (d) => !(d.imageId === imageRef.current.id && isSameMapCode(d.mapCode, currentMapCode))
+      );
+      finalData.data = [...other, finalData.data[0]];
+    } catch {
+      // 文件不存在
+    }
+    const content = JSON.stringify(finalData, null, 2);
+    await window.electronAPI!.project.writeFile(project, subPath, new TextEncoder().encode(content));
+    allDataRef.current = finalData.data;
+    console.log("[Calibration] 保存成功:", subPath);
+  }, [buildSaveData]);
 
-    save(fileData).catch((e) => console.error("[Calibration] 保存失败:", e));
-  }, [mapName]);
+  const flushSave = useCallback(async () => {
+    if (saveInFlightRef.current) {
+      saveQueuedRef.current = true;
+      return;
+    }
 
-  const saveTimerRef = useRef<number>(0);
+    saveInFlightRef.current = true;
+    setSaveStatus("saving");
+    try {
+      do {
+        saveQueuedRef.current = false;
+        await saveSnapshot([...rectsRef.current]);
+      } while (saveQueuedRef.current);
+
+      setSaveStatus("saved");
+      clearTimeout(savedStatusTimerRef.current);
+      savedStatusTimerRef.current = window.setTimeout(() => setSaveStatus("idle"), 1200);
+    } catch (e) {
+      console.error("[Calibration] 保存失败:", e);
+      setSaveStatus("error");
+    } finally {
+      saveInFlightRef.current = false;
+    }
+  }, [saveSnapshot]);
+
   const scheduleSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = window.setTimeout(saveData, AUTO_SAVE_INTERVAL);
-  }, [saveData]);
+    setSaveStatus("pending");
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = 0;
+      void flushSave();
+    }, AUTO_SAVE_INTERVAL);
+  }, [flushSave]);
+
+  const handleBack = useCallback(() => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = 0;
+    }
+    flushSave().finally(onBack);
+  }, [flushSave, onBack]);
+
+  useEffect(() => () => {
+    clearTimeout(saveTimerRef.current);
+    clearTimeout(savedStatusTimerRef.current);
+  }, []);
 
   // 初始自适应：图片适配画布
   useEffect(() => {
@@ -746,7 +812,9 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
   // 计算某点位在所有图片中的总绑定次数（allDataRef 存的是上次保存的快照，rectsRef 是当前内存数据）
   const getPointBindCount = (pointCode: string): number => {
     let count = 0;
+    const currentMapCode = mapNameRef.current || "";
     for (const entry of allDataRef.current) {
+      if (!isSameMapCode(entry.mapCode, currentMapCode)) continue;
       if (entry.imageId === imageRef.current.id) continue;
       for (const r of entry.rects) {
         count += r.bindings.filter((b) => b.pointCode === pointCode).length;
@@ -794,7 +862,13 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
           {`  sp${image.spId}·${image.side === "left" ? "云台左" : "云台右"}`}
           {pendingRect ? "  [待绑定]" : ""}
         </span>
-        <Button icon={<ArrowLeftOutlined />} onClick={onBack} style={{ marginLeft: "auto" }}>返回图像编辑</Button>
+        <span className={`calibration-save-status ${saveStatus}`}>
+          {saveStatus === "pending" && "待保存"}
+          {saveStatus === "saving" && "保存中..."}
+          {saveStatus === "saved" && "已保存"}
+          {saveStatus === "error" && "保存失败"}
+        </span>
+        <Button icon={<ArrowLeftOutlined />} onClick={handleBack} style={{ marginLeft: "auto" }}>返回图像编辑</Button>
       </div>
 
       <div className="calibration-body" ref={bodyRef}>
