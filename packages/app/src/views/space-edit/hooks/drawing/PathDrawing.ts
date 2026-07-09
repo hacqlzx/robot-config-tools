@@ -573,12 +573,6 @@ export class PathDrawing {
     }
   };
 
-  private hasConnection(from: number, to: number): boolean {
-    return this.connections.some(
-      ([a, b]) => (a === from && b === to) || (a === to && b === from),
-    );
-  }
-
   private addConnectionInternal(
     from: number,
     to: number,
@@ -586,8 +580,7 @@ export class PathDrawing {
     bezier?: { cp1: [number, number, number]; cp2: [number, number, number] } | null,
   ) {
     if (from === to) return;
-    // 当前路径不允许重复边，避免用户反复点同一对停靠点导致保存重复路径段。
-    if (this.hasConnection(from, to)) return;
+    // 示意路径允许往复重叠；是否能保存为单条无分支序列由持久化层校验。
     const idx = this.connections.length;
     this.connections.push([from, to]);
     this.pathIds.push(id || genId());

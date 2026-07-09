@@ -3,11 +3,12 @@ export const POINT_TABLE_DIR_NAME = "点表";
 export const MAP_MODEL_FILE_NAME = "map.las";
 export const MAP_INFO_FILE_NAME = "map_info.json";
 
-export const MODEL_FILE_ACCEPT = ".las,.laz";
+export const MODEL_FILE_ACCEPT = ".las,.laz,.zip";
 export const POINT_TABLE_FILE_ACCEPT = ".xlsx,.xls";
 
 export const MODEL_FILE_RE = /\.(las|laz)$/i;
 export const LAS_FILE_RE = /\.las$/i;
+export const ZIP_FILE_RE = /\.zip$/i;
 export const POINT_TABLE_FILE_RE = /\.(xlsx|xls)$/i;
 
 export function normalizeProjectPath(value: string): string {
@@ -30,8 +31,12 @@ export function isLasFileName(fileName: string): boolean {
   return LAS_FILE_RE.test(fileName);
 }
 
+export function isZipFileName(fileName: string): boolean {
+  return ZIP_FILE_RE.test(fileName);
+}
+
 export function stripModelExtension(fileName: string): string {
-  return fileName.replace(MODEL_FILE_RE, "");
+  return fileName.replace(/\.(las|laz|zip)$/i, "");
 }
 
 export function siblingFilePath(filePath: string, nextFileName: string): string {

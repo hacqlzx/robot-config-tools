@@ -6,8 +6,10 @@ import {
   isPathPointObject,
   isPathRenderData,
   isRobotAreaList,
+  drawingDataLasToScene,
   pointToTuple,
   robotAreasToDrawingItemsData,
+  robotAreasToSceneDrawingItemsData,
   type BoxRenderItem,
   type CabinetRenderItem,
   type DrawingRenderData,
@@ -16,6 +18,7 @@ import {
   type PathSegmentValue,
 } from "./drawing-data";
 import { electronFileSource, type FileSource } from "./file-source";
+import { loadLasCoordinateTransform } from "./coordinate-transform";
 import { createLine, createSphere, updateLineEntity } from "./render-primitives";
 
 const RED = new pc.Color(1, 0.1, 0.1);
@@ -125,6 +128,16 @@ export class DrawingRenderer {
     const buf = await this.fileSource.readAll(filePath);
     const text = new TextDecoder("utf-8").decode(buf);
     const data = JSON.parse(text) as unknown;
+    if (isRobotAreaList(data)) {
+      const coordinate = await loadLasCoordinateTransform(this.fileSource, filePath);
+      this.loadData(robotAreasToSceneDrawingItemsData(data, coordinate));
+      return;
+    }
+    if (isPathRenderData(data) || isDrawingItemsData(data)) {
+      const coordinate = await loadLasCoordinateTransform(this.fileSource, filePath);
+      this.loadData(drawingDataLasToScene(data, coordinate));
+      return;
+    }
     this.loadData(data);
   }
 

@@ -1,6 +1,8 @@
 import { shell } from "electron";
+import AdmZip from "adm-zip";
 import fs from "fs";
 import path from "path";
+import os from "os";
 import { getDatabase } from "@robot/database";
 import { exportSpaceZip } from "../export-points";
 import { getProjectRoot, ensureProjectRoot, hasProjectRootConfig, initProjectRoot } from "./project-root";
@@ -29,6 +31,18 @@ import { readDirTree, type TreeNode } from "./project-tree";
 
 const MAP_MODEL_FILE_NAME = "map.las";
 const MAP_INFO_FILE_NAME = "map_info.json";
+const MAP_DIR_NAME = "地图";
+
+interface ImportedSpaceModelZipResult {
+  mapName: string;
+  mapDir: string;
+  modelPath: string;
+}
+
+interface PreparedMapSource {
+  sourceDir: string;
+  mapName: string;
+}
 
 export async function listProjects(): Promise<string[]> {
   ensureProjectRoot();
@@ -131,6 +145,187 @@ export async function importProjectModel(projectName: string, sourcePath: string
     updateManifestForWrittenFile(projectName, mapInfoPath, Buffer.byteLength(mapInfoText));
   }
   return targetPath;
+}
+
+export async function importProjectModelZip(projectName: string, sourcePath: string): Promise<ImportedSpaceModelZipResult> {
+  const rawSourcePath = String(sourcePath ?? "").trim();
+  if (!rawSourcePath || !path.isAbsolute(rawSourcePath)) {
+    throw new Error("源压缩包路径无效");
+  }
+
+  const sourceResolved = path.resolve(rawSourcePath);
+  if (path.extname(sourceResolved).toLowerCase() !== ".zip") {
+    throw new Error("仅支持 ZIP 空间模型包");
+  }
+
+  let sourceStat: Awaited<ReturnType<typeof fs.promises.stat>> | null = null;
+  try {
+    sourceStat = await fs.promises.stat(sourceResolved);
+  } catch {
+    sourceStat = null;
+  }
+  if (!sourceStat?.isFile()) {
+    throw new Error("源压缩包不存在");
+  }
+
+  const manifest = ensureProjectManifest(projectName);
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "robot-space-import-"));
+
+  try {
+    const zip = new AdmZip(sourceResolved);
+    zip.extractAllTo(tempRoot, true);
+
+    const prepared = prepareMapSourceDir(tempRoot, sourceResolved);
+    const mapSourceDir = prepared.sourceDir;
+    const mapName = assertSafePathSegment(prepared.mapName, "地图名称");
+    const targetDir = resolveProjectPath(projectName, manifest.layout.dirs.maps || MAP_DIR_NAME, mapName);
+
+    if (fs.existsSync(targetDir)) {
+      fs.rmSync(targetDir, { recursive: true, force: true });
+      removeManifestAssetsUnderPath(projectName, targetDir);
+    }
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.cpSync(mapSourceDir, targetDir, { recursive: true, force: true });
+
+    const modelPath = findPreferredModelFile(targetDir);
+    if (!modelPath) {
+      throw new Error("压缩包中未找到 map.las 或 LAS/LAZ 模型文件");
+    }
+
+    const modelStat = fs.statSync(modelPath);
+    updateManifestForWrittenFile(projectName, modelPath, modelStat.size);
+
+    const mapInfoPath = path.join(targetDir, MAP_INFO_FILE_NAME);
+    if (!fs.existsSync(mapInfoPath)) {
+      const mapInfoText = `${JSON.stringify({ mapName }, null, 2)}\n`;
+      await fs.promises.writeFile(mapInfoPath, mapInfoText, "utf-8");
+      updateManifestForWrittenFile(projectName, mapInfoPath, Buffer.byteLength(mapInfoText));
+    } else {
+      updateManifestForWrittenFile(projectName, mapInfoPath, fs.statSync(mapInfoPath).size);
+    }
+
+    return { mapName, mapDir: targetDir, modelPath };
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+function prepareMapSourceDir(extractDir: string, sourceZipPath: string): PreparedMapSource {
+  const outerMapZip = findOuterMapZip(extractDir);
+  if (outerMapZip) {
+    const mapName = assertSafePathSegment(path.basename(outerMapZip, ".zip"), "地图名称");
+    const mapExtractDir = path.join(extractDir, "__map__", mapName);
+    fs.mkdirSync(mapExtractDir, { recursive: true });
+    new AdmZip(outerMapZip).extractAllTo(mapExtractDir, true);
+    flattenSingleWrapperDir(mapExtractDir);
+    normalizeMapModelFileName(mapExtractDir);
+    return { sourceDir: mapExtractDir, mapName };
+  }
+
+  const mapDirFromOuterPackage = findMapDirUnderMapRoot(extractDir);
+  if (mapDirFromOuterPackage) {
+    normalizeMapModelFileName(mapDirFromOuterPackage);
+    return { sourceDir: mapDirFromOuterPackage, mapName: path.basename(mapDirFromOuterPackage) };
+  }
+
+  flattenSingleWrapperDir(extractDir);
+  const directModel = findPreferredModelFile(extractDir, false);
+  if (directModel) {
+    normalizeMapModelFileName(extractDir);
+    return { sourceDir: extractDir, mapName: path.basename(sourceZipPath, ".zip") };
+  }
+
+  const mapDir = findDirContainingModel(extractDir);
+  if (mapDir) {
+    normalizeMapModelFileName(mapDir);
+    return { sourceDir: mapDir, mapName: path.basename(mapDir) };
+  }
+
+  throw new Error("压缩包中未找到地图模型文件");
+}
+
+function findOuterMapZip(rootDir: string): string | null {
+  const mapRoot = path.join(rootDir, MAP_DIR_NAME);
+  if (!fs.existsSync(mapRoot)) return null;
+
+  const entries = fs.readdirSync(mapRoot, { withFileTypes: true });
+  const zipEntries = entries.filter((entry) => entry.isFile() && path.extname(entry.name).toLowerCase() === ".zip");
+  if (zipEntries.length > 1) {
+    throw new Error("空间模型加载仅支持单个地图包，请选择单地图导出的 ZIP");
+  }
+  return zipEntries[0] ? path.join(mapRoot, zipEntries[0].name) : null;
+}
+
+function findMapDirUnderMapRoot(rootDir: string): string | null {
+  const mapRoot = path.join(rootDir, MAP_DIR_NAME);
+  if (!fs.existsSync(mapRoot)) return null;
+
+  if (findPreferredModelFile(mapRoot, false)) return mapRoot;
+
+  const entries = fs.readdirSync(mapRoot, { withFileTypes: true });
+  const mapDir = entries.find((entry) => {
+    if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name.startsWith("__")) return false;
+    return !!findPreferredModelFile(path.join(mapRoot, entry.name), false);
+  });
+  return mapDir ? path.join(mapRoot, mapDir.name) : null;
+}
+
+function flattenSingleWrapperDir(targetDir: string): void {
+  const items = fs.readdirSync(targetDir, { withFileTypes: true })
+    .filter((item) => !item.name.startsWith(".") && !item.name.startsWith("__"));
+  if (items.length !== 1 || !items[0].isDirectory()) return;
+
+  const wrapper = path.join(targetDir, items[0].name);
+  if (!findPreferredModelFile(wrapper)) return;
+
+  for (const item of fs.readdirSync(wrapper, { withFileTypes: true })) {
+    const src = path.join(wrapper, item.name);
+    const dst = path.join(targetDir, item.name);
+    fs.cpSync(src, dst, { recursive: true, force: true });
+  }
+  fs.rmSync(wrapper, { recursive: true, force: true });
+}
+
+function findDirContainingModel(rootDir: string): string | null {
+  const queue = [rootDir];
+  while (queue.length > 0) {
+    const dir = queue.shift()!;
+    if (findPreferredModelFile(dir, false)) return dir;
+    for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (item.isDirectory() && !item.name.startsWith(".") && !item.name.startsWith("__")) {
+        queue.push(path.join(dir, item.name));
+      }
+    }
+  }
+  return null;
+}
+
+function findPreferredModelFile(rootDir: string, recursive = true): string | null {
+  const directMapLas = path.join(rootDir, MAP_MODEL_FILE_NAME);
+  if (fs.existsSync(directMapLas)) return directMapLas;
+
+  const direct = fs.readdirSync(rootDir, { withFileTypes: true })
+    .find((entry) => entry.isFile() && SUPPORTED_MAP_EXTS.has(path.extname(entry.name).toLowerCase()));
+  if (direct) return path.join(rootDir, direct.name);
+
+  if (!recursive) return null;
+  for (const item of fs.readdirSync(rootDir, { withFileTypes: true })) {
+    if (!item.isDirectory() || item.name.startsWith(".") || item.name.startsWith("__")) continue;
+    const found = findPreferredModelFile(path.join(rootDir, item.name), true);
+    if (found) return found;
+  }
+  return null;
+}
+
+function normalizeMapModelFileName(mapDir: string): void {
+  const target = path.join(mapDir, MAP_MODEL_FILE_NAME);
+  if (fs.existsSync(target)) return;
+
+  const model = findPreferredModelFile(mapDir, false);
+  if (!model) return;
+  const ext = path.extname(model).toLowerCase();
+  if (!SUPPORTED_MAP_EXTS.has(ext)) return;
+  fs.renameSync(model, target);
 }
 
 export function getProjectManifest(projectName: string) {

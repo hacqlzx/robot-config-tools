@@ -6,6 +6,8 @@
  * - image-edit / 其他页面也可以把解析后的 manifest 或 JSON 转成这里的形状再渲染；
  * - DrawingRenderer 只做只读回显和命中选择，不承担业务校验。
  */
+import type { LasCoordinateTransform, Vec3Tuple } from "./coordinate-transform";
+
 export type DrawingItemType = "cabinet" | "device-area" | "charging-area";
 
 export interface DrawingBayRef {
@@ -86,7 +88,7 @@ export interface RobotAreaRecord {
   [key: string]: unknown;
 }
 
-type VecTuple = [number, number, number];
+type VecTuple = Vec3Tuple;
 
 const AREA_TYPE_CABINET_ROW = "1";
 const AREA_TYPE_CABINET = "2";
@@ -284,4 +286,80 @@ export function robotAreasToDrawingItemsData(records: RobotAreaRecord[]): Drawin
     }
   }
   return { items };
+}
+
+function tupleFromArray(value: number[]): VecTuple | null {
+  const [x, y, z] = value;
+  return isFiniteNumber(x) && isFiniteNumber(y) && isFiniteNumber(z) ? [x, y, z] : null;
+}
+
+function transformVerts(verts: number[][], transform: (point: VecTuple) => VecTuple): number[][] {
+  return verts
+    .map(tupleFromArray)
+    .filter(Boolean)
+    .map((point) => [...transform(point as VecTuple)]);
+}
+
+function transformDrawingItemToScene(item: DrawingRenderItem, coordinate: LasCoordinateTransform): DrawingRenderItem {
+  if (isCabinetRenderItem(item)) {
+    return {
+      ...item,
+      geometry: {
+        ...item.geometry,
+        verts: transformVerts(item.geometry.verts, coordinate.lasToScene),
+      },
+    };
+  }
+  return {
+    ...item,
+    geometry: {
+      ...item.geometry,
+      verts: transformVerts(item.geometry.verts, coordinate.lasToScene),
+    },
+  };
+}
+
+function transformPathPointToScene(point: PathPointValue, coordinate: LasCoordinateTransform): PathPointValue {
+  const tuple = pointToTuple(point);
+  if (!tuple) return point;
+  const [x, y, z] = coordinate.lasToScene(tuple);
+  if (isPathPointObject(point)) return { ...point, x, y, z };
+  return [x, y, z];
+}
+
+function transformBezierToScene(bezier: unknown, coordinate: LasCoordinateTransform): unknown {
+  if (!isRecord(bezier)) return bezier;
+  const cp1 = Array.isArray(bezier.cp1) ? tupleFromArray(bezier.cp1 as number[]) : null;
+  const cp2 = Array.isArray(bezier.cp2) ? tupleFromArray(bezier.cp2 as number[]) : null;
+  if (!cp1 || !cp2) return bezier;
+  return {
+    ...bezier,
+    cp1: coordinate.lasToScene(cp1),
+    cp2: coordinate.lasToScene(cp2),
+  };
+}
+
+export function drawingDataLasToScene(data: DrawingRenderData, coordinate: LasCoordinateTransform): DrawingRenderData {
+  if (isPathRenderData(data)) {
+    return {
+      ...data,
+      points: data.points.map((point) => transformPathPointToScene(point, coordinate)),
+      paths: data.paths.map((path) => ({
+        ...path,
+        bezier: transformBezierToScene(path.bezier, coordinate),
+      })),
+    };
+  }
+
+  return {
+    ...data,
+    items: data.items.map((item) => transformDrawingItemToScene(item, coordinate)),
+  };
+}
+
+export function robotAreasToSceneDrawingItemsData(
+  records: RobotAreaRecord[],
+  coordinate: LasCoordinateTransform,
+): DrawingItemsData {
+  return drawingDataLasToScene(robotAreasToDrawingItemsData(records), coordinate) as DrawingItemsData;
 }

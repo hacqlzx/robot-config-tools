@@ -138,24 +138,29 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     }
   }, [getCurrentModelPath, isAutoSavingRef, message, params]);
 
-  /** 保存可行路径 */
-  const handleSavePath = useCallback(async () => {
-    const silent = isAutoSavingRef.current;
+  const savePathInternal = useCallback(async (showError: boolean): Promise<boolean> => {
     const api = window.electronAPI;
-    if (!api) { if (!silent) message.warning("仅 Electron 模式下可保存"); return; }
+    if (!api) { if (showError) message.warning("仅 Electron 模式下可保存"); return false; }
     const projectName = localStorage.getItem("selectedProject");
-    if (!projectName) { if (!silent) message.warning("请先选择项目"); return; }
+    if (!projectName) { if (showError) message.warning("请先选择项目"); return false; }
     const data = params.getPathData();
-    if (!data) return;
+    if (!data) return true;
     const modelPath = getCurrentModelPath();
-    if (!modelPath) { if (!silent) message.warning("未找到模型路径，无法保存"); return; }
+    if (!modelPath) { if (showError) message.warning("未找到模型路径，无法保存"); return false; }
     try {
       await savePathDrawing({ api, projectName, modelPath, data });
       params.onPathFileSaved?.(getPathJsonPath(modelPath));
+      return true;
     } catch (e: any) {
-      if (!silent) message.error("保存路径失败: " + (e?.message || e));
+      if (showError) message.error("保存路径失败: " + (e?.message || e));
+      return false;
     }
   }, [isAutoSavingRef, message, params, getCurrentModelPath]);
+
+  /** 保存可行路径 */
+  const handleSavePath = useCallback(async () => {
+    await savePathInternal(!isAutoSavingRef.current);
+  }, [isAutoSavingRef, savePathInternal]);
 
   // handleSaveAll 会被定时器调用。用 ref 保存最新函数，避免定时器闭包拿到旧状态。
   const handleSaveAllRef = useRef<() => Promise<void>>(async () => {});
@@ -185,14 +190,18 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     isAutoSavingRef.current = true;
     if (hasCharging) await handleSaveChargingArea();
     await handleSaveDeviceAreas();
-    await handleSavePath();
+    const pathSaved = await savePathInternal(!silent);
     isAutoSavingRef.current = false;
+    if (!pathSaved) {
+      if (!silent) saveStatusSetter("idle");
+      return;
+    }
     if (!silent) {
       saveStatusSetter("saved");
       message.success("保存成功");
       setTimeout(() => saveStatusSetter("idle"), 2000);
     }
-  }, [handleSaveChargingArea, handleSaveDeviceAreas, handleSavePath, isAutoSavingRef, saveStatusSetter, message, params, getCurrentModelPath]);
+  }, [handleSaveChargingArea, handleSaveDeviceAreas, savePathInternal, isAutoSavingRef, saveStatusSetter, message, params, getCurrentModelPath]);
   handleSaveAllRef.current = handleSaveAll;
 
   // 自动保存只负责同步当前编辑态几何，不弹成功提示；手动保存才更新 SaveStatusBadge。

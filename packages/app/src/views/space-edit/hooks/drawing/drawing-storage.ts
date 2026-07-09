@@ -4,7 +4,8 @@
 // 编辑器内部仍使用 8 顶点结构，读写时在这里完成 pose(4 点字符串) <-> 8 顶点的转换。
 
 import type { SpaceTreeNode } from "../../types";
-import { MAP_DIR_NAME, mapSiblingFilePath, mapSiblingSubPath, projectSubPathFromDir } from "../../utils/space-paths";
+import { fileNameFromPath, MAP_DIR_NAME, mapSiblingFilePath, mapSiblingSubPath, projectSubPathFromDir } from "../../utils/space-paths";
+import { loadLasCoordinateTransform, type LasCoordinateTransform, type Vec3Tuple } from "../../utils/las-coordinate-transform";
 import type { PathPoint, PathSegment, PathData } from "./PathDrawing";
 
 /** 绘制类型标识 */
@@ -18,7 +19,7 @@ export interface CabinetItem {
   area: { id: number; name: string; code: string };
   /** 所属间隔 */
   bay: { id: number; name: string; code: string };
-  /** 几何：立方体 8 顶点世界坐标 + 沿前底边的分隔参数 */
+  /** 几何：立方体 8 顶点工具场景坐标 + 沿前底边的分隔参数 */
   geometry: { verts: number[][]; splits: number[] };
   /** 各分隔屏柜（编码 + 名称） */
   cabinets: { code: string; name: string }[];
@@ -29,7 +30,7 @@ export interface CabinetItem {
 export interface ChargingAreaItem {
   id: string;
   type: "charging-area";
-  /** 几何：立体矩形 8 顶点世界坐标 */
+  /** 几何：立体矩形 8 顶点工具场景坐标 */
   geometry: { verts: number[][] };
   updatedAt: string;
 }
@@ -38,7 +39,7 @@ export interface ChargingAreaItem {
 export interface DeviceAreaItem {
   id: string;
   type: "device-area";
-  /** 几何：立体矩形 8 顶点世界坐标 */
+  /** 几何：立体矩形 8 顶点工具场景坐标 */
   geometry: { verts: number[][] };
   /** 高度（米） */
   height: number;
@@ -80,7 +81,8 @@ export const LEGACY_DRAWING_FILE_NAME = "充电区域、设备区、屏柜.json"
 
 /** 可行路径单独存储文件名 */
 export const PATH_FILE_NAME = "reference_path.txt";
-export const LEGACY_PATH_FILE_NAME = "可行驶路径.json";
+export const ROBOT_PATH_FILE_NAME = "path.json";
+export const ROBOT_STOP_POINTS_FILE_NAMES = ["stop_points.json", "stop_point.json"] as const;
 
 const AREA_TYPE_CABINET_ROW = "1";
 const AREA_TYPE_CABINET = "2";
@@ -88,7 +90,7 @@ const AREA_TYPE_CHARGING = "4";
 const AREA_TYPE_DEVICE = "8";
 
 type ElectronAPI = NonNullable<Window["electronAPI"]>;
-type VecTuple = [number, number, number];
+type VecTuple = Vec3Tuple;
 
 /** 由模型绝对路径推导同目录下 JSON 的绝对路径（读用） */
 function jsonAbsPath(modelPath: string): string {
@@ -109,10 +111,6 @@ function pathAbsPath(modelPath: string): string {
   return mapSiblingFilePath(modelPath, PATH_FILE_NAME);
 }
 
-function legacyPathAbsPath(modelPath: string): string {
-  return mapSiblingFilePath(modelPath, LEGACY_PATH_FILE_NAME);
-}
-
 /** 路径文件项目相对子路径（写用） */
 function pathSubPath(modelPath: string): string {
   return mapSiblingSubPath(modelPath, PATH_FILE_NAME);
@@ -123,7 +121,7 @@ export function isDrawingDataFileName(name: string): boolean {
 }
 
 export function isReferencePathFileName(name: string): boolean {
-  return name === PATH_FILE_NAME || name === LEGACY_PATH_FILE_NAME;
+  return name === PATH_FILE_NAME || name === ROBOT_PATH_FILE_NAME;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -162,6 +160,57 @@ function formatCoord(value: number): string {
 function toTuple(value: number[]): VecTuple | null {
   const [x, y, z] = value;
   return Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) ? [x, y, z] : null;
+}
+
+function mapTuple(point: VecTuple, transform: (point: VecTuple) => VecTuple): VecTuple {
+  return transform(point);
+}
+
+function mapVerts(verts: number[][], transform: (point: VecTuple) => VecTuple): number[][] {
+  return verts
+    .map(toTuple)
+    .filter(Boolean)
+    .map((point) => [...mapTuple(point as VecTuple, transform)]);
+}
+
+function sceneVertsToLas(verts: number[][], coordinate: LasCoordinateTransform): number[][] {
+  return mapVerts(verts, coordinate.sceneToLas);
+}
+
+function lasVertsToScene(verts: number[][], coordinate: LasCoordinateTransform): number[][] {
+  return mapVerts(verts, coordinate.lasToScene);
+}
+
+function scenePathDataToLas(data: PathData, coordinate: LasCoordinateTransform): PathData {
+  return {
+    points: data.points.map((point) => {
+      const [x, y, z] = coordinate.sceneToLas([point.x, point.y, point.z]);
+      return { ...point, x, y, z };
+    }),
+    paths: data.paths.map((path) => ({
+      ...path,
+      bezier: path.bezier ? {
+        cp1: coordinate.sceneToLas(path.bezier.cp1),
+        cp2: coordinate.sceneToLas(path.bezier.cp2),
+      } : null,
+    })),
+  };
+}
+
+function lasPathDataToScene(data: PathData, coordinate: LasCoordinateTransform): PathData {
+  return {
+    points: data.points.map((point) => {
+      const [x, y, z] = coordinate.lasToScene([point.x, point.y, point.z]);
+      return { ...point, x, y, z };
+    }),
+    paths: data.paths.map((path) => ({
+      ...path,
+      bezier: path.bezier ? {
+        cp1: coordinate.lasToScene(path.bezier.cp1),
+        cp2: coordinate.lasToScene(path.bezier.cp2),
+      } : null,
+    })),
+  };
 }
 
 function parsePose(pose: unknown): VecTuple[] | null {
@@ -287,6 +336,17 @@ async function readAreaRecordsFromPath(api: ElectronAPI, filePath: string): Prom
   return normalizeAreaData(JSON.parse(text));
 }
 
+async function readJsonFile(api: ElectronAPI, filePath: string): Promise<unknown> {
+  const buf = await api.readLargeFile(filePath);
+  const text = new TextDecoder("utf-8").decode(buf);
+  return JSON.parse(text);
+}
+
+async function readTextFile(api: ElectronAPI, filePath: string): Promise<string> {
+  const buf = await api.readLargeFile(filePath);
+  return new TextDecoder("utf-8").decode(buf);
+}
+
 async function readAreaRecords(api: ElectronAPI, modelPath: string): Promise<RobotAreaRecord[]> {
   for (const candidate of [jsonAbsPath(modelPath), legacyJsonAbsPath(modelPath)]) {
     try {
@@ -371,6 +431,59 @@ function makeCabinetRobotAreas(item: CabinetItem, rowId: number, time: string, e
     });
   }
   return records;
+}
+
+function cabinetItemToLas(item: CabinetItem, coordinate: LasCoordinateTransform): CabinetItem {
+  return {
+    ...item,
+    geometry: {
+      ...item.geometry,
+      verts: sceneVertsToLas(item.geometry.verts, coordinate),
+    },
+  };
+}
+
+function cabinetItemToScene(item: CabinetItem, coordinate: LasCoordinateTransform): CabinetItem {
+  return {
+    ...item,
+    geometry: {
+      ...item.geometry,
+      verts: lasVertsToScene(item.geometry.verts, coordinate),
+    },
+  };
+}
+
+function chargingItemToLas(item: ChargingAreaItem, coordinate: LasCoordinateTransform): ChargingAreaItem {
+  return {
+    ...item,
+    geometry: { verts: sceneVertsToLas(item.geometry.verts, coordinate) },
+  };
+}
+
+function chargingItemToScene(item: ChargingAreaItem, coordinate: LasCoordinateTransform): ChargingAreaItem {
+  return {
+    ...item,
+    geometry: { verts: lasVertsToScene(item.geometry.verts, coordinate) },
+  };
+}
+
+function deviceAreaItemToLas(item: DeviceAreaItem, coordinate: LasCoordinateTransform): DeviceAreaItem {
+  return {
+    ...item,
+    geometry: { verts: sceneVertsToLas(item.geometry.verts, coordinate) },
+  };
+}
+
+function deviceAreaItemToScene(item: DeviceAreaItem, coordinate: LasCoordinateTransform): DeviceAreaItem {
+  const verts = lasVertsToScene(item.geometry.verts, coordinate);
+  const height = verts.length >= 6
+    ? Math.abs((verts[5]?.[1] ?? 0) - (verts[1]?.[1] ?? 0)) || item.height
+    : item.height;
+  return {
+    ...item,
+    geometry: { verts },
+    height,
+  };
 }
 
 function legacyItemsToRobotAreas(items: DrawingItem[]): RobotAreaRecord[] {
@@ -490,6 +603,14 @@ function robotAreasToDrawingItems(records: RobotAreaRecord[]): DrawingItem[] {
   return items;
 }
 
+function robotAreasToSceneDrawingItems(records: RobotAreaRecord[], coordinate: LasCoordinateTransform): DrawingItem[] {
+  return robotAreasToDrawingItems(records).map((item) => {
+    if (item.type === "cabinet") return cabinetItemToScene(item, coordinate);
+    if (item.type === "charging-area") return chargingItemToScene(item, coordinate);
+    return deviceAreaItemToScene(item, coordinate);
+  });
+}
+
 /**
  * 保存屏柜绘制：读现有 area.json → 替换同名柜排及其柜子 → 写回 flat 数组。
  * 未被当前编辑器处理的其他区域类型会原样保留。
@@ -501,9 +622,11 @@ export async function saveCabinetDrawing(params: {
   item: CabinetItem;
 }): Promise<CabinetItem> {
   const { api, projectName, modelPath, item } = params;
+  const coordinate = await loadLasCoordinateTransform(api, modelPath);
+  const robotItem = cabinetItemToLas(item, coordinate);
   const records = await readAreaRecords(api, modelPath);
-  const existingRow = findCabinetRowForItem(records, item);
-  const rowId = chooseCabinetRowId(records, item, existingRow);
+  const existingRow = findCabinetRowForItem(records, robotItem);
+  const rowId = chooseCabinetRowId(records, robotItem, existingRow);
   const rowIdText = String(rowId);
   const rowIdsToRemove = new Set<string>([rowIdText]);
   if (existingRow?.id != null) rowIdsToRemove.add(valueText(existingRow.id));
@@ -515,7 +638,7 @@ export async function saveCabinetDrawing(params: {
     return true;
   });
   const time = formatTime();
-  const cabinetRecords = makeCabinetRobotAreas(item, rowId, time, existingRow);
+  const cabinetRecords = makeCabinetRobotAreas(robotItem, rowId, time, existingRow);
   next.push(...cabinetRecords);
   await writeAreaRecords(api, projectName, modelPath, next);
 
@@ -529,7 +652,8 @@ export async function saveCabinetDrawing(params: {
 
 /** 读取该模型已保存的全部屏柜记录（用于回显） */
 export async function loadCabinetItems(api: ElectronAPI, modelPath: string): Promise<CabinetItem[]> {
-  return robotAreasToDrawingItems(await readAreaRecords(api, modelPath))
+  const coordinate = await loadLasCoordinateTransform(api, modelPath);
+  return robotAreasToSceneDrawingItems(await readAreaRecords(api, modelPath), coordinate)
     .filter((it): it is CabinetItem => it.type === "cabinet");
 }
 
@@ -541,11 +665,13 @@ export async function saveChargingArea(params: {
   item: ChargingAreaItem | null;
 }): Promise<void> {
   const { api, projectName, modelPath, item } = params;
+  const coordinate = await loadLasCoordinateTransform(api, modelPath);
   const records = await readAreaRecords(api, modelPath);
   const oldCharging = records.find((record) => areaType(record) === AREA_TYPE_CHARGING);
   const next = records.filter((record) => areaType(record) !== AREA_TYPE_CHARGING);
   if (item) {
-    const pose = boxPoseFromVerts(item.geometry.verts);
+    const robotItem = chargingItemToLas(item, coordinate);
+    const pose = boxPoseFromVerts(robotItem.geometry.verts);
     if (pose) {
       next.push({
         id: valueText(oldCharging?.id) || "1",
@@ -561,7 +687,8 @@ export async function saveChargingArea(params: {
 
 /** 读取该模型已保存的充电区域记录（用于回显） */
 export async function loadChargingArea(api: ElectronAPI, modelPath: string): Promise<ChargingAreaItem | null> {
-  const items = robotAreasToDrawingItems(await readAreaRecords(api, modelPath));
+  const coordinate = await loadLasCoordinateTransform(api, modelPath);
+  const items = robotAreasToSceneDrawingItems(await readAreaRecords(api, modelPath), coordinate);
   return items.find((it): it is ChargingAreaItem => it.type === "charging-area") ?? null;
 }
 
@@ -573,15 +700,17 @@ export async function saveDeviceAreas(params: {
   items: DeviceAreaItem[];
 }): Promise<void> {
   const { api, projectName, modelPath, items } = params;
+  const coordinate = await loadLasCoordinateTransform(api, modelPath);
   const records = await readAreaRecords(api, modelPath);
   const next = records.filter((record) => areaType(record) !== AREA_TYPE_DEVICE);
   const used = new Set<number>();
 
   for (const item of items) {
+    const robotItem = deviceAreaItemToLas(item, coordinate);
     let id = positiveInt(item.id);
     if (!id || used.has(id)) id = nextAvailableId(used);
     used.add(id);
-    const pose = boxPoseFromVerts(item.geometry.verts);
+    const pose = boxPoseFromVerts(robotItem.geometry.verts);
     if (!pose) continue;
     next.push({
       id: String(id),
@@ -596,7 +725,8 @@ export async function saveDeviceAreas(params: {
 
 /** 读取该模型已保存的全部设备区记录（用于回显） */
 export async function loadDeviceAreas(api: ElectronAPI, modelPath: string): Promise<DeviceAreaItem[]> {
-  return robotAreasToDrawingItems(await readAreaRecords(api, modelPath))
+  const coordinate = await loadLasCoordinateTransform(api, modelPath);
+  return robotAreasToSceneDrawingItems(await readAreaRecords(api, modelPath), coordinate)
     .filter((it): it is DeviceAreaItem => it.type === "device-area");
 }
 
@@ -607,8 +737,9 @@ async function collectBoundBayIds(api: ElectronAPI, nodes: SpaceTreeNode[], ids:
       await collectBoundBayIds(api, node.children, ids);
     } else if (isDrawingDataFileName(node.name)) {
       try {
+        const coordinate = await loadLasCoordinateTransform(api, node.path);
         const records = await readAreaRecordsFromPath(api, node.path);
-        for (const it of robotAreasToDrawingItems(records)) {
+        for (const it of robotAreasToSceneDrawingItems(records, coordinate)) {
           if (it.type === "device-area" && it.bay?.id > 0) ids.add(it.bay.id);
         }
       } catch {}
@@ -629,7 +760,8 @@ export async function getBoundBayIdsInProject(api: ElectronAPI, projectName: str
 /** 直接按绘制 JSON 的绝对路径读取屏柜记录（地图树勾选 json 时用） */
 export async function loadCabinetItemsFromJson(api: ElectronAPI, jsonPath: string): Promise<CabinetItem[]> {
   try {
-    return robotAreasToDrawingItems(await readAreaRecordsFromPath(api, jsonPath))
+    const coordinate = await loadLasCoordinateTransform(api, jsonPath);
+    return robotAreasToSceneDrawingItems(await readAreaRecordsFromPath(api, jsonPath), coordinate)
       .filter((it): it is CabinetItem => it.type === "cabinet");
   } catch {
     return [];
@@ -639,7 +771,8 @@ export async function loadCabinetItemsFromJson(api: ElectronAPI, jsonPath: strin
 /** 直接按绘制 JSON 的绝对路径读取全部记录（地图树勾选 json 时用） */
 export async function loadAllItemsFromJson(api: ElectronAPI, jsonPath: string): Promise<DrawingItem[]> {
   try {
-    return robotAreasToDrawingItems(await readAreaRecordsFromPath(api, jsonPath));
+    const coordinate = await loadLasCoordinateTransform(api, jsonPath);
+    return robotAreasToSceneDrawingItems(await readAreaRecordsFromPath(api, jsonPath), coordinate);
   } catch {
     return [];
   }
@@ -648,7 +781,8 @@ export async function loadAllItemsFromJson(api: ElectronAPI, jsonPath: string): 
 /** 直接按绘制 JSON 的绝对路径读取充电区域记录（地图树勾选 json 时用） */
 export async function loadChargingAreaFromJson(api: ElectronAPI, jsonPath: string): Promise<ChargingAreaItem | null> {
   try {
-    const items = robotAreasToDrawingItems(await readAreaRecordsFromPath(api, jsonPath));
+    const coordinate = await loadLasCoordinateTransform(api, jsonPath);
+    const items = robotAreasToSceneDrawingItems(await readAreaRecordsFromPath(api, jsonPath), coordinate);
     return items.find((it): it is ChargingAreaItem => it.type === "charging-area") ?? null;
   } catch {
     return null;
@@ -680,6 +814,246 @@ export async function deleteCabinetItem(api: ElectronAPI, projectName: string, j
   await api.project.writeFile(projectName, subPathFromJson(jsonPath), buffer);
 }
 
+interface RobotPathRecord {
+  id?: string | number;
+  name?: string;
+  start_id?: string | number;
+  end_id?: string | number;
+  waypoints?: string;
+  [key: string]: unknown;
+}
+
+function isRobotPathFileName(name: string): boolean {
+  return name.toLowerCase() === ROBOT_PATH_FILE_NAME;
+}
+
+function robotPathAbsPath(modelPath: string): string {
+  return mapSiblingFilePath(modelPath, ROBOT_PATH_FILE_NAME);
+}
+
+function normalizeRecordArray(data: unknown, keys: string[] = []): Record<string, unknown>[] {
+  if (Array.isArray(data)) return data.filter(isRecord);
+  if (!isRecord(data)) return [];
+  for (const key of keys) {
+    const value = data[key];
+    if (Array.isArray(value)) return value.filter(isRecord);
+  }
+  return [];
+}
+
+function parseRobotStopPoint(record: Record<string, unknown>): { id: string; point: PathPoint } | null {
+  const id = valueText(record.id);
+  const x = asFiniteNumber(record.pose_x);
+  const y = asFiniteNumber(record.pose_y);
+  const z = asFiniteNumber(record.pose_z) ?? 0;
+  if (!id || x == null || y == null) return null;
+  return {
+    id,
+    point: {
+      id: `stop:${id}`,
+      x,
+      y,
+      z,
+    },
+  };
+}
+
+function parseRobotWaypointString(value: unknown): VecTuple[] {
+  if (typeof value !== "string" || !value.trim()) return [];
+  return value.split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const nums = part.split(",").map((n) => Number(n.trim()));
+      if (nums.length < 2 || !Number.isFinite(nums[0]) || !Number.isFinite(nums[1])) return null;
+      const z = Number.isFinite(nums[2]) ? nums[2] : 0;
+      return [nums[0], nums[1], z] as VecTuple;
+    })
+    .filter(Boolean) as VecTuple[];
+}
+
+function samePathPosition(a: PathPoint | null | undefined, b: PathPoint | null | undefined): boolean {
+  if (!a || !b) return false;
+  return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) < 1e-5;
+}
+
+async function readRobotStopPoints(api: ElectronAPI, pathJsonPath: string): Promise<Map<string, PathPoint>> {
+  for (const fileName of ROBOT_STOP_POINTS_FILE_NAMES) {
+    try {
+      const data = await readJsonFile(api, mapSiblingFilePath(pathJsonPath, fileName));
+      const records = normalizeRecordArray(data, ["stop_points", "stopPoints", "items"]);
+      const result = new Map<string, PathPoint>();
+      for (const record of records) {
+        const parsed = parseRobotStopPoint(record);
+        if (parsed) result.set(parsed.id, parsed.point);
+      }
+      if (result.size > 0) return result;
+    } catch {}
+  }
+  return new Map();
+}
+
+function addPathPoint(points: PathPoint[], byId: Map<string, PathPoint>, point: PathPoint): string {
+  const existing = byId.get(point.id);
+  if (existing) return existing.id;
+  points.push(point);
+  byId.set(point.id, point);
+  return point.id;
+}
+
+function addRobotRouteSegment(paths: PathSegment[], routeKey: string, from: string, to: string, index: number) {
+  if (from === to) return;
+  paths.push({
+    id: `route:${routeKey}:seg:${index}`,
+    from,
+    to,
+    bezier: null,
+  });
+}
+
+function buildRobotRoutePathData(routes: RobotPathRecord[], stopPoints: Map<string, PathPoint>): PathData | null {
+  const points: PathPoint[] = [];
+  const pointById = new Map<string, PathPoint>();
+  const paths: PathSegment[] = [];
+
+  routes.forEach((route, routeIndex) => {
+    const startId = valueText(route.start_id);
+    const endId = valueText(route.end_id);
+    const routeBaseKey = valueText(route.id) || valueText(route.name) || `${startId}_${endId}` || "route";
+    const routeKey = `${routeBaseKey}:${routeIndex + 1}`;
+    const pointIds: string[] = [];
+
+    const pushPoint = (point: PathPoint | null | undefined) => {
+      if (!point) return;
+      const prevPoint = pointById.get(pointIds[pointIds.length - 1]);
+      if (samePathPosition(prevPoint, point)) return;
+      pointIds.push(addPathPoint(points, pointById, point));
+    };
+
+    pushPoint(stopPoints.get(startId));
+
+    parseRobotWaypointString(route.waypoints).forEach((tuple, waypointIndex) => {
+      pushPoint({
+        id: `route:${routeKey}:wp:${waypointIndex + 1}`,
+        x: tuple[0],
+        y: tuple[1],
+        z: tuple[2],
+      });
+    });
+
+    pushPoint(stopPoints.get(endId));
+
+    for (let i = 0; i < pointIds.length - 1; i++) {
+      addRobotRouteSegment(paths, routeKey, pointIds[i], pointIds[i + 1], i + 1);
+    }
+  });
+
+  return points.length > 0 ? { points, paths } : null;
+}
+
+async function loadRobotRouteDrawing(api: ElectronAPI, pathJsonPath: string): Promise<PathData | null> {
+  const [routeData, stopPoints, coordinate] = await Promise.all([
+    readJsonFile(api, pathJsonPath),
+    readRobotStopPoints(api, pathJsonPath),
+    loadLasCoordinateTransform(api, pathJsonPath),
+  ]);
+  const routes = normalizeRecordArray(routeData, ["paths", "routes", "items"]) as RobotPathRecord[];
+  const data = buildRobotRoutePathData(routes, stopPoints);
+  return data ? lasPathDataToScene(data, coordinate) : null;
+}
+
+function orderedPathPoints(data: PathData): PathPoint[] {
+  if (!data.points.length) return [];
+  if (!data.paths.length) return data.points;
+
+  const pointById = new Map(data.points.map((point) => [point.id, point]));
+  const ordered: PathPoint[] = [];
+  let expectedFrom = "";
+
+  for (const segment of data.paths) {
+    const from = pointById.get(segment.from);
+    const to = pointById.get(segment.to);
+    if (!from || !to) throw new Error("路径包含无效点位，请重新绘制");
+
+    if (ordered.length === 0) {
+      ordered.push(from, to);
+      expectedFrom = to.id;
+      continue;
+    }
+
+    if (segment.from !== expectedFrom) {
+      throw new Error("示意路径不能有分支，请按单条连续路线绘制");
+    }
+
+    ordered.push(to);
+    expectedFrom = to.id;
+  }
+
+  return ordered;
+}
+
+function pointInPolygon2D(point: PathPoint, polygon: VecTuple[]): boolean {
+  if (polygon.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i][0];
+    const zi = polygon[i][2];
+    const xj = polygon[j][0];
+    const zj = polygon[j][2];
+    const onEdge = Math.abs((point.z - zi) * (xj - xi) - (point.x - xi) * (zj - zi)) < 1e-8
+      && point.x >= Math.min(xi, xj) - 1e-8
+      && point.x <= Math.max(xi, xj) + 1e-8
+      && point.z >= Math.min(zi, zj) - 1e-8
+      && point.z <= Math.max(zi, zj) + 1e-8;
+    if (onEdge) return true;
+    const intersect = ((zi > point.z) !== (zj > point.z))
+      && point.x < ((xj - xi) * (point.z - zi)) / ((zj - zi) || 1e-12) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function isPathStartInChargingArea(startPoint: PathPoint, charging: ChargingAreaItem | null): boolean {
+  const verts = charging?.geometry?.verts || [];
+  const base = [verts[0], verts[1], verts[2], verts[3]]
+    .map(toTuple)
+    .filter(Boolean) as VecTuple[];
+  return base.length >= 3 && pointInPolygon2D(startPoint, base);
+}
+
+function pathTextFromLasPoints(points: PathPoint[]): string {
+  const lines = points.map((point, index) =>
+    `${index + 1} ${formatCoord(point.x)} ${formatCoord(point.y)} ${formatCoord(point.z)}`,
+  );
+  return `${lines.join("\n")}\n`;
+}
+
+function parseReferencePathText(text: string): PathData | null {
+  const points: PathPoint[] = [];
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (const line of lines) {
+    if (/^(编号|id|index)(\s|$)/i.test(line)) continue;
+    const parts = line.split(/[\s,]+/).filter(Boolean);
+    if (parts.length < 4) continue;
+    const id = Number.parseInt(parts[0], 10);
+    const x = Number(parts[1]);
+    const y = Number(parts[2]);
+    const z = Number(parts[3]);
+    if (!Number.isInteger(id) || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+    points.push({ id: `path:${id}`, x, y, z });
+  }
+  if (points.length === 0) return null;
+  return {
+    points,
+    paths: points.slice(1).map((point, index) => ({
+      id: `path:${index + 1}_${index + 2}`,
+      from: points[index].id,
+      to: point.id,
+      bezier: null,
+    })),
+  };
+}
+
 /** 保存可行路径：写入独立的 reference_path.txt */
 export async function savePathDrawing(params: {
   api: ElectronAPI;
@@ -690,45 +1064,44 @@ export async function savePathDrawing(params: {
   const { api, projectName, modelPath, data } = params;
   if (!data || data.points.length === 0) {
     // 允许保存空路径，等价于清空当前模型的路径文件内容。
-    const bytes = new TextEncoder().encode(JSON.stringify(null));
+    const bytes = new TextEncoder().encode("");
     const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
     await api.project.writeFile(projectName, pathSubPath(modelPath), buffer);
     return;
   }
-  const content: PathItem = {
-    points: data.points,
-    paths: data.paths,
-    updatedAt: new Date().toISOString(),
-  };
-  const bytes = new TextEncoder().encode(JSON.stringify(content, null, 2));
+  const coordinate = await loadLasCoordinateTransform(api, modelPath);
+  const orderedScenePoints = orderedPathPoints(data);
+  const chargingArea = await loadChargingArea(api, modelPath);
+  if (!isPathStartInChargingArea(orderedScenePoints[0], chargingArea)) {
+    throw new Error("示意路径起点需要在充电区域内");
+  }
+  const robotPoints = scenePathDataToLas({
+    points: orderedScenePoints,
+    paths: [],
+  }, coordinate).points;
+  const bytes = new TextEncoder().encode(pathTextFromLasPoints(robotPoints));
   const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   await api.project.writeFile(projectName, pathSubPath(modelPath), buffer);
 }
 
 /** 读取该模型已保存的可行路径记录 */
 export async function loadPathDrawing(api: ElectronAPI, modelPath: string): Promise<PathData | null> {
-  for (const candidate of [pathAbsPath(modelPath), legacyPathAbsPath(modelPath)]) {
+  const fileName = fileNameFromPath(modelPath);
+  const directPathFile = isReferencePathFileName(fileName);
+  const candidates = directPathFile
+    ? [modelPath]
+    : [pathAbsPath(modelPath), robotPathAbsPath(modelPath)];
+
+  for (const candidate of candidates) {
     try {
-      const buf = await api.readLargeFile(candidate);
-      const text = new TextDecoder("utf-8").decode(buf);
-      const data = JSON.parse(text);
-      if (!data) return null;
-      if (Array.isArray(data.points)) {
-        const firstPt = data.points[0];
-        if (firstPt && typeof firstPt === "object" && !Array.isArray(firstPt) && "id" in firstPt) {
-          return {
-            points: (data.points as PathPoint[]).map((p) => ({ id: p.id, x: p.x, y: p.y, z: p.z })),
-            paths: Array.isArray(data.paths) ? (data.paths as PathSegment[]).map((s) => ({
-              id: s.id,
-              from: s.from,
-              to: s.to,
-              bezier: s.bezier,
-            })) : [],
-          };
-        }
-        // 旧格式兼容：{ points: number[][], connections: [number, number][] }
-        return data as any;
+      if (isRobotPathFileName(fileNameFromPath(candidate))) {
+        return await loadRobotRouteDrawing(api, candidate);
       }
+
+      const coordinate = await loadLasCoordinateTransform(api, candidate);
+      const text = await readTextFile(api, candidate);
+      const textPathData = parseReferencePathText(text);
+      if (textPathData) return lasPathDataToScene(textPathData, coordinate);
     } catch {}
   }
   return null;

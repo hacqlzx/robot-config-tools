@@ -1,7 +1,7 @@
 ﻿import { useRef } from "react";
 import { UploadOutlined, TableOutlined, SaveOutlined, ScissorOutlined, BorderOutlined, ThunderboltOutlined, AppstoreOutlined, NodeIndexOutlined, ExportOutlined } from "@ant-design/icons";
 import { message } from "antd";
-import { MODEL_FILE_ACCEPT, POINT_TABLE_FILE_ACCEPT, isLasOrLazFileName } from "../utils/space-paths";
+import { MODEL_FILE_ACCEPT, POINT_TABLE_FILE_ACCEPT, isLasOrLazFileName, isZipFileName } from "../utils/space-paths";
 
 interface Props {
   cabinetMode?: boolean;
@@ -40,8 +40,8 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!isLasOrLazFileName(file.name)) {
-      message.warning("仅支持 LAS/LAZ 模型文件");
+    if (!isLasOrLazFileName(file.name) && !isZipFileName(file.name)) {
+      message.warning("仅支持 LAS/LAZ 模型文件或 ZIP 空间模型包");
       e.target.value = "";
       return;
     }

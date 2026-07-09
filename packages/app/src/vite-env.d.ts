@@ -59,6 +59,7 @@ declare global {
         rename: (oldName: string, newName: string) => Promise<string>;
         delete: (name: string) => Promise<string>;
         importFile: (projectName: string, sourcePath: string, fileName: string) => Promise<string>;
+        importModelZip: (projectName: string, sourcePath: string) => Promise<{ mapName: string; mapDir: string; modelPath: string }>;
         getManifest: (projectName: string) => Promise<ProjectManifest>;
         listTree: (projectName: string, subDir: string) => Promise<TreeNode[]>;
         writeFile: (projectName: string, subPath: string, data: ArrayBuffer) => Promise<string>;

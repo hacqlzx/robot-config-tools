@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import * as pc from "playcanvas";
 import { parsePointExcel } from "@/utils/excel-parser";
 import type { ModelPointStats, SpaceMessageApi } from "../types";
-import { POINT_TABLE_DIR_NAME, POINT_TABLE_FILE_RE, isLasOrLazFileName, loadedFileKey, pointTableFileSubPath, stripModelExtension } from "../utils/space-paths";
+import { POINT_TABLE_DIR_NAME, POINT_TABLE_FILE_RE, isLasOrLazFileName, isZipFileName, loadedFileKey, pointTableFileSubPath, stripModelExtension } from "../utils/space-paths";
 
 interface UseFileOperationsParams {
   entitiesRef: React.MutableRefObject<Map<string, pc.Entity>>;
@@ -81,8 +81,10 @@ export function useFileOperations(params: UseFileOperationsParams) {
 
   /** 选择模型文件 */
   const handleFileSelect = useCallback(async (file: File) => {
-    if (!isLasOrLazFileName(file.name)) {
-      message.warning("仅支持 LAS/LAZ 模型文件");
+    const isPointCloud = isLasOrLazFileName(file.name);
+    const isZip = isZipFileName(file.name);
+    if (!isPointCloud && !isZip) {
+      message.warning("仅支持 LAS/LAZ 模型文件或 ZIP 空间模型包");
       return;
     }
 
@@ -110,10 +112,17 @@ export function useFileOperations(params: UseFileOperationsParams) {
     try {
       const sourcePath = window.electronAPI.getFilePath(file);
       if (!sourcePath) throw new Error("无法读取源文件路径");
-      const baseName = stripModelExtension(file.name);
-      const targetPath = await window.electronAPI.project.importFile(selectedProject, sourcePath, baseName);
+      let targetPath = "";
+      if (isZip) {
+        const result = await window.electronAPI.project.importModelZip(selectedProject, sourcePath);
+        targetPath = result.modelPath;
+      } else {
+        const baseName = stripModelExtension(file.name);
+        targetPath = await window.electronAPI.project.importFile(selectedProject, sourcePath, baseName);
+      }
       await loadLasFromPath(targetPath);
       setTreeKey((k) => k + 1);
+      message.success(isZip ? "空间模型包导入成功" : "模型导入成功");
     } catch (err: any) {
       message.error("模型导入失败: " + (err?.message || err));
     }
