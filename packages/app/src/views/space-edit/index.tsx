@@ -7,6 +7,7 @@ import { useMapDrawingVisibility } from "./hooks/useMapDrawingVisibility";
 import { useProjectBoundBayIds } from "./hooks/useProjectBoundBayIds";
 import { useClipCompletion } from "./hooks/useClipCompletion";
 import { useDrawingModeToggles } from "./hooks/useDrawingModeToggles";
+import { useDrawingHistory, type DrawingHistoryScope } from "./hooks/useDrawingHistory";
 import * as pc from "playcanvas";
 import { useCabinetDrawing } from "./hooks/useCabinetDrawing";
 import { useChargingAreaDrawing } from "./hooks/useChargingAreaDrawing";
@@ -62,20 +63,33 @@ export default function SpaceEdit() {
   const hasAutoFocusedRef = useRef(false);
   const modelGroundYRef = useRef(-Infinity);
   const isAutoSavingRef = useRef(false);
+  const drawingHistoryRecordRef = useRef<(scope: DrawingHistoryScope, before: any, after: any, label: string) => void>(() => {});
+  const handleDrawingHistory = useCallback((scope: DrawingHistoryScope, before: any, after: any, label: string) => {
+    drawingHistoryRecordRef.current(scope, before, after, label);
+  }, []);
 
   // ---- 绘制 Hook ----
   // 这些 hook 只暴露模式状态和 setup 函数；真正的 canvas 事件绑定在 usePlayCanvas 中统一完成。
-  const { cabinetMode, cornerCount, cabinetCount, handleToggleCabinet, handleUndo, setCabinetNames, getCabinetGeometry, setupCabinetDrawing } = useCabinetDrawing();
-  const { chargingMode, pointCount: chargingPointCount, height: chargingHeight, handleToggleCharging, handleUndo: handleChargingUndo, handleSave: handleChargingSave, handleSetHeight: handleChargingSetHeight, setupChargingAreaDrawing, drawingRef: chargingDrawingRef, hasExistingRef: chargingExistingRef } = useChargingAreaDrawing(
+  const { cabinetMode, cornerCount, cabinetCount, handleToggleCabinet, setCabinetNames, getCabinetGeometry, clearCabinetDraft, setupCabinetDrawing, drawingRef: cabinetDrawingRef } = useCabinetDrawing(handleDrawingHistory);
+  const { chargingMode, pointCount: chargingPointCount, height: chargingHeight, handleToggleCharging, handleSave: handleChargingSave, handleSetHeight: handleChargingSetHeight, clearChargingDraft, setupChargingAreaDrawing, drawingRef: chargingDrawingRef, hasExistingRef: chargingExistingRef } = useChargingAreaDrawing(
     () => handleSaveChargingArea(),
     () => { isAutoSavingRef.current = true; handleSaveChargingArea(); },
+    handleDrawingHistory,
   );
-  const { deviceAreaMode, boxCount: deviceAreaBoxCount, height: deviceAreaHeight, selectedBoxId: deviceAreaSelectedBoxId, selectedBoxBay: deviceAreaSelectedBoxBay, handleToggleDeviceArea, handleForceCloseDeviceArea, handleUndo: handleDeviceAreaUndo, handleBindBay: handleDeviceAreaBindBay, handleUnbind: handleDeviceAreaUnbind, handleSave: handleDeviceAreaSave, handleSetHeight: handleDeviceAreaSetHeight, getBoxDatas, getBoundBayIds, setupDeviceAreaDrawing, drawingRef: deviceAreaDrawingRef, markSaved: markDeviceAreaSaved } = useDeviceAreaDrawing(
+  const { deviceAreaMode, boxCount: deviceAreaBoxCount, height: deviceAreaHeight, selectedBoxId: deviceAreaSelectedBoxId, selectedBoxBay: deviceAreaSelectedBoxBay, handleToggleDeviceArea, handleForceCloseDeviceArea, handleBindBay: handleDeviceAreaBindBay, handleUnbind: handleDeviceAreaUnbind, handleSave: handleDeviceAreaSave, handleSetHeight: handleDeviceAreaSetHeight, getBoxDatas, getBoundBayIds, clearDeviceAreaDraft, setupDeviceAreaDrawing, drawingRef: deviceAreaDrawingRef, markSaved: markDeviceAreaSaved } = useDeviceAreaDrawing(
     () => handleSaveDeviceAreas(),
     () => { isAutoSavingRef.current = true; handleSaveDeviceAreas(); },
+    handleDrawingHistory,
   );
-  const { pathMode, handleTogglePath, handleForceClose: handleForceClosePath, getPathData, setupPathDrawing, drawingRef: pathDrawingRef } = usePathDrawing();
-  const projectBoundBayIdsRef = useProjectBoundBayIds(deviceAreaMode);
+  const { pathMode, handleTogglePath, handleForceClose: handleForceClosePath, getPathData, clearPathDraft, setupPathDrawing, drawingRef: pathDrawingRef } = usePathDrawing(handleDrawingHistory);
+  const drawingHistory = useDrawingHistory({
+    cabinetDrawingRef,
+    chargingDrawingRef,
+    deviceAreaDrawingRef,
+    pathDrawingRef,
+  });
+  drawingHistoryRecordRef.current = drawingHistory.record;
+  const projectBoundBayIds = useProjectBoundBayIds(deviceAreaMode);
 
   // ---- PlayCanvas 引擎 ----
   // usePlayCanvas 是 space-edit 的三维装配点：公共 ThreeDEngine + 四类编辑 Drawing + CabinetViewer。
@@ -105,6 +119,12 @@ export default function SpaceEdit() {
   });
 
   const refreshTree = useCallback(() => setTreeKey((k) => k + 1), []);
+  const clearDrawingDrafts = useCallback(() => {
+    clearCabinetDraft();
+    clearChargingDraft();
+    clearDeviceAreaDraft();
+    clearPathDraft();
+  }, [clearCabinetDraft, clearChargingDraft, clearDeviceAreaDraft, clearPathDraft]);
 
   // 地图树里 JSON 的勾选/回显状态独立管理，避免把树组件和三维实体生命周期绑死。
   const {
@@ -133,12 +153,13 @@ export default function SpaceEdit() {
     entitiesRef, filePathRef, isAutoSavingRef,
     saveStatusSetter: setSaveStatus, message,
     savedCabinetRef,
-    getCabinetGeometry, handleToggleCabinet,
+    getCabinetGeometry, clearCabinetDraft, handleToggleCabinet,
     chargingDrawingRef, chargingMode, handleToggleCharging,
     getBoxDatas, markDeviceAreaSaved,
     getPathData,
     onDrawingFileSaved: markDrawingFileShown,
     onPathFileSaved: markPathFileShown,
+    onCabinetSaved: drawingHistory.clear,
   });
 
   // ---- 大模型显示比例 ----
@@ -207,6 +228,34 @@ export default function SpaceEdit() {
     loadLasFromPath, requestRender, closeAllDrawingModes,
     setImporting, setLoadedFiles, setTreeKey, setClipEntityName, setClipMode, message,
   });
+  const handleLoadLasFromPathWithHistoryReset = useCallback(async (filePath: string) => {
+    drawingHistory.clear();
+    clearDrawingDrafts();
+    await handleLoadLasFromPath(filePath);
+  }, [clearDrawingDrafts, drawingHistory.clear, handleLoadLasFromPath]);
+  const handleFileSelectWithHistoryReset = useCallback(async (file: File) => {
+    drawingHistory.clear();
+    clearDrawingDrafts();
+    await handleFileSelect(file);
+  }, [clearDrawingDrafts, drawingHistory.clear, handleFileSelect]);
+  const handleToggleVisibleWithHistoryReset = useCallback((filePath: string) => {
+    drawingHistory.clear();
+    clearDrawingDrafts();
+    handleToggleVisible(filePath);
+  }, [clearDrawingDrafts, drawingHistory.clear, handleToggleVisible]);
+  const handleUnloadModelFromPathWithHistoryReset = useCallback((filePath: string) => {
+    drawingHistory.clear();
+    clearDrawingDrafts();
+    return handleUnloadModelFromPath(filePath);
+  }, [clearDrawingDrafts, drawingHistory.clear, handleUnloadModelFromPath]);
+  const handleToggleDrawingWithHistoryReset = useCallback((jsonPath: string, checked: boolean) => {
+    drawingHistory.clear();
+    return handleToggleDrawing(jsonPath, checked);
+  }, [drawingHistory.clear, handleToggleDrawing]);
+  const handleTogglePathFileWithHistoryReset = useCallback((jsonPath: string, checked: boolean) => {
+    drawingHistory.clear();
+    return handleTogglePathFile(jsonPath, checked);
+  }, [drawingHistory.clear, handleTogglePathFile]);
   const handleClipComplete = useClipCompletion({
     clipEntityName,
     entitiesRef,
@@ -240,12 +289,16 @@ export default function SpaceEdit() {
       onResizeStart={onResizeStart}
       toolbar={(
         <Toolbar
-          onFileSelect={handleFileSelect}
+          onFileSelect={handleFileSelectWithHistoryReset}
           onClipModel={handleClipModel}
           cabinetMode={cabinetMode} onToggleCabinet={toggleCabinetExclusive}
           chargingMode={chargingMode} onToggleCharging={toggleChargingExclusive}
           deviceAreaMode={deviceAreaMode} onToggleDeviceArea={toggleDeviceAreaExclusive}
           pathMode={pathMode} onTogglePath={togglePathExclusive}
+          onUndo={drawingHistory.undo}
+          onRedo={drawingHistory.redo}
+          canUndo={drawingHistory.canUndo}
+          canRedo={drawingHistory.canRedo}
           onSaveAll={handleManualSave}
           onImportPointTable={handleImportPointTable}
           onExportModel={() => setExportModalOpen(true)}
@@ -256,13 +309,13 @@ export default function SpaceEdit() {
       sidePanel={(
         <SidePanel
           panelWidth={panelWidth}
-          treeKey={treeKey} onLoadLas={handleLoadLasFromPath}
-          onToggleVisible={handleToggleVisible}
-          onUnloadMapFile={handleUnloadModelFromPath}
+          treeKey={treeKey} onLoadLas={handleLoadLasFromPathWithHistoryReset}
+          onToggleVisible={handleToggleVisibleWithHistoryReset}
+          onUnloadMapFile={handleUnloadModelFromPathWithHistoryReset}
           loadedFiles={loadedFiles} loadingFile={loadingFile}
           onCabinetCheck={handleCabinetCheck}
-          mapDrawingShown={drawingShown} onToggleDrawing={handleToggleDrawing}
-          mapPathShown={pathShown} onTogglePath={handleTogglePathFile}
+          mapDrawingShown={drawingShown} onToggleDrawing={handleToggleDrawingWithHistoryReset}
+          mapPathShown={pathShown} onTogglePath={handleTogglePathFileWithHistoryReset}
         />
       )}
       scene={(
@@ -275,14 +328,12 @@ export default function SpaceEdit() {
           cabinetMode={cabinetMode}
           cabinetCornerCount={cornerCount}
           cabinetCount={cabinetCount}
-          onCabinetUndo={handleUndo}
           onCabinetClose={handleToggleCabinet}
           onCabinetSave={handleSaveCabinet}
           onCabinetNamesChange={setCabinetNames}
           chargingMode={chargingMode}
           chargingPointCount={chargingPointCount}
           chargingHeight={chargingHeight}
-          onChargingUndo={handleChargingUndo}
           onChargingClose={handleToggleCharging}
           onChargingSave={handleChargingSave}
           onChargingSetHeight={handleChargingSetHeight}
@@ -291,8 +342,7 @@ export default function SpaceEdit() {
           deviceAreaHeight={deviceAreaHeight}
           deviceAreaSelectedBoxId={deviceAreaSelectedBoxId}
           deviceAreaSelectedBoxBay={deviceAreaSelectedBoxBay}
-          deviceAreaBoundBayIds={new Set([...getBoundBayIds(), ...projectBoundBayIdsRef.current])}
-          onDeviceAreaUndo={handleDeviceAreaUndo}
+          deviceAreaBoundBayIds={new Set([...getBoundBayIds(), ...projectBoundBayIds])}
           onDeviceAreaClose={handleToggleDeviceArea}
           onDeviceAreaSave={handleDeviceAreaSave}
           onDeviceAreaSetHeight={handleDeviceAreaSetHeight}

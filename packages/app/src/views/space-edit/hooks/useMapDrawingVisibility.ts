@@ -160,6 +160,7 @@ export function useMapDrawingVisibility({
     if (!api) return;
     const drawing = deviceAreaDrawingRef.current;
     if (!drawing) return;
+    if (drawing.hasAnyData?.()) return;
     (async () => {
       // 退出设备区编辑模式后，从当前勾选的绘制 JSON 重新回灌设备区，
       // 避免编辑器 clear/load 过程导致树勾选状态和场景回显脱节。

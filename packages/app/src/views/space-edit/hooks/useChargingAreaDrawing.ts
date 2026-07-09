@@ -1,7 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import * as pc from "playcanvas";
 import { Modal } from "antd";
-import { ChargingAreaDrawing } from "./drawing/ChargingAreaDrawing";
+import { ChargingAreaDrawing, type ChargingAreaDrawingSnapshot } from "./drawing/ChargingAreaDrawing";
+import type { DrawingHistoryScope } from "./useDrawingHistory";
 
 interface ChargingAreaDrawingAPI {
   chargingMode: boolean;
@@ -16,6 +17,7 @@ interface ChargingAreaDrawingAPI {
   handleSave: () => void;
   /** 修改高度 */
   handleSetHeight: (h: number) => void;
+  clearChargingDraft: () => void;
   setupChargingAreaDrawing: (
     app: pc.Application,
     camera: pc.Entity,
@@ -34,6 +36,7 @@ interface ChargingAreaDrawingAPI {
 export function useChargingAreaDrawing(
   onSaveCharging?: () => void,
   onDeleteCharging?: () => void,
+  onHistory?: (scope: DrawingHistoryScope, before: ChargingAreaDrawingSnapshot, after: ChargingAreaDrawingSnapshot, label: string) => void,
 ): ChargingAreaDrawingAPI {
   const [chargingMode, setChargingMode] = useState(false);
   const [pointCount, setPointCount] = useState(0);
@@ -61,6 +64,8 @@ export function useChargingAreaDrawing(
       onDelete: () => {
         deleteCbRef.current?.();
       },
+      onHistory: (before, after, label) => onHistory?.("charging", before, after, label),
+      onHeightChange: (h) => setHeight(h),
     });
     drawingRef.current = drawing;
     return () => {
@@ -101,7 +106,7 @@ export function useChargingAreaDrawing(
     }
   }, [chargingMode, doToggle]);
 
-  // 进入/退出绘制都清空（保证只有一个充电区域，再次进入重画）
+  // 进入绘制时按单例规则清空；退出只停用交互，方便跨模式撤销/恢复。
   useEffect(() => {
     const drawing = drawingRef.current;
     if (!drawing) return;
@@ -124,5 +129,13 @@ export function useChargingAreaDrawing(
     drawingRef.current?.setHeight(h);
   }, []);
 
-  return { chargingMode, pointCount, height, handleToggleCharging, handleUndo, handleSave, handleSetHeight, setupChargingAreaDrawing, drawingRef, hasExistingRef };
+  const clearChargingDraft = useCallback(() => {
+    drawingRef.current?.clear();
+  }, []);
+
+  useEffect(() => {
+    drawingRef.current?.setHistoryCallback((before, after, label) => onHistory?.("charging", before, after, label));
+  }, [onHistory]);
+
+  return { chargingMode, pointCount, height, handleToggleCharging, handleUndo, handleSave, handleSetHeight, clearChargingDraft, setupChargingAreaDrawing, drawingRef, hasExistingRef };
 }

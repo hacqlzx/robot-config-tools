@@ -21,7 +21,6 @@ interface SpaceEditSceneProps {
   cabinetMode: boolean;
   cabinetCornerCount: number;
   cabinetCount: number;
-  onCabinetUndo: () => void;
   onCabinetClose: () => void;
   onCabinetSave: (data: CabinetSaveData) => void;
   onCabinetNamesChange: (names: string[]) => void;
@@ -29,7 +28,6 @@ interface SpaceEditSceneProps {
   chargingMode: boolean;
   chargingPointCount: number;
   chargingHeight: number;
-  onChargingUndo: () => void;
   onChargingClose: () => void;
   onChargingSave: () => void;
   onChargingSetHeight: (height: number) => void;
@@ -40,7 +38,6 @@ interface SpaceEditSceneProps {
   deviceAreaSelectedBoxId: string | null;
   deviceAreaSelectedBoxBay: { id: number; name: string; code: string } | null;
   deviceAreaBoundBayIds: Set<number>;
-  onDeviceAreaUndo: () => void;
   onDeviceAreaClose: () => void;
   onDeviceAreaSave: () => void;
   onDeviceAreaSetHeight: (height: number) => void;
@@ -72,14 +69,12 @@ export default function SpaceEditScene({
   cabinetMode,
   cabinetCornerCount,
   cabinetCount,
-  onCabinetUndo,
   onCabinetClose,
   onCabinetSave,
   onCabinetNamesChange,
   chargingMode,
   chargingPointCount,
   chargingHeight,
-  onChargingUndo,
   onChargingClose,
   onChargingSave,
   onChargingSetHeight,
@@ -89,7 +84,6 @@ export default function SpaceEditScene({
   deviceAreaSelectedBoxId,
   deviceAreaSelectedBoxBay,
   deviceAreaBoundBayIds,
-  onDeviceAreaUndo,
   onDeviceAreaClose,
   onDeviceAreaSave,
   onDeviceAreaSetHeight,
@@ -117,14 +111,12 @@ export default function SpaceEditScene({
         cabinetMode={cabinetMode}
         cabinetCornerCount={cabinetCornerCount}
         cabinetCount={cabinetCount}
-        onCabinetUndo={onCabinetUndo}
         onCabinetClose={onCabinetClose}
         onCabinetSave={onCabinetSave}
         onCabinetNamesChange={onCabinetNamesChange}
         chargingMode={chargingMode}
         chargingPointCount={chargingPointCount}
         chargingHeight={chargingHeight}
-        onChargingUndo={onChargingUndo}
         onChargingClose={onChargingClose}
         onChargingSave={onChargingSave}
         onChargingSetHeight={onChargingSetHeight}
@@ -134,7 +126,6 @@ export default function SpaceEditScene({
         deviceAreaSelectedBoxId={deviceAreaSelectedBoxId}
         deviceAreaSelectedBoxBay={deviceAreaSelectedBoxBay}
         deviceAreaBoundBayIds={deviceAreaBoundBayIds}
-        onDeviceAreaUndo={onDeviceAreaUndo}
         onDeviceAreaClose={onDeviceAreaClose}
         onDeviceAreaSave={onDeviceAreaSave}
         onDeviceAreaSetHeight={onDeviceAreaSetHeight}

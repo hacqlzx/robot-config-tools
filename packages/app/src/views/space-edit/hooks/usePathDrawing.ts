@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import * as pc from "playcanvas";
-import { PathDrawing, type PathData } from "./drawing/PathDrawing";
+import { PathDrawing, type PathData, type PathDrawingSnapshot } from "./drawing/PathDrawing";
+import type { DrawingHistoryScope } from "./useDrawingHistory";
 
 interface PathDrawingAPI {
   pathMode: boolean;
@@ -11,6 +12,7 @@ interface PathDrawingAPI {
   handleUndo: () => void;
   getPathData: () => PathData | null;
   loadPathData: (data: PathData) => void;
+  clearPathDraft: () => void;
   setupPathDrawing: (
     app: pc.Application,
     camera: pc.Entity,
@@ -20,7 +22,9 @@ interface PathDrawingAPI {
   drawingRef: { current: PathDrawing | null };
 }
 
-export function usePathDrawing(): PathDrawingAPI {
+export function usePathDrawing(
+  onHistory?: (scope: DrawingHistoryScope, before: PathDrawingSnapshot, after: PathDrawingSnapshot, label: string) => void,
+): PathDrawingAPI {
   const [pathMode, setPathMode] = useState(false);
   const [pointCount, setPointCount] = useState(0);
   const [connectionCount, setConnectionCount] = useState(0);
@@ -38,6 +42,7 @@ export function usePathDrawing(): PathDrawingAPI {
         setPointCount(data.points.length);
         setConnectionCount(data.paths.length);
       },
+      onHistory: (before, after, label) => onHistory?.("path", before, after, label),
     });
     drawingRef.current = drawing;
     drawing.setEnabled(true);
@@ -76,6 +81,14 @@ export function usePathDrawing(): PathDrawingAPI {
     drawingRef.current?.loadData(data);
   }, []);
 
+  const clearPathDraft = useCallback(() => {
+    drawingRef.current?.clear();
+  }, []);
+
+  useEffect(() => {
+    drawingRef.current?.setHistoryCallback((before, after, label) => onHistory?.("path", before, after, label));
+  }, [onHistory]);
+
   return {
     pathMode,
     pointCount,
@@ -85,6 +98,7 @@ export function usePathDrawing(): PathDrawingAPI {
     handleUndo,
     getPathData,
     loadPathData,
+    clearPathDraft,
     setupPathDrawing,
     drawingRef,
   };

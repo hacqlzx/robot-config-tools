@@ -15,7 +15,9 @@ interface UseSaveHandlersParams {
   savedCabinetRef: React.MutableRefObject<{ item: CabinetItem; jsonPath: string } | null>;
   /** 屏柜绘制相关 */
   getCabinetGeometry: () => { verts: number[][]; splits: number[] } | null;
+  clearCabinetDraft?: () => void;
   handleToggleCabinet: () => void;
+  onCabinetSaved?: () => void;
   /** 充电区域相关 */
   chargingDrawingRef: React.MutableRefObject<any>;
   chargingMode: boolean;
@@ -69,6 +71,8 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
       params.savedCabinetRef.current = { item: savedItem, jsonPath };
       params.onDrawingFileSaved?.(jsonPath, "cabinet");
       message.success(`保存成功（${savedItem.cabinets.length} 个屏柜）`);
+      params.clearCabinetDraft?.();
+      params.onCabinetSaved?.();
       params.handleToggleCabinet();
     } catch (e: any) {
       message.error("保存失败: " + (e?.message || e));

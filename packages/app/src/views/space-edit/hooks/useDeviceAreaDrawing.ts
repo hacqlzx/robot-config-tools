@@ -1,7 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import * as pc from "playcanvas";
 import { Modal } from "antd";
-import { DeviceAreaDrawing, DeviceAreaDrawingOptions } from "./drawing/DeviceAreaDrawing";
+import { DeviceAreaDrawing, type DeviceAreaDrawingSnapshot } from "./drawing/DeviceAreaDrawing";
+import type { DrawingHistoryScope } from "./useDrawingHistory";
 
 interface UseDeviceAreaDrawingAPI {
   deviceAreaMode: boolean;
@@ -19,6 +20,7 @@ interface UseDeviceAreaDrawingAPI {
   getBoxDatas: () => { id: string; verts: number[][]; height: number; bay: { id: number; name: string; code: string } | null }[];
   getBoundBayIds: () => number[];
   loadBoxes: (datas: { id: string; verts: number[][]; height?: number; bay: { id: number; name: string; code: string } | null }[]) => void;
+  clearDeviceAreaDraft: () => void;
   setupDeviceAreaDrawing: (
     app: pc.Application,
     camera: pc.Entity,
@@ -32,6 +34,7 @@ interface UseDeviceAreaDrawingAPI {
 export function useDeviceAreaDrawing(
   onSave?: () => void,
   onDelete?: () => void,
+  onHistory?: (scope: DrawingHistoryScope, before: DeviceAreaDrawingSnapshot, after: DeviceAreaDrawingSnapshot, label: string) => void,
 ): UseDeviceAreaDrawingAPI {
   const [deviceAreaMode, setDeviceAreaMode] = useState(false);
   const [boxCount, setBoxCount] = useState(0);
@@ -74,6 +77,8 @@ export function useDeviceAreaDrawing(
       onDelete: () => {
         deleteCbRef.current?.();
       },
+      onHistory: (before, after, label) => onHistory?.("device-area", before, after, label),
+      onHeightChange: (h) => setHeight(h),
     });
     drawingRef.current = drawing;
     return () => {
@@ -109,13 +114,9 @@ export function useDeviceAreaDrawing(
     });
   }, []);
 
-  /** 强制关闭设备区（用于互斥切换），仅清除未保存数据，保留已保存的框 */
+  /** 强制关闭设备区（用于互斥切换），只停用交互，保留草稿给统一撤销/恢复 */
   const handleForceCloseDeviceArea = useCallback(() => {
-    if (dirtyRef.current) {
-      drawingRef.current?.clearAll();
-    } else {
-      drawingRef.current?.setEnabled(false);
-    }
+    drawingRef.current?.setEnabled(false);
     setDeviceAreaMode(false);
   }, []);
 
@@ -165,14 +166,23 @@ export function useDeviceAreaDrawing(
     dirtyRef.current = false;
   }, []);
 
+  const clearDeviceAreaDraft = useCallback(() => {
+    drawingRef.current?.clearAll();
+    dirtyRef.current = false;
+  }, []);
+
   const markSaved = useCallback(() => {
     dirtyRef.current = false;
   }, []);
 
+  useEffect(() => {
+    drawingRef.current?.setHistoryCallback((before, after, label) => onHistory?.("device-area", before, after, label));
+  }, [onHistory]);
+
   return {
     deviceAreaMode, boxCount, height, selectedBoxId, selectedBoxBay,
     handleToggleDeviceArea, handleForceCloseDeviceArea, handleUndo, handleBindBay, handleUnbind, handleSave, handleSetHeight,
-    getBoxDatas, getBoundBayIds, loadBoxes,
+    getBoxDatas, getBoundBayIds, loadBoxes, clearDeviceAreaDraft,
     setupDeviceAreaDrawing, drawingRef, markSaved,
   };
 }

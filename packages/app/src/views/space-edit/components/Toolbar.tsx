@@ -1,5 +1,5 @@
 ﻿import { useRef } from "react";
-import { UploadOutlined, TableOutlined, SaveOutlined, ScissorOutlined, BorderOutlined, ThunderboltOutlined, AppstoreOutlined, NodeIndexOutlined, ExportOutlined } from "@ant-design/icons";
+import { UploadOutlined, TableOutlined, SaveOutlined, ScissorOutlined, BorderOutlined, ThunderboltOutlined, AppstoreOutlined, NodeIndexOutlined, ExportOutlined, ArrowLeftOutlined, ArrowRightOutlined } from "@ant-design/icons";
 import { message } from "antd";
 import { MODEL_FILE_ACCEPT, POINT_TABLE_FILE_ACCEPT, isLasOrLazFileName, isZipFileName } from "../utils/space-paths";
 
@@ -12,6 +12,10 @@ interface Props {
   onToggleDeviceArea?: () => void;
   pathMode?: boolean;
   onTogglePath?: () => void;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
   onSaveAll?: () => void;
   onFileSelect: (file: File) => void;
   onClipModel?: () => void;
@@ -24,6 +28,8 @@ const BUTTONS = [
   { icon: <UploadOutlined style={{ fontSize: 20 }} />, label: "空间模型加载", action: "file" as const },
   { icon: <TableOutlined style={{ fontSize: 20 }} />, label: "点表加载", action: "point" as const },
   { icon: <SaveOutlined style={{ fontSize: 20 }} />, label: "保存全部", action: "saveAll" as const },
+  { icon: <ArrowLeftOutlined style={{ fontSize: 20 }} />, label: "撤销", action: "undo" as const },
+  { icon: <ArrowRightOutlined style={{ fontSize: 20 }} />, label: "恢复", action: "redo" as const },
   { icon: <ScissorOutlined style={{ fontSize: 20 }} />, label: "裁切模型", action: "clip" as const },
   { icon: <BorderOutlined style={{ fontSize: 20 }} />, label: "绘制屏柜", action: "cabinet" as const },
   { icon: <ThunderboltOutlined style={{ fontSize: 20 }} />, label: "绘制充电区域", action: "charging" as const },
@@ -32,7 +38,7 @@ const BUTTONS = [
   { icon: <ExportOutlined style={{ fontSize: 20 }} />, label: "导出模型", action: "export" as const },
 ];
 
-export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onToggleCabinet, chargingMode, onToggleCharging, deviceAreaMode, onToggleDeviceArea, pathMode, onTogglePath, onSaveAll, onImportPointTable, onExportModel, importing }: Props) {
+export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onToggleCabinet, chargingMode, onToggleCharging, deviceAreaMode, onToggleDeviceArea, pathMode, onTogglePath, onUndo, onRedo, canUndo, canRedo, onSaveAll, onImportPointTable, onExportModel, importing }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pointInputRef = useRef<HTMLInputElement>(null);
 
@@ -73,6 +79,8 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
       case "charging": onToggleCharging?.(); break;
       case "deviceArea": onToggleDeviceArea?.(); break;
       case "path": onTogglePath?.(); break;
+      case "undo": onUndo?.(); break;
+      case "redo": onRedo?.(); break;
       case "saveAll": onSaveAll?.(); break;
       case "export": onExportModel?.(); break;
     }
@@ -101,6 +109,15 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
           background: #e6f4ff;
           color: #1677ff;
         }
+        .space-edit-toolbar-btn:disabled {
+          cursor: not-allowed;
+          color: #bfbfbf;
+          background: transparent;
+        }
+        .space-edit-toolbar-btn:disabled:hover {
+          color: #bfbfbf;
+          background: transparent;
+        }
       `}</style>
       <div style={{
         display: "flex", alignItems: "center", gap: 4,
@@ -121,7 +138,7 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
               key={label}
               className={`space-edit-toolbar-btn${isActive ? " active" : ""}`}
               onClick={() => handleClick(action)}
-              disabled={action === "point" && importing}
+              disabled={(action === "point" && importing) || (action === "undo" && !canUndo) || (action === "redo" && !canRedo)}
             >
               {icon}
               <span>{label}{action === "point" && importing ? "..." : ""}</span>

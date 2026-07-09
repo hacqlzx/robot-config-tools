@@ -12,6 +12,10 @@ export interface DeviceAreaDrawingOptions {
   onSelectChange?: (boxId: string | null) => void;
   /** 框被删除时回调 */
   onDelete?: () => void | Promise<void>;
+  /** 几何和绑定变更历史记录回调 */
+  onHistory?: (before: DeviceAreaDrawingSnapshot, after: DeviceAreaDrawingSnapshot, label: string) => void;
+  /** 选中框高度变化回调 */
+  onHeightChange?: (height: number) => void;
 }
 
 const DEFAULTS = {
@@ -43,6 +47,19 @@ interface BoxInfo {
   labelEl: HTMLDivElement | null;
 }
 
+export interface DeviceAreaBoxSnapshot {
+  id: string;
+  verts: number[][];
+  selected: boolean;
+  height: number;
+  bay: { id: number; name: string; code: string } | null;
+}
+
+export interface DeviceAreaDrawingSnapshot {
+  points: number[][];
+  boxes: DeviceAreaBoxSnapshot[];
+}
+
 /**
  * 设备区绘制（框架无关）
  *
@@ -60,7 +77,7 @@ export class DeviceAreaDrawing {
   private entitiesRef: { current: Map<string, pc.Entity> };
   private gd: pc.GraphicsDevice;
   private canvas: HTMLCanvasElement;
-  private opts: Required<Omit<DeviceAreaDrawingOptions, "onChange" | "onSelectChange" | "onDelete">> & Pick<DeviceAreaDrawingOptions, "onChange" | "onSelectChange" | "onDelete">;
+  private opts: Required<Omit<DeviceAreaDrawingOptions, "onChange" | "onSelectChange" | "onDelete" | "onHistory" | "onHeightChange">> & Pick<DeviceAreaDrawingOptions, "onChange" | "onSelectChange" | "onDelete" | "onHistory" | "onHeightChange">;
 
   // points/clickLines 是当前正在放置的临时 3 点；boxes 是已经成体的设备区集合。
   private points: pc.Vec3[] = [];
@@ -103,11 +120,56 @@ export class DeviceAreaDrawing {
 
   setGroundY(y: number) { this.groundY = y; }
 
+  setHistoryCallback(fn: DeviceAreaDrawingOptions["onHistory"]) {
+    this.opts.onHistory = fn;
+  }
+
+  getSnapshot(): DeviceAreaDrawingSnapshot {
+    return {
+      points: this.points.map((v) => [v.x, v.y, v.z]),
+      boxes: this.boxes.map((b) => ({
+        id: b.id,
+        verts: b.verts.map((v) => [v.x, v.y, v.z]),
+        selected: b.selected,
+        height: b.height,
+        bay: b.bay ? { ...b.bay } : null,
+      })),
+    };
+  }
+
+  restoreSnapshot(snapshot: DeviceAreaDrawingSnapshot) {
+    this.destroyBoxes();
+    this.clearPlacement();
+    this.points = snapshot.points.map((v) => new pc.Vec3(v[0], v[1], v[2]));
+    this.rebuildPlacement();
+
+    let selectedBox: BoxInfo | null = null;
+    for (const item of snapshot.boxes) {
+      if (item.verts.length !== 8) continue;
+      const box = this.createBoxFromData({
+        id: item.id,
+        verts: item.verts,
+        height: item.height,
+        bay: item.bay,
+      });
+      if (box) {
+        this.boxes.push(box);
+        if (item.selected) selectedBox = box;
+      }
+    }
+    if (selectedBox) this.selectBox(selectedBox);
+    else this.opts.onSelectChange?.(null);
+    if (selectedBox) this.opts.onHeightChange?.(selectedBox.height);
+    this.emitChange();
+    this.requestRender();
+  }
+
   /** 动态修改选中框的高度 */
   setHeight(h: number) {
     if (h <= 0) return;
     const box = this.boxes.find((b) => b.selected);
     if (!box) return;
+    const before = this.getSnapshot();
     box.height = h;
     const v = box.verts;
     const baseY = (v[0].y + v[1].y + v[2].y + v[3].y) / 4;
@@ -119,6 +181,8 @@ export class DeviceAreaDrawing {
       updateLineEntity(line, v[a], v[b], thickness);
     });
     this.requestRender();
+    this.opts.onHeightChange?.(h);
+    this.recordHistory("调整设备区高度", before);
   }
 
   /** 获取选中框的高度 */
@@ -136,6 +200,10 @@ export class DeviceAreaDrawing {
 
   getBoxCount(): number { return this.boxes.length; }
 
+  hasAnyData(): boolean {
+    return this.points.length > 0 || this.boxes.length > 0;
+  }
+
   getSelectedBoxId(): string | null {
     return this.boxes.find((b) => b.selected)?.id ?? null;
   }
@@ -148,18 +216,22 @@ export class DeviceAreaDrawing {
   bindBayToSelected(bay: { id: number; name: string; code: string }) {
     const box = this.boxes.find((b) => b.selected);
     if (!box) return;
+    const before = this.getSnapshot();
     box.bay = bay;
     this.updateBoxLabel(box);
     this.opts.onSelectChange?.(box.id);
+    this.recordHistory("绑定设备区间隔", before);
   }
 
   /** 解绑选中框的间隔 */
   unbindSelected() {
     const box = this.boxes.find((b) => b.selected);
     if (!box) return;
+    const before = this.getSnapshot();
     box.bay = null;
     this.updateBoxLabel(box);
     this.opts.onSelectChange?.(box.id);
+    this.recordHistory("解绑设备区间隔", before);
   }
 
   /** 获取所有已绑定的间隔 ID（用于校验重复） */
@@ -182,21 +254,8 @@ export class DeviceAreaDrawing {
     // 回显时整体重建 boxes，避免旧实体残留；保存的 8 顶点是权威几何。
     this.clearAll();
     for (const d of datas) {
-      if (d.verts.length !== 8) continue;
-      const vs = d.verts.map((v) => new pc.Vec3(v[0], v[1], v[2]));
-      const id = d.id || (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
-      const h = d.height || this.opts.height;
-      const lines = BOX_EDGES.map(([a, b]) =>
-        createLine(this.app, vs[a], vs[b], this.opts.color, this.opts.lineThickness),
-      );
-      lines.forEach((line, i) => {
-        const [a, b] = BOX_EDGES[i];
-        updateLineEntity(line, vs[a], vs[b], this.opts.lineThickness);
-      });
-      const labelEl = this.createLabelEl();
-      const box: BoxInfo = { id, verts: vs, lines, selected: false, height: h, bay: d.bay, labelEl };
-      this.updateBoxLabel(box);
-      this.boxes.push(box);
+      const box = this.createBoxFromData(d);
+      if (box) this.boxes.push(box);
     }
     this.emitChange();
     this.requestRender();
@@ -219,11 +278,7 @@ export class DeviceAreaDrawing {
   }
 
   clearAll() {
-    for (const box of this.boxes) {
-      box.lines.forEach((e) => e.destroy());
-      box.labelEl?.remove();
-    }
-    this.boxes.length = 0;
+    this.destroyBoxes();
     this.clearPlacement();
     this.emitChange();
     this.requestRender();
@@ -239,6 +294,11 @@ export class DeviceAreaDrawing {
 
   private emitChange() { this.opts.onChange?.(this.boxes.length); }
 
+  private recordHistory(label: string, before: DeviceAreaDrawingSnapshot | null) {
+    if (!before) return;
+    this.opts.onHistory?.(before, this.getSnapshot(), label);
+  }
+
   private clearPlacement() {
     this.clickLines.forEach((e) => e.destroy());
     this.pointSpheres.forEach((e) => e.destroy());
@@ -247,8 +307,54 @@ export class DeviceAreaDrawing {
     this.points.length = 0;
   }
 
+  private rebuildPlacement() {
+    this.pointSpheres.forEach((e) => e.destroy());
+    this.clickLines.forEach((e) => e.destroy());
+    this.pointSpheres = this.points.map((p) => createSphere(this.app, p, this.opts.color, this.opts.sphereScale));
+    this.clickLines = [];
+    for (let i = 1; i < this.points.length; i++) {
+      this.clickLines.push(createLine(this.app, this.points[i - 1], this.points[i], this.opts.color, this.opts.lineThickness));
+    }
+  }
+
+  private destroyBoxes() {
+    for (const box of this.boxes) {
+      box.lines.forEach((e) => e.destroy());
+      box.labelEl?.remove();
+    }
+    this.boxes.length = 0;
+    this.opts.onSelectChange?.(null);
+  }
+
+  private removeBoxAt(idx: number) {
+    const box = this.boxes[idx];
+    if (!box) return;
+    box.lines.forEach((e) => e.destroy());
+    box.labelEl?.remove();
+    this.boxes.splice(idx, 1);
+  }
+
+  private createBoxFromData(data: { id?: string; verts: number[][]; height?: number; bay: { id: number; name: string; code: string } | null }): BoxInfo | null {
+    if (data.verts.length !== 8) return null;
+    const vs = data.verts.map((v) => new pc.Vec3(v[0], v[1], v[2]));
+    const id = data.id || (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
+    const h = data.height || this.opts.height;
+    const lines = BOX_EDGES.map(([a, b]) =>
+      createLine(this.app, vs[a], vs[b], this.opts.color, this.opts.lineThickness),
+    );
+    lines.forEach((line, i) => {
+      const [a, b] = BOX_EDGES[i];
+      updateLineEntity(line, vs[a], vs[b], this.opts.lineThickness);
+    });
+    const labelEl = this.createLabelEl();
+    const box: BoxInfo = { id, verts: vs, lines, selected: false, height: h, bay: data.bay, labelEl };
+    this.updateBoxLabel(box);
+    return box;
+  }
+
   private placePoint(pos: pc.Vec3) {
     if (this.points.length >= 3) return;
+    const before = this.getSnapshot();
     this.pointSpheres.push(createSphere(this.app, pos, this.opts.color, this.opts.sphereScale));
     if (this.points.length >= 1) {
       const prev = this.points[this.points.length - 1];
@@ -261,6 +367,7 @@ export class DeviceAreaDrawing {
       this.clearPlacement();
     }
     this.emitChange();
+    this.recordHistory("绘制设备区点", before);
   }
 
   private buildBox() {
@@ -313,14 +420,13 @@ export class DeviceAreaDrawing {
   private deleteSelected() {
     const idx = this.boxes.findIndex((b) => b.selected);
     if (idx < 0) return;
-    const box = this.boxes[idx];
-    box.lines.forEach((e) => e.destroy());
-    box.labelEl?.remove();
-    this.boxes.splice(idx, 1);
+    const before = this.getSnapshot();
+    this.removeBoxAt(idx);
     this.opts.onSelectChange?.(null);
     this.opts.onDelete?.();
     this.emitChange();
     this.requestRender();
+    this.recordHistory("删除设备区", before);
   }
 
   // ========== 选中 ==========
@@ -354,6 +460,7 @@ export class DeviceAreaDrawing {
   private moveSelected(dx: number, dy: number, dz: number) {
     const box = this.boxes.find((b) => b.selected);
     if (!box) return;
+    const before = this.getSnapshot();
     const d = new pc.Vec3(dx, dy, dz);
     // 方向键移动是整体平移 8 个顶点，不重新吸附点云，避免误改变用户框出的区域。
     box.verts.forEach((v) => v.add(d));
@@ -363,6 +470,7 @@ export class DeviceAreaDrawing {
       updateLineEntity(line, box.verts[a], box.verts[b], thickness);
     });
     this.requestRender();
+    this.recordHistory("移动设备区", before);
   }
 
   private getBoxTopCenter(box: BoxInfo): pc.Vec3 {

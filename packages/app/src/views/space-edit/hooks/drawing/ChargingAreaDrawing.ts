@@ -21,6 +21,10 @@ export interface ChargingAreaDrawingOptions {
   onSelectChange?: (selected: boolean) => void;
   /** 框被删除时回调 */
   onDelete?: () => void;
+  /** 几何变更历史记录回调 */
+  onHistory?: (before: ChargingAreaDrawingSnapshot, after: ChargingAreaDrawingSnapshot, label: string) => void;
+  /** 高度变化回调 */
+  onHeightChange?: (height: number) => void;
 }
 
 const DEFAULTS = {
@@ -46,6 +50,12 @@ interface BoxState {
   lines: pc.Entity[]; // 12 棱，与 BOX_EDGES 一一对应
 }
 
+export interface ChargingAreaDrawingSnapshot {
+  points: number[][];
+  box: { verts: number[][]; selected: boolean } | null;
+  height: number;
+}
+
 /**
  * 充电区域绘制（框架无关）
  *
@@ -63,7 +73,7 @@ export class ChargingAreaDrawing {
   private entitiesRef: { current: Map<string, pc.Entity> };
   private gd: pc.GraphicsDevice;
   private canvas: HTMLCanvasElement;
-  private opts: Required<Omit<ChargingAreaDrawingOptions, "onChange" | "onSelectChange" | "onDelete">> & Pick<ChargingAreaDrawingOptions, "onChange" | "onSelectChange" | "onDelete">;
+  private opts: Required<Omit<ChargingAreaDrawingOptions, "onChange" | "onSelectChange" | "onDelete" | "onHistory" | "onHeightChange">> & Pick<ChargingAreaDrawingOptions, "onChange" | "onSelectChange" | "onDelete" | "onHistory" | "onHeightChange">;
 
   /** 1 点无法确定水平面时使用模型地平面 Y，未设置则回退三点最低 Y */
   private groundY = -Infinity;
@@ -109,8 +119,47 @@ export class ChargingAreaDrawing {
     if (this.labelEl) this.labelEl.style.display = this.box ? "block" : "none";
   }
 
+  setHistoryCallback(fn: ChargingAreaDrawingOptions["onHistory"]) {
+    this.opts.onHistory = fn;
+  }
+
   getPointCount(): number {
     return this.box ? 3 : this.points.length;
+  }
+
+  getSnapshot(): ChargingAreaDrawingSnapshot {
+    return {
+      points: this.points.map((v) => [v.x, v.y, v.z]),
+      box: this.box
+        ? {
+            verts: this.box.verts.map((v) => [v.x, v.y, v.z]),
+            selected: this.selected,
+          }
+        : null,
+      height: this.opts.height,
+    };
+  }
+
+  restoreSnapshot(snapshot: ChargingAreaDrawingSnapshot) {
+    this.destroyBox();
+    this.clickLines.forEach((e) => e.destroy());
+    this.pointSpheres.forEach((e) => e.destroy());
+    this.clickLines.length = 0;
+    this.pointSpheres.length = 0;
+    this.points = snapshot.points.map((v) => new pc.Vec3(v[0], v[1], v[2]));
+    this.opts.height = snapshot.height || this.opts.height;
+    this.opts.onHeightChange?.(this.opts.height);
+
+    if (snapshot.box?.verts.length === 8) {
+      const vs = snapshot.box.verts.map((v) => new pc.Vec3(v[0], v[1], v[2]));
+      this.buildBoxFromVerts(vs);
+      if (snapshot.box.selected) this.select();
+    } else {
+      this.rebuildPlacement();
+    }
+
+    this.emitChange();
+    this.requestRender();
   }
 
   /** 撤销：有立体矩形则退回 2 点态，否则删最后一个点 */
@@ -164,16 +213,7 @@ export class ChargingAreaDrawing {
     this.pointSpheres.length = 0;
     this.points.length = 0;
 
-    const vs = verts.map((v) => new pc.Vec3(v[0], v[1], v[2]));
-    const lines = BOX_EDGES.map(([a, b]) =>
-      createLine(this.app, vs[a], vs[b], this.opts.color, this.opts.lineThickness),
-    );
-    lines.forEach((line, i) => {
-      const [a, b] = BOX_EDGES[i];
-      updateLineEntity(line, vs[a], vs[b], this.opts.lineThickness);
-    });
-    this.box = { verts: vs, lines };
-    if (this.labelEl) this.labelEl.style.display = "block";
+    this.buildBoxFromVerts(verts.map((v) => new pc.Vec3(v[0], v[1], v[2])));
     this.emitChange();
     this.requestRender();
   }
@@ -196,6 +236,7 @@ export class ChargingAreaDrawing {
   /** 动态修改高度（已有框时直接调整顶部顶点） */
   setHeight(h: number) {
     if (!this.box || h <= 0) return;
+    const before = this.getSnapshot();
     this.opts.height = h;
     const v = this.box.verts;
     const baseY = (v[0].y + v[1].y + v[2].y + v[3].y) / 4;
@@ -207,6 +248,7 @@ export class ChargingAreaDrawing {
       updateLineEntity(line, v[a], v[b], thickness);
     });
     this.requestRender();
+    this.recordHistory("调整充电区高度", before);
   }
 
   destroy() {
@@ -228,6 +270,11 @@ export class ChargingAreaDrawing {
     this.opts.onChange?.(this.getPointCount());
   }
 
+  private recordHistory(label: string, before: ChargingAreaDrawingSnapshot | null) {
+    if (!before) return;
+    this.opts.onHistory?.(before, this.getSnapshot(), label);
+  }
+
   /** 按当前 points 重建放点态的球与连线 */
   private rebuildPlacement() {
     this.pointSpheres.forEach((e) => e.destroy());
@@ -241,6 +288,7 @@ export class ChargingAreaDrawing {
 
   private placePoint(pos: pc.Vec3) {
     if (this.points.length >= 3) return;
+    const before = this.getSnapshot();
     this.pointSpheres.push(createSphere(this.app, pos, this.opts.color, this.opts.sphereScale));
     if (this.points.length >= 1) {
       const prev = this.points[this.points.length - 1];
@@ -250,6 +298,7 @@ export class ChargingAreaDrawing {
     // 三点足够确定一个水平矩形：p1/p2 给出一条边，p3 决定另一侧宽度。
     if (this.points.length === 3) this.buildBox();
     this.emitChange();
+    this.recordHistory("绘制充电区点", before);
   }
 
   /** 3 点 → 平面矩形（忽略高度）→ 拉伸成立体矩形 */
@@ -301,11 +350,26 @@ export class ChargingAreaDrawing {
     this.requestRender();
   }
 
+  private buildBoxFromVerts(vertsInput: pc.Vec3[]) {
+    const vs = vertsInput.map((v) => v.clone());
+    const lines = BOX_EDGES.map(([a, b]) =>
+      createLine(this.app, vs[a], vs[b], this.opts.color, this.opts.lineThickness),
+    );
+    lines.forEach((line, i) => {
+      const [a, b] = BOX_EDGES[i];
+      updateLineEntity(line, vs[a], vs[b], this.opts.lineThickness);
+    });
+    this.box = { verts: vs, lines };
+    if (this.labelEl) this.labelEl.style.display = "block";
+  }
+
   private destroyBox() {
     if (this.box) {
       this.box.lines.forEach((e) => e.destroy());
       this.box = null;
     }
+    this.selected = false;
+    this.opts.onSelectChange?.(false);
     this.deselect();
     if (this.labelEl) this.labelEl.style.display = "none";
   }
@@ -428,6 +492,7 @@ export class ChargingAreaDrawing {
   /** 平移立体矩形 */
   private moveBox(dx: number, dy: number, dz: number) {
     if (!this.box) return;
+    const before = this.getSnapshot();
     const d = new pc.Vec3(dx, dy, dz);
     this.box.verts.forEach((v) => v.add(d));
     const thickness = this.selected ? HIGHLIGHT_THICKNESS : this.opts.lineThickness;
@@ -436,6 +501,7 @@ export class ChargingAreaDrawing {
       updateLineEntity(line, this.box!.verts[a], this.box!.verts[b], thickness);
     });
     this.requestRender();
+    this.recordHistory("移动充电区", before);
   }
 
   // ============ 事件 ============
@@ -476,10 +542,12 @@ export class ChargingAreaDrawing {
     if (!this.selected || !this.box) return;
     if (e.key === "Delete" || e.key === "Backspace") {
       e.preventDefault();
+      const before = this.getSnapshot();
       this.destroyBox();
       this.opts.onDelete?.();
       this.emitChange();
       this.requestRender();
+      this.recordHistory("删除充电区", before);
       return;
     }
     const s = this.opts.moveStep;

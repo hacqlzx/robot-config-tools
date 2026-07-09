@@ -19,6 +19,8 @@ export interface CabinetDrawingOptions {
   onChange?: (cornerCount: number) => void;
   /** 屏柜数量变化时回调（成体后 = 分隔数 + 1，未成体为 0） */
   onCabinetCountChange?: (count: number) => void;
+  /** 几何变更历史记录回调 */
+  onHistory?: (before: CabinetDrawingSnapshot, after: CabinetDrawingSnapshot, label: string) => void;
 }
 
 const DEFAULTS = {
@@ -56,6 +58,11 @@ interface Split {
   edges: pc.Entity[];   // [前竖, 后竖, 底深, 顶深]
 }
 
+export interface CabinetDrawingSnapshot {
+  corners: number[][];
+  cube: { verts: number[][]; splits: number[] } | null;
+}
+
 /**
  * 屏柜绘制（框架无关）
  *
@@ -74,8 +81,8 @@ export class CabinetDrawing {
   private entitiesRef: { current: Map<string, pc.Entity> };
   private gd: pc.GraphicsDevice;
   private canvas: HTMLCanvasElement;
-  private opts: Required<Omit<CabinetDrawingOptions, "onChange" | "onCabinetCountChange">> &
-    Pick<CabinetDrawingOptions, "onChange" | "onCabinetCountChange">;
+  private opts: Required<Omit<CabinetDrawingOptions, "onChange" | "onCabinetCountChange" | "onHistory">> &
+    Pick<CabinetDrawingOptions, "onChange" | "onCabinetCountChange" | "onHistory">;
 
   // 放点阶段（0~3 点）：还没形成完整立方体，只显示用户点击点和红色连线。
   private corners: pc.Vec3[] = [];
@@ -90,6 +97,7 @@ export class CabinetDrawing {
   private dragStartScreen: { x: number; y: number } | null = null;
   private selectedVert = -1;
   private isDragging = false;
+  private dragBeforeSnapshot: CabinetDrawingSnapshot | null = null;
   private static readonly CLICK_THRESHOLD = 3;
   private static readonly EDGE_HIT_PX2 = 100; // 命中红线阈值 10px
 
@@ -124,7 +132,11 @@ export class CabinetDrawing {
 
   setEnabled(v: boolean) {
     this.enabled = v;
-    if (!v) { this.dragStartScreen = null; this.isDragging = false; }
+    if (!v) { this.dragStartScreen = null; this.isDragging = false; this.dragBeforeSnapshot = null; }
+  }
+
+  setHistoryCallback(fn: CabinetDrawingOptions["onHistory"]) {
+    this.opts.onHistory = fn;
   }
 
   /** 设置各屏柜名称（用于框上方红色标签） */
@@ -144,6 +156,36 @@ export class CabinetDrawing {
       verts: this.cube.verts.map((v) => [v.x, v.y, v.z]),
       splits: this.splits.map((s) => s.t),
     };
+  }
+
+  getSnapshot(): CabinetDrawingSnapshot {
+    return {
+      corners: this.corners.map((v) => [v.x, v.y, v.z]),
+      cube: this.cube
+        ? {
+            verts: this.cube.verts.map((v) => [v.x, v.y, v.z]),
+            splits: this.splits.map((s) => s.t),
+          }
+        : null,
+    };
+  }
+
+  restoreSnapshot(snapshot: CabinetDrawingSnapshot) {
+    this.destroySplits();
+    this.destroyCube();
+    this.clickLines.forEach((e) => e.destroy());
+    this.cornerSpheres.forEach((e) => e.destroy());
+    this.clickLines.length = 0;
+    this.cornerSpheres.length = 0;
+    this.corners = snapshot.corners.map((v) => new pc.Vec3(v[0], v[1], v[2]));
+    this.rebuildPlacement();
+    if (snapshot.cube?.verts.length === 8) {
+      this.buildCubeFromVerts(snapshot.cube.verts.map((v) => new pc.Vec3(v[0], v[1], v[2])));
+      snapshot.cube.splits.forEach((t) => this.addSplitInternal(t));
+    }
+    this.emitChange();
+    this.emitCabinetCount();
+    this.requestRender();
   }
 
   /** 撤销：优先撤分隔 → 撤立方体 → 撤角点 */
@@ -226,6 +268,27 @@ export class CabinetDrawing {
     this.opts.onCabinetCountChange?.(this.cube ? this.splits.length + 1 : 0);
   }
 
+  private recordHistory(label: string, before: CabinetDrawingSnapshot | null) {
+    if (!before) return;
+    this.opts.onHistory?.(before, this.getSnapshot(), label);
+  }
+
+  private rebuildPlacement() {
+    this.pointLikePlacementDestroy();
+    this.cornerSpheres = this.corners.map((p) => createSphere(this.app, p, this.opts.clickColor, this.opts.sphereScale));
+    this.clickLines = [];
+    for (let i = 1; i < this.corners.length; i++) {
+      this.clickLines.push(createLine(this.app, this.corners[i - 1], this.corners[i], this.opts.clickColor, this.opts.lineThickness));
+    }
+  }
+
+  private pointLikePlacementDestroy() {
+    this.clickLines.forEach((e) => e.destroy());
+    this.cornerSpheres.forEach((e) => e.destroy());
+    this.clickLines.length = 0;
+    this.cornerSpheres.length = 0;
+  }
+
   private getVPMatrix(): pc.Mat4 | null {
     const camComp = this.camera.camera;
     if (!camComp) return null;
@@ -248,6 +311,7 @@ export class CabinetDrawing {
 
   private placeCorner(pos: pc.Vec3) {
     if (this.corners.length >= 4) return;
+    const before = this.getSnapshot();
     this.cornerSpheres.push(createSphere(this.app, pos, this.opts.clickColor, this.opts.sphereScale));
     if (this.corners.length >= 1) {
       const prev = this.corners[this.corners.length - 1];
@@ -256,6 +320,7 @@ export class CabinetDrawing {
     this.corners.push(pos.clone());
     if (this.corners.length === 4) this.buildCube();
     this.emitChange();
+    this.recordHistory("绘制屏柜角点", before);
   }
 
   // ============ 内部：立方体阶段 ============
@@ -276,12 +341,13 @@ export class CabinetDrawing {
       new pc.Vec3().add2(new pc.Vec3().add2(p1, up), depth), // 7 后左上
     ];
 
-    this.clickLines.forEach((e) => e.destroy());
-    this.cornerSpheres.forEach((e) => e.destroy());
-    this.clickLines.length = 0;
-    this.cornerSpheres.length = 0;
-    this.corners.length = 0;
+    this.buildCubeFromVerts(verts);
+  }
 
+  private buildCubeFromVerts(vertsInput: pc.Vec3[]) {
+    this.pointLikePlacementDestroy();
+    this.corners.length = 0;
+    const verts = vertsInput.map((v) => v.clone());
     const spheres = verts.map((v, i) =>
       createSphere(this.app, v, this.vertColor(i), this.opts.sphereScale),
     );
@@ -436,6 +502,12 @@ export class CabinetDrawing {
   }
 
   private addSplit(t: number) {
+    const before = this.getSnapshot();
+    this.addSplitInternal(t);
+    this.recordHistory("新增屏柜分隔", before);
+  }
+
+  private addSplitInternal(t: number) {
     if (!this.cube) return;
     const c = this.splitCorners(t);
     const th = this.opts.lineThickness;
@@ -565,6 +637,7 @@ export class CabinetDrawing {
       if (hit >= 0) {
         this.selectVert(hit);
         this.isDragging = true;
+        this.dragBeforeSnapshot = this.getSnapshot();
         (window as any).__drawingDragging = true;
         this.dragStartScreen = { x: e.clientX, y: e.clientY };
         this.requestRender();
@@ -597,6 +670,8 @@ export class CabinetDrawing {
         const snap = screenPickLas(this.gd, this.camera, sx, sy, this.entitiesRef.current);
         if (snap) this.moveVertex(this.selectedVert, snap.point);
       }
+      this.recordHistory("调整屏柜顶点", this.dragBeforeSnapshot);
+      this.dragBeforeSnapshot = null;
       this.dragStartScreen = null;
       this.requestRender();
       return;

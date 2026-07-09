@@ -18,6 +18,7 @@ export interface PathDrawingOptions {
   cpScale?: number;
   onChange?: (data: PathData) => void;
   onSelectChange?: (selected: boolean) => void;
+  onHistory?: (before: PathDrawingSnapshot, after: PathDrawingSnapshot, label: string) => void;
 }
 
 export interface PathPoint {
@@ -40,6 +41,13 @@ export interface PathSegment {
 export interface PathData {
   points: PathPoint[];
   paths: PathSegment[];
+}
+
+export interface PathDrawingSnapshot {
+  data: PathData;
+  selectedPointId: string | null;
+  selectedPathId: string | null;
+  lastConnectedPointId: string | null;
 }
 
 const DEFAULTS = {
@@ -99,7 +107,7 @@ export class PathDrawing {
   private entitiesRef: { current: Map<string, pc.Entity> };
   private gd: pc.GraphicsDevice;
   private canvas: HTMLCanvasElement;
-  private opts: Required<Omit<PathDrawingOptions, "onChange" | "onSelectChange">> & Pick<PathDrawingOptions, "onChange" | "onSelectChange">;
+  private opts: Required<Omit<PathDrawingOptions, "onChange" | "onSelectChange" | "onHistory">> & Pick<PathDrawingOptions, "onChange" | "onSelectChange" | "onHistory">;
 
   private points: pc.Vec3[] = [];
   private pointIds: string[] = [];
@@ -121,6 +129,8 @@ export class PathDrawing {
   private isDragging = false;
   private cpDragging: { pathIdx: number; which: 1 | 2 } | null = null;
   private dragStartScreen: { x: number; y: number } | null = null;
+  private pointDragBeforeSnapshot: PathDrawingSnapshot | null = null;
+  private cpDragBeforeSnapshot: PathDrawingSnapshot | null = null;
 
   constructor(
     app: pc.Application,
@@ -151,6 +161,10 @@ export class PathDrawing {
   setEnabled(v: boolean) {
     this.enabled = v;
     if (!v) this.cancelDrag();
+  }
+
+  setHistoryCallback(fn: PathDrawingOptions["onHistory"]) {
+    this.opts.onHistory = fn;
   }
 
   /** 切换激活/非激活状态 */
@@ -190,6 +204,26 @@ export class PathDrawing {
     };
   }
 
+  getSnapshot(): PathDrawingSnapshot {
+    return {
+      data: this.getData(),
+      selectedPointId: this.selectedPointIdx >= 0 ? this.pointIds[this.selectedPointIdx] : null,
+      selectedPathId: this.selectedPathIdx >= 0 ? this.pathIds[this.selectedPathIdx] : null,
+      lastConnectedPointId: this.lastConnectedIdx >= 0 ? this.pointIds[this.lastConnectedIdx] : null,
+    };
+  }
+
+  restoreSnapshot(snapshot: PathDrawingSnapshot) {
+    this.loadData(snapshot.data);
+    this.lastConnectedIdx = snapshot.lastConnectedPointId ? this.pointIds.indexOf(snapshot.lastConnectedPointId) : -1;
+    const pointIdx = snapshot.selectedPointId ? this.pointIds.indexOf(snapshot.selectedPointId) : -1;
+    const pathIdx = snapshot.selectedPathId ? this.pathIds.indexOf(snapshot.selectedPathId) : -1;
+    if (pointIdx >= 0) this._selPoint(pointIdx);
+    else if (pathIdx >= 0) this._selPath(pathIdx);
+    else this._unselAll();
+    this.requestRender();
+  }
+
   loadData(data: PathData | { points: number[][]; connections: [number, number][] }) {
     // 加载保存数据时先清空实体和索引，再按格式重建点、线和控制点。
     this.clearEntities();
@@ -203,6 +237,12 @@ export class PathDrawing {
     this.cpSpheres.length = 0;
     this.curveSegs.length = 0;
     this.lastConnectedIdx = -1;
+    this.selectedPointIdx = -1;
+    this.selectedPathIdx = -1;
+    this.isDragging = false;
+    this.cpDragging = null;
+    this.pointDragBeforeSnapshot = null;
+    this.cpDragBeforeSnapshot = null;
 
     if (isOldPathData(data)) {
       // 旧格式没有稳定 id，加载时临时生成，保存后会转成新格式。
@@ -314,6 +354,11 @@ export class PathDrawing {
 
   private emitChange() {
     this.opts.onChange?.(this.getData());
+  }
+
+  private recordHistory(label: string, before: PathDrawingSnapshot | null) {
+    if (!before) return;
+    this.opts.onHistory?.(before, this.getSnapshot(), label);
   }
 
   // ============ 贝塞尔曲线 ============
@@ -528,6 +573,7 @@ export class PathDrawing {
 
   /** 删除路径（保留前后停靠点） */
   private deletePath(idx: number) {
+    const before = this.getSnapshot();
     this.lines[idx]?.destroy();
     this.curveSegs[idx]?.forEach((e) => e.destroy());
     this.hideCpSpheres(idx);
@@ -540,10 +586,12 @@ export class PathDrawing {
     this._unselAll();
     this.emitChange();
     this.requestRender();
+    this.recordHistory("删除路径段", before);
   }
 
   /** 删除停靠点（同时删除前后关联路径） */
   private deletePoint(idx: number) {
+    const before = this.getSnapshot();
     this.removeConnectionsForInner(idx);
     this.spheres[idx].destroy();
     this.points.splice(idx, 1);
@@ -560,6 +608,7 @@ export class PathDrawing {
     this._unselAll();
     this.emitChange();
     this.requestRender();
+    this.recordHistory("删除路径点", before);
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
@@ -677,6 +726,7 @@ export class PathDrawing {
       const hitCp = this.hitTestCp(sx, sy);
       if (hitCp) {
         this.cpDragging = hitCp;
+        this.cpDragBeforeSnapshot = this.getSnapshot();
         (window as any).__drawingDragging = true;
         this.dragStartScreen = { x: e.clientX, y: e.clientY };
         this.requestRender();
@@ -687,6 +737,7 @@ export class PathDrawing {
       if (hitPt >= 0) {
         this._selPoint(hitPt);
         this.isDragging = true;
+        this.pointDragBeforeSnapshot = this.getSnapshot();
         (window as any).__drawingDragging = true;
         this.dragStartScreen = { x: e.clientX, y: e.clientY };
         this.requestRender();
@@ -735,6 +786,8 @@ export class PathDrawing {
     if (this.cpDragging) {
       this.cpDragging = null;
       (window as any).__drawingDragging = false;
+      this.recordHistory("调整路径曲线", this.cpDragBeforeSnapshot);
+      this.cpDragBeforeSnapshot = null;
       this.dragStartScreen = null;
       this.requestRender();
       return;
@@ -750,6 +803,8 @@ export class PathDrawing {
         const snap = screenPickLas(this.gd, this.camera, sx, sy, this.entitiesRef.current);
         if (snap) this.moveSelected(snap.point);
       }
+      this.recordHistory("移动路径点", this.pointDragBeforeSnapshot);
+      this.pointDragBeforeSnapshot = null;
       this.dragStartScreen = null;
       this.requestRender();
       return;
@@ -771,20 +826,24 @@ export class PathDrawing {
 
       const hitIdx = this.hitTestSphere(sx, sy);
       if (hitIdx >= 0 && hitIdx !== this.lastConnectedIdx) {
+        const before = this.getSnapshot();
         if (this.lastConnectedIdx >= 0) {
           this.addConnection(this.lastConnectedIdx, hitIdx);
         }
         this.lastConnectedIdx = hitIdx;
         this._unselAll();
         this.requestRender();
+        this.recordHistory("连接路径点", before);
         this.dragStartScreen = null;
         return;
       }
 
       const hitResult = screenPickLas(this.gd, this.camera, sx, sy, this.entitiesRef.current);
       if (hitResult) {
+        const before = this.getSnapshot();
         this.placePoint(hitResult.point);
         this.requestRender();
+        this.recordHistory("绘制路径点", before);
       }
     }
 
@@ -793,8 +852,12 @@ export class PathDrawing {
   };
 
   private cancelDrag = () => {
+    this.recordHistory("移动路径点", this.pointDragBeforeSnapshot);
+    this.recordHistory("调整路径曲线", this.cpDragBeforeSnapshot);
     this.isDragging = false;
     this.cpDragging = null;
+    this.pointDragBeforeSnapshot = null;
+    this.cpDragBeforeSnapshot = null;
     (window as any).__drawingDragging = false;
     this.dragStartScreen = null;
   };

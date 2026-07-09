@@ -146,6 +146,25 @@ function asFiniteNumber(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function defaultDeviceAreaName(id: string | number): string {
+  return `设备区域${valueText(id)}`;
+}
+
+function deviceAreaBayFromRecord(record: RobotAreaRecord): DeviceAreaItem["bay"] {
+  const id = positiveInt(record.id);
+  const name = valueText(record.name);
+  if (!id || !name || name === defaultDeviceAreaName(record.id ?? "")) return null;
+  return { id, name, code: "" };
+}
+
+function deviceAreaRecordId(item: DeviceAreaItem, used: Set<number>): number {
+  const boundId = item.bay?.id;
+  if (boundId && boundId > 0 && !used.has(boundId)) return boundId;
+  const itemId = positiveInt(item.id);
+  if (itemId && !used.has(itemId)) return itemId;
+  return nextAvailableId(used);
+}
+
 function formatTime(date = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
@@ -489,7 +508,7 @@ function deviceAreaItemToScene(item: DeviceAreaItem, coordinate: LasCoordinateTr
 function legacyItemsToRobotAreas(items: DrawingItem[]): RobotAreaRecord[] {
   const records: RobotAreaRecord[] = [];
   let cabinetRowId = 1;
-  let deviceId = 1;
+  const usedDeviceIds = new Set<number>();
   const time = formatTime();
 
   for (const item of items || []) {
@@ -504,10 +523,12 @@ function legacyItemsToRobotAreas(items: DrawingItem[]): RobotAreaRecord[] {
     } else if (item?.type === "device-area") {
       const pose = boxPoseFromVerts(item.geometry?.verts || []);
       if (pose) {
+        const id = deviceAreaRecordId(item, usedDeviceIds);
+        usedDeviceIds.add(id);
         records.push({
-          id: String(deviceId++),
+          id: String(id),
           type: AREA_TYPE_DEVICE,
-          name: item.bay?.name || `设备区域${deviceId - 1}`,
+          name: item.bay?.name || defaultDeviceAreaName(id),
           pose,
           time: item.updatedAt || time,
         });
@@ -589,13 +610,12 @@ function robotAreasToDrawingItems(records: RobotAreaRecord[]): DrawingItem[] {
     } else if (type === AREA_TYPE_DEVICE) {
       const pose = parsePose(record.pose);
       if (!pose) continue;
-      const name = valueText(record.name);
       items.push({
         id: valueText(record.id) || String(items.length + 1),
         type: "device-area",
         geometry: { verts: boxPoseToVerts(pose) },
         height: boxHeightFromPose(pose),
-        bay: name ? { id: 0, name, code: "" } : null,
+        bay: deviceAreaBayFromRecord(record),
         updatedAt: valueText(record.time),
       });
     }
@@ -707,15 +727,14 @@ export async function saveDeviceAreas(params: {
 
   for (const item of items) {
     const robotItem = deviceAreaItemToLas(item, coordinate);
-    let id = positiveInt(item.id);
-    if (!id || used.has(id)) id = nextAvailableId(used);
+    const id = deviceAreaRecordId(item, used);
     used.add(id);
     const pose = boxPoseFromVerts(robotItem.geometry.verts);
     if (!pose) continue;
     next.push({
       id: String(id),
       type: AREA_TYPE_DEVICE,
-      name: item.bay?.name || `设备区域${id}`,
+      name: item.bay?.name || defaultDeviceAreaName(id),
       pose,
       time: formatTime(),
     });

@@ -12,7 +12,6 @@ interface DrawingEditPanelsProps {
   cabinetMode: boolean;
   cabinetCornerCount: number;
   cabinetCount: number;
-  onCabinetUndo: () => void;
   onCabinetClose: () => void;
   onCabinetSave: (data: CabinetSaveData) => void;
   onCabinetNamesChange: (names: string[]) => void;
@@ -20,7 +19,6 @@ interface DrawingEditPanelsProps {
   chargingMode: boolean;
   chargingPointCount: number;
   chargingHeight: number;
-  onChargingUndo: () => void;
   onChargingClose: () => void;
   onChargingSave: () => void;
   onChargingSetHeight: (height: number) => void;
@@ -31,7 +29,6 @@ interface DrawingEditPanelsProps {
   deviceAreaSelectedBoxId: string | null;
   deviceAreaSelectedBoxBay: { id: number; name: string; code: string } | null;
   deviceAreaBoundBayIds: Set<number>;
-  onDeviceAreaUndo: () => void;
   onDeviceAreaClose: () => void;
   onDeviceAreaSave: () => void;
   onDeviceAreaSetHeight: (height: number) => void;
@@ -49,14 +46,12 @@ export default function DrawingEditPanels({
   cabinetMode,
   cabinetCornerCount,
   cabinetCount,
-  onCabinetUndo,
   onCabinetClose,
   onCabinetSave,
   onCabinetNamesChange,
   chargingMode,
   chargingPointCount,
   chargingHeight,
-  onChargingUndo,
   onChargingClose,
   onChargingSave,
   onChargingSetHeight,
@@ -66,7 +61,6 @@ export default function DrawingEditPanels({
   deviceAreaSelectedBoxId,
   deviceAreaSelectedBoxBay,
   deviceAreaBoundBayIds,
-  onDeviceAreaUndo,
   onDeviceAreaClose,
   onDeviceAreaSave,
   onDeviceAreaSetHeight,
@@ -79,7 +73,6 @@ export default function DrawingEditPanels({
         <CabinetPanel
           cornerCount={cabinetCornerCount}
           cabinetCount={cabinetCount}
-          onUndo={onCabinetUndo}
           onClose={onCabinetClose}
           onSave={onCabinetSave}
           onNamesChange={onCabinetNamesChange}
@@ -89,7 +82,6 @@ export default function DrawingEditPanels({
         <ChargingAreaPanel
           pointCount={chargingPointCount}
           height={chargingHeight}
-          onUndo={onChargingUndo}
           onClose={onChargingClose}
           onSave={onChargingSave}
           onSetHeight={onChargingSetHeight}
@@ -102,7 +94,6 @@ export default function DrawingEditPanels({
           selectedBoxId={deviceAreaSelectedBoxId}
           selectedBoxBay={deviceAreaSelectedBoxBay}
           boundBayIds={deviceAreaBoundBayIds}
-          onUndo={onDeviceAreaUndo}
           onClose={onDeviceAreaClose}
           onSave={onDeviceAreaSave}
           onSetHeight={onDeviceAreaSetHeight}

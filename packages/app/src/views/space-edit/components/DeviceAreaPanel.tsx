@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Button, Select, Table, InputNumber, message } from "antd";
-import { CloseOutlined, UndoOutlined, SaveOutlined } from "@ant-design/icons";
+import { Button, Select, Table, InputNumber } from "antd";
+import { CloseOutlined, SaveOutlined } from "@ant-design/icons";
 import type { DeviceBay } from "@robot/database";
 
 interface Props {
@@ -8,7 +8,6 @@ interface Props {
   height: number;
   selectedBoxId: string | null;
   selectedBoxBay: { id: number; name: string; code: string } | null;
-  onUndo: () => void;
   onClose: () => void;
   onSave: () => void;
   onSetHeight: (h: number) => void;
@@ -20,7 +19,7 @@ interface Props {
 
 export default function DeviceAreaPanel({
   boxCount, height, selectedBoxId, selectedBoxBay,
-  onUndo, onClose, onSave, onSetHeight, onBindBay, onUnbind, boundBayIds,
+  onClose, onSave, onSetHeight, onBindBay, onUnbind, boundBayIds,
 }: Props) {
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
@@ -120,7 +119,6 @@ export default function DeviceAreaPanel({
           <span style={{ fontSize: 12, whiteSpace: "nowrap" }}>高度(m)</span>
           <InputNumber size="small" min={0.1} max={100} step={0.1} value={height}
             onChange={(v) => v != null && onSetHeight(v)} style={{ width: 72 }} />
-          <Button size="small" icon={<UndoOutlined />} onClick={onUndo} disabled={boxCount === 0}>撤销</Button>
         </div>
         <div style={{ fontSize: 11, color: "#999", marginBottom: 6 }}>点击3个点生成设备区 → 选中框 → 在下表中绑定间隔</div>
         <Table<DeviceBay>

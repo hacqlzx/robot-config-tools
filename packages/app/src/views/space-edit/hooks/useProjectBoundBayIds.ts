@@ -1,17 +1,19 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { getBoundBayIdsInProject } from "./drawing/drawing-storage";
 
 export function useProjectBoundBayIds(deviceAreaMode: boolean) {
-  const projectBoundBayIdsRef = useRef<Set<number>>(new Set());
+  const [projectBoundBayIds, setProjectBoundBayIds] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     if (!deviceAreaMode) return;
     const api = window.electronAPI;
     if (!api) return;
+    let cancelled = false;
     getBoundBayIdsInProject(api, localStorage.getItem("selectedProject") || "").then((ids) => {
-      projectBoundBayIdsRef.current = ids;
+      if (!cancelled) setProjectBoundBayIds(ids);
     });
+    return () => { cancelled = true; };
   }, [deviceAreaMode]);
 
-  return projectBoundBayIdsRef;
+  return projectBoundBayIds;
 }

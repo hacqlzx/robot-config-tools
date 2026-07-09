@@ -1,14 +1,12 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Button, Select, Table, Input, message } from "antd";
-import { UndoOutlined, CloseOutlined, SaveOutlined } from "@ant-design/icons";
+import { CloseOutlined, SaveOutlined } from "@ant-design/icons";
 
 interface Props {
   /** 当前已放置的角点数量（0~4） */
   cornerCount: number;
   /** 当前屏柜数量（成体后 = 分隔数 + 1，未成体为 0） */
   cabinetCount: number;
-  /** 撤销最后一个角点 */
-  onUndo: () => void;
   /** 关闭绘制屏柜 */
   onClose: () => void;
   /** 保存：传出当前面板数据 */
@@ -31,8 +29,8 @@ function gen18(): string {
   return (raw + "000000000000000000").slice(0, 18).toUpperCase();
 }
 
-/** 绘制屏柜操作小窗（可拖动，提示 + 撤销 + 区域/间隔选择 + 屏柜表格） */
-export default function CabinetPanel({ cornerCount, cabinetCount, onUndo, onClose, onSave, onNamesChange }: Props) {
+/** 绘制屏柜操作小窗（可拖动，提示 + 区域/间隔选择 + 屏柜表格） */
+export default function CabinetPanel({ cornerCount, cabinetCount, onClose, onSave, onNamesChange }: Props) {
   // 相对初始右上角（right:16, top:16）的拖动位移
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
@@ -173,9 +171,6 @@ export default function CabinetPanel({ cornerCount, cabinetCount, onUndo, onClos
       <div style={{ padding: 12 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
           <span style={{ flex: 1, fontSize: 12, color: "#333" }}>{tip}</span>
-          <Button size="small" icon={<UndoOutlined />} onClick={onUndo} disabled={cornerCount === 0}>
-            撤销
-          </Button>
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
