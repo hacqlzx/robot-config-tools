@@ -156,6 +156,17 @@ function positiveInt(value: unknown): number | null {
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
+function defaultDeviceAreaName(id: string | number): string {
+  return `设备区域${valueText(id)}`;
+}
+
+function deviceAreaBayFromRecord(record: RobotAreaRecord): DrawingBayRef | null {
+  const id = positiveInt(record.id);
+  const name = valueText(record.name);
+  if (!id || !name || name === defaultDeviceAreaName(record.id ?? "")) return null;
+  return { id, name };
+}
+
 function parsePose(pose: unknown): VecTuple[] | null {
   if (typeof pose !== "string") return null;
   const points = pose.split(";")
@@ -281,7 +292,7 @@ export function robotAreasToDrawingItemsData(records: RobotAreaRecord[]): Drawin
         type: "device-area",
         name,
         geometry: { verts: boxPoseToVerts(pose) },
-        bay: name ? { id: 0, name } : null,
+        bay: deviceAreaBayFromRecord(record),
       });
     }
   }

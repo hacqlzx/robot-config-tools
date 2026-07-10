@@ -189,6 +189,10 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
     scheduleDraw();
   }, [images, scheduleDraw]);
 
+  useEffect(() => {
+    scheduleDraw();
+  }, [calibrationRects, scheduleDraw]);
+
   // 绘制：从 ref 读取 pan/scale，缩略图 + 视口裁剪
   const draw = useCallback(() => {
     rafIdRef.current = 0;
