@@ -1,6 +1,6 @@
 // 空间绘制数据持久化。
 //
-// area.json 对外使用机器人区域协议：一个 flat JSON 数组，每条记录用 type 区分区域。
+// description_file.json 对外使用机器人区域协议：一个 flat JSON 数组，每条记录用 type 区分区域。
 // 编辑器内部仍使用 8 顶点结构，读写时在这里完成 pose(4 点字符串) <-> 8 顶点的转换。
 
 import type { SpaceTreeNode } from "../../types";
@@ -76,8 +76,7 @@ export interface RobotAreaRecord {
 }
 
 /** 绘制数据文件名（充电区域、设备区、屏柜共用一个文件） */
-export const DRAWING_FILE_NAME = "area.json";
-export const LEGACY_DRAWING_FILE_NAME = "充电区域、设备区、屏柜.json";
+export const DRAWING_FILE_NAME = "description_file.json";
 
 /** 可行路径单独存储文件名 */
 export const PATH_FILE_NAME = "reference_path.txt";
@@ -97,10 +96,6 @@ function jsonAbsPath(modelPath: string): string {
   return mapSiblingFilePath(modelPath, DRAWING_FILE_NAME);
 }
 
-function legacyJsonAbsPath(modelPath: string): string {
-  return mapSiblingFilePath(modelPath, LEGACY_DRAWING_FILE_NAME);
-}
-
 /** 由模型绝对路径推导项目相对子路径（写用，writeFile 需要项目相对路径） */
 function jsonSubPath(modelPath: string): string {
   return mapSiblingSubPath(modelPath, DRAWING_FILE_NAME);
@@ -117,7 +112,7 @@ function pathSubPath(modelPath: string): string {
 }
 
 export function isDrawingDataFileName(name: string): boolean {
-  return name === DRAWING_FILE_NAME || name === LEGACY_DRAWING_FILE_NAME;
+  return name === DRAWING_FILE_NAME;
 }
 
 export function isReferencePathFileName(name: string): boolean {
@@ -367,11 +362,9 @@ async function readTextFile(api: ElectronAPI, filePath: string): Promise<string>
 }
 
 async function readAreaRecords(api: ElectronAPI, modelPath: string): Promise<RobotAreaRecord[]> {
-  for (const candidate of [jsonAbsPath(modelPath), legacyJsonAbsPath(modelPath)]) {
-    try {
-      return await readAreaRecordsFromPath(api, candidate);
-    } catch {}
-  }
+  try {
+    return await readAreaRecordsFromPath(api, jsonAbsPath(modelPath));
+  } catch {}
   return [];
 }
 
@@ -632,7 +625,7 @@ function robotAreasToSceneDrawingItems(records: RobotAreaRecord[], coordinate: L
 }
 
 /**
- * 保存屏柜绘制：读现有 area.json → 替换同名柜排及其柜子 → 写回 flat 数组。
+ * 保存屏柜绘制：读现有 description_file.json → 替换同名柜排及其柜子 → 写回 flat 数组。
  * 未被当前编辑器处理的其他区域类型会原样保留。
  */
 export async function saveCabinetDrawing(params: {
@@ -677,7 +670,7 @@ export async function loadCabinetItems(api: ElectronAPI, modelPath: string): Pro
     .filter((it): it is CabinetItem => it.type === "cabinet");
 }
 
-/** 保存充电区域：读现有 area.json → 移除旧充电区域记录 → 写入新记录 */
+/** 保存充电区域：读现有 description_file.json → 移除旧充电区域记录 → 写入新记录 */
 export async function saveChargingArea(params: {
   api: ElectronAPI;
   projectName: string;
@@ -712,7 +705,7 @@ export async function loadChargingArea(api: ElectronAPI, modelPath: string): Pro
   return items.find((it): it is ChargingAreaItem => it.type === "charging-area") ?? null;
 }
 
-/** 保存设备区域列表：读现有 area.json → 移除旧设备区记录 → 写入新记录列表 */
+/** 保存设备区域列表：读现有 description_file.json → 移除旧设备区记录 → 写入新记录列表 */
 export async function saveDeviceAreas(params: {
   api: ElectronAPI;
   projectName: string;

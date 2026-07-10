@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Tree, Modal, Input, message } from "antd";
+import { Tree, Modal, message } from "antd";
 import type { TreeProps, TreeDataNode } from "antd";
 import TreeView from "./TreeView";
 import DeviceTree from "@/components/DeviceTree";
@@ -73,9 +73,6 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
   const [cabinetTreeData, setCabinetTreeData] = useState<TreeDataNode[]>([]);
   const [deviceAreaTreeData, setDeviceAreaTreeData] = useState<TreeDataNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(false);
-
-  const [renameTarget, setRenameTarget] = useState<SpaceTreeNode | null>(null);
-  const [renameValue, setRenameValue] = useState("");
 
   const loadMapTree = useCallback(async () => {
     const selectedProject = localStorage.getItem("selectedProject");
@@ -159,27 +156,6 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
     });
   }, [loadMapTree, loadedFiles, onToggleDrawing, onTogglePath, onUnloadMapFile]);
 
-  /** 右键-重命名：打开弹窗 */
-  const handleRequestRename = useCallback((node: SpaceTreeNode) => {
-    setRenameTarget(node);
-    setRenameValue(node.name);
-  }, []);
-
-  /** 执行重命名 */
-  const doRename = useCallback(async () => {
-    if (!renameTarget) return;
-    const name = renameValue.trim();
-    if (!name) { message.warning("名称不能为空"); return; }
-    try {
-      await window.electronAPI?.project.renamePath(renameTarget.path, name);
-      message.success("已重命名");
-      setRenameTarget(null);
-      loadMapTree();
-    } catch (e: any) {
-      message.error("重命名失败: " + (e?.message || e));
-    }
-  }, [renameTarget, renameValue, loadMapTree]);
-
   /** 渲染 antd Tree（设备台账或屏柜共用） */
 
   return (
@@ -225,7 +201,6 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
                 loadingFile={loadingFile}
                 onLoadLas={onLoadLas}
                 onToggleVisible={onToggleVisible}
-                onRequestRename={handleRequestRename}
                 onRequestDelete={handleRequestDelete}
                 onRequestOpenDir={handleRequestOpenDir}
                 drawingShown={mapDrawingShown}
@@ -273,22 +248,6 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
           )}
         </div>
       </div>
-      <Modal
-        title="重命名"
-        open={!!renameTarget}
-        onOk={doRename}
-        onCancel={() => setRenameTarget(null)}
-        okText="确定"
-        cancelText="取消"
-        destroyOnHidden
-      >
-        <Input
-          value={renameValue}
-          onChange={(e) => setRenameValue(e.target.value)}
-          onPressEnter={doRename}
-          autoFocus
-        />
-      </Modal>
     </>
   );
 }

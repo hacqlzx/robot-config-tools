@@ -8,9 +8,7 @@ import { Transform } from "stream";
 
 const MAP_MODEL_FILE_NAME = "map.las";
 const MAP_INFO_FILE_NAME = "map_info.json";
-const AREA_FILE_NAME = "area.json";
 const REFERENCE_PATH_FILE_NAME = "reference_path.txt";
-const LEGACY_AREA_FILE_NAME = "充电区域、设备区、屏柜.json";
 const LEGACY_REFERENCE_PATH_FILE_NAME = "可行驶路径.json";
 const MAP_MODEL_EXT_RE = /\.(las|laz)$/i;
 
@@ -196,7 +194,6 @@ function appendMapContents(archive: ZipArchive, src: string, mapName: string) {
 
     let outputRel = rel;
     if (direct && MAP_MODEL_EXT_RE.test(base)) outputRel = MAP_MODEL_FILE_NAME;
-    else if (base === LEGACY_AREA_FILE_NAME) outputRel = toZipPath(path.dirname(rel) === "." ? "" : path.dirname(rel), AREA_FILE_NAME).replace(/^\//, "");
     else if (base === LEGACY_REFERENCE_PATH_FILE_NAME) outputRel = toZipPath(path.dirname(rel) === "." ? "" : path.dirname(rel), REFERENCE_PATH_FILE_NAME).replace(/^\//, "");
 
     if (added.has(outputRel)) continue;

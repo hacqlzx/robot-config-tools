@@ -11,7 +11,7 @@ const CALIBRATION_FILE_NAME = "勘察数据.json";
 const CALIB_DEVICE_DIR_NAME = "calib_device";
 const CALIB_CABINET_DIR_NAME = "calib_cabinet";
 const MAP_DIR_NAME = "地图";
-const AREA_FILE_NAME = "area.json";
+const AREA_FILE_NAME = "description_file.json";
 const AREA_TYPE_DEVICE = "8";
 
 interface CalibrationBinding {

@@ -36,6 +36,20 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
 
   const getDrawingJsonPath = (modelPath: string) => mapSiblingFilePath(modelPath, DRAWING_FILE_NAME);
   const getPathJsonPath = (modelPath: string) => mapSiblingFilePath(modelPath, PATH_FILE_NAME);
+  const saveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showSavedStatus = useCallback(() => {
+    saveStatusSetter("saved");
+    if (saveStatusTimerRef.current) clearTimeout(saveStatusTimerRef.current);
+    saveStatusTimerRef.current = setTimeout(() => {
+      saveStatusSetter("idle");
+      saveStatusTimerRef.current = null;
+    }, 2000);
+  }, [saveStatusSetter]);
+
+  useEffect(() => () => {
+    if (saveStatusTimerRef.current) clearTimeout(saveStatusTimerRef.current);
+  }, []);
 
   /** 当前绘制模型路径：优先可见且有路径的模型 */
   const getCurrentModelPath = useCallback((): string => {
@@ -70,14 +84,14 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
       // 避免编辑态线框和只读回显线框重叠。
       params.savedCabinetRef.current = { item: savedItem, jsonPath };
       params.onDrawingFileSaved?.(jsonPath, "cabinet");
-      message.success(`保存成功（${savedItem.cabinets.length} 个屏柜）`);
+      showSavedStatus();
       params.clearCabinetDraft?.();
       params.onCabinetSaved?.();
       params.handleToggleCabinet();
     } catch (e: any) {
       message.error("保存失败: " + (e?.message || e));
     }
-  }, [getCurrentModelPath, message, params]);
+  }, [getCurrentModelPath, message, params, showSavedStatus]);
 
   /** 保存充电区域 */
   const handleSaveChargingArea = useCallback(async () => {
@@ -103,12 +117,12 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     try {
       await saveChargingArea({ api, projectName, modelPath, item });
       if (item) params.onDrawingFileSaved?.(getDrawingJsonPath(modelPath), "charging-area");
-      if (!isAutoSavingRef.current) message.success("保存成功");
+      if (!isAutoSavingRef.current) showSavedStatus();
       if (params.chargingMode) params.handleToggleCharging();
     } catch (e: any) {
       message.error("保存充电区失败: " + (e?.message || e));
     }
-  }, [getCurrentModelPath, isAutoSavingRef, message, params]);
+  }, [getCurrentModelPath, isAutoSavingRef, message, params, showSavedStatus]);
 
   /** 保存设备区 */
   const handleSaveDeviceAreas = useCallback(async () => {
@@ -135,12 +149,12 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     try {
       await saveDeviceAreas({ api, projectName, modelPath, items });
       if (items.length > 0) params.onDrawingFileSaved?.(getDrawingJsonPath(modelPath), "device-area");
-      if (!silent) message.success("保存成功");
+      if (!silent) showSavedStatus();
       params.markDeviceAreaSaved();
     } catch (e: any) {
       message.error("保存设备区失败: " + (e?.message || e));
     }
-  }, [getCurrentModelPath, isAutoSavingRef, message, params]);
+  }, [getCurrentModelPath, isAutoSavingRef, message, params, showSavedStatus]);
 
   const savePathInternal = useCallback(async (showError: boolean): Promise<boolean> => {
     const api = window.electronAPI;
@@ -178,7 +192,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     const hasPath = !!params.getPathData();
 
     // 自动保存时：无任何数据且 JSON 文件不存在 → 不创建空文件。
-    // 这样新项目只打开地图不会生成空的“充电区域、设备区、屏柜.json”。
+    // 这样新项目只打开地图不会生成空的 description_file.json。
     if (silent && !hasCharging && !hasDeviceAreas && !hasPath) {
       const modelPath = getCurrentModelPath();
       if (!modelPath) return;
@@ -201,11 +215,9 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
       return;
     }
     if (!silent) {
-      saveStatusSetter("saved");
-      message.success("保存成功");
-      setTimeout(() => saveStatusSetter("idle"), 2000);
+      showSavedStatus();
     }
-  }, [handleSaveChargingArea, handleSaveDeviceAreas, savePathInternal, isAutoSavingRef, saveStatusSetter, message, params, getCurrentModelPath]);
+  }, [handleSaveChargingArea, handleSaveDeviceAreas, savePathInternal, isAutoSavingRef, saveStatusSetter, showSavedStatus, params, getCurrentModelPath]);
   handleSaveAllRef.current = handleSaveAll;
 
   // 自动保存只负责同步当前编辑态几何，不弹成功提示；手动保存才更新 SaveStatusBadge。

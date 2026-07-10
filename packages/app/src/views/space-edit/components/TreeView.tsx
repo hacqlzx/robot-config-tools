@@ -1,7 +1,14 @@
 import { useState, useEffect, useRef } from "react";
 import { Dropdown } from "antd";
 import { FolderOutlined, FileOutlined, LoadingOutlined } from "@ant-design/icons";
-import { isDrawingDataFileName, isReferencePathFileName } from "../hooks/drawing/drawing-storage";
+import {
+  DRAWING_FILE_NAME,
+  PATH_FILE_NAME,
+  ROBOT_PATH_FILE_NAME,
+  ROBOT_STOP_POINTS_FILE_NAMES,
+  isDrawingDataFileName,
+  isReferencePathFileName,
+} from "../hooks/drawing/drawing-storage";
 import type { SpaceTreeNode } from "../types";
 import { MAP_INFO_FILE_NAME, isLasOrLazFileName, loadedFileKey } from "../utils/space-paths";
 
@@ -14,8 +21,6 @@ interface Props {
   onToggleVisible?: (filePath: string) => void;
   /** 懒加载子节点，返回的 children 会被合并到对应节点下 */
   loadChildren?: (node: SpaceTreeNode) => Promise<SpaceTreeNode[]>;
-  /** 右键-重命名 */
-  onRequestRename?: (node: SpaceTreeNode) => void;
   /** 右键-删除 */
   onRequestDelete?: (node: SpaceTreeNode) => void;
   /** 右键-打开文件目录 */
@@ -26,11 +31,21 @@ interface Props {
   onToggleDrawing?: (path: string, checked: boolean) => void;
   /** 已回显的路径 json 集合 */
   pathShown?: Set<string>;
-  /** 勾选/取消可行驶路径 json */
+  /** 勾选/取消路径 json */
   onTogglePath?: (path: string, checked: boolean) => void;
 }
 
-export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, onLoadLas, onToggleVisible, loadChildren, onRequestRename, onRequestDelete, onRequestOpenDir, drawingShown, onToggleDrawing, pathShown, onTogglePath }: Props) {
+function displayNodeName(node: SpaceTreeNode): string {
+  if (node.isDir) return node.name;
+  if (isLasOrLazFileName(node.name)) return "地图模型";
+  if (node.name === DRAWING_FILE_NAME) return "区域";
+  if (node.name === ROBOT_PATH_FILE_NAME) return "路径";
+  if (node.name === PATH_FILE_NAME) return "示意路径";
+  if ((ROBOT_STOP_POINTS_FILE_NAMES as readonly string[]).includes(node.name)) return "停靠点";
+  return node.name;
+}
+
+export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, onLoadLas, onToggleVisible, loadChildren, onRequestDelete, onRequestOpenDir, drawingShown, onToggleDrawing, pathShown, onTogglePath }: Props) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
     const expandAll = (list: SpaceTreeNode[]) => {
@@ -204,13 +219,11 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
         const effectiveChildren = getEffectiveChildren(node);
         const isLoading = loadingNodes.has(node.path);
         const menuItems = [
-          { key: "rename", label: "重命名" },
           { key: "openDir", label: "打开文件目录" },
           { key: "delete", label: "删除", danger: true },
         ];
         const onMenuClick = (info: { key: string }) => {
-          if (info.key === "rename") onRequestRename?.(node);
-          else if (info.key === "openDir") onRequestOpenDir?.(node);
+          if (info.key === "openDir") onRequestOpenDir?.(node);
           else if (info.key === "delete") onRequestDelete?.(node);
         };
 
@@ -268,8 +281,11 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
               ) : (
                 <FileOutlined style={{ color: "#999", fontSize: 14 }} />
               )}
-              <span style={{ marginLeft: 2, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "default" }}>
-                {node.name}
+              <span
+                title={node.name}
+                style={{ marginLeft: 2, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "default" }}
+              >
+                {displayNodeName(node)}
               </span>
               {!node.isDir && isLas(node.name) && loadingFile === loadedFileKey(node.path) && (
                 <LoadingOutlined style={{ color: "#1677ff", fontSize: 14, flexShrink: 0 }} />
@@ -285,7 +301,6 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
                 onLoadLas={onLoadLas}
                 onToggleVisible={onToggleVisible}
                 loadChildren={loadChildren}
-                onRequestRename={onRequestRename}
                 onRequestDelete={onRequestDelete}
                 onRequestOpenDir={onRequestOpenDir}
                 drawingShown={drawingShown}
