@@ -279,6 +279,23 @@ export default function SpaceEdit() {
   // ---- 副作用：交互、设备区、屏柜回显 ----
   useEffect(() => { cabinetViewerRef.current?.setOnRequestDelete(handleDeleteCabinetItem); }, [handleDeleteCabinetItem]);
   useEffect(() => { cabinetViewerRef.current?.setInteractive(!cabinetMode && !chargingMode && !deviceAreaMode && !pathMode); }, [cabinetMode, chargingMode, deviceAreaMode, pathMode]);
+  useEffect(() => {
+    const mode = cabinetMode
+      ? "cabinet"
+      : chargingMode
+        ? "charging"
+        : deviceAreaMode
+          ? "device-area"
+          : pathMode
+            ? "path"
+            : "idle";
+    (window as any).__spaceEditInteractionMode = mode;
+    return () => {
+      if ((window as any).__spaceEditInteractionMode === mode) {
+        (window as any).__spaceEditInteractionMode = "idle";
+      }
+    };
+  }, [cabinetMode, chargingMode, deviceAreaMode, pathMode]);
 
   // ==================== JSX ====================
 

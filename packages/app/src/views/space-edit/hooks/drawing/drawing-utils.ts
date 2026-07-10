@@ -1,4 +1,15 @@
 import * as pc from "playcanvas";
+export {
+  viewProjectionMatrix,
+  projectToScreen,
+  worldToScreen,
+  screenToRay,
+  pointToSegmentDistSq,
+  extractBoxObb,
+  rayObbHit,
+  hitTestBoxVolume,
+  isNearProjectedBounds,
+} from "../../../../components/three-d-engine/selection-utils";
 
 // ============ 绘制工具函数（屏柜/设备区/路径通用） ============
 
@@ -70,18 +81,21 @@ export function screenPickLas(
   return nearResult || farResult;
 }
 
-/** 投影世界坐标到屏幕坐标（画布像素坐标系），位于相机背后返回 null */
-export function worldToScreen(wp: pc.Vec3, vpMat: pc.Mat4, screenW: number, screenH: number): { sx: number; sy: number } | null {
-  const m = vpMat.data;
-  const clipW = m[3] * wp.x + m[7] * wp.y + m[11] * wp.z + m[15];
-  if (clipW <= 0) return null;
-  const clipX = m[0] * wp.x + m[4] * wp.y + m[8] * wp.z + m[12];
-  const clipY = m[1] * wp.x + m[5] * wp.y + m[9] * wp.z + m[13];
-  const invW = 1 / clipW;
-  return {
-    sx: (clipX * invW * 0.5 + 0.5) * screenW,
-    sy: (0.5 - clipY * invW * 0.5) * screenH,
-  };
+export function claimSpaceEditClick(owner: string) {
+  const w = window as any;
+  w.__spaceEditClickClaim = owner;
+  window.setTimeout(() => {
+    if (w.__spaceEditClickClaim === owner) w.__spaceEditClickClaim = null;
+  }, 0);
+}
+
+export function isSpaceEditClickClaimedByOther(owner: string): boolean {
+  const claim = (window as any).__spaceEditClickClaim;
+  return !!claim && claim !== owner;
+}
+
+export function hasSpaceEditClickClaim(): boolean {
+  return !!(window as any).__spaceEditClickClaim;
 }
 
 /** 设置球体（顶点标记）颜色 */

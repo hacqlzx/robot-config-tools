@@ -1,5 +1,14 @@
 import * as pc from "playcanvas";
-import { screenPickLas, createSphere, createLine, updateLineEntity } from "./drawing-utils";
+import {
+  screenPickLas,
+  createSphere,
+  createLine,
+  updateLineEntity,
+  hitTestBoxVolume,
+  pointToSegmentDistSq,
+  claimSpaceEditClick,
+  isSpaceEditClickClaimedByOther,
+} from "./drawing-utils";
 
 /** 充电区域绘制配置项 */
 export interface ChargingAreaDrawingOptions {
@@ -44,6 +53,9 @@ const BOX_EDGES: [number, number][] = [
 ];
 const HIGHLIGHT_THICKNESS = 0.025;
 const CLICK_THRESHOLD = 3;
+const EDGE_HIT_DISTANCE_SQ = 144;
+const BOX_HIT_TOLERANCE = 1.03;
+const CLICK_CLAIM_OWNER = "charging-area";
 
 interface BoxState {
   verts: pc.Vec3[];   // 8 顶点
@@ -454,19 +466,22 @@ export class ChargingAreaDrawing {
     };
   }
 
-  /** 点击是否命中立体矩形（屏幕包围框） */
+  /** 点击是否命中立体矩形：优先按盒体体积命中，边线容差只做补充。 */
   private hitTestBox(sx: number, sy: number): boolean {
     if (!this.box) return false;
+    if (hitTestBoxVolume(this.camera, this.canvas, this.box.verts, sx, sy, BOX_HIT_TOLERANCE) !== null) {
+      return true;
+    }
     const vp = this.vpMatrix();
     if (!vp) return false;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const v of this.box.verts) {
-      const sp = this.project(v, vp);
-      if (!sp) return false;
-      if (sp.x < minX) minX = sp.x; if (sp.x > maxX) maxX = sp.x;
-      if (sp.y < minY) minY = sp.y; if (sp.y > maxY) maxY = sp.y;
+    const screenVerts = this.box.verts.map((v) => this.project(v, vp));
+    if (screenVerts.some((p) => !p)) return false;
+    for (const [a, b] of BOX_EDGES) {
+      const pa = screenVerts[a]!;
+      const pb = screenVerts[b]!;
+      if (pointToSegmentDistSq(sx, sy, pa.x, pa.y, pb.x, pb.y) <= EDGE_HIT_DISTANCE_SQ) return true;
     }
-    return sx >= minX && sx <= maxX && sy >= minY && sy <= maxY;
+    return false;
   }
 
   private select() {
@@ -506,7 +521,14 @@ export class ChargingAreaDrawing {
 
   // ============ 事件 ============
 
+  private canHandlePointer(): boolean {
+    if (this.enabled) return true;
+    const mode = (window as any).__spaceEditInteractionMode;
+    return !mode || mode === "idle";
+  }
+
   private onMouseDown = (e: MouseEvent) => {
+    if (!this.canHandlePointer()) return;
     if (e.button !== 0) return;
     if ((window as any).__clipDragging || (window as any).__drawingDragging) return;
     if (!this.enabled && !this.box) return;
@@ -515,6 +537,10 @@ export class ChargingAreaDrawing {
 
   private onMouseUp = (e: MouseEvent) => {
     if (e.button !== 0 || !this.dragStartScreen) { this.dragStartScreen = null; return; }
+    if ((window as any).__clipDragging || (window as any).__drawingDragging || isSpaceEditClickClaimedByOther(CLICK_CLAIM_OWNER)) {
+      this.dragStartScreen = null;
+      return;
+    }
     const moved = Math.hypot(e.clientX - this.dragStartScreen.x, e.clientY - this.dragStartScreen.y);
     this.dragStartScreen = null;
     if (moved > CLICK_THRESHOLD) return;
@@ -524,7 +550,10 @@ export class ChargingAreaDrawing {
     const sy = Math.round(e.clientY - rect.top);
 
     if (this.box) {
-      if (this.hitTestBox(sx, sy)) this.select();
+      if (this.hitTestBox(sx, sy)) {
+        this.select();
+        claimSpaceEditClick(CLICK_CLAIM_OWNER);
+      }
       else this.deselect();
       this.requestRender();
       return;

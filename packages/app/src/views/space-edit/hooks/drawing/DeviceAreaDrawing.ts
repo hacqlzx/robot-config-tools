@@ -1,5 +1,14 @@
 import * as pc from "playcanvas";
-import { screenPickLas, createSphere, createLine, updateLineEntity } from "./drawing-utils";
+import {
+  screenPickLas,
+  createSphere,
+  createLine,
+  updateLineEntity,
+  hitTestBoxVolume,
+  pointToSegmentDistSq,
+  claimSpaceEditClick,
+  isSpaceEditClickClaimedByOther,
+} from "./drawing-utils";
 
 export interface DeviceAreaDrawingOptions {
   color?: pc.Color;
@@ -34,7 +43,10 @@ const BOX_EDGES: [number, number][] = [
 ];
 const HIGHLIGHT_THICKNESS = 0.025;
 const CLICK_THRESHOLD = 3;
+const EDGE_HIT_DISTANCE_SQ = 144;
+const BOX_HIT_TOLERANCE = 1.03;
 const LABEL_COLOR = "#3399ff";
+const CLICK_CLAIM_OWNER = "device-area";
 
 interface BoxInfo {
   id: string;
@@ -566,35 +578,56 @@ export class DeviceAreaDrawing {
     };
   }
 
-  private hitTestBox(box: BoxInfo, sx: number, sy: number): boolean {
+  private hitTestBox(box: BoxInfo, sx: number, sy: number): number | null {
+    const volumeHit = hitTestBoxVolume(this.camera, this.canvas, box.verts, sx, sy, BOX_HIT_TOLERANCE);
+    if (volumeHit !== null) return volumeHit;
     const vp = this.vpMatrix();
-    if (!vp) return false;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const v of box.verts) {
-      const sp = this.project(v, vp);
-      if (!sp) return false;
-      if (sp.x < minX) minX = sp.x; if (sp.x > maxX) maxX = sp.x;
-      if (sp.y < minY) minY = sp.y; if (sp.y > maxY) maxY = sp.y;
-    }
-    return sx >= minX && sx <= maxX && sy >= minY && sy <= maxY;
-  }
-
-  private hitTestAny(sx: number, sy: number): BoxInfo | null {
-    for (let i = this.boxes.length - 1; i >= 0; i--) {
-      if (this.hitTestBox(this.boxes[i], sx, sy)) return this.boxes[i];
+    if (!vp) return null;
+    const screenVerts = box.verts.map((v) => this.project(v, vp));
+    if (screenVerts.some((p) => !p)) return null;
+    for (const [a, b] of BOX_EDGES) {
+      const pa = screenVerts[a]!;
+      const pb = screenVerts[b]!;
+      if (pointToSegmentDistSq(sx, sy, pa.x, pa.y, pb.x, pb.y) <= EDGE_HIT_DISTANCE_SQ) return Infinity;
     }
     return null;
   }
 
+  private hitTestAny(sx: number, sy: number): BoxInfo | null {
+    let bestBox: BoxInfo | null = null;
+    let bestT = Infinity;
+    for (let i = this.boxes.length - 1; i >= 0; i--) {
+      const t = this.hitTestBox(this.boxes[i], sx, sy);
+      if (t !== null && t <= bestT) {
+        bestBox = this.boxes[i];
+        bestT = t;
+      }
+    }
+    return bestBox;
+  }
+
   // ========== 事件 ==========
 
+  private canHandlePointer(): boolean {
+    if (this.enabled) return true;
+    const mode = (window as any).__spaceEditInteractionMode;
+    return !mode || mode === "idle";
+  }
+
   private onMouseDown = (e: MouseEvent) => {
+    if (!this.canHandlePointer()) return;
+    if (e.button !== 0) return;
+    if ((window as any).__clipDragging || (window as any).__drawingDragging) return;
     if (!this.enabled && this.boxes.length === 0) return;
     this.dragStartScreen = { x: e.clientX, y: e.clientY };
   };
 
   private onMouseUp = (e: MouseEvent) => {
     if (e.button !== 0 || !this.dragStartScreen) { this.dragStartScreen = null; return; }
+    if ((window as any).__clipDragging || (window as any).__drawingDragging || isSpaceEditClickClaimedByOther(CLICK_CLAIM_OWNER)) {
+      this.dragStartScreen = null;
+      return;
+    }
     const moved = Math.hypot(e.clientX - this.dragStartScreen.x, e.clientY - this.dragStartScreen.y);
     this.dragStartScreen = null;
     if (moved > CLICK_THRESHOLD) return;
@@ -606,6 +639,7 @@ export class DeviceAreaDrawing {
     const hit = this.hitTestAny(sx, sy);
     if (hit) {
       this.selectBox(hit);
+      claimSpaceEditClick(CLICK_CLAIM_OWNER);
       return;
     }
 

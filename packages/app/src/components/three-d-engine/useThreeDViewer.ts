@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback, useState } from "react";
 import { ThreeDEngine, type ThreeDEngineOptions } from "./ThreeDEngine";
 import { PointCloudLoader, type LoadedModel } from "./PointCloudLoader";
-import { DrawingRenderer } from "./DrawingRenderer";
+import { DrawingRenderer, type DrawingRendererSelectInfo } from "./DrawingRenderer";
 import type { DrawingRenderData } from "./drawing-data";
 import type { FileSource } from "./file-source";
 
@@ -42,7 +42,7 @@ interface UseThreeDViewerParams {
   containerRef: React.RefObject<HTMLDivElement | null>;
   engineOptions?: ThreeDEngineOptions;
   fileSource?: FileSource;
-  onSelect?: (info: { type: "cabinet" | "device-area" | "charging-area"; bayId: number }) => void;
+  onSelect?: (info: DrawingRendererSelectInfo) => void;
 }
 
 /**

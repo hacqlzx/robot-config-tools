@@ -1,6 +1,6 @@
 export { ThreeDEngine, type ThreeDEngineOptions } from "./ThreeDEngine";
 export { PointCloudLoader, type PointCloudLoaderCallbacks, type LoadedModel } from "./PointCloudLoader";
-export { DrawingRenderer } from "./DrawingRenderer";
+export { DrawingRenderer, type DrawingRendererSelectInfo } from "./DrawingRenderer";
 export type { DrawingRenderData, DrawingItemsData, DrawingRenderItem, PathRenderData } from "./drawing-data";
 export {
   createLasCoordinateTransform,

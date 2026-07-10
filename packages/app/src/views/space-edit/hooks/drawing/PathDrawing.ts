@@ -2,10 +2,13 @@ import * as pc from "playcanvas";
 import {
   screenPickLas,
   worldToScreen,
+  pointToSegmentDistSq,
   setSphereColor,
   setLineColor,
   createSphere,
   createLine,
+  claimSpaceEditClick,
+  hasSpaceEditClickClaim,
 } from "./drawing-utils";
 
 export interface PathDrawingOptions {
@@ -63,6 +66,7 @@ const DEFAULTS = {
 const CURVE_SEGMENTS = 16;
 
 const CLICK_THRESHOLD = 3;
+const CLICK_CLAIM_OWNER = "path";
 
 let _idCounter = 0;
 function genId(): string {
@@ -74,21 +78,6 @@ function isOldPathData(data: any): data is { points: number[][]; connections: [n
   if (!data) return false;
   const pt = data.points?.[0];
   return Array.isArray(pt) && typeof pt[0] === "number";
-}
-
-function pointToSegmentDistSq(
-  px: number, py: number,
-  ax: number, ay: number,
-  bx: number, by: number,
-): number {
-  const dx = bx - ax, dy = by - ay;
-  const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0) return (px - ax) ** 2 + (py - ay) ** 2;
-  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
-  t = Math.max(0, Math.min(1, t));
-  const nearX = ax + t * dx;
-  const nearY = ay + t * dy;
-  return (px - nearX) ** 2 + (py - nearY) ** 2;
 }
 
 /**
@@ -127,6 +116,7 @@ export class PathDrawing {
   private selectedPathIdx = -1;
   private lastConnectedIdx = -1;
   private isDragging = false;
+  private pendingPathSelectIdx = -1;
   private cpDragging: { pathIdx: number; which: 1 | 2 } | null = null;
   private dragStartScreen: { x: number; y: number } | null = null;
   private pointDragBeforeSnapshot: PathDrawingSnapshot | null = null;
@@ -149,7 +139,7 @@ export class PathDrawing {
 
     this.canvas.addEventListener("mousedown", this.onMouseDown);
     window.addEventListener("mousemove", this.onMouseMove);
-    window.addEventListener("mouseup", this.onMouseUp);
+    window.addEventListener("mouseup", this.onMouseUp, true);
     window.addEventListener("keydown", this.onKeyDown);
     this.canvas.addEventListener("mouseleave", this.cancelDrag);
     document.addEventListener("mouseleave", this.cancelDrag);
@@ -318,7 +308,7 @@ export class PathDrawing {
   destroy() {
     this.canvas.removeEventListener("mousedown", this.onMouseDown);
     window.removeEventListener("mousemove", this.onMouseMove);
-    window.removeEventListener("mouseup", this.onMouseUp);
+    window.removeEventListener("mouseup", this.onMouseUp, true);
     window.removeEventListener("keydown", this.onKeyDown);
     this.canvas.removeEventListener("mouseleave", this.cancelDrag);
     document.removeEventListener("mouseleave", this.cancelDrag);
@@ -612,7 +602,7 @@ export class PathDrawing {
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
-    if (!this.enabled || this.active) return;
+    if (!this.enabled || this.active || !this.canHandlePointer()) return;
     if (e.key === "Delete") {
       if (this.selectedPathIdx >= 0) {
         this.deletePath(this.selectedPathIdx);
@@ -713,10 +703,16 @@ export class PathDrawing {
 
   // ============ 事件处理 ============
 
+  private canHandlePointer(): boolean {
+    const mode = (window as any).__spaceEditInteractionMode;
+    return !mode || mode === "idle" || mode === "path";
+  }
+
   private onMouseDown = (e: MouseEvent) => {
     if (!this.enabled) return;
+    if (!this.canHandlePointer()) return;
     if (e.button !== 0) return;
-    if ((window as any).__clipDragging) return;
+    if ((window as any).__clipDragging || hasSpaceEditClickClaim()) return;
 
     const rect = this.canvas.getBoundingClientRect();
     const sx = e.clientX - rect.left;
@@ -737,6 +733,7 @@ export class PathDrawing {
       if (hitPt >= 0) {
         this._selPoint(hitPt);
         this.isDragging = true;
+        this.pendingPathSelectIdx = -1;
         this.pointDragBeforeSnapshot = this.getSnapshot();
         (window as any).__drawingDragging = true;
         this.dragStartScreen = { x: e.clientX, y: e.clientY };
@@ -744,13 +741,12 @@ export class PathDrawing {
         return;
       }
       if (hitLn >= 0) {
-        this._selPath(hitLn);
-        (window as any).__drawingDragging = true;
+        this.pendingPathSelectIdx = hitLn;
         this.dragStartScreen = { x: e.clientX, y: e.clientY };
-        this.requestRender();
         return;
       }
       this._unselAll();
+      this.pendingPathSelectIdx = -1;
       this.requestRender();
       return;
     }
@@ -814,8 +810,18 @@ export class PathDrawing {
     const dx = e.clientX - this.dragStartScreen.x;
     const dy = e.clientY - this.dragStartScreen.y;
     if (Math.sqrt(dx * dx + dy * dy) > CLICK_THRESHOLD) {
+      this.pendingPathSelectIdx = -1;
       this.dragStartScreen = null;
       (window as any).__drawingDragging = false;
+      return;
+    }
+
+    if (!this.active && this.pendingPathSelectIdx >= 0) {
+      this._selPath(this.pendingPathSelectIdx);
+      claimSpaceEditClick(CLICK_CLAIM_OWNER);
+      this.pendingPathSelectIdx = -1;
+      this.dragStartScreen = null;
+      this.requestRender();
       return;
     }
 
@@ -832,6 +838,7 @@ export class PathDrawing {
         }
         this.lastConnectedIdx = hitIdx;
         this._unselAll();
+        claimSpaceEditClick(CLICK_CLAIM_OWNER);
         this.requestRender();
         this.recordHistory("连接路径点", before);
         this.dragStartScreen = null;
@@ -855,6 +862,7 @@ export class PathDrawing {
     this.recordHistory("移动路径点", this.pointDragBeforeSnapshot);
     this.recordHistory("调整路径曲线", this.cpDragBeforeSnapshot);
     this.isDragging = false;
+    this.pendingPathSelectIdx = -1;
     this.cpDragging = null;
     this.pointDragBeforeSnapshot = null;
     this.cpDragBeforeSnapshot = null;

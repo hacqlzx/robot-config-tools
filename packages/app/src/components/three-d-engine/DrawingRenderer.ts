@@ -20,6 +20,15 @@ import {
 import { electronFileSource, type FileSource } from "./file-source";
 import { loadLasCoordinateTransform } from "./coordinate-transform";
 import { createLine, createSphere, updateLineEntity } from "./render-primitives";
+import {
+  extractBoxObb,
+  isNearProjectedBounds,
+  pointToSegmentDistSq,
+  projectToScreen,
+  rayObbHit,
+  screenToRay,
+  viewProjectionMatrix,
+} from "./selection-utils";
 
 const RED = new pc.Color(1, 0.1, 0.1);
 const GREEN = new pc.Color(0.2, 1, 0.3);
@@ -31,7 +40,10 @@ const THICKNESS = 0.01;
 const HIGHLIGHT_THICKNESS = 0.025;
 const CLICK_THRESHOLD = 8;
 const PATH_THICKNESS = 0.05;
+const PATH_HIGHLIGHT_THICKNESS = 0.08;
+const PATH_HIT_DISTANCE_SQ = 100;
 const PATH_SPHERE_SCALE = 0.12;
+const PATH_SPHERE_HIGHLIGHT_SCALE = 0.18;
 
 const RED_EDGES: [number, number][] = [[0, 1], [1, 2], [2, 6]];
 const GREEN_EDGES: [number, number][] = [
@@ -86,6 +98,39 @@ interface CabItem {
   selected: boolean;
 }
 
+interface PathPointItem {
+  index: number;
+  pos: pc.Vec3;
+  sphere: pc.Entity;
+  selected: boolean;
+}
+
+interface PathLineItem {
+  index: number;
+  from: pc.Vec3;
+  to: pc.Vec3;
+  line: pc.Entity;
+  selected: boolean;
+}
+
+export type DrawingRendererSelectInfo =
+  | { type: "cabinet" | "device-area" | "charging-area"; bayId: number }
+  | { type: "path"; bayId: 0; index: number; target: "point" | "line" };
+
+type HitResult =
+  | { type: "cabinet"; item: CabItem }
+  | { type: "box"; item: BoxItem }
+  | { type: "path-point"; item: PathPointItem }
+  | { type: "path-line"; item: PathLineItem };
+
+function setEntityColor(entity: pc.Entity, color: pc.Color) {
+  const material = entity.render?.material as pc.StandardMaterial | undefined;
+  if (!material) return;
+  material.diffuse = color;
+  material.emissive = color;
+  material.update();
+}
+
 /**
  * 通用绘制渲染器 — 从 JSON 加载并只读展示屏柜 / 充电区域 / 设备区域 / 路径
  *
@@ -102,6 +147,8 @@ export class DrawingRenderer {
   private boxes: BoxItem[] = [];
   private cabinets: CabItem[] = [];
   private pathEntities: pc.Entity[] = [];
+  private pathPoints: PathPointItem[] = [];
+  private pathLines: PathLineItem[] = [];
   private labelContainer: HTMLDivElement | null = null;
   private labelRafId = 0;
   private gd: pc.GraphicsDevice;
@@ -109,7 +156,7 @@ export class DrawingRenderer {
   private downPos: { x: number; y: number } | null = null;
   private allLabels: LabelInfo[] = [];
   private fileSource: FileSource;
-  onSelect?: (info: { type: "cabinet" | "device-area" | "charging-area"; bayId: number }) => void;
+  onSelect?: (info: DrawingRendererSelectInfo) => void;
 
   constructor(app: pc.Application, camera: pc.Entity, requestRender: () => void, fileSource: FileSource = electronFileSource) {
     this.app = app;
@@ -170,6 +217,8 @@ export class DrawingRenderer {
     this.boxes = [];
     this.cabinets = [];
     this.pathEntities = [];
+    this.pathPoints = [];
+    this.pathLines = [];
     this.allLabels = [];
   }
 
@@ -252,21 +301,23 @@ export class DrawingRenderer {
       .filter((pt): pt is { pos: pc.Vec3; id?: string | number } => !!pt);
     const pointById = new Map<string | number, pc.Vec3>();
 
-    for (const pt of points) {
+    points.forEach((pt, index) => {
       if (pt.id !== undefined) pointById.set(pt.id, pt.pos);
       const p = pt.pos;
       const sphere = createSphere(this.app, p, PATH_COLOR, PATH_SPHERE_SCALE);
       this.entities.push(sphere);
       this.pathEntities.push(sphere);
-    }
-    for (const seg of data.paths) {
+      this.pathPoints.push({ index, pos: p, sphere, selected: false });
+    });
+    data.paths.forEach((seg, index) => {
       const p1 = this.resolvePathPoint(seg, "start", "from", points, pointById);
       const p2 = this.resolvePathPoint(seg, "end", "to", points, pointById);
-      if (!p1 || !p2) continue;
+      if (!p1 || !p2) return;
       const line = createLine(this.app, p1, p2, PATH_COLOR, PATH_THICKNESS);
       this.entities.push(line);
       this.pathEntities.push(line);
-    }
+      this.pathLines.push({ index, from: p1, to: p2, line, selected: false });
+    });
   }
 
   private toPathVertex(point: PathPointValue): { pos: pc.Vec3; id?: string | number } | null {
@@ -321,6 +372,24 @@ export class DrawingRenderer {
     this.requestRender();
   }
 
+  private selectPathPoint(point: PathPointItem) {
+    if (point.selected) return;
+    this.deselectAll();
+    setEntityColor(point.sphere, PATH_COLOR);
+    point.sphere.setLocalScale(PATH_SPHERE_HIGHLIGHT_SCALE, PATH_SPHERE_HIGHLIGHT_SCALE, PATH_SPHERE_HIGHLIGHT_SCALE);
+    point.selected = true;
+    this.requestRender();
+  }
+
+  private selectPathLine(path: PathLineItem) {
+    if (path.selected) return;
+    this.deselectAll();
+    setEntityColor(path.line, PATH_COLOR);
+    updateLineEntity(path.line, path.from, path.to, PATH_HIGHLIGHT_THICKNESS);
+    path.selected = true;
+    this.requestRender();
+  }
+
   private deselectAll() {
     for (const box of this.boxes) {
       if (!box.selected) continue;
@@ -338,150 +407,92 @@ export class DrawingRenderer {
       });
       cab.selected = false;
     }
+    for (const path of this.pathLines) {
+      if (!path.selected) continue;
+      setEntityColor(path.line, PATH_COLOR);
+      updateLineEntity(path.line, path.from, path.to, PATH_THICKNESS);
+      path.selected = false;
+    }
+    for (const point of this.pathPoints) {
+      if (!point.selected) continue;
+      setEntityColor(point.sphere, PATH_COLOR);
+      point.sphere.setLocalScale(PATH_SPHERE_SCALE, PATH_SPHERE_SCALE, PATH_SPHERE_SCALE);
+      point.selected = false;
+    }
     this.requestRender();
   }
 
   // ====== 投影工具（标签定位用） ======
 
   private vpMatrix(): pc.Mat4 | null {
-    const camComp = this.camera.camera;
-    if (!camComp) return null;
-    return new pc.Mat4().mul2(camComp.projectionMatrix, this.camera.getWorldTransform().clone().invert());
+    return viewProjectionMatrix(this.camera);
   }
 
   private project(p: pc.Vec3, vp: pc.Mat4, cssW: number, cssH: number): { x: number; y: number } | null {
-    const m = vp.data;
-    const clipW = m[3] * p.x + m[7] * p.y + m[11] * p.z + m[15];
-    if (clipW <= 0) return null;
-    const inv = 1 / clipW;
-    return {
-      x: (((m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12]) * inv) * 0.5 + 0.5) * cssW,
-      y: (0.5 - ((m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13]) * inv) * 0.5) * cssH,
-    };
+    return projectToScreen(p, vp, cssW, cssH);
   }
 
   // ====== 命中测试（射线 + OBB 求交） ======
-
-  /** 点击位置 → 世界空间射线（手动逆 VP 反投影，不依赖 screenToWorld 版本差异） */
-  private screenToRay(sx: number, sy: number): { origin: pc.Vec3; dir: pc.Vec3 } | null {
-    const camComp = this.camera.camera;
-    if (!camComp) return null;
-    const rect = this.canvas.getBoundingClientRect();
-    const cssW = rect.width;
-    const cssH = rect.height;
-    if (cssW <= 0 || cssH <= 0) return null;
-
-    const ndcX = (sx / cssW) * 2 - 1;
-    const ndcY = 1 - (sy / cssH) * 2;
-
-    const viewInv = this.camera.getWorldTransform();
-    const proj = camComp.projectionMatrix;
-    const vp = new pc.Mat4().mul2(proj, viewInv.clone().invert());
-    const vpInv = vp.clone().invert();
-
-    const near4 = new pc.Vec4(ndcX, ndcY, -1, 1);
-    const far4 = new pc.Vec4(ndcX, ndcY, 1, 1);
-    vpInv.transformVec4(near4, near4);
-    vpInv.transformVec4(far4, far4);
-    if (Math.abs(near4.w) < 1e-8 || Math.abs(far4.w) < 1e-8) return null;
-
-    const near = new pc.Vec3(near4.x / near4.w, near4.y / near4.w, near4.z / near4.w);
-    const far = new pc.Vec3(far4.x / far4.w, far4.y / far4.w, far4.z / far4.w);
-    const dir = new pc.Vec3().sub2(far, near).normalize();
-    return { origin: near, dir };
-  }
-
-  /** 从 8 个顶点提取定向包围盒（正交化 + 投影重算延展） */
-  private extractOBB(verts: pc.Vec3[]): { center: pc.Vec3; axes: pc.Vec3[]; extents: number[] } | null {
-    if (verts.length < 8) return null;
-    const center = new pc.Vec3();
-    for (const v of verts) center.add(v);
-    center.mulScalar(1 / verts.length);
-
-    const e0 = new pc.Vec3().sub2(verts[1], verts[0]);
-    const e1 = new pc.Vec3().sub2(verts[3], verts[0]);
-    const e2 = new pc.Vec3().sub2(verts[4], verts[0]);
-
-    const ax = e0.clone().normalize();
-    const ay = e1.clone();
-    ay.sub(ax.clone().mulScalar(ax.dot(ay)));
-    const ayLen = ay.length();
-    if (ayLen < 0.001) return null;
-    ay.mulScalar(1 / ayLen);
-    const az = new pc.Vec3().cross(ax, ay);
-
-    let minX = Infinity, maxX = -Infinity;
-    let minY = Infinity, maxY = -Infinity;
-    let minZ = Infinity, maxZ = -Infinity;
-    for (const v of verts) {
-      const d = new pc.Vec3().sub2(v, center);
-      const px = ax.dot(d); if (px < minX) minX = px; if (px > maxX) maxX = px;
-      const py = ay.dot(d); if (py < minY) minY = py; if (py > maxY) maxY = py;
-      const pz = az.dot(d); if (pz < minZ) minZ = pz; if (pz > maxZ) maxZ = pz;
-    }
-    const ex = Math.max(Math.abs(minX), Math.abs(maxX), 0.01);
-    const ey = Math.max(Math.abs(minY), Math.abs(maxY), 0.01);
-    const ez = Math.max(Math.abs(minZ), Math.abs(maxZ), 0.01);
-    return { center, axes: [ax, ay, az], extents: [ex, ey, ez] };
-  }
-
-  /** 射线与定向包围盒求交，返回命中距离 t，未命中返回 null */
-  private rayOBBHit(
-    origin: pc.Vec3, dir: pc.Vec3,
-    center: pc.Vec3, axes: pc.Vec3[], extents: number[],
-  ): number | null {
-    const d = new pc.Vec3().sub2(origin, center);
-    let tMin = -Infinity;
-    let tMax = Infinity;
-    for (let i = 0; i < 3; i++) {
-      const e = axes[i].dot(d);
-      const f = axes[i].dot(dir);
-      if (Math.abs(f) > 1e-8) {
-        let t1 = (-e - extents[i]) / f;
-        let t2 = (-e + extents[i]) / f;
-        if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
-        if (t1 > tMin) tMin = t1;
-        if (t2 < tMax) tMax = t2;
-        if (tMin > tMax) return null;
-      } else if (Math.abs(e) > extents[i]) {
-        return null;
-      }
-    }
-    return tMin > 0 ? tMin : (tMax > 0 ? tMax : null);
-  }
 
   private isNearProjection(verts: pc.Vec3[], sx: number, sy: number, margin = 12): boolean {
     const vp = this.vpMatrix();
     if (!vp) return true;
     const rect = this.canvas.getBoundingClientRect();
-    const cssW = rect.width;
-    const cssH = rect.height;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const v of verts) {
-      const sp = this.project(v, vp, cssW, cssH);
-      if (!sp) return true;
-      if (sp.x < minX) minX = sp.x;
-      if (sp.x > maxX) maxX = sp.x;
-      if (sp.y < minY) minY = sp.y;
-      if (sp.y > maxY) maxY = sp.y;
-    }
-    return sx >= minX - margin && sx <= maxX + margin && sy >= minY - margin && sy <= maxY + margin;
+    return isNearProjectedBounds(verts, sx, sy, vp, rect.width, rect.height, margin);
   }
 
-  private hitTest(sx: number, sy: number): { type: "cabinet"; item: CabItem } | { type: "box"; item: BoxItem } | null {
-    const ray = this.screenToRay(sx, sy);
+  private hitTestPath(sx: number, sy: number): HitResult | null {
+    const vp = this.vpMatrix();
+    if (!vp) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    const cssW = rect.width;
+    const cssH = rect.height;
+
+    let bestPoint: PathPointItem | null = null;
+    let bestPointD2 = PATH_HIT_DISTANCE_SQ;
+    for (const point of this.pathPoints) {
+      const sp = this.project(point.pos, vp, cssW, cssH);
+      if (!sp) continue;
+      const d2 = (sp.x - sx) ** 2 + (sp.y - sy) ** 2;
+      if (d2 < bestPointD2) {
+        bestPointD2 = d2;
+        bestPoint = point;
+      }
+    }
+    if (bestPoint) return { type: "path-point", item: bestPoint };
+
+    let bestLine: PathLineItem | null = null;
+    let bestLineD2 = PATH_HIT_DISTANCE_SQ;
+    for (const path of this.pathLines) {
+      const a = this.project(path.from, vp, cssW, cssH);
+      const b = this.project(path.to, vp, cssW, cssH);
+      if (!a || !b) continue;
+      const d2 = pointToSegmentDistSq(sx, sy, a.x, a.y, b.x, b.y);
+      if (d2 < bestLineD2) {
+        bestLineD2 = d2;
+        bestLine = path;
+      }
+    }
+    return bestLine ? { type: "path-line", item: bestLine } : null;
+  }
+
+  private hitTest(sx: number, sy: number): HitResult | null {
+    const pathHit = this.hitTestPath(sx, sy);
+    if (pathHit) return pathHit;
+
+    const ray = screenToRay(this.camera, this.canvas, sx, sy);
     if (!ray) return null;
 
     const HIT_TOLERANCE = 1.2;
-    let bestResult: { type: "cabinet"; item: CabItem } | { type: "box"; item: BoxItem } | null = null;
+    let bestResult: HitResult | null = null;
     let bestT = Infinity;
 
     for (const box of this.boxes) {
       if (!this.isNearProjection(box.verts, sx, sy)) continue;
-      const obb = this.extractOBB(box.verts);
+      const obb = extractBoxObb(box.verts);
       if (!obb) continue;
       const te = obb.extents;
-      const t = this.rayOBBHit(ray.origin, ray.dir, obb.center, obb.axes,
+      const t = rayObbHit(ray.origin, ray.dir, obb.center, obb.axes,
         [te[0] * HIT_TOLERANCE, te[1] * HIT_TOLERANCE, te[2] * HIT_TOLERANCE]);
       if (t !== null && t < bestT) {
         bestT = t;
@@ -490,10 +501,10 @@ export class DrawingRenderer {
     }
     for (const cab of this.cabinets) {
       if (!this.isNearProjection(cab.verts, sx, sy)) continue;
-      const obb = this.extractOBB(cab.verts);
+      const obb = extractBoxObb(cab.verts);
       if (!obb) continue;
       const te = obb.extents;
-      const t = this.rayOBBHit(ray.origin, ray.dir, obb.center, obb.axes,
+      const t = rayObbHit(ray.origin, ray.dir, obb.center, obb.axes,
         [te[0] * HIT_TOLERANCE, te[1] * HIT_TOLERANCE, te[2] * HIT_TOLERANCE]);
       if (t !== null && t < bestT) {
         bestT = t;
@@ -525,9 +536,15 @@ export class DrawingRenderer {
       if (hit.type === "box") {
         this.selectBox(hit.item);
         this.onSelect?.({ type: hit.item.type, bayId: hit.item.bayId });
-      } else {
+      } else if (hit.type === "cabinet") {
         this.selectCabinet(hit.item);
         this.onSelect?.({ type: "cabinet", bayId: hit.item.bayId });
+      } else if (hit.type === "path-point") {
+        this.selectPathPoint(hit.item);
+        this.onSelect?.({ type: "path", bayId: 0, index: hit.item.index, target: "point" });
+      } else {
+        this.selectPathLine(hit.item);
+        this.onSelect?.({ type: "path", bayId: 0, index: hit.item.index, target: "line" });
       }
     } else {
       this.deselectAll();
@@ -574,3 +591,4 @@ export class DrawingRenderer {
     }
   }
 }
+
