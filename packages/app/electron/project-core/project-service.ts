@@ -3,7 +3,13 @@ import AdmZip from "adm-zip";
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { getDatabase } from "@robot/database";
+import {
+  deleteProjectData,
+  getDatabase,
+  getProjectDataCounts,
+  renameProjectData,
+  type ProjectDataCounts,
+} from "@robot/database";
 import { exportSpaceZip, type PointTableExportData } from "../export-points";
 import { getProjectRoot, ensureProjectRoot, hasProjectRootConfig, initProjectRoot } from "./project-root";
 import {
@@ -44,6 +50,40 @@ interface PreparedMapSource {
   mapName: string;
 }
 
+function makeProjectTreeWritable(targetPath: string): void {
+  if (!fs.existsSync(targetPath)) return;
+  const stat = fs.lstatSync(targetPath);
+  if (stat.isSymbolicLink()) return;
+  if (stat.isDirectory()) {
+    for (const entry of fs.readdirSync(targetPath)) {
+      makeProjectTreeWritable(path.join(targetPath, entry));
+    }
+    fs.chmodSync(targetPath, 0o777);
+    return;
+  }
+  fs.chmodSync(targetPath, 0o666);
+}
+
+function removeProjectDirectory(dirPath: string): void {
+  const removeOptions: fs.RmDirOptions = {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 200,
+  };
+  try {
+    fs.rmSync(dirPath, removeOptions);
+  } catch (error: any) {
+    if (error?.code !== "EPERM" && error?.code !== "EACCES") throw error;
+    makeProjectTreeWritable(dirPath);
+    fs.rmSync(dirPath, removeOptions);
+  }
+}
+
+function assertProjectName(name: string): string {
+  return assertSafePathSegment(name, "项目名称");
+}
+
 export async function listProjects(): Promise<string[]> {
   ensureProjectRoot();
   const entries = fs.readdirSync(getProjectRoot(), { withFileTypes: true });
@@ -66,7 +106,7 @@ export async function createProject(name: string): Promise<string> {
   if (!hasProjectRootConfig()) await initProjectRoot();
   ensureProjectRoot();
 
-  const safeName = assertSafePathSegment(name, "项目名称");
+  const safeName = assertProjectName(name);
   const dirPath = resolveProjectDir(safeName);
   if (fs.existsSync(dirPath)) {
     throw new Error(`项目 "${safeName}" 已存在`);
@@ -79,29 +119,82 @@ export async function createProject(name: string): Promise<string> {
 
 export async function renameProject(oldName: string, newName: string): Promise<string> {
   ensureProjectRoot();
-  const safeNewName = assertSafePathSegment(newName, "项目名称");
-  const oldPath = resolveProjectDir(oldName);
+  const safeOldName = assertSafePathSegment(oldName, "项目名称");
+  const safeNewName = assertProjectName(newName);
+  if (safeOldName === safeNewName) return safeNewName;
+
+  const oldPath = resolveProjectDir(safeOldName);
   const newPath = resolveProjectDir(safeNewName);
   if (!fs.existsSync(oldPath)) {
-    throw new Error(`项目 "${oldName}" 不存在`);
+    throw new Error(`项目 "${safeOldName}" 不存在`);
   }
   if (fs.existsSync(newPath)) {
     throw new Error(`项目 "${safeNewName}" 已存在`);
   }
 
+  const db = getDatabase();
+  const targetCounts = getProjectDataCounts(db, safeNewName);
+  if (targetCounts.total > 0) {
+    throw new Error(`数据库中已存在项目 "${safeNewName}" 的关联数据，无法重命名`);
+  }
+
   fs.renameSync(oldPath, newPath);
-  updateManifestForProjectRename(safeNewName);
+  let databaseRenamed = false;
+  try {
+    updateManifestForProjectRename(safeNewName);
+    renameProjectData(db, safeOldName, safeNewName);
+    databaseRenamed = true;
+  } catch (error) {
+    const rollbackErrors: string[] = [];
+    let databaseNeedsRollback = databaseRenamed;
+    if (!databaseNeedsRollback) {
+      try {
+        databaseNeedsRollback = getProjectDataCounts(db, safeNewName).total > 0;
+      } catch (rollbackError: any) {
+        rollbackErrors.push(`数据库状态检查失败：${rollbackError?.message || rollbackError}`);
+      }
+    }
+    if (databaseNeedsRollback) {
+      try {
+        renameProjectData(db, safeNewName, safeOldName);
+      } catch (rollbackError: any) {
+        rollbackErrors.push(`数据库回滚失败：${rollbackError?.message || rollbackError}`);
+      }
+    }
+    try {
+      fs.renameSync(newPath, oldPath);
+      updateManifestForProjectRename(safeOldName);
+    } catch (rollbackError: any) {
+      rollbackErrors.push(`项目目录回滚失败：${rollbackError?.message || rollbackError}`);
+    }
+    if (rollbackErrors.length > 0) {
+      throw new Error(`${(error as any)?.message || error}；${rollbackErrors.join("；")}`);
+    }
+    throw error;
+  }
   return safeNewName;
 }
 
 export async function deleteProject(name: string): Promise<string> {
   ensureProjectRoot();
-  const dirPath = resolveProjectDir(name);
+  const safeName = assertSafePathSegment(name, "项目名称");
+  const dirPath = resolveProjectDir(safeName);
   if (!fs.existsSync(dirPath)) {
-    throw new Error(`项目 "${name}" 不存在`);
+    throw new Error(`项目 "${safeName}" 不存在`);
   }
-  fs.rmSync(dirPath, { recursive: true });
-  return name;
+
+  deleteProjectData(getDatabase(), safeName);
+  try {
+    removeProjectDirectory(dirPath);
+  } catch (error: any) {
+    throw new Error(`项目数据库数据已删除，但目录清理失败：${error?.message || error}`);
+  }
+  return safeName;
+}
+
+export function getProjectDatabaseSummary(name: string): ProjectDataCounts {
+  const safeName = assertSafePathSegment(name, "项目名称");
+  return getProjectDataCounts(getDatabase(), safeName);
 }
 
 export async function importProjectModel(projectName: string, sourcePath: string, fileName: string): Promise<string> {

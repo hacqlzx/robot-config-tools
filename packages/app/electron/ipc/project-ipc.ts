@@ -5,6 +5,7 @@ import {
   deleteProjectPath,
   exportProjectFile,
   exportProjectZip,
+  getProjectDatabaseSummary,
   getProjectManifest,
   importProjectModel,
   importProjectModelZip,
@@ -22,6 +23,7 @@ export function registerProjectIpc(): void {
   ipcMain.handle("project:create", async (_event, name: string) => createProject(name));
   ipcMain.handle("project:rename", async (_event, oldName: string, newName: string) => renameProject(oldName, newName));
   ipcMain.handle("project:delete", async (_event, name: string) => deleteProject(name));
+  ipcMain.handle("project:data-summary", async (_event, name: string) => getProjectDatabaseSummary(name));
   ipcMain.handle("project:import-file", async (_event, projectName: string, sourcePath: string, fileName: string) =>
     importProjectModel(projectName, sourcePath, fileName),
   );

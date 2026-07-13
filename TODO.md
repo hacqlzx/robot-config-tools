@@ -14,7 +14,8 @@
 - ✅ 空间区域和路径已切换到机器人协议：`description_file.json`、`reference_path.txt`，兼容读取 `path.json` 和停靠点文件。
 - ✅ 勘察数据按地图导入/导出、图像标识导入/导出、标定串行保存队列和视口缩略图加载已接入。
 - ✅ 项目、机器人、后台 IP 和连接状态已收敛到 `appContextStore`，业务页面不再直接读写对应 localStorage key，也不再回退到默认项目。
-- ⬜ 项目数据库随重命名/删除同步、Electron 网络/证书安全、LAZ worker/取消、LOD、typecheck/lint/回归脚本仍未完成。
+- ✅ 项目重命名/删除已同步目录、清单和数据库六张项目关联表，删除前会展示数据库影响数量。
+- ⬜ Electron 网络/证书安全、LAZ worker/取消、LOD、typecheck/lint/回归脚本仍未完成。
 
 ## 原则
 
@@ -48,28 +49,28 @@
 - 顶部切换项目后，不刷新应用也能看到设备树和地图树同步变化。
 - 清空项目选择后，各页面不再使用 `"默认项目"` 或 `"default"` 静默写文件。
 
-### 2. ⬜ 项目重命名/删除同步数据库
+### 2. ✅ 项目重命名/删除同步数据库
 
-现状：`project:rename` 只改目录名，数据库表仍按旧 `project_name` 查询，重命名后设备树会丢数据。
+目标：项目目录生命周期与数据库中的项目关联数据保持一致。
 
 涉及文件：
 - `packages/app/electron/project-core/project-service.ts`
 - `packages/app/electron/ipc/project-ipc.ts`
-- `packages/app/electron/db-ipc.ts`
-- `packages/database/src/repositories/project-station.repo.ts`
-- `packages/database/src/repositories/*.repo.ts`
-- `packages/database/src/migrations/*.ts`
+- `packages/app/electron/preload.cjs`
+- `packages/app/src/pages/app-header/index.tsx`
+- `packages/database/src/services/project-lifecycle.service.ts`
 
-具体任务：
-- 增加数据库侧 `renameProject(oldName, newName)`，同步更新：
+已完成：
+- 数据库侧集中提供项目数据统计、重命名和删除服务，同步处理：
   - `project_station.project_name`
   - `device_voltage.project_name`
   - `device_bay.project_name`
   - `device_main.project_name`
   - `device_component.project_name`
   - `device_point.project_name`
-- 项目删除时提供明确策略：只删目录、只删数据库、或全部删除。默认建议全部删除并二次确认。
-- UI 删除项目时显示会删除哪些数据。
+- 重命名同步更新目录、项目清单和数据库；目标名称存在数据库残留时阻断，失败时尝试回滚目录、清单和数据库。
+- 删除确认后直接清理数据库关联数据并递归删除原项目目录，不创建临时隔离目录；遇到 Windows 只读文件会清除只读属性后立即重试，仍失败时明确报错。
+- 删除策略固定为同时删除目录和数据库关联数据；顶部项目管理二次确认弹窗会明确影响范围并显示六类记录数量。
 
 验收：
 - 项目重命名后，点表、设备树、勘察标定仍可查询。

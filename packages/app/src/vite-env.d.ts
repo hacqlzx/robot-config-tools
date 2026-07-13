@@ -43,6 +43,16 @@ declare global {
     };
   }
 
+  interface ProjectDataCounts {
+    stationBindings: number;
+    voltages: number;
+    bays: number;
+    mainDevices: number;
+    components: number;
+    points: number;
+    total: number;
+  }
+
   interface Window {
     electronAPI?: {
       platform: string;
@@ -58,6 +68,7 @@ declare global {
         create: (name: string) => Promise<string>;
         rename: (oldName: string, newName: string) => Promise<string>;
         delete: (name: string) => Promise<string>;
+        getDataSummary: (name: string) => Promise<ProjectDataCounts>;
         importFile: (projectName: string, sourcePath: string, fileName: string) => Promise<string>;
         importModelZip: (projectName: string, sourcePath: string) => Promise<{ mapName: string; mapDir: string; modelPath: string }>;
         getManifest: (projectName: string) => Promise<ProjectManifest>;

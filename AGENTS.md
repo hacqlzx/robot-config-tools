@@ -58,7 +58,7 @@
 - 创建无边框窗口，注册 GPU 启动参数。
 - 开发环境加载 Vite dev server，生产加载 `dist/index.html`。
 - `app/*` 管理应用生命周期、窗口和 GPU 参数，`ipc/*` 按系统、文件、项目、归档拆分 IPC，`project-core/*` 管理项目根、目录安全、清单和文件服务。
-- IPC 管理项目目录：列表、新增、重命名、删除、LAS/LAZ 或空间模型 ZIP 导入、目录树、写文件、删除/重命名路径、打开目录、导出文件。
+- IPC 管理项目目录：列表、新增、重命名、删除、LAS/LAZ 或空间模型 ZIP 导入、目录树、写文件、删除/重命名路径、打开目录、导出文件。项目重命名和删除会同步处理数据库中的项目关联数据。
 - IPC 提供大文件读取：`read-file-chunk`、`read-large-file`，供点云加载用。
 - 初始化数据库 IPC。
 - 导出空间模型 ZIP，外层包含可选点表和 `地图/*.zip` 单地图包；导入时仅接受单地图空间模型包。
@@ -76,6 +76,7 @@
 - `migrations/*.ts`：当前迁移到 004。
 - `repositories/*.repo.ts`：电压区、间隔、主设备、部件、点位、项目厂站绑定的 CRUD/upsert。
 - `services/import.service.ts`：Excel 点表行导入，生成/复用各层级编码，并写入设备树和点位。
+- `services/project-lifecycle.service.ts`：统计、重命名和删除六张表中的项目关联数据。
 - `types/index.ts`：数据库实体和 DTO 类型。
 
 主要表：`device_voltage`、`device_bay`、`device_main`、`device_component`、`device_point`、`project_station`、`schema_version`。
@@ -164,7 +165,7 @@
 - 涉及项目文件读写时走 `window.electronAPI.project.*`，并注意主进程已有项目根越界保护。
 - 涉及数据库时同步更新迁移、类型、Repository、IPC 暴露和 `vite-env.d.ts`。
 - 点表字段和枚举有两套方向：导入在 `excel-parser.ts`，导出在 `export-points.ts` 和 `electron/export-points.ts`。
-- 项目目录名变更目前只同步文件夹和 `project.manifest.json`，尚未同步数据库各表的 `project_name`；删除项目也只删目录，处理项目管理时必须一起考虑数据库一致性。
+- 项目重命名会同步目录、`project.manifest.json` 和六张表的 `project_name`，任一步失败会尝试补偿回滚；项目删除默认同时删除目录、设备树、点位/标定关联和厂站绑定，UI 会在二次确认弹窗中展示关联记录数。确认删除后直接递归删除原项目目录，不创建临时隔离目录；遇到 Windows 只读文件会清除只读属性后立即重试。
 - 不要在业务页面直接读写 `selectedProject`、`selectedRobot`、`backend_current_ip`；统一使用 `appContextStore` getter/setter 或 hooks。IP 历史和机器人列表缓存仍可使用各自独立的 localStorage key。
 - 当前没有专门的 lint/test 脚本。提交前至少跑 `pnpm build` 或与改动相关的构建命令。
 - 开发服务器默认端口是 `50050`。
@@ -172,6 +173,6 @@
 
 ## 当前技术债入口
 
-根目录 `TODO.md` 已按 2026-07-13 的实现复核，使用 `✅`、`🟡`、`⬜` 标记完成度。当前优先项是项目重命名/删除与数据库同步、Electron 网络/证书边界、点云后台任务与 LOD、基础 typecheck/lint/回归脚本。
+根目录 `TODO.md` 已按 2026-07-13 的实现复核，使用 `✅`、`🟡`、`⬜` 标记完成度。当前优先项是 Electron 网络/证书边界、点云后台任务与 LOD、基础 typecheck/lint/回归脚本。
 
 每次接手仍先运行 `git status --short`，本说明不再记录容易失效的单次本地改动快照。

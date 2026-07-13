@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     rename: (oldName, newName) =>
       ipcRenderer.invoke("project:rename", oldName, newName),
     delete: (name) => ipcRenderer.invoke("project:delete", name),
+    getDataSummary: (name) => ipcRenderer.invoke("project:data-summary", name),
     importFile: (projectName, sourcePath, fileName) =>
       ipcRenderer.invoke("project:import-file", projectName, sourcePath, fileName),
     importModelZip: (projectName, sourcePath) =>

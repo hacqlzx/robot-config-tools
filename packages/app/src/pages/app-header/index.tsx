@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect, useCallback } from "react";
-import { Menu, Button, Select, Dropdown, Modal, Input, Popconfirm, message, Tooltip } from "antd";
+import { Menu, Button, Select, Dropdown, Modal, Input, Alert, message, Tooltip } from "antd";
 import { MinusOutlined, BorderOutlined, CloseOutlined, SettingOutlined, ProjectOutlined, PlusOutlined, EditOutlined, DeleteOutlined, CheckOutlined, FolderOpenOutlined } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -62,6 +62,11 @@ export default function AppHeader() {
   const [projectRoot, setProjectRoot] = useState("");
   const [editingName, setEditingName] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
+  const [deleteProjectName, setDeleteProjectName] = useState<string | null>(null);
+  const [deleteSummary, setDeleteSummary] = useState<ProjectDataCounts | null>(null);
+  const [deleteSummaryLoading, setDeleteSummaryLoading] = useState(false);
+  const [deleteSummaryError, setDeleteSummaryError] = useState("");
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [robotOptions, setRobotOptions] = useState<{ label: string; value: string }[]>([]);
   const [messageApi, contextHolder] = message.useMessage({ top: MESSAGE_TOP_OFFSET });
 
@@ -165,18 +170,54 @@ export default function AppHeader() {
     }
   };
 
-  const handleDeleteProject = async (name: string) => {
-    if (!window.electronAPI?.project) return;
+  const handleDeleteProject = async () => {
+    if (!deleteProjectName || !window.electronAPI?.project) return;
+    const name = deleteProjectName;
+    setDeleteLoading(true);
     try {
       await window.electronAPI.project.delete(name);
       messageApi.success(`项目 "${name}" 已删除`);
       if (selectedProject === name) {
         setSelectedProject(null);
       }
-      loadProjects();
+      setDeleteProjectName(null);
+      setDeleteSummary(null);
+      await loadProjects();
     } catch (e: any) {
       messageApi.error(e?.message || "删除项目失败");
+    } finally {
+      setDeleteLoading(false);
     }
+  };
+
+  const loadDeleteSummary = async (name: string) => {
+    if (!window.electronAPI?.project.getDataSummary) {
+      setDeleteSummaryError("仅 Electron 环境支持项目数据统计");
+      return;
+    }
+    setDeleteSummary(null);
+    setDeleteSummaryError("");
+    setDeleteSummaryLoading(true);
+    try {
+      const summary = await window.electronAPI.project.getDataSummary(name);
+      setDeleteSummary(summary);
+    } catch (e: any) {
+      setDeleteSummaryError(e?.message || "统计项目关联数据失败");
+    } finally {
+      setDeleteSummaryLoading(false);
+    }
+  };
+
+  const handleOpenDeleteModal = (name: string) => {
+    setDeleteProjectName(name);
+    void loadDeleteSummary(name);
+  };
+
+  const handleCloseDeleteModal = () => {
+    if (deleteLoading) return;
+    setDeleteProjectName(null);
+    setDeleteSummary(null);
+    setDeleteSummaryError("");
   };
 
   const handleSwitchProject = (name: string) => {
@@ -403,15 +444,7 @@ export default function AppHeader() {
                     <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={() => handleOpenProjectDir(item)}>打开目录</Button>
                     <Button type="link" size="small" onClick={() => handleStartRename(item)}>重命名</Button>
                     {selectedProject !== item ? (
-                      <Popconfirm
-                        title={`确定删除项目 "${item}"？`}
-                        description="删除后不可恢复"
-                        onConfirm={() => handleDeleteProject(item)}
-                        okText="确定"
-                        cancelText="取消"
-                      >
-                        <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
-                      </Popconfirm>
+                      <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleOpenDeleteModal(item)}>删除</Button>
                     ) : null}
                   </>
                 )}
@@ -420,6 +453,64 @@ export default function AppHeader() {
             );
           })
         )}
+      </Modal>
+
+      <Modal
+        title={`删除项目${deleteProjectName ? ` "${deleteProjectName}"` : ""}`}
+        open={!!deleteProjectName}
+        centered
+        width={560}
+        mask={{ closable: false }}
+        closable={!deleteLoading}
+        keyboard={!deleteLoading}
+        okText="确认删除"
+        cancelText="取消"
+        okButtonProps={{ danger: true, disabled: deleteSummaryLoading || !deleteSummary }}
+        confirmLoading={deleteLoading}
+        onOk={handleDeleteProject}
+        onCancel={handleCloseDeleteModal}
+      >
+        <Alert
+          type="error"
+          showIcon
+          message="此操作不可恢复"
+          description="将永久删除项目目录、点表、设备树、标定关联和厂站绑定。"
+        />
+        <div style={{ marginTop: 16, color: "#595959" }}>
+          <div style={{ marginBottom: 12 }}>
+            <span style={{ color: "#8c8c8c" }}>项目目录：</span>
+            <Tooltip title={deleteProjectName ? getProjectPath(deleteProjectName) : ""}>
+              <span style={{ wordBreak: "break-all" }}>{deleteProjectName ? getProjectPath(deleteProjectName) : ""}</span>
+            </Tooltip>
+          </div>
+          {deleteSummaryLoading ? (
+            <div style={{ color: "#8c8c8c" }}>正在统计数据库关联数据...</div>
+          ) : deleteSummaryError ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="关联数据统计失败"
+              description={(
+                <div>
+                  <div>{deleteSummaryError}</div>
+                  <Button type="link" size="small" onClick={() => deleteProjectName && loadDeleteSummary(deleteProjectName)} style={{ padding: 0, marginTop: 4 }}>重新统计</Button>
+                </div>
+              )}
+            />
+          ) : deleteSummary ? (
+            <>
+              <div style={{ marginBottom: 8, fontWeight: 500 }}>数据库关联记录：{deleteSummary.total} 条</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "8px 16px", color: "#595959" }}>
+                <span>点位：{deleteSummary.points}</span>
+                <span>部件：{deleteSummary.components}</span>
+                <span>主设备：{deleteSummary.mainDevices}</span>
+                <span>间隔：{deleteSummary.bays}</span>
+                <span>电压区：{deleteSummary.voltages}</span>
+                <span>厂站绑定：{deleteSummary.stationBindings}</span>
+              </div>
+            </>
+          ) : null}
+        </div>
       </Modal>
 
       <BackendModal open={backendOpen} onClose={() => setBackendOpen(false)} />

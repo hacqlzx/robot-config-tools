@@ -29,3 +29,5 @@ export { ProjectStationRepo } from "./repositories/project-station.repo";
 // 服务
 export { importPointExcel } from "./services/import.service";
 export type { PointExcelRow, ImportResult } from "./services/import.service";
+export { deleteProjectData, getProjectDataCounts, renameProjectData } from "./services/project-lifecycle.service";
+export type { ProjectDataCounts } from "./services/project-lifecycle.service";
