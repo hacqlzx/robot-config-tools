@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Modal, Form, Input, Select, Button, App, Alert } from "antd";
+import { useSelectedProject } from "@/stores/appContextStore";
 
 interface SurveyImageExportProps {
   open: boolean;
@@ -15,7 +16,7 @@ export default function SurveyImageExport({ open, onClose }: SurveyImageExportPr
   const [surveyDataPath, setSurveyDataPath] = useState("");
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const currentProject = localStorage.getItem("selectedProject") || "—";
+  const currentProject = useSelectedProject();
   const selectedMap = Form.useWatch("map", form) as string | undefined;
 
   const resetModalState = useCallback(() => {
@@ -36,7 +37,7 @@ export default function SurveyImageExport({ open, onClose }: SurveyImageExportPr
     }
 
     const api = window.electronAPI?.project;
-    if (!api || !currentProject || currentProject === "—") {
+    if (!api || !currentProject) {
       setMapOptions([]);
       setSurveyDataPath("");
       return;
@@ -52,7 +53,7 @@ export default function SurveyImageExport({ open, onClose }: SurveyImageExportPr
   }, [currentProject, open, resetModalState]);
 
   useEffect(() => {
-    if (!open || !selectedMap || !currentProject || currentProject === "—" || !window.electronAPI) {
+    if (!open || !selectedMap || !currentProject || !window.electronAPI) {
       setSurveyDataPath("");
       return;
     }
@@ -63,7 +64,7 @@ export default function SurveyImageExport({ open, onClose }: SurveyImageExportPr
   }, [currentProject, open, selectedMap]);
 
   const handleExport = async () => {
-    if (!currentProject || currentProject === "—") {
+    if (!currentProject) {
       message.warning("请先选择项目");
       return;
     }
@@ -114,7 +115,7 @@ export default function SurveyImageExport({ open, onClose }: SurveyImageExportPr
       <Form form={form} layout="vertical">
         <div style={{ display: "flex", gap: 12 }}>
           <Form.Item label="当前项目" style={{ flex: 1, marginBottom: 24 }}>
-            <Input value={currentProject} disabled />
+            <Input value={currentProject || "未选择"} disabled />
           </Form.Item>
           <Form.Item name="map" label="选择地图" style={{ flex: 1, marginBottom: 24 }}>
             <Select placeholder="请选择地图" allowClear loading={loading} options={mapOptions} />

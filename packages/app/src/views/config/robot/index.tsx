@@ -5,7 +5,7 @@ import { ReloadOutlined, PlusOutlined } from "@ant-design/icons";
 import RobotFormModal from "./RobotFormModal";
 import CameraTableModal, { type CameraVO } from "./CameraTableModal";
 import { getAllRobot, addRobot, updateRobot, deleteRobot, getFacInfo } from "@/api/config.js";
-import { subscribe } from "@/stores/backendStore";
+import { subscribeBackendContext } from "@/stores/appContextStore";
 
 export interface RobotRecord {
   id: number;
@@ -119,7 +119,7 @@ export default function RobotConfig() {
 
   // IP 切换时重新加载
   useEffect(() => {
-    return subscribe(() => {
+    return subscribeBackendContext(() => {
       fetchRobots();
       fetchFacOptions();
     });

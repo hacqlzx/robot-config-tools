@@ -2,6 +2,7 @@
 import { UploadOutlined, TableOutlined, SaveOutlined, ScissorOutlined, BorderOutlined, ThunderboltOutlined, AppstoreOutlined, NodeIndexOutlined, ExportOutlined, ArrowLeftOutlined, ArrowRightOutlined } from "@ant-design/icons";
 import { message } from "antd";
 import { MODEL_FILE_ACCEPT, POINT_TABLE_FILE_ACCEPT, isLasOrLazFileName, isZipFileName } from "../utils/space-paths";
+import { useSelectedProject } from "@/stores/appContextStore";
 
 interface Props {
   cabinetMode?: boolean;
@@ -39,6 +40,7 @@ const BUTTONS = [
 ];
 
 export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onToggleCabinet, chargingMode, onToggleCharging, deviceAreaMode, onToggleDeviceArea, pathMode, onTogglePath, onUndo, onRedo, canUndo, canRedo, onSaveAll, onImportPointTable, onExportModel, importing }: Props) {
+  const selectedProject = useSelectedProject();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pointInputRef = useRef<HTMLInputElement>(null);
 
@@ -52,7 +54,6 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
       return;
     }
 
-    const selectedProject = localStorage.getItem("selectedProject");
     if (!selectedProject) {
       message.warning("请先在顶部菜单栏选择一个项目");
       e.target.value = "";

@@ -1,19 +1,24 @@
 import { useEffect, useState } from "react";
 import { getBoundBayIdsInProject } from "./drawing/drawing-storage";
+import { useSelectedProject } from "@/stores/appContextStore";
 
 export function useProjectBoundBayIds(deviceAreaMode: boolean) {
+  const selectedProject = useSelectedProject();
   const [projectBoundBayIds, setProjectBoundBayIds] = useState<Set<number>>(new Set());
 
   useEffect(() => {
-    if (!deviceAreaMode) return;
+    if (!deviceAreaMode || !selectedProject) {
+      setProjectBoundBayIds(new Set());
+      return;
+    }
     const api = window.electronAPI;
     if (!api) return;
     let cancelled = false;
-    getBoundBayIdsInProject(api, localStorage.getItem("selectedProject") || "").then((ids) => {
+    getBoundBayIdsInProject(api, selectedProject).then((ids) => {
       if (!cancelled) setProjectBoundBayIds(ids);
     });
     return () => { cancelled = true; };
-  }, [deviceAreaMode]);
+  }, [deviceAreaMode, selectedProject]);
 
   return projectBoundBayIds;
 }

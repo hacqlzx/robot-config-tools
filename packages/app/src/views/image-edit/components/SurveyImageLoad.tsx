@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Modal, Form, Input, Select, Upload, Button, App, Alert } from "antd";
 import { InboxOutlined } from "@ant-design/icons";
+import { useSelectedProject } from "@/stores/appContextStore";
 
 const { Dragger } = Upload;
 const SURVEY_DIR_NAME = "勘察数据";
@@ -24,7 +25,7 @@ export default function SurveyImageLoad({ open, onClose, onImport, onTaskImport 
   const [importedSpIds, setImportedSpIds] = useState<number[]>([]);
   const [zipFile, setZipFile] = useState<File | null>(null);
   const [extracting, setExtracting] = useState(false);
-  const currentProject = localStorage.getItem("selectedProject") || "—";
+  const currentProject = useSelectedProject();
   const selectedMap = Form.useWatch("map", form) as string | undefined;
 
   const readImportedSpIds = useCallback(async (surveyDir: string): Promise<number[]> => {
@@ -48,7 +49,7 @@ export default function SurveyImageLoad({ open, onClose, onImport, onTaskImport 
   }, []);
 
   const resolveSurveyDataDir = useCallback(async (mapName: string): Promise<string> => {
-    if (!window.electronAPI || !currentProject || currentProject === "—" || !mapName) return "";
+    if (!window.electronAPI || !currentProject || !mapName) return "";
     const root = await window.electronAPI.getProjectRoot();
     return `${root}\\${currentProject}\\${SURVEY_DIR_NAME}\\${mapName}`;
   }, [currentProject]);
@@ -68,7 +69,7 @@ export default function SurveyImageLoad({ open, onClose, onImport, onTaskImport 
   useEffect(() => {
     if (!open) return;
     const api = window.electronAPI?.project;
-    if (!api || !currentProject || currentProject === "—") {
+    if (!api || !currentProject) {
       setMapOptions([]);
       setSurveyDataDir("");
       setImportedSpIds([]);
@@ -126,6 +127,10 @@ export default function SurveyImageLoad({ open, onClose, onImport, onTaskImport 
       message.warning("请先选择地图");
       return;
     }
+    if (!currentProject) {
+      message.warning("请先选择项目");
+      return;
+    }
 
     setExtracting(true);
 
@@ -138,8 +143,7 @@ export default function SurveyImageLoad({ open, onClose, onImport, onTaskImport 
           message.error("无法获取文件路径");
           return;
         }
-        const projectName = localStorage.getItem("selectedProject") || "default";
-        const result = await api.importSurveyData(projectName, mapName, filePath);
+        const result = await api.importSurveyData(currentProject, mapName, filePath);
         if (!result.success) {
           message.error("解压失败: " + (result.error || "未知错误"));
           return;
@@ -180,7 +184,7 @@ export default function SurveyImageLoad({ open, onClose, onImport, onTaskImport 
       <Form form={form} layout="vertical">
         <div style={{ display: "flex", gap: 12 }}>
           <Form.Item label="当前项目" style={{ flex: 1, marginBottom: 24 }}>
-            <Input value={currentProject} disabled />
+            <Input value={currentProject || "未选择"} disabled />
           </Form.Item>
           <Form.Item name="map" label="选择地图" style={{ flex: 1, marginBottom: 24 }}>
             <Select placeholder="请选择地图" allowClear options={mapOptions} />

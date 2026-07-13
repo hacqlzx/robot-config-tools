@@ -17,6 +17,7 @@ import { useResizable } from "@/components/useResizable";
 import ImageCanvas from "@/components/image-canvas/ImageCanvas";
 import type { ImageItem } from "@/components/image-canvas/ImageCanvas";
 import { useTaskLoader } from "./hooks/useTaskLoader";
+import { useSelectedProject } from "@/stores/appContextStore";
 import "./index.scss";
 
 type CalibrationImageItem = ImageItem & { img: HTMLImageElement };
@@ -46,6 +47,7 @@ function getCalibrationEntryMapCode(entry: any, fileMapCode?: string): string {
 
 export default function ImageEdit() {
   const { message } = App.useApp();
+  const selectedProject = useSelectedProject();
   const containerRef = useRef<HTMLDivElement>(null);
 
   const { width: leftWidth, resizing, onMouseDown } = useResizable({
@@ -138,28 +140,29 @@ export default function ImageEdit() {
 
   // 拉取当前项目下所有间隔
   useEffect(() => {
-    const project = localStorage.getItem("selectedProject");
-    if (!project || !window.electronAPI?.db?.bay) return;
-    window.electronAPI.db.bay.list(project).then((list) => {
+    if (!selectedProject || !window.electronAPI?.db?.bay) {
+      setBayList([]);
+      return;
+    }
+    window.electronAPI.db.bay.list(selectedProject).then((list) => {
       setBayList(list.map((b) => ({ id: b.id, bayName: b.bayName })));
     }).catch(() => {});
-  }, []);
+  }, [selectedProject]);
 
   // 根据选中间隔查询巡检点
   useEffect(() => {
-    const project = localStorage.getItem("selectedProject");
-    if (!project || !selBayId || !window.electronAPI?.db?.point) {
+    if (!selectedProject || !selBayId || !window.electronAPI?.db?.point) {
       if (!selBayId) setPoints([]);
       return;
     }
-    window.electronAPI.db.point.list(project).then((list) => {
+    window.electronAPI.db.point.list(selectedProject).then((list) => {
       setPoints(
         list
           .filter((p) => p.bayId === selBayId)
           .map((p) => ({ id: p.id, pointCode: p.pointCode, pointName: p.pointName, demarcateState: p.demarcateState }))
       );
     }).catch(() => setPoints([]));
-  }, [selBayId]);
+  }, [selBayId, selectedProject]);
 
   const handle3DSelect = useCallback((info: { type: string; bayId: number }) => {
     if (info.bayId) setSelBayId(info.bayId);
@@ -185,8 +188,7 @@ export default function ImageEdit() {
 
   /** 加载勘察图像（地图模式：LAS + JSON） */
   const handleSurveyLoad = useCallback(async (mapName: string) => {
-    const project = localStorage.getItem("selectedProject");
-    if (!project || !window.electronAPI?.project) return;
+    if (!selectedProject || !window.electronAPI?.project) return;
     // 卸载旧模型
     loaderRef.current?.destroy();
     drawingRef.current?.clear();
@@ -204,7 +206,7 @@ export default function ImageEdit() {
     setCheckedPoints([]);
     setPoints([]);
     try {
-      const tree = await window.electronAPI.project.listTree(project, `地图/${mapName}`);
+      const tree = await window.electronAPI.project.listTree(selectedProject, `地图/${mapName}`);
 
       const lasFiles: string[] = [];
       const jsonFiles: string[] = [];
@@ -250,7 +252,7 @@ export default function ImageEdit() {
     } catch (e: any) {
       message.error("加载地图数据失败: " + (e?.message || ""));
     }
-  }, [message, loadFile, loadDrawing, clearTask]);
+  }, [message, loadFile, loadDrawing, clearTask, selectedProject]);
 
   /** 加载任务图像（任务模式：JSON + JPG 拼接） */
   const handleTaskLoad = useCallback(async (taskDir: string) => {

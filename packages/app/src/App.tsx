@@ -2,6 +2,7 @@
 import { Layout, ConfigProvider, App, message as antdMessage } from "antd";
 import { Outlet } from "react-router-dom";
 import AppHeader from "./pages/app-header";
+import { useSelectedProject } from "./stores/appContextStore";
 import "./styles/global.css";
 import "./styles/title-bar.scss";
 
@@ -13,6 +14,8 @@ export const MESSAGE_TOP_OFFSET = APP_HEADER_HEIGHT + 12;
 const { Content } = Layout;
 
 export default function AppLayout() {
+  const selectedProject = useSelectedProject();
+
   useEffect(() => {
     antdMessage.config({ top: MESSAGE_TOP_OFFSET });
     window.__removeSplash?.();
@@ -43,7 +46,7 @@ export default function AppLayout() {
           <AppHeader />
           <Content style={{ height: `calc(100vh - ${APP_HEADER_HEIGHT}px)`, padding: 0, background: "#f5f5f5", overflow: "hidden" }}>
             <div style={{ height: "100%", boxSizing: "border-box" }}>
-              <Outlet />
+              <Outlet key={selectedProject || "no-project"} />
             </div>
           </Content>
         </Layout>

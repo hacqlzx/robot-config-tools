@@ -1,95 +1,83 @@
-# robotConfigTools 项目架构速查（写给 AI 助手）
+# robotConfigTools 项目架构速查
 
----
+更新时间：2026-07-13。更完整的接手说明和修改约束见 `AGENTS.md`。
 
 ## 技术栈
 
-| 层级 | 技术 | 版本 |
+| 层级 | 技术 | 说明 |
 |------|------|------|
-| 构建 | Vite 5.4 + TypeScript 5.5 | ESM |
-| UI | React 18.3 + Ant Design 6.4 + SCSS | |
-| 3D | PlayCanvas 2.18 + @playcanvas/pcui 6.1 | WebGL |
-| 桌面 | Electron 42.3 + vite-plugin-electron 0.28 | 可选 |
-| 路由 | react-router-dom 7.17 | Data Router |
-| HTTP | axios 1.17 | |
-| MQTT | mqtt 5.15 | |
-| 状态 | 自定义发布/订阅模式 (无 Zustand) | |
-| 包管理 | pnpm Monorepo (单包) | |
+| Workspace | pnpm | `packages/app` + `packages/database` 两个包 |
+| UI | React 18.3 + Ant Design 6.4 + SCSS | HashRouter，业务页位于 `src/views` |
+| 3D | PlayCanvas 2.18 + laz-perf | 当前客户端模型主链路为 LAS/LAZ |
+| 桌面 | Electron 42.3 + vite-plugin-electron 0.28 | 完整文件、数据库和归档能力只在 Electron 可用 |
+| 数据 | sql.js | 本地数据库、迁移、Repository 和点表导入服务 |
+| HTTP | axios 1.17 | 每次请求动态读取后台 IP，baseURL 为 `https://{ip}` |
+| 状态 | `appContextStore` + `useSyncExternalStore` | 统一项目、机器人、后台 IP 和连接状态，兼容原 localStorage key |
 
 ## 目录结构
 
-```
-packages/app/                     # 唯一 app 包
-├── index.html                    # Vite 入口 HTML
-├── vite.config.ts                # 双模式：浏览器 vs Electron（ELECTRON=true）
-├── .env                          # VITE_API_TARGET=https://192.168.0.79
-├── electron/
-│   ├── main.ts                   # Electron 主进程
-│   └── preload.cjs               # contextBridge 暴露 electronAPI
-├── public/
-│   ├── supersplate/              # supersplat 编辑器预构建产物（子应用嵌入）
-│   └── static/lib/               # WASM 库：laz-perf / webp / lodepng
-└── src/
-    ├── main.tsx                  # 入口: ReactDOM.createRoot + RouterProvider
-    ├── App.tsx                   # 根布局: Ant Design Layout + AppHeader + Outlet
-    ├── vite-env.d.ts             # __ELECTRON__ 和 window.electronAPI 类型
-    ├── config/menu.ts            # 6个菜单项配置
-    ├── router/index.tsx          # 路由表（7条路由，默认重定向 / -> /space-edit）
-    ├── pages/                    # 【当前活跃】页面组件
-    │   ├── space-edit/index.tsx  # ★ 核心：3D点云查看器（PLY/SPLAT/LAS/LAZ）
-    │   ├── image-edit/           # 占位
-    │   ├── screen-verify/        # 占位
-    │   ├── device-verify/        # 占位
-    │   ├── connection-test/      # HTTP+MQTT 调试工具（完成）
-    │   └── config/               # 配置管理（部分完成）
-    │       └── station|robot|map|platform|network/
-    ├── views/                    # 【旧版】相同功能的另一套实现，pages/是迭代后版本
-    ├── components/               # 通用组件
-    │   ├── app-header/           # 顶部导航栏（菜单+项目选择+厂站/机器人选择+后端连接+Electron窗口按钮）
-    │   ├── backend-modal/        # 后台IP连接弹窗（ping检测+历史列表）
-    │   └── ip-input/             # 四段式IP输入
-    ├── stores/backendStore.ts    # 简易发布/订阅模式管理后端连接状态+IP持久化
-    ├── services/http.ts          # axios实例：动态baseURL(localStorage IP) + req-id + 拦截器
-    ├── api/config.js             # API: getAllFac() 获取厂站列表
-    ├── styles/global.css + title-bar.scss
-    └── playcanvas-core/          # ★ 3D引擎核心（从supersplat提取）
-        ├── pc-app.ts             # PlayCanvas App容器
-        ├── scene.ts              # 核心场景管理器（527行，E-C-S架构，3渲染层，按需渲染）
-        ├── splat.ts              # 高斯泼溅数据类（776行）
-        ├── controllers.ts        # 指针/触摸/键盘相机控制器（669行，轨道+飞行模式）
-        ├── simple-camera.ts      # 简易轨道/飞行相机（页面直接使用）
-        ├── pointcloud.ts         # 点云渲染
-        ├── shaders/              # GLSL着色器（splat/pointcloud/position/bound/blit）
-        ├── io/read/              # 数据读写：loader.ts(Splat)、las-reader.ts(LAS/LAZ)
-        └── data-processor/       # 位置/包围盒/交叉检测计算
+```text
+packages/
+├── app/
+│   ├── electron/
+│   │   ├── main.ts                 # 主进程组合入口
+│   │   ├── app/                    # 生命周期、窗口
+│   │   ├── ipc/                    # system/file/project/archive IPC
+│   │   ├── project-core/           # 项目根、路径安全、manifest、文件服务
+│   │   ├── db-ipc.ts               # 数据库 IPC
+│   │   └── export-points.ts        # 点表和空间模型导出协议
+│   ├── public/                     # laz-perf/webp/lodepng WASM、supersplate 静态资源
+│   └── src/
+│       ├── pages/                  # 应用外壳：顶部栏、后台弹窗
+│       ├── views/                  # 当前业务页面
+│       ├── components/three-d-engine/ # 通用 3D 引擎、点云加载和绘制回显
+│       ├── components/image-canvas/   # 勘察图片画布和缩略图缓存
+│       ├── playcanvas-core/        # 相机、LAS/LAZ 读取及历史 GSplat 能力
+│       ├── services/http.ts
+│       └── stores/appContextStore.ts # 统一应用上下文和后台订阅
+└── database/
+    └── src/
+        ├── core/                   # sql.js 连接、自动保存和迁移执行
+        ├── migrations/             # 当前 001～004
+        ├── repositories/           # 设备层级和项目厂站绑定
+        └── services/import.service.ts
 ```
 
 ## 路由表
 
-| 路径 | 组件 | 状态 |
-|------|------|------|
-| `/` → 重定向至 `/space-edit` | — | — |
-| `/space-edit` | pages/space-edit | ★ 核心完成 |
-| `/image-edit` | pages/image-edit | 占位 |
-| `/screen-verify` | pages/screen-verify | 占位 |
-| `/device-verify` | pages/device-verify | 占位 |
-| `/config` | pages/config（含子导航） | 部分完成 |
-| `/connection-test` | pages/connection-test | 完成 |
+| 路径 | 入口 | 当前状态 |
+|------|------|----------|
+| `/space-edit` | `views/space-edit` | 核心编辑页，默认路由 |
+| `/image-edit` | `views/image-edit` | 勘察图像导入、标定、导出已接入，持续开发 |
+| `/device-verify` | `views/device-verify` | 占位 |
+| `/import-export` | `views/import-export` | 部分后台导入导出已接入，其余卡片占位 |
+| `/config` | `views/config` | 厂站、机器人、地图、平台、网络后台配置 |
 
-## 关键架构决策
+没有 `/screen-verify` 或 `/connection-test` 路由；`views/screen-verify` 目录目前未接入。
 
-1. **双端模式**: 通过 `ELECTRON=true` 环境变量在编译时切换 浏览器SPA / Electron桌面端，base 分别为 `/` 和 `./`
-2. **React + PlayCanvas 混合**: Canvas 通过 `useRef` 嵌入 React，页面直接操作 PlayCanvas Engine API
-3. **状态管理**: 无第三方库，`backendStore.ts` 是自定义发布/订阅，IP 通过 localStorage 持久化
-4. **pages/ vs views/**: pages/ 是当前活跃版本（space-edit 增加了流式分块加载和非压缩LAS解析），views/ 是历史代码
-5. **配置页**: 厂站/机器人/地图的 CRUD 表格和表单弹窗已完成（使用 mock 数据），平台/网络为占位
-6. **后端 API**: 仅有 `getAllFac()` 一个已实现接口，axios baseURL 从 localStorage 动态读取 IP
+## 关键协议
+
+- 项目根：开发环境默认使用仓库 `project/`；打包后可选择数据目录，配置保存在 Electron `userData/data-path.json`。
+- 项目清单：`project/{项目}/project.manifest.json`，记录目录布局和地图/点表/勘察任务资产。
+- 地图目录：`地图/{地图名}/map.las`、`map_info.json`、`description_file.json`、`reference_path.txt`。
+- 区域协议：`description_file.json` 为 flat 数组，`type=1/2/4/8` 表示柜排/屏柜/充电区/设备区。
+- 勘察目录：`勘察数据/{地图名}` 保存导入任务，`勘察数据/勘察数据.json` 保存跨地图标定。
+- 数据库：开发默认 `data/robot-config.db`，当前迁移版本为 004。
+
+## 架构边界
+
+1. 浏览器模式适合 UI 调试；项目文件、点表数据库、空间模型和勘察归档依赖 `window.electronAPI`。
+2. `space-edit` 和 `image-edit` 都复用 `ThreeDEngine`/`PointCloudLoader`；前者自行组装编辑态，后者使用 `useThreeDViewer` 只读组合层。
+3. LAS 使用分块读取并按上限降采样；LAZ 仍整文件进入渲染进程和 WASM 内存，尚无 worker/取消/LOD。
+4. 后台配置接口不再是 mock；`api/config.js` 包含厂站、机器人、地图、通信和导入导出等接口。
+5. 项目、机器人和后台连接统一由 `appContextStore` 管理；项目切换会按 Outlet key 重建业务页，未选项目时不再回退到默认目录。
 
 ## 常用命令
 
 ```bash
-pnpm dev              # 浏览器开发模式（端口50050）
-pnpm dev:electron     # Electron桌面端开发
-pnpm build            # 构建浏览器版本
-pnpm build:electron   # 构建Electron桌面端
+pnpm dev              # 浏览器开发模式，端口 50050
+pnpm dev:electron     # Electron 开发模式
+pnpm build            # 浏览器构建
+pnpm build:electron   # Electron 构建
+pnpm package          # Windows NSIS 打包
 ```

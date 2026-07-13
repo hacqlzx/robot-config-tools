@@ -8,6 +8,7 @@ import {
   DisconnectOutlined,
 } from "@ant-design/icons";
 import { useResizable } from "@/components/useResizable";
+import { useSelectedProject } from "@/stores/appContextStore";
 import type { ImageItem } from "@/components/image-canvas/ImageCanvas";
 import "./CalibrationView.scss";
 
@@ -88,6 +89,7 @@ function isSameMapCode(a?: string | null, b?: string | null): boolean {
 
 export default function CalibrationView({ image, taskDir, mapName, selBayId, onSelBayIdChange, nameFilter, onNameFilterChange, pointFilter, onPointFilterChange, onBack }: Props) {
   const { message } = App.useApp();
+  const selectedProject = useSelectedProject();
   const [mode, setMode] = useState<"move" | "select">("move");
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -163,28 +165,29 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
 
   // 拉取间隔列表
   useEffect(() => {
-    const project = localStorage.getItem("selectedProject");
-    if (!project || !window.electronAPI?.db?.bay) return;
-    window.electronAPI.db.bay.list(project).then((list: any[]) => {
+    if (!selectedProject || !window.electronAPI?.db?.bay) {
+      setBayList([]);
+      return;
+    }
+    window.electronAPI.db.bay.list(selectedProject).then((list: any[]) => {
       setBayList(list.map((b) => ({ id: b.id, bayName: b.bayName })));
     }).catch(() => {});
-  }, []);
+  }, [selectedProject]);
 
   // 查询点位
   useEffect(() => {
-    const project = localStorage.getItem("selectedProject");
-    if (!project || !selBayId || !window.electronAPI?.db?.point) {
+    if (!selectedProject || !selBayId || !window.electronAPI?.db?.point) {
       if (!selBayId) setPoints([]);
       return;
     }
-    window.electronAPI.db.point.list(project).then((list: any[]) => {
+    window.electronAPI.db.point.list(selectedProject).then((list: any[]) => {
       setPoints(
         list
           .filter((p: any) => p.bayId === selBayId)
           .map((p: any) => ({ id: p.id, pointCode: p.pointCode, pointName: p.pointName, demarcateState: p.demarcateState }))
       );
     }).catch(() => setPoints([]));
-  }, [selBayId]);
+  }, [selBayId, selectedProject]);
 
   // 加载已有标定数据
   useEffect(() => {
@@ -232,8 +235,7 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
 
   const saveSnapshot = useCallback(async (rectSnapshot: RectData[]) => {
     const td = taskDirRef.current;
-    const project = localStorage.getItem("selectedProject") || "";
-    if (!td || !project || !window.electronAPI?.project) return;
+    if (!td || !selectedProject || !window.electronAPI?.project) return;
 
     // 点表绑定/标定结果是项目级共享数据；导入图片时只覆盖各地图数据目录，不能覆盖这个文件。
     const sharedFilePath = getSharedCalibrationFilePath(td);
@@ -254,10 +256,10 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
       // 文件不存在
     }
     const content = JSON.stringify(finalData, null, 2);
-    await window.electronAPI!.project.writeFile(project, subPath, new TextEncoder().encode(content));
+    await window.electronAPI!.project.writeFile(selectedProject, subPath, new TextEncoder().encode(content));
     allDataRef.current = finalData.data;
     console.log("[Calibration] 保存成功:", subPath);
-  }, [buildSaveData]);
+  }, [buildSaveData, selectedProject]);
 
   const flushSave = useCallback(async () => {
     if (saveInFlightRef.current) {

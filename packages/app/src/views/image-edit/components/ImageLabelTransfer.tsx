@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Modal, Form, Input, Select, Button, App, Alert } from "antd";
 import { FolderOpenOutlined } from "@ant-design/icons";
+import { useSelectedProject } from "@/stores/appContextStore";
 
 interface ImageLabelTransferProps {
   open: boolean;
@@ -21,7 +22,7 @@ export default function ImageLabelTransfer({ open, mode, onClose, onImported }: 
   const [zipPath, setZipPath] = useState("");
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const currentProject = localStorage.getItem("selectedProject") || "—";
+  const currentProject = useSelectedProject();
   const selectedMap = Form.useWatch("map", form) as string | undefined;
 
   const resetModalState = useCallback(() => {
@@ -44,7 +45,7 @@ export default function ImageLabelTransfer({ open, mode, onClose, onImported }: 
     }
 
     const api = window.electronAPI?.project;
-    if (!api || !currentProject || currentProject === "—") {
+    if (!api || !currentProject) {
       setMapOptions([]);
       return;
     }
@@ -59,7 +60,7 @@ export default function ImageLabelTransfer({ open, mode, onClose, onImported }: 
   }, [currentProject, open, resetModalState]);
 
   useEffect(() => {
-    if (!open || !selectedMap || !currentProject || currentProject === "—" || !window.electronAPI) {
+    if (!open || !selectedMap || !currentProject || !window.electronAPI) {
       setSurveyDataPath("");
       setCalibrationPath("");
       return;
@@ -83,7 +84,7 @@ export default function ImageLabelTransfer({ open, mode, onClose, onImported }: 
   };
 
   const handleSubmit = async () => {
-    if (!currentProject || currentProject === "—") {
+    if (!currentProject) {
       message.warning("请先选择项目");
       return;
     }
@@ -150,7 +151,7 @@ export default function ImageLabelTransfer({ open, mode, onClose, onImported }: 
       <Form form={form} layout="vertical">
         <div style={{ display: "flex", gap: 12 }}>
           <Form.Item label="当前项目" style={{ flex: 1, marginBottom: 24 }}>
-            <Input value={currentProject} disabled />
+            <Input value={currentProject || "未选择"} disabled />
           </Form.Item>
           <Form.Item name="map" label="选择地图" style={{ flex: 1, marginBottom: 24 }}>
             <Select placeholder="请选择地图" allowClear loading={loading} options={mapOptions} />

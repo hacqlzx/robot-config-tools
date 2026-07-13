@@ -6,6 +6,7 @@ import DeviceTree from "@/components/DeviceTree";
 import { deleteCabinetDevicesFromJson, isDrawingDataFileName, isReferencePathFileName } from "../hooks/drawing/drawing-storage";
 import type { SpaceTreeNode } from "../types";
 import { MAP_DIR_NAME, isLasOrLazFileName, loadedFileKey } from "../utils/space-paths";
+import { useSelectedProject } from "@/stores/appContextStore";
 
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 520;
@@ -68,6 +69,7 @@ const TREE_CSS = `
 `;
 
 export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUnloadMapFile, loadedFiles, treeKey, loadingFile, onCabinetCheck, mapDrawingShown, onToggleDrawing, mapPathShown, onTogglePath }: Props) {
+  const selectedProject = useSelectedProject();
   const [sideTab, setSideTab] = useState("map");
   const [mapTreeData, setMapTreeData] = useState<SpaceTreeNode[]>([]);
   const [cabinetTreeData, setCabinetTreeData] = useState<TreeDataNode[]>([]);
@@ -75,25 +77,29 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
   const [treeLoading, setTreeLoading] = useState(false);
 
   const loadMapTree = useCallback(async () => {
-    const selectedProject = localStorage.getItem("selectedProject");
-    if (!selectedProject || !window.electronAPI) return;
+    if (!selectedProject || !window.electronAPI) {
+      setMapTreeData([]);
+      return;
+    }
     try {
       const nodes = await window.electronAPI.project.listTree(selectedProject, MAP_DIR_NAME);
       setMapTreeData(nodes);
     } catch {
       setMapTreeData([]);
     }
-  }, []);
+  }, [selectedProject]);
 
   const loadBayTypeTree = useCallback(async (bayType: string, setter: React.Dispatch<React.SetStateAction<TreeDataNode[]>>) => {
-    const projectName = localStorage.getItem("selectedProject");
-    if (!projectName || !window.electronAPI) return;
+    if (!selectedProject || !window.electronAPI) {
+      setter([]);
+      return;
+    }
     setTreeLoading(true);
     try {
       const api = window.electronAPI;
       const [voltList, bayList] = await Promise.all([
-        api.db.voltage.list(projectName),
-        api.db.bay.list(projectName),
+        api.db.voltage.list(selectedProject),
+        api.db.bay.list(selectedProject),
       ]);
       setter(buildBayTypeTree(voltList, bayList, bayType));
     } catch {
@@ -101,7 +107,7 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
     } finally {
       setTreeLoading(false);
     }
-  }, []);
+  }, [selectedProject]);
 
   useEffect(() => {
     if (sideTab === "map") {
@@ -150,11 +156,10 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
             n.children?.forEach(walkClear);
           };
           walkClear(node);
-          const projectName = localStorage.getItem("selectedProject");
           const api = window.electronAPI;
-          if (projectName && api) {
+          if (selectedProject && api) {
             for (const jsonPath of drawingFiles) {
-              await deleteCabinetDevicesFromJson(api, projectName, jsonPath);
+              await deleteCabinetDevicesFromJson(api, selectedProject, jsonPath);
             }
           }
           await window.electronAPI?.project.deletePath(node.path);
@@ -165,7 +170,7 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
         }
       },
     });
-  }, [loadMapTree, loadedFiles, onToggleDrawing, onTogglePath, onUnloadMapFile]);
+  }, [loadMapTree, loadedFiles, onToggleDrawing, onTogglePath, onUnloadMapFile, selectedProject]);
 
   /** 渲染 antd Tree（设备台账或屏柜共用） */
 

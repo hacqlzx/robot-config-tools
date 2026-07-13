@@ -13,7 +13,7 @@ import {
   downLoadExcelTemplate,
   downloadCommunicateExcel,
 } from "@/api/config.js";
-import { getCurrentIp } from "@/stores/backendStore";
+import { useAppContext } from "@/stores/appContextStore";
 import "./index.scss";
 
 interface IEAction {
@@ -110,6 +110,7 @@ function isImportKey(key: string): boolean {
 
 export default function ImportExport() {
   const { message } = App.useApp();
+  const { selectedProject, selectedRobot, backendIp } = useAppContext();
   const containerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [columns, setColumns] = useState(4);
@@ -142,13 +143,16 @@ export default function ImportExport() {
 
   /** 通用下载到目录：Electron 选目录下载，浏览器直接触发下载 */
   const downloadFileToDir = useCallback(async (filePath: string, label: string) => {
-    const ip = getCurrentIp();
-    if (!ip) {
+    if (!backendIp) {
       message.warning("请先连接后台");
       return;
     }
+    if (window.electronAPI && !selectedProject) {
+      message.warning("请先在顶部选择项目");
+      return;
+    }
 
-    const downloadUrl = `https://${ip}${filePath}`;
+    const downloadUrl = `https://${backendIp}${filePath}`;
     // 从路径中提取文件名，并替换 Windows 非法字符
     const rawName = filePath.split("/").pop() || `${label}.xlsx`;
     const fileName = rawName.replace(/[<>:"/\\|?*]/g, "-");
@@ -164,10 +168,9 @@ export default function ImportExport() {
         if (!response.ok) throw new Error("下载失败: " + response.status);
         const buffer = await response.arrayBuffer();
 
-        const projectName = localStorage.getItem("selectedProject") || "default";
         const tempPath = `_temp/${fileName}`;
-        tempFilePath = await window.electronAPI.project.writeFile(projectName, tempPath, buffer);
-        await window.electronAPI.project.exportFile(projectName, tempPath, dir);
+        tempFilePath = await window.electronAPI.project.writeFile(selectedProject, tempPath, buffer);
+        await window.electronAPI.project.exportFile(selectedProject, tempPath, dir);
 
         message.success("下载成功");
       } catch (e: any) {
@@ -189,11 +192,10 @@ export default function ImportExport() {
       document.body.removeChild(a);
       message.success("已开始下载");
     }
-  }, [message]);
+  }, [backendIp, message, selectedProject]);
 
   /** 点表导入 */
   const handlePatrolPointImport = useCallback(async (file: File) => {
-    const selectedRobot = localStorage.getItem("selectedRobot");
     if (!selectedRobot) {
       message.warning("请先在顶部选择机器人");
       return;
@@ -243,7 +245,7 @@ export default function ImportExport() {
     } finally {
       setUploadingLabel(null);
     }
-  }, [message]);
+  }, [message, selectedRobot]);
 
   /** 通信信息导入 */
   const handleCommunicationImport = useCallback(async (file: File) => {
@@ -264,8 +266,7 @@ export default function ImportExport() {
   }, [message]);
 
   /** 读取顶部栏选中的机器人 */
-  const getSelectedRobot = useCallback(async () => {
-    const selectedRobot = localStorage.getItem("selectedRobot");
+  const resolveSelectedRobot = useCallback(async () => {
     if (!selectedRobot) {
       message.warning("请先在顶部选择机器人");
       return null;
@@ -283,13 +284,13 @@ export default function ImportExport() {
       return null;
     }
     return robot;
-  }, [message]);
+  }, [message, selectedRobot]);
 
   /** 图像标识导入 */
   const handleImageLabelImport = useCallback(async (file: File) => {
     setUploadingLabel("图像标识导入");
     try {
-      const robot = await getSelectedRobot();
+      const robot = await resolveSelectedRobot();
       if (!robot) return;
 
       const res = await importProspectCalibration(file, robot.id);
@@ -304,13 +305,13 @@ export default function ImportExport() {
     } finally {
       setUploadingLabel(null);
     }
-  }, [getSelectedRobot, message]);
+  }, [resolveSelectedRobot, message]);
 
   /** 空间模型导出 */
   const handleSpaceModelExport = useCallback(async () => {
     setUploadingLabel("空间模型导出");
     try {
-      const robot = await getSelectedRobot();
+      const robot = await resolveSelectedRobot();
       if (!robot) return;
       const res = await exportSpaceModel(robot.id);
       const body = res.data;
@@ -325,13 +326,13 @@ export default function ImportExport() {
     } finally {
       setUploadingLabel(null);
     }
-  }, [getSelectedRobot, message, downloadFileToDir]);
+  }, [resolveSelectedRobot, message, downloadFileToDir]);
 
   /** 勘察图像导出 */
   const handleSurveyImageExport = useCallback(async () => {
     setUploadingLabel("勘察图像导出");
     try {
-      const robot = await getSelectedRobot();
+      const robot = await resolveSelectedRobot();
       if (!robot) return;
       const res = await exportProspectImage(robot.id);
       const body = res.data;
@@ -346,13 +347,13 @@ export default function ImportExport() {
     } finally {
       setUploadingLabel(null);
     }
-  }, [getSelectedRobot, message, downloadFileToDir]);
+  }, [resolveSelectedRobot, message, downloadFileToDir]);
 
   /** 设备验证图导出 */
   const handleDeviceCheckImageExport = useCallback(async () => {
     setUploadingLabel("设备验证图导出");
     try {
-      const robot = await getSelectedRobot();
+      const robot = await resolveSelectedRobot();
       if (!robot) return;
       const res = await exportDeviceCheckImage(robot.id);
       const body = res.data;
@@ -367,7 +368,7 @@ export default function ImportExport() {
     } finally {
       setUploadingLabel(null);
     }
-  }, [getSelectedRobot, message, downloadFileToDir]);
+  }, [resolveSelectedRobot, message, downloadFileToDir]);
 
   /** 点表模板下载 */
   const handlePatrolPointTemplateDownload = useCallback(async () => {

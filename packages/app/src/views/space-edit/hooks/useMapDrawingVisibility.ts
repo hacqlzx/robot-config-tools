@@ -13,6 +13,7 @@ import {
 import type { SpaceMessageApi } from "../types";
 import { getCurrentModelPathFromRefs } from "../utils/model-state";
 import { mapSiblingFilePath } from "../utils/space-paths";
+import { useSelectedProject } from "@/stores/appContextStore";
 
 function cabinetKey(item: CabinetItem): number | null {
   const n = Number.parseInt(String(item.id ?? ""), 10);
@@ -49,6 +50,7 @@ export function useMapDrawingVisibility({
   refreshTree,
   message,
 }: UseMapDrawingVisibilityParams) {
+  const selectedProject = useSelectedProject();
   // drawingShown/pathShown 只记录树节点勾选状态；真正的实体分别在 CabinetViewer/各 Drawing 类中。
   const [drawingShown, setDrawingShown] = useState<Set<string>>(new Set());
   const [pathShown, setPathShown] = useState<Set<string>>(new Set());
@@ -154,15 +156,14 @@ export function useMapDrawingVisibility({
 
   const handleDeleteCabinetItem = useCallback(async (jsonPath: string, cabinetId: number) => {
     const api = window.electronAPI;
-    const projectName = localStorage.getItem("selectedProject");
-    if (!api || !projectName) return;
-    try { await deleteCabinetItem(api, projectName, jsonPath, cabinetId); }
+    if (!api || !selectedProject) return;
+    try { await deleteCabinetItem(api, selectedProject, jsonPath, cabinetId); }
     catch (e: any) { message.error("删除失败: " + (e?.message || e)); return; }
     cabinetViewerRef.current?.hide(cabinetId);
     const ids = shownByJsonRef.current.get(jsonPath);
     if (ids) shownByJsonRef.current.set(jsonPath, ids.filter((id) => id !== cabinetId));
     message.success("已删除");
-  }, [cabinetViewerRef, message]);
+  }, [cabinetViewerRef, message, selectedProject]);
 
   useEffect(() => {
     if (deviceAreaMode) return;

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Tree, Spin } from "antd";
 import type { TreeProps, TreeDataNode } from "antd";
+import { useSelectedProject } from "@/stores/appContextStore";
 
 interface Props {
   /** 是否显示复选框 */
@@ -78,13 +79,17 @@ function collectExpandKeys(nodes: TreeDataNode[], maxLevel: number): React.Key[]
 }
 
 export default function DeviceTree({ checkable, onCheck, defaultExpandLevel = 0, style }: Props) {
+  const projectName = useSelectedProject();
   const [treeData, setTreeData] = useState<TreeDataNode[]>([]);
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
   const [loading, setLoading] = useState(false);
 
   const loadTree = useCallback(async () => {
-    const projectName = localStorage.getItem("selectedProject");
-    if (!projectName || !window.electronAPI) return;
+    if (!projectName || !window.electronAPI) {
+      setTreeData([]);
+      setExpandedKeys([]);
+      return;
+    }
     setLoading(true);
     try {
       const api = window.electronAPI;
@@ -102,7 +107,7 @@ export default function DeviceTree({ checkable, onCheck, defaultExpandLevel = 0,
     } finally {
       setLoading(false);
     }
-  }, [defaultExpandLevel]);
+  }, [defaultExpandLevel, projectName]);
 
   useEffect(() => { loadTree(); }, [loadTree]);
 
@@ -113,7 +118,6 @@ export default function DeviceTree({ checkable, onCheck, defaultExpandLevel = 0,
       if (!key.startsWith("component/")) { resolve(); return; }
       const componentId = parseInt(key.split("/")[1], 10);
       if (isNaN(componentId)) { resolve(); return; }
-      const projectName = localStorage.getItem("selectedProject");
       if (!projectName || !window.electronAPI) { resolve(); return; }
       try {
         const points = await window.electronAPI.db.point.findByComponentId(componentId, projectName);
@@ -122,7 +126,7 @@ export default function DeviceTree({ checkable, onCheck, defaultExpandLevel = 0,
           title: p.pointName || "(未命名)",
           isLeaf: true,
         }));
-        setTreeData((prev) => upsertChildren(prev, node.key, children));
+        setTreeData((prev) => upsertChildren(prev, key, children));
       } finally {
         resolve();
       }

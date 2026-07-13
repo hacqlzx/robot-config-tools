@@ -9,7 +9,7 @@ import {
   setCurrentMap,
   getFacInfo,
 } from "@/api/config.js";
-import { subscribe } from "@/stores/backendStore";
+import { subscribeBackendContext } from "@/stores/appContextStore";
 
 interface MapRecord {
   id: number;
@@ -87,7 +87,7 @@ export default function MapConfig() {
 
   // IP 切换时重新加载
   useEffect(() => {
-    return subscribe(() => {
+    return subscribeBackendContext(() => {
       fetchMaps();
       fetchFacNames();
     });

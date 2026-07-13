@@ -2,7 +2,7 @@
 import { Card, Form, Input, Button, Select, Tag, message } from "antd";
 import IpInput from "@/components/ip-input";
 import { getRobotInfo, saveRobotInfo, getAnalysisMachineInfo, saveAnalysisMachineInfo, getSuperSystemInfo, saveSuperSystemInfo } from "@/api/config.js";
-import { subscribe } from "@/stores/backendStore";
+import { subscribeBackendContext } from "@/stores/appContextStore";
 
 interface ApiResponse<T> {
   code: number;
@@ -100,7 +100,7 @@ export default function PlatformConfig() {
 
   // IP 切换时重新加载
   useEffect(() => {
-    return subscribe(() => {
+    return subscribeBackendContext(() => {
       fetchBackend();
       fetchAnalysis();
       fetchHost();

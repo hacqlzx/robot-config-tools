@@ -1,5 +1,5 @@
 import axios, { AxiosResponse } from "axios";
-import { getCurrentIp } from "../stores/backendStore";
+import { getBackendIp } from "../stores/appContextStore";
 
 const instance = axios.create({ timeout: 300000 });
 
@@ -10,7 +10,7 @@ instance.interceptors.request.use((config) => {
     config.headers["Content-Type"] = "application/json";
   }
 
-  const ip = getCurrentIp();
+  const ip = getBackendIp();
   if (ip) {
     config.baseURL = `https://${ip}`;
   } else {

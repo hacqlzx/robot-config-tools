@@ -2,6 +2,7 @@ import { useState, useEffect, type ReactNode } from "react";
 import { Modal, Checkbox, Divider, Progress, Button, Spin, App } from "antd";
 import { FolderOutlined, FileExcelOutlined } from "@ant-design/icons";
 import { MAP_DIR_NAME, POINT_TABLE_DIR_NAME, POINT_TABLE_FILE_RE } from "../utils/space-paths";
+import { useSelectedProject } from "@/stores/appContextStore";
 
 interface Props {
   open: boolean;
@@ -17,7 +18,8 @@ interface FileItem {
 
 export default function ExportModal({ open, onClose }: Props) {
   const { message } = App.useApp();
-  const projectName = localStorage.getItem("selectedProject") || "未选择";
+  const selectedProject = useSelectedProject();
+  const projectName = selectedProject || "";
   const [files, setFiles] = useState<FileItem[]>([]);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
@@ -60,7 +62,7 @@ export default function ExportModal({ open, onClose }: Props) {
       setLoading(false);
     };
     loadFiles();
-  }, [open]);
+  }, [open, projectName]);
 
   const toggleAll = (val: boolean) => {
     setChecked(val ? new Set(files.map((f) => f.key)) : new Set());

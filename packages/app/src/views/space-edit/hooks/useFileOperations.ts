@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import * as pc from "playcanvas";
 import { parsePointExcel } from "@/utils/excel-parser";
+import { useSelectedProject } from "@/stores/appContextStore";
 import type { ModelPointStats, SpaceMessageApi } from "../types";
 import { POINT_TABLE_DIR_NAME, POINT_TABLE_FILE_RE, isLasOrLazFileName, isZipFileName, loadedFileKey, pointTableFileSubPath, stripModelExtension } from "../utils/space-paths";
 
@@ -23,6 +24,7 @@ interface UseFileOperationsParams {
 }
 
 export function useFileOperations(params: UseFileOperationsParams) {
+  const selectedProject = useSelectedProject();
   const { entitiesRef, lasHeadersRef, filePathRef, pointStatsRef, modelGroundYRef, hasAutoFocusedRef,
     loadLasFromPath, requestRender, closeAllDrawingModes,
     setImporting, setLoadedFiles, setTreeKey, setClipEntityName, setClipMode, message } = params;
@@ -49,25 +51,28 @@ export function useFileOperations(params: UseFileOperationsParams) {
       const api = (window as any).electronAPI;
       if (!api) { message.warning("仅 Electron 模式下可用"); setImporting(false); return; }
 
-      const projectName = localStorage.getItem("selectedProject") || "默认项目";
+      if (!selectedProject) {
+        message.warning("请先在顶部菜单栏选择一个项目");
+        return;
+      }
 
       // 保存 Excel 到项目点表目录。当前规则是一个项目保留一份点表文件，新导入会替换旧点表。
       const ext = file.name.match(/\.(xlsx|xls)$/i)?.[0] || ".xlsx";
       const savedName = `${stationName}${ext}`;
       try {
-        const pointTableFiles = await api.project.listTree(projectName, POINT_TABLE_DIR_NAME);
+        const pointTableFiles = await api.project.listTree(selectedProject, POINT_TABLE_DIR_NAME);
         for (const node of pointTableFiles) {
           if (!node.isDir && POINT_TABLE_FILE_RE.test(node.name)) await api.project.deletePath(node.path);
         }
       } catch {}
       const arrayBuf = await file.arrayBuffer();
       const savedSubPath = pointTableFileSubPath(savedName);
-      await api.project.writeFile(projectName, savedSubPath, arrayBuf);
+      await api.project.writeFile(selectedProject, savedSubPath, arrayBuf);
 
       // 数据库导入需要厂站编码；当前客户端未接正式编码源，先按名称+时间尾号生成。
       const stationCode = stationName.substring(0, 10) + Date.now().toString().slice(-4);
       await api.startBatch();
-      const result = await api.importPoints(rows, stationName, stationCode, projectName);
+      const result = await api.importPoints(rows, stationName, stationCode, selectedProject);
       await api.endBatch();
 
       message.success(`导入成功: ${result.inserted} 新增, ${result.updated} 更新, 文件已保存至 ${savedSubPath}`);
@@ -77,7 +82,7 @@ export function useFileOperations(params: UseFileOperationsParams) {
     } finally {
       setImporting(false);
     }
-  }, [setImporting, message, closeAllDrawingModes]);
+  }, [setImporting, message, closeAllDrawingModes, selectedProject]);
 
   /** 选择模型文件 */
   const handleFileSelect = useCallback(async (file: File) => {
@@ -88,7 +93,6 @@ export function useFileOperations(params: UseFileOperationsParams) {
       return;
     }
 
-    const selectedProject = localStorage.getItem("selectedProject");
     if (!window.electronAPI) {
       message.warning("模型导入仅 Electron 模式可用");
       return;
@@ -126,7 +130,7 @@ export function useFileOperations(params: UseFileOperationsParams) {
     } catch (err: any) {
       message.error("模型导入失败: " + (err?.message || err));
     }
-  }, [closeAllDrawingModes, entitiesRef, lasHeadersRef, filePathRef, pointStatsRef, setLoadedFiles, modelGroundYRef, hasAutoFocusedRef, loadLasFromPath, setTreeKey, message]);
+  }, [closeAllDrawingModes, entitiesRef, lasHeadersRef, filePathRef, pointStatsRef, setLoadedFiles, modelGroundYRef, hasAutoFocusedRef, loadLasFromPath, setTreeKey, message, selectedProject]);
 
   /** 仅卸载指定路径对应的模型；删除文件前使用，避免误触发加载 */
   const handleUnloadModelFromPath = useCallback((filePath: string) => {

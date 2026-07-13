@@ -2,6 +2,7 @@
 import { parseLasHeader, loadLazPerf, getWasmUrl } from "../../../playcanvas-core/io/read/las-reader";
 import { pointcloudVert, pointcloudFrag } from "../../../playcanvas-core/shaders/pointcloud-shader";
 import { MAP_DIR_NAME, MAP_INFO_FILE_NAME, mapDirSubPath, mapModelFileSubPath, stripModelExtension } from "../utils/space-paths";
+import { getSelectedProject } from "@/stores/appContextStore";
 
 interface Bounds {
   minX: number; maxX: number;
@@ -352,7 +353,7 @@ export async function performClipSave({
     let clipName = "";
     setProgress(95); onProgress?.(95);
     if (window.electronAPI) {
-      const selectedProject = localStorage.getItem("selectedProject");
+      const selectedProject = getSelectedProject();
       if (selectedProject) {
         const dirFiles = await window.electronAPI.project.listTree(selectedProject, MAP_DIR_NAME);
         const existing = dirFiles.filter((f: any) => f.isDir && new RegExp("^" + baseName + "_\\d+$").test(f.name));

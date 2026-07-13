@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { Button, Select, Table, InputNumber } from "antd";
 import { CloseOutlined, SaveOutlined } from "@ant-design/icons";
 import type { DeviceBay } from "@robot/database";
+import { useSelectedProject } from "@/stores/appContextStore";
 
 interface Props {
   boxCount: number;
@@ -21,6 +22,7 @@ export default function DeviceAreaPanel({
   boxCount, height, selectedBoxId, selectedBoxBay,
   onClose, onSave, onSetHeight, onBindBay, onUnbind, boundBayIds,
 }: Props) {
+  const projectName = useSelectedProject();
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
   const [areaId, setAreaId] = useState<number | undefined>();
@@ -29,8 +31,11 @@ export default function DeviceAreaPanel({
 
   useEffect(() => {
     const api = (window as any).electronAPI;
-    if (!api) return;
-    const projectName = localStorage.getItem("selectedProject") || "";
+    if (!api || !projectName) {
+      setVoltList([]);
+      setAllBays([]);
+      return;
+    }
     Promise.all([
       api.db.voltage.list(projectName),
       api.db.bay.list(projectName),
@@ -38,7 +43,7 @@ export default function DeviceAreaPanel({
       setVoltList(volts);
       setAllBays(bays);
     }).catch(() => {});
-  }, []);
+  }, [projectName]);
 
   const onTitleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();

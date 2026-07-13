@@ -1,7 +1,11 @@
 ﻿import { useState, useEffect } from "react";
 import { Modal, Form, Button, Popconfirm, message } from "antd";
 import { DeleteOutlined, LinkOutlined } from "@ant-design/icons";
-import { getCurrentIp, setCurrentIp, setConnectionStatus, notifyIpSwitch } from "@/stores/backendStore";
+import {
+  setBackendConnection,
+  setConnectionStatus,
+  useAppContext,
+} from "@/stores/appContextStore";
 import IpInput from "@/components/ip-input";
 
 const STORAGE_KEY = "backend_ip_list";
@@ -24,6 +28,7 @@ interface Props {
 }
 
 export default function BackendModal({ open, onClose }: Props) {
+  const { backendIp } = useAppContext();
   const [form] = Form.useForm();
   const [ipList, setIpList] = useState<IpRecord[]>(loadIpList);
   const [connecting, setConnecting] = useState(false);
@@ -34,28 +39,34 @@ export default function BackendModal({ open, onClose }: Props) {
   useEffect(() => {
     if (open) {
       form.resetFields();
-      const lastIp = getCurrentIp();
-      if (lastIp) {
-        form.setFieldsValue({ ip: lastIp });
+      if (backendIp) {
+        form.setFieldsValue({ ip: backendIp });
       }
     }
-  }, [open, form]);
+  }, [backendIp, open, form]);
 
   const connect = async (ip: string) => {
     if (!ipRegex.test(ip)) { message.error("请输入正确的 IP 地址"); return false; }
     setConnecting(true);
-    const ok = __ELECTRON__ ? (window.electronAPI?.ping?.(ip) ?? false) : false;
-    setConnecting(false);
-    setConnectionStatus(ok ? "connected" : "failed");
-    return ok;
+    try {
+      const ok = __ELECTRON__ && window.electronAPI?.ping
+        ? await window.electronAPI.ping(ip)
+        : false;
+      if (!ok) setConnectionStatus("failed");
+      return ok;
+    } catch {
+      setConnectionStatus("failed");
+      return false;
+    } finally {
+      setConnecting(false);
+    }
   };
 
   const handleAdd = async (values: { ip: string }) => {
     const ok = await connect(values.ip);
     if (ok) {
       setIpList([...ipList, { ip: values.ip }]);
-      setCurrentIp(values.ip);
-      notifyIpSwitch();
+      setBackendConnection(values.ip, "connected");
       message.success(`${values.ip} 连接成功`);
       form.resetFields();
       onClose();
@@ -70,8 +81,7 @@ export default function BackendModal({ open, onClose }: Props) {
     const ok = await connect(ip);
     setConnectingIndex(null);
     if (ok) {
-      setCurrentIp(ip);
-      notifyIpSwitch();
+      setBackendConnection(ip, "connected");
       message.success(`${ip} 连接成功`);
       onClose();
     } else {

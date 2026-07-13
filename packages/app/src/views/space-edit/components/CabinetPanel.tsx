@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Button, Select, Table, Input, message } from "antd";
 import { CloseOutlined, SaveOutlined } from "@ant-design/icons";
+import { useSelectedProject } from "@/stores/appContextStore";
 
 interface Props {
   /** 当前已放置的角点数量（0~4） */
@@ -40,6 +41,7 @@ function gen18(): string {
 
 /** 绘制屏柜操作小窗（可拖动，提示 + 区域/间隔选择 + 屏柜表格） */
 export default function CabinetPanel({ cornerCount, cabinetCount, onClose, onSave, onDraftChange, onNamesChange }: Props) {
+  const projectName = useSelectedProject();
   // 相对初始右上角（right:16, top:16）的拖动位移
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
@@ -51,13 +53,16 @@ export default function CabinetPanel({ cornerCount, cabinetCount, onClose, onSav
   const [bayId, setBayId] = useState<number | undefined>();
 
   useEffect(() => {
-    const projectName = localStorage.getItem("selectedProject");
     const api = (window as any).electronAPI;
-    if (!projectName || !api?.db) return;
+    if (!projectName || !api?.db) {
+      setVoltList([]);
+      setBayList([]);
+      return;
+    }
     Promise.all([api.db.voltage.list(projectName), api.db.bay.list(projectName)])
       .then(([v, b]: [any[], any[]]) => { setVoltList(v || []); setBayList(b || []); })
       .catch(() => {});
-  }, []);
+  }, [projectName]);
 
   // 区域：查全部
   const areaOptions = voltList.map((v) => ({ value: v.id, label: v.voltName || "(未命名)" }));

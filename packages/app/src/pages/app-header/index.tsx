@@ -5,61 +5,24 @@ import type { MenuProps } from "antd";
 import { useNavigate, useLocation } from "react-router-dom";
 import { menuConfig } from "@/config/menu";
 import BackendModal from "@/pages/backend-modal";
-import { getConnectionStatus, subscribe, ConnectionStatus, getCurrentIp } from "@/stores/backendStore";
+import {
+  getSelectedProject,
+  getSelectedRobot,
+  setConnectionStatus,
+  setSelectedProject,
+  setSelectedRobot,
+  useAppContext,
+} from "@/stores/appContextStore";
 import { getAllRobot } from "@/api/config.js";
 import { MESSAGE_TOP_OFFSET } from "@/App";
 
 const menuItems: MenuProps["items"] = menuConfig.map((item) => ({ key: item.key, label: item.label }));
-
-const SELECTED_PROJECT_KEY = "selectedProject";
 
 function joinProjectPath(root: string, projectName: string): string {
   if (!root || !projectName) return root || "";
   const trimmedRoot = root.replace(/[\\/]+$/, "");
   const separator = root.includes("\\") ? "\\" : "/";
   return `${trimmedRoot}${separator}${projectName}`;
-}
-
-function getStoredProject(): string | null {
-  try {
-    return localStorage.getItem(SELECTED_PROJECT_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function setStoredProject(name: string | null) {
-  try {
-    if (name) {
-      localStorage.setItem(SELECTED_PROJECT_KEY, name);
-    } else {
-      localStorage.removeItem(SELECTED_PROJECT_KEY);
-    }
-  } catch {
-    // ignore
-  }
-}
-
-const SELECTED_ROBOT_KEY = "selectedRobot";
-
-function getStoredRobot(): string | null {
-  try {
-    return localStorage.getItem(SELECTED_ROBOT_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function setStoredRobot(name: string | null) {
-  try {
-    if (name) {
-      localStorage.setItem(SELECTED_ROBOT_KEY, name);
-    } else {
-      localStorage.removeItem(SELECTED_ROBOT_KEY);
-    }
-  } catch {
-    // ignore
-  }
 }
 
 const CACHED_ROBOT_LIST_KEY = "cachedRobotList";
@@ -84,6 +47,13 @@ function setCachedRobotList(list: { label: string; value: string }[]) {
 export default function AppHeader() {
   const navigate = useNavigate();
   const location = useLocation();
+  const {
+    selectedProject,
+    selectedRobot,
+    backendIp,
+    backendIpVersion,
+    connectionStatus: connStatus,
+  } = useAppContext();
   const [backendOpen, setBackendOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [editProjectOpen, setEditProjectOpen] = useState(false);
@@ -92,21 +62,8 @@ export default function AppHeader() {
   const [projectRoot, setProjectRoot] = useState("");
   const [editingName, setEditingName] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
-  const [selectedProject, setSelectedProject] = useState<string | null>(getStoredProject);
-  const [selectedRobot, setSelectedRobot] = useState<string | null>(getStoredRobot);
   const [robotOptions, setRobotOptions] = useState<{ label: string; value: string }[]>([]);
-  const [connStatus, setConnStatus] = useState<ConnectionStatus>(getConnectionStatus);
   const [messageApi, contextHolder] = message.useMessage({ top: MESSAGE_TOP_OFFSET });
-
-  // 同步 selectedProject 到 localStorage
-  useEffect(() => {
-    setStoredProject(selectedProject);
-  }, [selectedProject]);
-
-  // 同步 selectedRobot 到 localStorage
-  useEffect(() => {
-    setStoredRobot(selectedRobot);
-  }, [selectedRobot]);
 
   const loadRobotList = useCallback(async () => {
     try {
@@ -116,58 +73,36 @@ export default function AppHeader() {
         const list = body.data.map((r: any) => ({ label: r.robotName, value: r.robotName }));
         setRobotOptions(list);
         setCachedRobotList(list);
+        const currentRobot = getSelectedRobot();
+        if (currentRobot && !list.some((item: { value: string }) => item.value === currentRobot)) {
+          setSelectedRobot(null);
+        }
       }
     } catch {
       // ignore
     }
   }, []);
 
-  // 连接状态变化时更新标记，连接成功自动刷新机器人列表
+  // 连接成功后刷新机器人列表。
   useEffect(() => {
-    return subscribe(() => {
-      const status = getConnectionStatus();
-      setConnStatus(status);
-      if (status === "connected") {
-        loadRobotList();
-      }
-    });
-  }, [loadRobotList]);
+    if (backendIpVersion > 0) setRobotOptions([]);
+    if (connStatus === "connected") loadRobotList();
+  }, [backendIpVersion, connStatus, loadRobotList]);
 
-  // 初始化：先显示缓存，再拉取最新
+  // 初始化先显示缓存；自动连接成功后再拉取当前后台的列表。
   useEffect(() => {
     const cached = getCachedRobotList();
     if (cached) {
       setRobotOptions(cached);
     }
-    loadRobotList();
-  }, [loadRobotList]);
-
-
-
-  // ?????????????????
-
-  // ?????????? IP????????????
-  useEffect(() => {
-    console.log("[app-header] mount, checking saved IP...");
-    console.log("[app-header] window.electronAPI exists:", !!window.electronAPI);
-    console.log("[app-header] window.electronAPI?.ping exists:", !!window.electronAPI?.ping);
-    const lastIp = getCurrentIp();
-    console.log("[app-header] lastIp:", lastIp || "(none)");
-    if (!lastIp || !window.electronAPI?.ping) {
-      console.log("[app-header] skip auto-connect: no IP or no ping API");
-      return;
-    }
-
-    console.log("[app-header] pinging", lastIp, "...");
-    window.electronAPI.ping(lastIp).then(async (ok: boolean) => {
-      console.log("[app-header] ping result:", ok);
-      if (ok) {
-        setConnStatus("connected");
-      } else {
-        setConnStatus("failed");
-      }
-    });
   }, []);
+  // 启动时自动检查已保存后台。
+  useEffect(() => {
+    if (!backendIp || !window.electronAPI?.ping) return;
+    window.electronAPI.ping(backendIp).then((ok: boolean) => {
+      setConnectionStatus(ok ? "connected" : "failed");
+    });
+  }, [backendIp]);
 
   const loadProjectRoot = useCallback(async () => {
     if (!window.electronAPI?.getProjectRoot) {
@@ -190,17 +125,16 @@ export default function AppHeader() {
       const list = await window.electronAPI.project.list();
       setProjects(list);
       await loadProjectRoot();
+      const currentProject = getSelectedProject();
       if (list.length === 0) {
         setSelectedProject(null);
-        setStoredProject(null);
-      } else if (selectedProject && !list.includes(selectedProject)) {
+      } else if (currentProject && !list.includes(currentProject)) {
         setSelectedProject(null);
-        setStoredProject(null);
       }
     } catch {
       messageApi.error("加载项目列表失败");
     }
-  }, [loadProjectRoot, messageApi, selectedProject]);
+  }, [loadProjectRoot, messageApi]);
 
   // 初始化加载项目列表
   useEffect(() => {

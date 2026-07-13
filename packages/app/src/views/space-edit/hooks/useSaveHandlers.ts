@@ -4,6 +4,7 @@ import { saveCabinetDrawing, saveChargingArea, saveDeviceAreas, savePathDrawing,
 import type { SaveStatus, SpaceMessageApi } from "../types";
 import { getCurrentModelPathFromRefs } from "../utils/model-state";
 import { mapSiblingFilePath } from "../utils/space-paths";
+import { useSelectedProject } from "@/stores/appContextStore";
 
 interface UseSaveHandlersParams {
   entitiesRef: React.MutableRefObject<Map<string, pc.Entity>>;
@@ -45,6 +46,7 @@ interface CabinetSaveData {
 }
 
 export function useSaveHandlers(params: UseSaveHandlersParams) {
+  const selectedProject = useSelectedProject();
   const { entitiesRef, filePathRef, isAutoSavingRef, saveStatusSetter, message } = params;
 
   const getDrawingJsonPath = (modelPath: string) => mapSiblingFilePath(modelPath, DRAWING_FILE_NAME);
@@ -92,8 +94,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
   const handleSaveCabinet = useCallback(async (data: CabinetSaveData) => {
     const api = window.electronAPI;
     if (!api) { message.warning("仅 Electron 模式下可保存"); return; }
-    const projectName = localStorage.getItem("selectedProject");
-    if (!projectName) { message.warning("请先选择项目"); return; }
+    if (!selectedProject) { message.warning("请先选择项目"); return; }
     const geometry = params.getCabinetGeometry();
     if (!geometry) { message.warning("请先完成屏柜绘制（四点成体）"); return; }
 
@@ -127,8 +128,8 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     };
     try {
       saveStatusSetter("saving");
-      await saveCabinetMainDevices(api, projectName, { ...data, cabinetRow, rows });
-      const savedItem = await saveCabinetDrawing({ api, projectName, modelPath, item });
+      await saveCabinetMainDevices(api, selectedProject, { ...data, cabinetRow, rows });
+      const savedItem = await saveCabinetDrawing({ api, projectName: selectedProject, modelPath, item });
       const jsonPath = getDrawingJsonPath(modelPath);
       // 屏柜保存后立即回显给 CabinetViewer。这里用 ref 暂存，等绘制模式关闭后再 show，
       // 避免编辑态线框和只读回显线框重叠。
@@ -142,14 +143,13 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
       saveStatusSetter("idle");
       message.error("保存失败: " + (e?.message || e));
     }
-  }, [getCurrentModelPath, message, params, saveCabinetMainDevices, saveStatusSetter, showSavedStatus]);
+  }, [getCurrentModelPath, message, params, saveCabinetMainDevices, saveStatusSetter, selectedProject, showSavedStatus]);
 
   /** 保存充电区域 */
   const handleSaveChargingArea = useCallback(async () => {
     const api = window.electronAPI;
     if (!api) { if (!isAutoSavingRef.current) message.warning("仅 Electron 模式下可保存"); return; }
-    const projectName = localStorage.getItem("selectedProject");
-    if (!projectName) { if (!isAutoSavingRef.current) message.warning("请先选择项目"); return; }
+    if (!selectedProject) { if (!isAutoSavingRef.current) message.warning("请先选择项目"); return; }
     const drawing = params.chargingDrawingRef.current;
     if (!drawing) return;
     const verts = drawing.getBoxVerts();
@@ -166,22 +166,21 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     } : null;
 
     try {
-      await saveChargingArea({ api, projectName, modelPath, item });
+      await saveChargingArea({ api, projectName: selectedProject, modelPath, item });
       if (item) params.onDrawingFileSaved?.(getDrawingJsonPath(modelPath), "charging-area");
       if (!isAutoSavingRef.current) showSavedStatus();
       if (params.chargingMode) params.handleToggleCharging();
     } catch (e: any) {
       message.error("保存充电区失败: " + (e?.message || e));
     }
-  }, [getCurrentModelPath, isAutoSavingRef, message, params, showSavedStatus]);
+  }, [getCurrentModelPath, isAutoSavingRef, message, params, selectedProject, showSavedStatus]);
 
   /** 保存设备区 */
   const handleSaveDeviceAreas = useCallback(async () => {
     const silent = isAutoSavingRef.current;
     const api = window.electronAPI;
     if (!api) { if (!silent) message.warning("仅 Electron 模式下可保存"); return; }
-    const projectName = localStorage.getItem("selectedProject");
-    if (!projectName) { if (!silent) message.warning("请先选择项目"); return; }
+    if (!selectedProject) { if (!silent) message.warning("请先选择项目"); return; }
     const datas = params.getBoxDatas();
 
     const modelPath = getCurrentModelPath();
@@ -198,33 +197,32 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     }));
 
     try {
-      await saveDeviceAreas({ api, projectName, modelPath, items });
+      await saveDeviceAreas({ api, projectName: selectedProject, modelPath, items });
       if (items.length > 0) params.onDrawingFileSaved?.(getDrawingJsonPath(modelPath), "device-area");
       if (!silent) showSavedStatus();
       params.markDeviceAreaSaved();
     } catch (e: any) {
       message.error("保存设备区失败: " + (e?.message || e));
     }
-  }, [getCurrentModelPath, isAutoSavingRef, message, params, showSavedStatus]);
+  }, [getCurrentModelPath, isAutoSavingRef, message, params, selectedProject, showSavedStatus]);
 
   const savePathInternal = useCallback(async (showError: boolean): Promise<boolean> => {
     const api = window.electronAPI;
     if (!api) { if (showError) message.warning("仅 Electron 模式下可保存"); return false; }
-    const projectName = localStorage.getItem("selectedProject");
-    if (!projectName) { if (showError) message.warning("请先选择项目"); return false; }
+    if (!selectedProject) { if (showError) message.warning("请先选择项目"); return false; }
     const data = params.getPathData();
     if (!data) return true;
     const modelPath = getCurrentModelPath();
     if (!modelPath) { if (showError) message.warning("未找到模型路径，无法保存"); return false; }
     try {
-      await savePathDrawing({ api, projectName, modelPath, data });
+      await savePathDrawing({ api, projectName: selectedProject, modelPath, data });
       params.onPathFileSaved?.(getPathJsonPath(modelPath));
       return true;
     } catch (e: any) {
       if (showError) message.error("保存路径失败: " + (e?.message || e));
       return false;
     }
-  }, [isAutoSavingRef, message, params, getCurrentModelPath]);
+  }, [isAutoSavingRef, message, params, getCurrentModelPath, selectedProject]);
 
   /** 保存可行路径 */
   const handleSavePath = useCallback(async () => {

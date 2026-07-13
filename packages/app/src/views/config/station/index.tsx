@@ -4,7 +4,7 @@ import type { ColumnsType } from "antd/es/table";
 import { ReloadOutlined, PlusOutlined } from "@ant-design/icons";
 import StationFormModal from "./StationFormModal";
 import { getFacInfo, addFac, editFac, deleteFac, setCurrentFac } from "@/api/config.js";
-import { subscribe } from "@/stores/backendStore";
+import { subscribeBackendContext } from "@/stores/appContextStore";
 
 export interface StationRecord {
   id: number;
@@ -70,7 +70,7 @@ export default function StationConfig() {
 
   // IP 切换时重新加载
   useEffect(() => {
-    return subscribe(() => {
+    return subscribeBackendContext(() => {
       fetchStations();
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps

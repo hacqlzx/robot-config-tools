@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import * as pc from "playcanvas";
 import { isLasFileName, loadedFileKey, mapDirSubPath } from "../utils/space-paths";
+import { useSelectedProject } from "@/stores/appContextStore";
 
 interface UseClipCompletionParams {
   clipEntityName: string;
@@ -29,6 +30,7 @@ export function useClipCompletion({
   setLoadingProgress,
   loadLasFromPath,
 }: UseClipCompletionParams) {
+  const selectedProject = useSelectedProject();
   return useCallback((clipName: string) => {
     setTreeKey((k) => k + 1);
     setLoadingText("");
@@ -52,12 +54,11 @@ export function useClipCompletion({
     hasAutoFocusedRef.current = false;
 
     setTimeout(async () => {
-      const project = localStorage.getItem("selectedProject");
-      if (project && window.electronAPI) {
-        const files = await window.electronAPI.project.listTree(project, mapDirSubPath(clipName));
+      if (selectedProject && window.electronAPI) {
+        const files = await window.electronAPI.project.listTree(selectedProject, mapDirSubPath(clipName));
         const lasFile: any = files.find((f: any) => isLasFileName(f.name));
         if (lasFile) loadLasFromPath(lasFile.path);
       }
     }, 500);
-  }, [clipEntityName, entitiesRef, filePathRef, hasAutoFocusedRef, lasHeadersRef, loadLasFromPath, pointStatsRef, setLoadedFiles, setLoadingProgress, setLoadingText, setTreeKey]);
+  }, [clipEntityName, entitiesRef, filePathRef, hasAutoFocusedRef, lasHeadersRef, loadLasFromPath, pointStatsRef, selectedProject, setLoadedFiles, setLoadingProgress, setLoadingText, setTreeKey]);
 }
