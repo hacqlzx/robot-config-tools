@@ -51,6 +51,12 @@ function cabinetTopCenters(verts: pc.Vec3[], splits: number[]): pc.Vec3[] {
   return out;
 }
 
+function cabinetKey(item: CabinetItem): number | null {
+  const n = Number.parseInt(String(item.id ?? ""), 10);
+  if (Number.isInteger(n) && n > 0) return n;
+  return item.bay.id > 0 ? item.bay.id : null;
+}
+
 interface Shown {
   verts: pc.Vec3[];
   jsonPath: string;
@@ -73,7 +79,7 @@ export class CabinetViewer {
   private interactive = true;
   private selected: number | null = null;
   private downPos: { x: number; y: number } | null = null;
-  private onRequestDelete?: (jsonPath: string, bayId: number) => void;
+  private onRequestDelete?: (jsonPath: string, cabinetId: number) => void;
   private onSelectChange?: (selected: boolean) => void;
 
   constructor(app: pc.Application, camera: pc.Entity, requestRender: () => void) {
@@ -90,12 +96,12 @@ export class CabinetViewer {
 
   // ============ 选中 / 高亮 ============
 
-  private select(bayId: number) {
+  private select(cabinetId: number) {
     this.deselect_all();
-    const s = this.shown.get(bayId);
+    const s = this.shown.get(cabinetId);
     if (!s) return;
     s.lines.forEach((line) => line.setLocalScale(HIGHLIGHT_THICKNESS, HIGHLIGHT_THICKNESS, line.getLocalScale().z));
-    this.selected = bayId;
+    this.selected = cabinetId;
     this.onSelectChange?.(true);
     this.requestRender();
   }
@@ -116,7 +122,7 @@ export class CabinetViewer {
     this.requestRender();
   }
 
-  setOnRequestDelete(fn: (jsonPath: string, bayId: number) => void) {
+  setOnRequestDelete(fn: (jsonPath: string, cabinetId: number) => void) {
     this.onRequestDelete = fn;
   }
 
@@ -129,8 +135,8 @@ export class CabinetViewer {
     if (!v) { this.deselect(); }
   }
 
-  has(bayId: number): boolean {
-    return this.shown.has(bayId);
+  has(cabinetId: number): boolean {
+    return this.shown.has(cabinetId);
   }
 
   getShownIds(): number[] {
@@ -138,7 +144,9 @@ export class CabinetViewer {
   }
 
   show(item: CabinetItem, jsonPath: string) {
-    this.hide(item.bay.id);
+    const key = cabinetKey(item);
+    if (key == null) return;
+    this.hide(key);
     const verts = item.geometry.verts.map(v3);
     if (verts.length < 8) return;
     const splits = item.geometry.splits || [];
@@ -155,17 +163,17 @@ export class CabinetViewer {
     const centers = cabinetTopCenters(verts, splits);
     const names = item.cabinets.map((c) => c.name);
     const labelEls = centers.map(() => this.createLabelEl());
-    this.shown.set(item.bay.id, { verts, jsonPath, lines, centers, names, labelEls });
+    this.shown.set(key, { verts, jsonPath, lines, centers, names, labelEls });
     this.requestRender();
   }
 
-  hide(bayId: number) {
-    const s = this.shown.get(bayId);
+  hide(cabinetId: number) {
+    const s = this.shown.get(cabinetId);
     if (!s) return;
     s.lines.forEach((e) => e.destroy());
     s.labelEls.forEach((el) => el.remove());
-    this.shown.delete(bayId);
-    if (this.selected === bayId) this.deselect();
+    this.shown.delete(cabinetId);
+    if (this.selected === cabinetId) this.deselect();
     this.requestRender();
   }
 

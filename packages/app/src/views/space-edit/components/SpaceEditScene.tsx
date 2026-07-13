@@ -8,6 +8,7 @@ import SceneViewport from "./SceneViewport";
 interface CabinetSaveData {
   area: { id: number; name: string; code: string };
   bay: { id: number; name: string; code: string };
+  cabinetRow?: { key: string; code: string; name: string } | null;
   rows: { key: string; code: string; name: string }[];
 }
 
@@ -23,6 +24,7 @@ interface SpaceEditSceneProps {
   cabinetCount: number;
   onCabinetClose: () => void;
   onCabinetSave: (data: CabinetSaveData) => void;
+  onCabinetDraftChange?: (data: CabinetSaveData | null) => void;
   onCabinetNamesChange: (names: string[]) => void;
 
   chargingMode: boolean;
@@ -71,6 +73,7 @@ export default function SpaceEditScene({
   cabinetCount,
   onCabinetClose,
   onCabinetSave,
+  onCabinetDraftChange,
   onCabinetNamesChange,
   chargingMode,
   chargingPointCount,
@@ -113,6 +116,7 @@ export default function SpaceEditScene({
         cabinetCount={cabinetCount}
         onCabinetClose={onCabinetClose}
         onCabinetSave={onCabinetSave}
+        onCabinetDraftChange={onCabinetDraftChange}
         onCabinetNamesChange={onCabinetNamesChange}
         chargingMode={chargingMode}
         chargingPointCount={chargingPointCount}

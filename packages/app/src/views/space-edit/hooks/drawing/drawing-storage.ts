@@ -19,6 +19,8 @@ export interface CabinetItem {
   area: { id: number; name: string; code: string };
   /** 所属间隔 */
   bay: { id: number; name: string; code: string };
+  /** 柜排自身。仅切割成多个屏柜时存在；未切割时直接保存为屏柜。 */
+  cabinetRow?: { code: string; name: string } | null;
   /** 几何：立方体 8 顶点工具场景坐标 + 沿前底边的分隔参数 */
   geometry: { verts: number[][]; splits: number[] };
   /** 各分隔屏柜（编码 + 名称） */
@@ -72,6 +74,7 @@ export interface RobotAreaRecord {
   cp_id?: string | number;
   start_time?: string;
   end_time?: string;
+  code?: string | number;
   [key: string]: unknown;
 }
 
@@ -131,8 +134,13 @@ function valueText(value: unknown): string {
   return value == null ? "" : String(value);
 }
 
+function cabinetMainDeviceCode(record: RobotAreaRecord): string {
+  return valueText(record.code);
+}
+
 function positiveInt(value: unknown): number | null {
-  const n = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
+  if (typeof value !== "number" && !/^\d+$/.test(String(value ?? "").trim())) return null;
+  const n = typeof value === "number" ? value : Number.parseInt(String(value).trim(), 10);
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
@@ -381,49 +389,69 @@ function nextAvailableId(used: Set<number>, start = 1, max = Number.MAX_SAFE_INT
   return Math.max(start, ...Array.from(used)) + 1;
 }
 
-function findCabinetRowForItem(records: RobotAreaRecord[], item: CabinetItem): RobotAreaRecord | null {
-  const itemName = item.bay?.name || "";
+function isCabinetRecord(record: RobotAreaRecord): boolean {
+  const type = areaType(record);
+  return type === AREA_TYPE_CABINET_ROW || type === AREA_TYPE_CABINET;
+}
+
+function hasCabinetRow(item: CabinetItem): boolean {
+  const validSplits = (item.geometry.splits || []).filter((t) => Number.isFinite(t) && t > 0 && t < 1);
+  return validSplits.length > 0 || item.cabinets.length > 1 || !!item.cabinetRow;
+}
+
+function findCabinetRootForItem(records: RobotAreaRecord[], item: CabinetItem): RobotAreaRecord | null {
+  const itemId = positiveInt(item.id);
+  if (!itemId) return null;
   return records.find((record) =>
-    areaType(record) === AREA_TYPE_CABINET_ROW
-    && itemName
-    && valueText(record.name) === itemName
+    isCabinetRecord(record)
+    && positiveInt(record.id) === itemId
+    && (areaType(record) === AREA_TYPE_CABINET_ROW || !valueText(record.parent_id))
   ) ?? null;
 }
 
-function chooseCabinetRowId(records: RobotAreaRecord[], item: CabinetItem, existingRow: RobotAreaRecord | null): number {
-  const existingId = positiveInt(existingRow?.id);
-  if (existingId && existingId <= 99) return existingId;
+function chooseCabinetRootId(records: RobotAreaRecord[], item: CabinetItem, existingRoot: RobotAreaRecord | null): number {
+  const existingId = positiveInt(existingRoot?.id);
+  if (existingId) return existingId;
 
   const used = new Set<number>();
   for (const record of records) {
-    if (areaType(record) !== AREA_TYPE_CABINET_ROW) continue;
+    if (!isCabinetRecord(record)) continue;
     const id = positiveInt(record.id);
-    if (id && (!existingRow || valueText(existingRow.id) !== valueText(record.id))) used.add(id);
+    if (id) used.add(id);
   }
 
-  if (item.bay.id > 0 && item.bay.id <= 99 && !used.has(item.bay.id)) return item.bay.id;
-  return nextAvailableId(used, 1, 99);
+  return nextAvailableId(used);
 }
 
-function makeCabinetRobotAreas(item: CabinetItem, rowId: number, time: string, existingRow?: RobotAreaRecord | null): RobotAreaRecord[] {
+function makeCabinetRobotAreas(item: CabinetItem, rootId: number, usedIds: Set<number>): RobotAreaRecord[] {
   const rowPose = cabinetPoseFromVerts(item.geometry.verts);
   if (!rowPose) return [];
-  const rowIdText = String(rowId);
-  const ip = valueText(existingRow?.ip) || "127.0.0.1";
-  const port = asFiniteNumber(existingRow?.port) ?? 0;
-  const rowName = item.bay?.name || `柜排${rowIdText}`;
+  const rootIdText = String(rootId);
+  usedIds.add(rootId);
+
+  if (!hasCabinetRow(item)) {
+    const cabinet = item.cabinets[0];
+    return [{
+      id: rootIdText,
+      name: cabinet?.name || `屏柜${rootIdText}`,
+      pose: rowPose,
+      type: AREA_TYPE_CABINET,
+      code: valueText(cabinet?.code),
+    }];
+  }
+
+  const rowName = item.cabinetRow?.name || `柜排${rootIdText}`;
+  const rowCode = valueText(item.cabinetRow?.code);
   const records: RobotAreaRecord[] = [{
-    id: rowIdText,
-    ip,
+    id: rootIdText,
     name: rowName,
-    port,
     pose: rowPose,
-    time,
     type: AREA_TYPE_CABINET_ROW,
+    code: rowCode,
   }];
 
   const bounds = sortedSplitBounds(item.geometry.splits || []);
-  const count = Math.max(item.cabinets.length, bounds.length - 1);
+  const count = Math.max(1, item.cabinets.length, bounds.length - 1);
   for (let i = 0; i < count; i++) {
     const left = bounds[i] ?? (i / count);
     const right = bounds[i + 1] ?? ((i + 1) / count);
@@ -431,15 +459,16 @@ function makeCabinetRobotAreas(item: CabinetItem, rowId: number, time: string, e
     const pose = segmentVerts ? cabinetPoseFromVerts(segmentVerts) : null;
     if (!pose) continue;
     const cabinet = item.cabinets[i];
+    const cabinetCode = valueText(cabinet?.code);
+    const childId = nextAvailableId(usedIds, rootId * 100 + i + 1);
+    usedIds.add(childId);
     records.push({
-      id: String(rowId * 100 + i + 1),
-      ip,
+      id: String(childId),
       name: cabinet?.name || `屏柜${i + 1}`,
-      parent_id: rowIdText,
-      port,
       pose,
-      time,
       type: AREA_TYPE_CABINET,
+      parent_id: rootIdText,
+      code: cabinetCode,
     });
   }
   return records;
@@ -500,14 +529,14 @@ function deviceAreaItemToScene(item: DeviceAreaItem, coordinate: LasCoordinateTr
 
 function legacyItemsToRobotAreas(items: DrawingItem[]): RobotAreaRecord[] {
   const records: RobotAreaRecord[] = [];
-  let cabinetRowId = 1;
+  const usedCabinetIds = new Set<number>();
   const usedDeviceIds = new Set<number>();
   const time = formatTime();
 
   for (const item of items || []) {
     if (item?.type === "cabinet") {
-      const rowId = cabinetRowId++;
-      records.push(...makeCabinetRobotAreas(item, rowId, item.updatedAt || time));
+      const rootId = nextAvailableId(usedCabinetIds);
+      records.push(...makeCabinetRobotAreas(item, rootId, usedCabinetIds));
     } else if (item?.type === "charging-area") {
       const pose = boxPoseFromVerts(item.geometry?.verts || []);
       if (pose) {
@@ -554,8 +583,8 @@ function buildCabinetItem(row: RobotAreaRecord, children: RobotAreaRecord[]): Ca
     });
 
   const cabinets = childInfos.length > 0
-    ? childInfos.map(({ child }, idx) => ({ code: "", name: valueText(child.name) || `屏柜${idx + 1}` }))
-    : [{ code: "", name: rowName }];
+    ? childInfos.map(({ child }, idx) => ({ code: cabinetMainDeviceCode(child), name: valueText(child.name) || `屏柜${idx + 1}` }))
+    : [{ code: cabinetMainDeviceCode(row), name: rowName }];
   const splits = childInfos.length > 1
     ? childInfos.slice(0, -1).map((info, idx) => {
       const fallback = (idx + 1) / childInfos.length;
@@ -567,10 +596,28 @@ function buildCabinetItem(row: RobotAreaRecord, children: RobotAreaRecord[]): Ca
     id: valueText(row.id) || String(rowId),
     type: "cabinet",
     area: { id: 0, name: "", code: "" },
-    bay: { id: rowId, name: rowName, code: "" },
+    bay: { id: 0, name: "", code: "" },
+    cabinetRow: childInfos.length > 0 ? { code: cabinetMainDeviceCode(row), name: rowName } : null,
     geometry: { verts: rowVerts, splits },
     cabinets,
     updatedAt: valueText(row.time),
+  };
+}
+
+function buildStandaloneCabinetItem(record: RobotAreaRecord): CabinetItem | null {
+  const pose = parsePose(record.pose);
+  if (!pose) return null;
+  const recordId = valueText(record.id);
+  const name = valueText(record.name) || `屏柜${recordId || "1"}`;
+  return {
+    id: recordId || String(positiveInt(record.id) ?? 0),
+    type: "cabinet",
+    area: { id: 0, name: "", code: "" },
+    bay: { id: 0, name: "", code: "" },
+    cabinetRow: null,
+    geometry: { verts: cabinetPoseToVerts(pose), splits: [] },
+    cabinets: [{ code: cabinetMainDeviceCode(record), name }],
+    updatedAt: valueText(record.time),
   };
 }
 
@@ -590,6 +637,9 @@ function robotAreasToDrawingItems(records: RobotAreaRecord[]): DrawingItem[] {
     const type = areaType(record);
     if (type === AREA_TYPE_CABINET_ROW) {
       const item = buildCabinetItem(record, childrenByParent.get(valueText(record.id)) || []);
+      if (item) items.push(item);
+    } else if (type === AREA_TYPE_CABINET && !valueText(record.parent_id)) {
+      const item = buildStandaloneCabinetItem(record);
       if (item) items.push(item);
     } else if (type === AREA_TYPE_CHARGING) {
       const pose = parsePose(record.pose);
@@ -625,7 +675,7 @@ function robotAreasToSceneDrawingItems(records: RobotAreaRecord[], coordinate: L
 }
 
 /**
- * 保存屏柜绘制：读现有 description_file.json → 替换同名柜排及其柜子 → 写回 flat 数组。
+ * 保存屏柜绘制：读现有 description_file.json → 写入一个独立柜排及其柜子 → 写回 flat 数组。
  * 未被当前编辑器处理的其他区域类型会原样保留。
  */
 export async function saveCabinetDrawing(params: {
@@ -638,27 +688,49 @@ export async function saveCabinetDrawing(params: {
   const coordinate = await loadLasCoordinateTransform(api, modelPath);
   const robotItem = cabinetItemToLas(item, coordinate);
   const records = await readAreaRecords(api, modelPath);
-  const existingRow = findCabinetRowForItem(records, robotItem);
-  const rowId = chooseCabinetRowId(records, robotItem, existingRow);
-  const rowIdText = String(rowId);
-  const rowIdsToRemove = new Set<string>([rowIdText]);
-  if (existingRow?.id != null) rowIdsToRemove.add(valueText(existingRow.id));
+  const existingRoot = findCabinetRootForItem(records, robotItem);
+  const rootId = chooseCabinetRootId(records, robotItem, existingRoot);
+  const rootIdText = String(rootId);
+  const rootIdsToRemove = new Set<string>([rootIdText]);
+  if (existingRoot?.id != null) rootIdsToRemove.add(valueText(existingRoot.id));
+
+  const replacedRecords = records.filter((record) => {
+    if (isCabinetRecord(record) && rootIdsToRemove.has(valueText(record.id))) return true;
+    return areaType(record) === AREA_TYPE_CABINET && rootIdsToRemove.has(valueText(record.parent_id));
+  });
+  const nextRecordsPreview = makeCabinetRobotAreas(robotItem, rootId, new Set(
+    records
+      .filter((record) => !replacedRecords.includes(record))
+      .map((record) => positiveInt(record.id))
+      .filter((id): id is number => id != null),
+  ));
+  const nextCodes = new Set(nextRecordsPreview.map((record) => cabinetMainDeviceCode(record)).filter(Boolean));
+  const nextNames = new Set(nextRecordsPreview.map((record) => valueText(record.name)).filter(Boolean));
+  const staleRecords = replacedRecords.filter((record) => {
+    const code = cabinetMainDeviceCode(record);
+    if (code) return !nextCodes.has(code);
+    const name = valueText(record.name);
+    return name && !nextNames.has(name);
+  });
+  if (staleRecords.length > 0) {
+    await deleteCabinetMainDevices(api, projectName, staleRecords);
+  }
 
   const next = records.filter((record) => {
     const type = areaType(record);
-    if (type === AREA_TYPE_CABINET_ROW && rowIdsToRemove.has(valueText(record.id))) return false;
-    if (type === AREA_TYPE_CABINET && rowIdsToRemove.has(valueText(record.parent_id))) return false;
+    if (isCabinetRecord(record) && rootIdsToRemove.has(valueText(record.id))) return false;
+    if (type === AREA_TYPE_CABINET && rootIdsToRemove.has(valueText(record.parent_id))) return false;
     return true;
   });
   const time = formatTime();
-  const cabinetRecords = makeCabinetRobotAreas(robotItem, rowId, time, existingRow);
+  const usedIds = new Set(next.map((record) => positiveInt(record.id)).filter((id): id is number => id != null));
+  const cabinetRecords = makeCabinetRobotAreas(robotItem, rootId, usedIds);
   next.push(...cabinetRecords);
   await writeAreaRecords(api, projectName, modelPath, next);
 
   return {
     ...item,
-    id: rowIdText,
-    bay: { id: rowId, name: item.bay.name || `柜排${rowIdText}`, code: item.bay.code },
+    id: rootIdText,
     updatedAt: time,
   };
 }
@@ -806,19 +878,82 @@ function subPathFromJson(jsonPath: string): string {
   return projectSubPathFromDir(jsonPath, MAP_DIR_NAME, DRAWING_FILE_NAME);
 }
 
-/** 删除某柜排记录及其柜子并写回 JSON */
-export async function deleteCabinetItem(api: ElectronAPI, projectName: string, jsonPath: string, bayId: number): Promise<void> {
+async function deleteCabinetMainDevices(
+  api: ElectronAPI,
+  projectName: string,
+  records: RobotAreaRecord[],
+): Promise<void> {
+  const devices = records
+    .filter(isCabinetRecord)
+    .map((record) => ({
+      code: cabinetMainDeviceCode(record),
+      name: valueText(record.name),
+    }))
+    .filter((device) => device.code || device.name);
+  const payload = {
+    devices,
+  };
+  console.log("[屏柜删除] 提交删除主设备", {
+    projectName,
+    devices: payload.devices,
+  });
+  const result = await api.deleteCabinetMainDevices(projectName, payload);
+  console.log("[屏柜删除] 主设备删除结果", result);
+  if (result.unmatched.length > 0) {
+    console.warn("[屏柜删除] 存在未按 code/name 精确匹配的屏柜，详见主进程兜底删除日志", result.unmatched);
+  }
+}
+
+/** 删除某个 description_file.json 中全部屏柜对应的主设备数据 */
+export async function deleteCabinetDevicesFromJson(api: ElectronAPI, projectName: string, jsonPath: string): Promise<void> {
   let records: RobotAreaRecord[] = [];
   try {
     records = await readAreaRecordsFromPath(api, jsonPath);
   } catch {
     return;
   }
-  const rowId = String(bayId);
+  await deleteCabinetMainDevices(api, projectName, records.filter(isCabinetRecord));
+}
+
+/** 删除某屏柜/柜排记录及其柜子并写回 JSON */
+export async function deleteCabinetItem(api: ElectronAPI, projectName: string, jsonPath: string, cabinetId: number): Promise<void> {
+  let records: RobotAreaRecord[] = [];
+  try {
+    records = await readAreaRecordsFromPath(api, jsonPath);
+  } catch {
+    return;
+  }
+  const rootId = String(cabinetId);
+  const removedRoot = records.find((record) =>
+    isCabinetRecord(record)
+    && valueText(record.id) === rootId
+    && (areaType(record) === AREA_TYPE_CABINET_ROW || !valueText(record.parent_id))
+  );
+  if (!removedRoot) {
+    console.warn("[屏柜删除] 未找到三维屏柜对应的 JSON 记录", { jsonPath, cabinetId, rootId });
+    throw new Error(`未找到屏柜记录：${rootId}`);
+  }
+  const removedRootId = valueText(removedRoot.id);
+  const removedChildren = records.filter((record) =>
+    areaType(record) === AREA_TYPE_CABINET
+    && valueText(record.parent_id) === removedRootId
+  );
+  const removedRecords = [removedRoot, ...removedChildren];
+  console.log("[屏柜删除] 三维删除请求", {
+    projectName,
+    jsonPath,
+    selectedId: cabinetId,
+    rootId: removedRootId,
+    rootCode: valueText(removedRoot.code),
+    childCount: removedChildren.length,
+    devices: removedRecords.map((record) => ({ code: cabinetMainDeviceCode(record), name: valueText(record.name) })),
+  });
+  await deleteCabinetMainDevices(api, projectName, removedRecords);
+
   const next = records.filter((record) => {
     const type = areaType(record);
-    if (type === AREA_TYPE_CABINET_ROW && valueText(record.id) === rowId) return false;
-    if (type === AREA_TYPE_CABINET && valueText(record.parent_id) === rowId) return false;
+    if (isCabinetRecord(record) && valueText(record.id) === removedRootId) return false;
+    if (type === AREA_TYPE_CABINET && valueText(record.parent_id) === removedRootId) return false;
     return true;
   });
   const bytes = new TextEncoder().encode(JSON.stringify(next, null, 2));
@@ -1055,14 +1190,15 @@ function parseReferencePathText(text: string): PathData | null {
     points.push({ id: `path:${id}`, x, y, z });
   }
   if (points.length === 0) return null;
+  const paths = points.slice(1).map((point, index): PathSegment => ({
+    id: `path:${index + 1}_${index + 2}`,
+    from: points[index].id,
+    to: point.id,
+    bezier: null,
+  }));
   return {
     points,
-    paths: points.slice(1).map((point, index) => ({
-      id: `path:${index + 1}_${index + 2}`,
-      from: points[index].id,
-      to: point.id,
-      bezier: null,
-    })),
+    paths,
   };
 }
 

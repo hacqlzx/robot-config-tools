@@ -31,6 +31,19 @@ interface UseSaveHandlersParams {
   onPathFileSaved?: (jsonPath: string) => void;
 }
 
+interface CabinetDeviceInput {
+  key?: string;
+  code: string;
+  name: string;
+}
+
+interface CabinetSaveData {
+  area: { id: number; name: string; code: string };
+  bay: { id: number; name: string; code: string };
+  cabinetRow?: CabinetDeviceInput | null;
+  rows: CabinetDeviceInput[];
+}
+
 export function useSaveHandlers(params: UseSaveHandlersParams) {
   const { entitiesRef, filePathRef, isAutoSavingRef, saveStatusSetter, message } = params;
 
@@ -56,8 +69,27 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     return getCurrentModelPathFromRefs(entitiesRef.current, filePathRef.current);
   }, [entitiesRef, filePathRef]);
 
+  const saveCabinetMainDevices = useCallback(async (
+    api: NonNullable<Window["electronAPI"]>,
+    projectName: string,
+    data: CabinetSaveData,
+  ): Promise<void> => {
+    const devices = [
+      ...(data.cabinetRow ? [data.cabinetRow] : []),
+      ...data.rows,
+    ].map((row) => ({
+      ...row,
+      code: row.code.trim(),
+      name: row.name.trim(),
+    }));
+    const result = await api.saveCabinetMainDevices(projectName, { area: data.area, bay: data.bay, rows: devices });
+    if (!result || result.total !== devices.length || result.ids.length !== devices.length) {
+      throw new Error("屏柜主设备保存结果异常，请重试");
+    }
+  }, []);
+
   /** 保存屏柜 */
-  const handleSaveCabinet = useCallback(async (data: { area: { id: number; name: string; code: string }; bay: { id: number; name: string; code: string }; rows: { key: string; code: string; name: string }[] }) => {
+  const handleSaveCabinet = useCallback(async (data: CabinetSaveData) => {
     const api = window.electronAPI;
     if (!api) { message.warning("仅 Electron 模式下可保存"); return; }
     const projectName = localStorage.getItem("selectedProject");
@@ -68,16 +100,34 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     const modelPath = getCurrentModelPath();
     if (!modelPath) { message.warning("未找到绘制模型，无法保存"); return; }
 
+    const rows = data.rows.map((r) => ({ ...r, code: r.code.trim(), name: r.name.trim() }));
+    const requiresCabinetRow = (geometry.splits || []).length > 0 || rows.length > 1;
+    const cabinetRow = requiresCabinetRow && data.cabinetRow
+      ? { ...data.cabinetRow, code: data.cabinetRow.code.trim(), name: data.cabinetRow.name.trim() }
+      : null;
+    const devices = cabinetRow ? [cabinetRow, ...rows] : rows;
+    if (rows.length === 0) { message.warning("请先完成屏柜分隔"); return; }
+    if (requiresCabinetRow && !cabinetRow) { message.warning("请填写柜排信息"); return; }
+    if (devices.some((r) => !r.name)) { message.warning("屏柜/柜排名称不能为空"); return; }
+    if (devices.some((r) => !r.code)) { message.warning("屏柜/柜排编号不能为空"); return; }
+    const duplicateName = devices.find((row, index) => devices.findIndex((item) => item.name === row.name) !== index);
+    if (duplicateName) { message.warning(`屏柜/柜排名称重复：${duplicateName.name}`); return; }
+    const duplicateCode = devices.find((row, index) => devices.findIndex((item) => item.code === row.code) !== index);
+    if (duplicateCode) { message.warning(`屏柜/柜排编号重复：${duplicateCode.code}`); return; }
+
     const item: CabinetItem = {
       id: (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()),
       type: "cabinet",
       area: data.area,
       bay: data.bay,
+      cabinetRow: cabinetRow ? { code: cabinetRow.code, name: cabinetRow.name } : null,
       geometry,
-      cabinets: data.rows.map((r) => ({ code: r.code, name: r.name })),
+      cabinets: rows.map((r) => ({ code: r.code, name: r.name })),
       updatedAt: new Date().toISOString(),
     };
     try {
+      saveStatusSetter("saving");
+      await saveCabinetMainDevices(api, projectName, { ...data, cabinetRow, rows });
       const savedItem = await saveCabinetDrawing({ api, projectName, modelPath, item });
       const jsonPath = getDrawingJsonPath(modelPath);
       // 屏柜保存后立即回显给 CabinetViewer。这里用 ref 暂存，等绘制模式关闭后再 show，
@@ -89,9 +139,10 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
       params.onCabinetSaved?.();
       params.handleToggleCabinet();
     } catch (e: any) {
+      saveStatusSetter("idle");
       message.error("保存失败: " + (e?.message || e));
     }
-  }, [getCurrentModelPath, message, params, showSavedStatus]);
+  }, [getCurrentModelPath, message, params, saveCabinetMainDevices, saveStatusSetter, showSavedStatus]);
 
   /** 保存充电区域 */
   const handleSaveChargingArea = useCallback(async () => {

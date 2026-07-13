@@ -4,7 +4,7 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import { getDatabase } from "@robot/database";
-import { exportSpaceZip } from "../export-points";
+import { exportSpaceZip, type PointTableExportData } from "../export-points";
 import { getProjectRoot, ensureProjectRoot, hasProjectRootConfig, initProjectRoot } from "./project-root";
 import {
   assertInside,
@@ -436,12 +436,18 @@ export async function exportProjectZip(
 
   const destRoot = path.resolve(rawDestDir);
   const db = getDatabase();
-  const points: any[] = db.prepare("SELECT * FROM device_point WHERE project_name = ?").all(safeProjectName);
+  const pointTableData: PointTableExportData = {
+    voltages: db.prepare("SELECT * FROM device_voltage WHERE project_name = ? ORDER BY sort_num, id").all(safeProjectName) as any[],
+    bays: db.prepare("SELECT * FROM device_bay WHERE project_name = ? ORDER BY sort_num, id").all(safeProjectName) as any[],
+    mains: db.prepare("SELECT * FROM device_main WHERE project_name = ? ORDER BY sort_num, id").all(safeProjectName) as any[],
+    components: db.prepare("SELECT * FROM device_component WHERE project_name = ? ORDER BY sort_num, id").all(safeProjectName) as any[],
+    points: db.prepare("SELECT * FROM device_point WHERE project_name = ? ORDER BY sort_num, id").all(safeProjectName) as any[],
+  };
 
   const includePointTable = items.some((it) => it.type === "点表");
   const mapDirs = items
     .filter((it) => it.type === "地图")
     .map((it) => assertSafePathSegment(it.name, "地图名称"));
 
-  return exportSpaceZip(safeProjectName, getProjectRoot(), points, mapDirs, includePointTable, destRoot, onProgress);
+  return exportSpaceZip(safeProjectName, getProjectRoot(), pointTableData, mapDirs, includePointTable, destRoot, onProgress);
 }

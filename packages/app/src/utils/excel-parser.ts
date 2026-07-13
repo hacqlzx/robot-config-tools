@@ -78,6 +78,27 @@ const COLUMN_MAP: Record<string, string> = {
   "巡视类型7": "inspect7", "巡视类型8": "inspect8",
 };
 
+const HIERARCHY_FIELDS = ["voltName", "bayName", "mainDeviceName", "componentName", "pointName"] as const;
+const HIERARCHY_LABELS = ["区域", "间隔", "主设备", "部件", "点位"] as const;
+
+function textValue(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function getHierarchyError(row: Record<string, any>): string | null {
+  const values = HIERARCHY_FIELDS.map((field) => textValue(row[field]));
+  const firstEmptyIndex = values.findIndex((value) => !value);
+
+  if (firstEmptyIndex === 0) {
+    return "区域不能为空";
+  }
+  if (firstEmptyIndex !== -1 && values.slice(firstEmptyIndex + 1).some(Boolean)) {
+    return `${HIERARCHY_LABELS[firstEmptyIndex]}为空时，下层层级也必须为空`;
+  }
+
+  return null;
+}
+
 /**
  * 解析 Excel 点位表
  * 自动检测：若第 2 行含表头字段，则第 1 行为描述行，表头在行 2，数据从行 3 起
@@ -126,6 +147,14 @@ export function parsePointExcel(file: File): Promise<{ rows: PointExcelRow[]; st
             }
           }
 
+          Object.keys(row).forEach((key) => {
+            if (typeof row[key] === "string") row[key] = row[key].trim();
+          });
+
+          if (Object.values(row).every((value) => textValue(value) === "")) {
+            continue;
+          }
+
           // 跳过示例行（点位名称以 "示例" 开头）
           if (row.pointName && String(row.pointName).startsWith("示例")) {
             continue;
@@ -160,9 +189,9 @@ export function parsePointExcel(file: File): Promise<{ rows: PointExcelRow[]; st
           // 获取厂站名（取第一个非空值）
           if (!stationName && row.stationName) stationName = String(row.stationName);
 
-          // 必填校验
-          if (!row.voltName || !row.bayName || !row.mainDeviceName || !row.componentName || !row.pointName) {
-            errors.push(`第 ${r + 1} 行: 缺少必填字段`);
+          const hierarchyError = getHierarchyError(row);
+          if (hierarchyError) {
+            errors.push(`第 ${r + 1} 行: ${hierarchyError}`);
             continue;
           }
 

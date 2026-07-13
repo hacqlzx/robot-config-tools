@@ -61,6 +61,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
         if (!r.ok) throw new Error(r.error);
         return r.data;
       }),
+  saveCabinetMainDevices: (projectName, payload) =>
+    ipcRenderer
+      .invoke("db:saveCabinetMainDevices", projectName, payload)
+      .then((r) => {
+        if (!r.ok) throw new Error(r.error);
+        return r.data;
+      }),
+  deleteCabinetMainDevices: (projectName, payload) =>
+    ipcRenderer
+      .invoke("db:deleteCabinetMainDevices", projectName, payload)
+      .then((r) => {
+        if (!r.ok) throw new Error(r.error);
+        return r.data;
+      }),
   exportZip: (projectName, items, destDir) =>
     ipcRenderer.invoke("project:export-zip", projectName, items, destDir),
   /** 解压 ZIP 文件到指定目录 */
@@ -101,9 +115,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
       getById: dbInvoke("mainDevice", "getById"),
       findByBayId: dbInvoke("mainDevice", "findByBayId"),
       findByStationId: dbInvoke("mainDevice", "findByStationId"),
+      findByMainDeviceNameAndBayId: dbInvoke("mainDevice", "findByMainDeviceNameAndBayId"),
+      findByMainDeviceCode: dbInvoke("mainDevice", "findByMainDeviceCode"),
       create: dbInvoke("mainDevice", "create"),
       update: dbInvoke("mainDevice", "update"),
       delete: dbInvoke("mainDevice", "delete"),
+      deleteCascade: dbInvoke("mainDevice", "deleteCascade"),
     },
     component: {
       list: dbInvoke("component", "list"),

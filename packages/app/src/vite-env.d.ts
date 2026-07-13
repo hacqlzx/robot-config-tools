@@ -72,6 +72,20 @@ declare global {
       selectZipFile: () => Promise<string | null>;
       onExportProgress: (callback: (data: { step: string; pct: number }) => void) => () => void;
       importPoints: (rows: any[], stationName: string, stationCode: string, projectName: string) => Promise<{ total: number; inserted: number; updated: number; errors: string[] }>;
+      saveCabinetMainDevices: (
+        projectName: string,
+        payload: {
+          area: { id: number; name: string; code: string };
+          bay: { id: number; name: string; code: string };
+          rows: { key?: string; code: string; name: string }[];
+        },
+      ) => Promise<{ inserted: number; updated: number; total: number; ids: number[] }>;
+      deleteCabinetMainDevices: (
+        projectName: string,
+        payload: {
+          devices?: { code?: string; name?: string }[];
+        },
+      ) => Promise<{ deleted: number; ids: number[]; unmatched: { code: string; name: string; reason: string }[]; beforeProjectCount: number; afterProjectCount: number }>;
       exportZip: (projectName: string, items: { type: string; name: string }[], destDir: string) => Promise<{ zipPath: string; zipName: string; config: any }>;
       extractZip: (zipPath: string, destDir: string) => Promise<{ success: boolean; error?: string; actualDir?: string }>;
       importSurveyData: (projectName: string, mapName: string, zipPath: string) => Promise<{ success: boolean; error?: string; surveyDir?: string; deviceDir?: string; importedSpIds?: number[] }>;
@@ -105,9 +119,12 @@ declare global {
           getById: (id: number) => Promise<import('@robot/database').DeviceMain | null>;
           findByBayId: (bayId: number, projectName?: string) => Promise<import('@robot/database').DeviceMain[]>;
           findByStationId: (stationId: number, projectName?: string) => Promise<import('@robot/database').DeviceMain[]>;
+          findByMainDeviceNameAndBayId: (mainDeviceName: string, bayId: number, projectName: string) => Promise<import('@robot/database').DeviceMain | null>;
+          findByMainDeviceCode: (mainDeviceCode: string, projectName: string) => Promise<import('@robot/database').DeviceMain | null>;
           create: (dto: import('@robot/database').CreateDeviceMainDTO) => Promise<import('@robot/database').DeviceMain>;
           update: (id: number, dto: import('@robot/database').UpdateDeviceMainDTO) => Promise<void>;
           delete: (id: number) => Promise<void>;
+          deleteCascade: (id: number, projectName?: string) => Promise<void>;
         };
         component: {
           list: (projectName?: string) => Promise<import('@robot/database').DeviceComponent[]>;

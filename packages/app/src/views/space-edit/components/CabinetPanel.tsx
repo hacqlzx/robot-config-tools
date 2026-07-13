@@ -10,7 +10,9 @@ interface Props {
   /** 关闭绘制屏柜 */
   onClose: () => void;
   /** 保存：传出当前面板数据 */
-  onSave?: (data: { area: { id: number; name: string; code: string }; bay: { id: number; name: string; code: string }; rows: CabinetRow[] }) => void;
+  onSave?: (data: CabinetSaveData) => void;
+  /** 面板当前表单快照变化，用于 Ctrl+S/工具栏保存 */
+  onDraftChange?: (data: CabinetSaveData | null) => void;
   /** 屏柜名称变化时上报（用于 3D 框上方红色标签） */
   onNamesChange?: (names: string[]) => void;
 }
@@ -21,6 +23,13 @@ const STEP_LABELS = ["前左下角", "前右下角", "前右上角", "后右上�
 /** 屏柜表格行 */
 interface CabinetRow { key: string; code: string; name: string; }
 
+interface CabinetSaveData {
+  area: { id: number; name: string; code: string };
+  bay: { id: number; name: string; code: string };
+  cabinetRow?: CabinetRow | null;
+  rows: CabinetRow[];
+}
+
 /** 生成 18 位编号 uid */
 function gen18(): string {
   const raw = (typeof crypto !== "undefined" && crypto.randomUUID)
@@ -30,7 +39,7 @@ function gen18(): string {
 }
 
 /** 绘制屏柜操作小窗（可拖动，提示 + 区域/间隔选择 + 屏柜表格） */
-export default function CabinetPanel({ cornerCount, cabinetCount, onClose, onSave, onNamesChange }: Props) {
+export default function CabinetPanel({ cornerCount, cabinetCount, onClose, onSave, onDraftChange, onNamesChange }: Props) {
   // 相对初始右上角（right:16, top:16）的拖动位移
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
@@ -59,6 +68,9 @@ export default function CabinetPanel({ cornerCount, cabinetCount, onClose, onSav
 
   // 屏柜表格：行数跟随屏柜数量增减，保留已编辑的值
   const [rows, setRows] = useState<CabinetRow[]>([]);
+  const [cabinetRow, setCabinetRow] = useState<CabinetRow>(() => ({ key: gen18(), code: gen18(), name: "柜排1" }));
+  const isSplit = cabinetCount > 1;
+
   useEffect(() => {
     setRows((prev) => {
       if (cabinetCount === prev.length) return prev;
@@ -75,10 +87,30 @@ export default function CabinetPanel({ cornerCount, cabinetCount, onClose, onSav
     setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, [field]: val } : r)));
   }, []);
 
+  const updateCabinetRow = useCallback((field: "code" | "name", val: string) => {
+    setCabinetRow((prev) => ({ ...prev, [field]: val }));
+  }, []);
+
   // 名称变化时上报，用于 3D 框上方红色标签
   useEffect(() => {
     onNamesChange?.(rows.map((r) => r.name));
   }, [rows, onNamesChange]);
+
+  useEffect(() => {
+    if (areaId == null || bayId == null) {
+      onDraftChange?.(null);
+      return;
+    }
+    const v = voltList.find((x) => x.id === areaId);
+    const b = bayList.find((x) => x.id === bayId);
+    const area = { id: areaId, name: v?.voltName || "", code: v?.voltCode || "" };
+    const bay = { id: bayId, name: b?.bayName || "", code: b?.bayCode || "" };
+    const nextRows = rows.map((r) => ({ ...r, code: r.code.trim(), name: r.name.trim() }));
+    const nextCabinetRow = isSplit
+      ? { ...cabinetRow, code: cabinetRow.code.trim(), name: cabinetRow.name.trim() }
+      : null;
+    onDraftChange?.({ area, bay, cabinetRow: nextCabinetRow, rows: nextRows });
+  }, [areaId, bayId, voltList, bayList, rows, cabinetRow, isSplit, onDraftChange]);
 
   const columns = [
     {
@@ -120,12 +152,51 @@ export default function CabinetPanel({ cornerCount, cabinetCount, onClose, onSav
       message.warning("请先选择区域和间隔");
       return;
     }
+    const nextRows = rows.map((r) => ({ ...r, code: r.code.trim(), name: r.name.trim() }));
+    const nextCabinetRow = isSplit
+      ? { ...cabinetRow, code: cabinetRow.code.trim(), name: cabinetRow.name.trim() }
+      : null;
+    if (nextRows.length === 0) {
+      message.warning("请先完成屏柜绘制");
+      return;
+    }
+    if (nextCabinetRow && !nextCabinetRow.name) {
+      message.warning("柜排名称不能为空");
+      return;
+    }
+    if (nextCabinetRow && !nextCabinetRow.code) {
+      message.warning("柜排编号不能为空");
+      return;
+    }
+    if (nextRows.some((r) => !r.name)) {
+      message.warning("屏柜名称不能为空");
+      return;
+    }
+    if (nextRows.some((r) => !r.code)) {
+      message.warning("屏柜编号不能为空");
+      return;
+    }
+    const devices = nextCabinetRow ? [nextCabinetRow, ...nextRows] : nextRows;
+    const duplicateName = devices.find((row, index) =>
+      devices.findIndex((item) => item.name === row.name) !== index
+    );
+    if (duplicateName) {
+      message.warning(`屏柜/柜排名称重复：${duplicateName.name}`);
+      return;
+    }
+    const duplicateCode = devices.find((row, index) =>
+      devices.findIndex((item) => item.code === row.code) !== index
+    );
+    if (duplicateCode) {
+      message.warning(`屏柜/柜排编号重复：${duplicateCode.code}`);
+      return;
+    }
     const v = voltList.find((x) => x.id === areaId);
     const b = bayList.find((x) => x.id === bayId);
     const area = { id: areaId, name: v?.voltName || "", code: v?.voltCode || "" };
     const bay = { id: bayId, name: b?.bayName || "", code: b?.bayCode || "" };
-    onSave?.({ area, bay, rows });
-  }, [areaId, bayId, voltList, bayList, rows, onSave]);
+    onSave?.({ area, bay, cabinetRow: nextCabinetRow, rows: nextRows });
+  }, [areaId, bayId, voltList, bayList, rows, cabinetRow, isSplit, onSave]);
 
   const tip = cornerCount < 4
     ? `点击屏柜【${STEP_LABELS[cornerCount]}】（${cornerCount + 1}/4）`
@@ -201,6 +272,26 @@ export default function CabinetPanel({ cornerCount, cabinetCount, onClose, onSav
             onChange={setBayId}
           />
         </div>
+
+        {isSplit && (
+          <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "36px 1fr", gap: "8px", alignItems: "center" }}>
+            <span style={{ fontSize: 12, color: "#666" }}>柜排</span>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <Input
+                size="small"
+                placeholder="柜排编号"
+                value={cabinetRow.code}
+                onChange={(e) => updateCabinetRow("code", e.target.value)}
+              />
+              <Input
+                size="small"
+                placeholder="柜排名称"
+                value={cabinetRow.name}
+                onChange={(e) => updateCabinetRow("name", e.target.value)}
+              />
+            </div>
+          </div>
+        )}
 
         {cabinetCount > 0 && (
           <Table<CabinetRow>

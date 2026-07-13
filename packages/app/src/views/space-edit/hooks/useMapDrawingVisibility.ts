@@ -14,6 +14,12 @@ import type { SpaceMessageApi } from "../types";
 import { getCurrentModelPathFromRefs } from "../utils/model-state";
 import { mapSiblingFilePath } from "../utils/space-paths";
 
+function cabinetKey(item: CabinetItem): number | null {
+  const n = Number.parseInt(String(item.id ?? ""), 10);
+  if (Number.isInteger(n) && n > 0) return n;
+  return item.bay.id > 0 ? item.bay.id : null;
+}
+
 interface UseMapDrawingVisibilityParams {
   entitiesRef: React.MutableRefObject<Map<string, any>>;
   filePathRef: React.MutableRefObject<Map<string, string>>;
@@ -46,7 +52,7 @@ export function useMapDrawingVisibility({
   // drawingShown/pathShown 只记录树节点勾选状态；真正的实体分别在 CabinetViewer/各 Drawing 类中。
   const [drawingShown, setDrawingShown] = useState<Set<string>>(new Set());
   const [pathShown, setPathShown] = useState<Set<string>>(new Set());
-  // 一个 JSON 文件里可能包含多个屏柜，按 jsonPath 记录 bayId，取消勾选时精准隐藏对应回显。
+  // 一个 JSON 文件里可能包含多个屏柜，按 jsonPath 记录柜排 id，取消勾选时精准隐藏对应回显。
   const shownByJsonRef = useRef<Map<string, number[]>>(new Map());
   const drawingShownRef = useRef(drawingShown);
   const chargingAreaSavedRef = useRef(false);
@@ -78,11 +84,15 @@ export function useMapDrawingVisibility({
     if (!modelPath) return;
     let items: CabinetItem[] = [];
     try { items = await loadCabinetItems(api, modelPath); } catch { return; }
-    const byBay = new Map(items.map((it) => [it.bay.id, it]));
-    const want = new Set(bayIds.filter((id) => byBay.has(id)));
+    const selectedBayIds = new Set(bayIds);
+    const wantItems = items.filter((it) => selectedBayIds.has(it.bay.id));
+    const wantKeys = new Set(wantItems.map(cabinetKey).filter((id): id is number => id != null));
     const jsonPath = mapSiblingFilePath(modelPath, DRAWING_FILE_NAME);
-    for (const id of viewer.getShownIds()) if (!want.has(id)) viewer.hide(id);
-    for (const id of want) if (!viewer.has(id)) viewer.show(byBay.get(id)!, jsonPath);
+    for (const id of viewer.getShownIds()) if (!wantKeys.has(id)) viewer.hide(id);
+    for (const item of wantItems) {
+      const key = cabinetKey(item);
+      if (key != null && !viewer.has(key)) viewer.show(item, jsonPath);
+    }
   }, [cabinetViewerRef, entitiesRef, filePathRef]);
 
   const handleTogglePathFile = useCallback(async (jsonPath: string, checked: boolean) => {
@@ -108,7 +118,7 @@ export function useMapDrawingVisibility({
       // 同一个绘制 JSON 内混放屏柜、充电区域、设备区，勾选时按 type 分发到不同渲染器。
       const cabItems = items.filter((it): it is CabinetItem => it.type === "cabinet");
       cabItems.forEach((it) => viewer.show(it, jsonPath));
-      shownByJsonRef.current.set(jsonPath, cabItems.map((it) => it.bay.id));
+      shownByJsonRef.current.set(jsonPath, cabItems.map(cabinetKey).filter((id): id is number => id != null));
       setDrawingShown((prev) => new Set(prev).add(jsonPath));
 
       const chargingItem = items.find((it): it is ChargingAreaItem => it.type === "charging-area");
@@ -142,15 +152,15 @@ export function useMapDrawingVisibility({
     }
   }, [cabinetViewerRef, chargingDrawingRef, chargingExistingRef, deviceAreaDrawingRef]);
 
-  const handleDeleteCabinetItem = useCallback(async (jsonPath: string, bayId: number) => {
+  const handleDeleteCabinetItem = useCallback(async (jsonPath: string, cabinetId: number) => {
     const api = window.electronAPI;
     const projectName = localStorage.getItem("selectedProject");
     if (!api || !projectName) return;
-    try { await deleteCabinetItem(api, projectName, jsonPath, bayId); }
+    try { await deleteCabinetItem(api, projectName, jsonPath, cabinetId); }
     catch (e: any) { message.error("删除失败: " + (e?.message || e)); return; }
-    cabinetViewerRef.current?.hide(bayId);
+    cabinetViewerRef.current?.hide(cabinetId);
     const ids = shownByJsonRef.current.get(jsonPath);
-    if (ids) shownByJsonRef.current.set(jsonPath, ids.filter((id) => id !== bayId));
+    if (ids) shownByJsonRef.current.set(jsonPath, ids.filter((id) => id !== cabinetId));
     message.success("已删除");
   }, [cabinetViewerRef, message]);
 
@@ -180,8 +190,9 @@ export function useMapDrawingVisibility({
       const saved = savedCabinetRef.current;
       if (saved && viewer) {
         viewer.show(saved.item, saved.jsonPath);
+        const key = cabinetKey(saved.item);
         const ids = shownByJsonRef.current.get(saved.jsonPath) || [];
-        if (!ids.includes(saved.item.bay.id)) shownByJsonRef.current.set(saved.jsonPath, [...ids, saved.item.bay.id]);
+        if (key != null && !ids.includes(key)) shownByJsonRef.current.set(saved.jsonPath, [...ids, key]);
         setDrawingShown((prev) => new Set(prev).add(saved.jsonPath));
       }
       savedCabinetRef.current = null;

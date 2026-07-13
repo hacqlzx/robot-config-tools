@@ -152,7 +152,8 @@ function valueText(value: unknown): string {
 }
 
 function positiveInt(value: unknown): number | null {
-  const n = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
+  if (typeof value !== "number" && !/^\d+$/.test(String(value ?? "").trim())) return null;
+  const n = typeof value === "number" ? value : Number.parseInt(String(value).trim(), 10);
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
@@ -245,8 +246,8 @@ function buildCabinetRenderItem(row: RobotAreaRecord, children: RobotAreaRecord[
       return (positiveInt(a.child.id) ?? a.index) - (positiveInt(b.child.id) ?? b.index);
     });
   const cabinets = childInfos.length > 0
-    ? childInfos.map(({ child }, idx) => ({ name: valueText(child.name) || `屏柜${idx + 1}` }))
-    : [{ name: rowName }];
+    ? childInfos.map(({ child }, idx) => ({ code: valueText(child.code), name: valueText(child.name) || `屏柜${idx + 1}` }))
+    : [{ code: valueText(row.code), name: rowName }];
   const splits = childInfos.length > 1
     ? childInfos.slice(0, -1).map((info, idx) => info.end == null ? (idx + 1) / childInfos.length : clamp01(info.end))
     : [];
@@ -254,8 +255,21 @@ function buildCabinetRenderItem(row: RobotAreaRecord, children: RobotAreaRecord[
     type: "cabinet",
     name: rowName,
     geometry: { verts: rowVerts, splits },
-    bay: { id: rowId, name: rowName },
+    bay: null,
     cabinets,
+  };
+}
+
+function buildStandaloneCabinetRenderItem(record: RobotAreaRecord): CabinetRenderItem | null {
+  const pose = parsePose(record.pose);
+  if (!pose) return null;
+  const name = valueText(record.name) || `屏柜${valueText(record.id) || "1"}`;
+  return {
+    type: "cabinet",
+    name,
+    geometry: { verts: cabinetPoseToVerts(pose), splits: [] },
+    bay: null,
+    cabinets: [{ code: valueText(record.code), name }],
   };
 }
 
@@ -275,6 +289,9 @@ export function robotAreasToDrawingItemsData(records: RobotAreaRecord[]): Drawin
     const type = areaType(record);
     if (type === AREA_TYPE_CABINET_ROW) {
       const item = buildCabinetRenderItem(record, childrenByParent.get(valueText(record.id)) || []);
+      if (item) items.push(item);
+    } else if (type === AREA_TYPE_CABINET && !valueText(record.parent_id)) {
+      const item = buildStandaloneCabinetRenderItem(record);
       if (item) items.push(item);
     } else if (type === AREA_TYPE_CHARGING) {
       const pose = parsePose(record.pose);

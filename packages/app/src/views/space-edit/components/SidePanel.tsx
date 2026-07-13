@@ -3,7 +3,7 @@ import { Tree, Modal, message } from "antd";
 import type { TreeProps, TreeDataNode } from "antd";
 import TreeView from "./TreeView";
 import DeviceTree from "@/components/DeviceTree";
-import { isDrawingDataFileName, isReferencePathFileName } from "../hooks/drawing/drawing-storage";
+import { deleteCabinetDevicesFromJson, isDrawingDataFileName, isReferencePathFileName } from "../hooks/drawing/drawing-storage";
 import type { SpaceTreeNode } from "../types";
 import { MAP_DIR_NAME, isLasOrLazFileName, loadedFileKey } from "../utils/space-paths";
 
@@ -115,13 +115,13 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
     if (sideTab === "cabinet") {
       loadBayTypeTree("屏柜区", setCabinetTreeData);
     }
-  }, [sideTab, loadBayTypeTree]);
+  }, [sideTab, treeKey, loadBayTypeTree]);
 
   useEffect(() => {
     if (sideTab === "deviceArea") {
       loadBayTypeTree("设备区", setDeviceAreaTreeData);
     }
-  }, [sideTab, loadBayTypeTree]);
+  }, [sideTab, treeKey, loadBayTypeTree]);
 
   /** 右键-打开文件目录 */
   const handleRequestOpenDir = useCallback((node: SpaceTreeNode) => {
@@ -139,13 +139,24 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
       onOk: async () => {
         try {
           // 删除前先清除页面上的模型、绘制和路径回显（含子目录）
+          const drawingFiles: string[] = [];
           const walkClear = (n: SpaceTreeNode) => {
             if (!n.isDir && isLasOrLazFileName(n.name) && loadedFiles.has(loadedFileKey(n.path))) onUnloadMapFile?.(n.path);
-            else if (isDrawingDataFileName(n.name)) onToggleDrawing?.(n.path, false);
+            else if (isDrawingDataFileName(n.name)) {
+              drawingFiles.push(n.path);
+              onToggleDrawing?.(n.path, false);
+            }
             else if (isReferencePathFileName(n.name)) onTogglePath?.(n.path, false);
             n.children?.forEach(walkClear);
           };
           walkClear(node);
+          const projectName = localStorage.getItem("selectedProject");
+          const api = window.electronAPI;
+          if (projectName && api) {
+            for (const jsonPath of drawingFiles) {
+              await deleteCabinetDevicesFromJson(api, projectName, jsonPath);
+            }
+          }
           await window.electronAPI?.project.deletePath(node.path);
           message.success("已删除");
           loadMapTree();
@@ -211,7 +222,7 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
             )
           ) : sideTab === "device" ? (
             <div className="side-tree">
-              <DeviceTree defaultExpandLevel={3} />
+              <DeviceTree key={treeKey} defaultExpandLevel={3} />
             </div>
           ) : sideTab === "cabinet" ? (
             treeLoading ? (

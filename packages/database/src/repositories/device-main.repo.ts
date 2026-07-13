@@ -115,4 +115,18 @@ export class DeviceMainRepo {
   delete(id: number): void {
     this.db.prepare("DELETE FROM device_main WHERE id = ?").run(id);
   }
+
+  deleteCascade(id: number, projectName?: string): void {
+    const main = this.getById(id);
+    if (!main) return;
+    if (projectName) {
+      this.db.prepare("DELETE FROM device_point WHERE main_device_id = ? AND project_name = ?").run(id, projectName);
+      this.db.prepare("DELETE FROM device_component WHERE main_device_id = ? AND project_name = ?").run(id, projectName);
+      this.db.prepare("DELETE FROM device_main WHERE id = ? AND project_name = ?").run(id, projectName);
+      return;
+    }
+    this.db.prepare("DELETE FROM device_point WHERE main_device_id = ?").run(id);
+    this.db.prepare("DELETE FROM device_component WHERE main_device_id = ?").run(id);
+    this.db.prepare("DELETE FROM device_main WHERE id = ?").run(id);
+  }
 }

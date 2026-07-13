@@ -24,6 +24,13 @@ import SpaceEditScene from "./components/SpaceEditScene";
 import type { CabinetItem } from "./hooks/drawing/drawing-storage";
 import type { ModelCenter, ModelPointStats, SaveStatus, ViewDirection } from "./types";
 
+interface CabinetSaveData {
+  area: { id: number; name: string; code: string };
+  bay: { id: number; name: string; code: string };
+  cabinetRow?: { key: string; code: string; name: string } | null;
+  rows: { key: string; code: string; name: string }[];
+}
+
 /** 根据点数和硬件决定加载比例 */
 function getLoadFraction(pointCount: number): number {
   if (pointCount > 20_000_000) return 0.25;
@@ -55,6 +62,7 @@ export default function SpaceEdit() {
     maxPercent: 0,
   });
   const savedCabinetRef = useRef<{ item: CabinetItem; jsonPath: string } | null>(null);
+  const cabinetDraftRef = useRef<CabinetSaveData | null>(null);
   const lasHeadersRef = useRef<Map<string, any>>(new Map());
   const filePathRef = useRef<Map<string, string>>(new Map());
   const pointStatsRef = useRef<Map<string, ModelPointStats>>(new Map());
@@ -119,6 +127,9 @@ export default function SpaceEdit() {
   });
 
   const refreshTree = useCallback(() => setTreeKey((k) => k + 1), []);
+  const handleCabinetDraftChange = useCallback((data: CabinetSaveData | null) => {
+    cabinetDraftRef.current = data;
+  }, []);
   const clearDrawingDrafts = useCallback(() => {
     clearCabinetDraft();
     clearChargingDraft();
@@ -272,9 +283,19 @@ export default function SpaceEdit() {
 
   // ---- 手动保存后重置自动保存计时器 ----
   const handleManualSave = useCallback(async () => {
+    if (cabinetMode) {
+      const draft = cabinetDraftRef.current;
+      if (!draft) {
+        message.warning("请先选择区域和间隔");
+        return;
+      }
+      await handleSaveCabinet(draft);
+      resetAutoSaveTimer();
+      return;
+    }
     await handleSaveAll();
     resetAutoSaveTimer();
-  }, [handleSaveAll, resetAutoSaveTimer]);
+  }, [cabinetMode, handleSaveCabinet, handleSaveAll, message, resetAutoSaveTimer]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -364,6 +385,7 @@ export default function SpaceEdit() {
           cabinetCount={cabinetCount}
           onCabinetClose={handleToggleCabinet}
           onCabinetSave={handleSaveCabinet}
+          onCabinetDraftChange={handleCabinetDraftChange}
           onCabinetNamesChange={setCabinetNames}
           chargingMode={chargingMode}
           chargingPointCount={chargingPointCount}

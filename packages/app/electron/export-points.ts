@@ -1,5 +1,5 @@
 import * as XLSX from "xlsx-js-style";
-import type { DevicePoint } from "@robot/database";
+import type { DeviceBay, DeviceComponent, DeviceMain, DevicePoint, DeviceVoltage } from "@robot/database";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -61,14 +61,25 @@ const IMPORT_TIPS = `1、加*号的必填；
 5、识别类型、表计类型、位置状态类型、主设备类型、相位、电压区域通过下拉选择，若位置状态类型、电压区域发生变化修改方式参考表'下拉选项变更操作说明'；
 6、重要等级未填写时默认为Ⅰ类；`;
 
-function generatePointExcel(points: DevicePoint[]): Buffer {
-  const rows: Record<string, string>[] = [];
-  for (const p of points) {
+export interface PointTableExportData {
+  points: DevicePoint[];
+  components: DeviceComponent[];
+  mains: DeviceMain[];
+  bays: DeviceBay[];
+  voltages: DeviceVoltage[];
+}
+
+function blankExportRow(): Record<string, string> {
+  return Object.fromEntries(EXPORT_COLS.map((col) => [col, ""]));
+}
+
+function pointExportRow(p: DevicePoint): Record<string, string> {
     const recogList = (p.recognitionTypeList || "").split(",").map((s) => RECOGNITION_REV[s.trim()] || s).filter(Boolean);
     const inspects = (p.inspectionSubType || "").split(",").map((s) => INSPECTION_REV[s.trim()] || s).filter(Boolean);
-    rows.push({
+    return {
+      ...blankExportRow(),
       "*点位名称": p.pointName || "", "点位编码": p.pointCode || "",
-      "*识别类型1": recogList[0] || "", "*识别类型2": recogList[1] || "",
+      "*识别类型1": recogList[0] || "", "识别类型2": recogList[1] || "",
       "采集类型": SAVE_REV[p.saveTypeList] || (p.saveTypeList ? String(p.saveTypeList) : ""),
       "表计类型": METER_REV[p.meterType] || (p.meterType ? String(p.meterType) : ""),
       "位置状态类型": POS_REV[p.positionStateType] || (p.positionStateType ? String(p.positionStateType) : ""),
@@ -81,8 +92,82 @@ function generatePointExcel(points: DevicePoint[]): Buffer {
       "*区域": p.voltName || "", "区域编码": p.voltCode || "",
       "巡视类型1": inspects[0] || "", "巡视类型2": inspects[1] || "", "巡视类型3": inspects[2] || "", "巡视类型4": inspects[3] || "",
       "巡视类型5": inspects[4] || "", "巡视类型6": inspects[5] || "", "巡视类型7": inspects[6] || "", "巡视类型8": inspects[7] || "",
-    });
+    };
+}
+
+function componentExportRow(c: DeviceComponent): Record<string, string> {
+  return {
+    ...blankExportRow(),
+    "*部件名称": c.componentName || "", "部件编码": c.componentCode || "",
+    "*主设备名称": c.mainDeviceName || "", "主设备编码": c.mainDeviceCode || "",
+    "*主设备类型": DEVICE_TYPE_REV[c.mainDeviceType] || (c.mainDeviceType ? String(c.mainDeviceType) : ""),
+    "*相位": PHASE_REV[c.phaseType] || (c.phaseType !== undefined ? String(c.phaseType) : ""),
+    "*间隔名称": c.bayName || "", "间隔编码": c.bayCode || "", "间隔类型": c.bayType || "",
+    "*区域": c.voltName || "", "区域编码": c.voltCode || "",
+  };
+}
+
+function mainExportRow(m: DeviceMain): Record<string, string> {
+  return {
+    ...blankExportRow(),
+    "*主设备名称": m.mainDeviceName || "", "主设备编码": m.mainDeviceCode || "",
+    "*主设备类型": DEVICE_TYPE_REV[m.mainDeviceType] || (m.mainDeviceType ? String(m.mainDeviceType) : ""),
+    "*相位": PHASE_REV[m.phaseType] || (m.phaseType !== undefined ? String(m.phaseType) : ""),
+    "*间隔名称": m.bayName || "", "间隔编码": m.bayCode || "", "间隔类型": m.bayType || "",
+    "*区域": m.voltName || "", "区域编码": m.voltCode || "",
+  };
+}
+
+function bayExportRow(b: DeviceBay): Record<string, string> {
+  return {
+    ...blankExportRow(),
+    "*间隔名称": b.bayName || "", "间隔编码": b.bayCode || "", "间隔类型": b.bayType || "",
+    "*区域": b.voltName || "", "区域编码": b.voltCode || "",
+  };
+}
+
+function voltageExportRow(v: DeviceVoltage): Record<string, string> {
+  return {
+    ...blankExportRow(),
+    "*区域": v.voltName || "", "区域编码": v.voltCode || "",
+  };
+}
+
+function buildPointExportRows(data: PointTableExportData): Record<string, string>[] {
+  const rows = data.points.map(pointExportRow);
+
+  const pointComponentIds = new Set(data.points.map((p) => p.componentId).filter((id) => id > 0));
+  const componentMainIds = new Set(data.components.map((c) => c.mainDeviceId).filter((id) => id > 0));
+  const mainBayIds = new Set(data.mains.map((m) => m.bayId).filter((id) => id > 0));
+  const bayVoltIds = new Set(data.bays.map((b) => b.voltId).filter((id) => id > 0));
+
+  for (const component of data.components) {
+    if (!pointComponentIds.has(component.id)) rows.push(componentExportRow(component));
   }
+  for (const main of data.mains) {
+    if (!componentMainIds.has(main.id)) rows.push(mainExportRow(main));
+  }
+  for (const bay of data.bays) {
+    if (!mainBayIds.has(bay.id)) rows.push(bayExportRow(bay));
+  }
+  for (const voltage of data.voltages) {
+    if (!bayVoltIds.has(voltage.id)) rows.push(voltageExportRow(voltage));
+  }
+
+  return rows;
+}
+
+function getStationName(data: PointTableExportData): string {
+  return data.points[0]?.stationName
+    || data.components[0]?.stationName
+    || data.mains[0]?.stationName
+    || data.bays[0]?.stationName
+    || data.voltages[0]?.stationName
+    || "未知厂站";
+}
+
+function generatePointExcel(data: PointTableExportData): Buffer {
+  const rows = buildPointExportRows(data);
 
   // 构建数据：第1行=提示, 第2行=表头, 后续=数据
   const headerRow = EXPORT_COLS;
@@ -239,13 +324,22 @@ export type ProgressCallback = (step: string, pct: number) => void;
 export async function exportSpaceZip(
   projectName: string,
   projectRoot: string,
-  points: DevicePoint[],
+  pointTableData: PointTableExportData,
   mapDirs: string[],
   includePointTable: boolean,
   destDir: string,
   onProgress?: ProgressCallback,
 ): Promise<ExportZipResult> {
-  const stationName = points.length > 0 ? (points[0].stationName || "未知厂站") : "未知厂站";
+  const pointRows = buildPointExportRows(pointTableData);
+  const stationName = getStationName(pointTableData);
+  console.log("[导出点表] 层级补齐统计", {
+    points: pointTableData.points.length,
+    components: pointTableData.components.length,
+    mains: pointTableData.mains.length,
+    bays: pointTableData.bays.length,
+    voltages: pointTableData.voltages.length,
+    exportRows: pointRows.length,
+  });
   const mapNames = mapDirs.join("_");
   const now = new Date();
   const timeStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
@@ -255,9 +349,9 @@ export async function exportSpaceZip(
   try {
     // Step 1: 生成点表 Excel（内存中，不写磁盘）
     let xlsxBuf: Buffer | null = null;
-    if (includePointTable && points.length > 0) {
+    if (includePointTable && pointRows.length > 0) {
       onProgress?.("生成点表...", 1);
-      xlsxBuf = generatePointExcel(points);
+      xlsxBuf = generatePointExcel(pointTableData);
     }
 
     // Step 2: 每张地图先归档成独立 zip，外层导出包的 地图/ 下只放这些 zip 文件。

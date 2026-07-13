@@ -33,24 +33,51 @@ const mainCodeCache = new Map<string, string>();
 const compCodeCache = new Map<string, string>();
 const pointCodeCache = new Map<string, string>();
 
-const pathKey = (...parts: string[]): string => parts.map((part) => part.trim()).join("|");
+const textValue = (value: unknown): string => String(value ?? "").trim();
+const pathKey = (...parts: unknown[]): string => parts.map(textValue).join("|");
+const hierarchyFields = ["voltName", "bayName", "mainDeviceName", "componentName", "pointName"] as const;
+const hierarchyLabels = ["区域", "间隔", "主设备", "部件", "点位"] as const;
 
 function normalizeRow(row: PointExcelRow): void {
-  row.voltName = row.voltName?.trim() ?? "";
-  row.voltCode = row.voltCode?.trim() ?? "";
-  row.bayName = row.bayName?.trim() ?? "";
-  row.bayCode = row.bayCode?.trim() ?? "";
-  row.bayType = row.bayType?.trim() ?? "";
-  row.mainDeviceName = row.mainDeviceName?.trim() ?? "";
-  row.mainDeviceCode = row.mainDeviceCode?.trim() ?? "";
-  row.componentName = row.componentName?.trim() ?? "";
-  row.componentCode = row.componentCode?.trim() ?? "";
-  row.componentType = row.componentType?.trim() ?? "";
-  row.pointName = row.pointName?.trim() ?? "";
-  row.pointCode = row.pointCode?.trim() ?? "";
-  row.cruiseId = row.cruiseId?.trim() ?? "";
-  row.stationName = row.stationName?.trim() ?? "";
-  row.stationCode = row.stationCode?.trim() ?? "";
+  row.voltName = textValue(row.voltName);
+  row.voltCode = textValue(row.voltCode);
+  row.bayName = textValue(row.bayName);
+  row.bayCode = textValue(row.bayCode);
+  row.bayType = textValue(row.bayType);
+  row.mainDeviceName = textValue(row.mainDeviceName);
+  row.mainDeviceCode = textValue(row.mainDeviceCode);
+  row.componentName = textValue(row.componentName);
+  row.componentCode = textValue(row.componentCode);
+  row.componentType = textValue(row.componentType);
+  row.pointName = textValue(row.pointName);
+  row.pointCode = textValue(row.pointCode);
+  row.cruiseId = textValue(row.cruiseId);
+  row.stationName = textValue(row.stationName);
+  row.stationCode = textValue(row.stationCode);
+}
+
+function getHierarchyDepth(row: PointExcelRow): { depth: number; error?: string } {
+  const values = hierarchyFields.map((field) => textValue(row[field]));
+  const firstEmptyIndex = values.findIndex((value) => !value);
+
+  if (firstEmptyIndex === 0) {
+    return { depth: 0, error: "区域不能为空" };
+  }
+  if (firstEmptyIndex !== -1 && values.slice(firstEmptyIndex + 1).some(Boolean)) {
+    return {
+      depth: firstEmptyIndex,
+      error: `${hierarchyLabels[firstEmptyIndex]}为空时，下层层级也必须为空`,
+    };
+  }
+
+  return { depth: firstEmptyIndex === -1 ? values.length : firstEmptyIndex };
+}
+
+function describeRow(row: PointExcelRow): string {
+  return hierarchyFields
+    .map((field) => textValue(row[field]))
+    .filter(Boolean)
+    .join(" / ");
 }
 
 function matchesPointPath(
@@ -147,27 +174,35 @@ export function importPointExcel(
 
   rows.forEach((row, index) => {
     normalizeRow(row);
-
-    const pointPath = pathKey(row.voltName, row.bayName, row.mainDeviceName, row.componentName, row.pointName);
-    const firstPathRow = pointPathRows.get(pointPath);
-    if (firstPathRow !== undefined) {
-      result.errors.push(`第 ${index + 1} 行: 同一部件下点位名称不能重复（与第 ${firstPathRow + 1} 行完整路径相同）`);
-    } else {
-      pointPathRows.set(pointPath, index);
+    const hierarchy = getHierarchyDepth(row);
+    if (hierarchy.error) {
+      result.errors.push(`第 ${index + 1} 行: ${hierarchy.error}`);
+      return;
     }
 
-    if (row.pointCode) {
-      const firstCodeRow = pointCodeRows.get(row.pointCode);
-      if (firstCodeRow !== undefined) {
-        result.errors.push(`第 ${index + 1} 行: 点位编码已存在（与第 ${firstCodeRow + 1} 行重复）`);
+    if (hierarchy.depth >= 5) {
+      const pointPath = pathKey(row.voltName, row.bayName, row.mainDeviceName, row.componentName, row.pointName);
+      const firstPathRow = pointPathRows.get(pointPath);
+      if (firstPathRow !== undefined) {
+        result.errors.push(`第 ${index + 1} 行: 同一部件下点位名称不能重复（与第 ${firstPathRow + 1} 行完整路径相同）`);
       } else {
-        pointCodeRows.set(row.pointCode, index);
+        pointPathRows.set(pointPath, index);
+      }
+
+      if (row.pointCode) {
+        const firstCodeRow = pointCodeRows.get(row.pointCode);
+        if (firstCodeRow !== undefined) {
+          result.errors.push(`第 ${index + 1} 行: 点位编码已存在（与第 ${firstCodeRow + 1} 行重复）`);
+        } else {
+          pointCodeRows.set(row.pointCode, index);
+        }
       }
     }
   });
 
   rows.forEach((row, index) => {
-    if (!row.pointCode) return;
+    const hierarchy = getHierarchyDepth(row);
+    if (hierarchy.error || hierarchy.depth < 5 || !row.pointCode) return;
 
     const existingPoint = pointRepo.findByPointCode(row.pointCode, projectName);
     if (existingPoint && !matchesPointPath(existingPoint, row.voltName, row.bayName, row.mainDeviceName, row.componentName, row.pointName)) {
@@ -179,13 +214,22 @@ export function importPointExcel(
     return result;
   }
 
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
     try {
+      const hierarchy = getHierarchyDepth(row);
+      if (hierarchy.error) {
+        result.errors.push(`第 ${index + 1} 行: ${hierarchy.error}`);
+        continue;
+      }
+
       // ====== 编码自动填充 + 逐层 upsert（对齐 Java insertOrUpdate* 模式） ======
       // 1. 电压区编码
+      let existingVoltage = row.voltCode ? voltageRepo.findByVoltCode(row.voltCode, projectName) : undefined;
+      if (!existingVoltage) {
+        existingVoltage = voltageRepo.findByVoltNameAndStationId(row.voltName, 0, projectName);
+      }
       if (!row.voltCode) {
         const exist = voltCodeCache.get(row.voltName);
-        const existingVoltage = voltageRepo.findByVoltNameAndStationId(row.voltName, 0, projectName);
         row.voltCode = exist || existingVoltage?.voltCode || generateCode("V");
       }
       const volt = voltageRepo.upsert({
@@ -202,12 +246,20 @@ export function importPointExcel(
       });
       row.voltCode = volt.voltCode;
       voltCodeCache.set(row.voltName, volt.voltCode);
+      if (hierarchy.depth === 1) {
+        if (existingVoltage) result.updated++;
+        else result.inserted++;
+        continue;
+      }
 
       // 2. 间隔编码
-      const bayCacheKey = row.voltName + "|" + row.bayName;
+      const bayCacheKey = pathKey(row.voltName, row.bayName);
+      let existingBay = row.bayCode ? bayRepo.findByBayCode(row.bayCode, projectName) : undefined;
+      if (!existingBay) {
+        existingBay = bayRepo.findByBayNameAndVoltId(row.bayName, volt.id, projectName);
+      }
       if (!row.bayCode) {
         const exist = bayCodeCache.get(bayCacheKey);
-        const existingBay = bayRepo.findByBayNameAndVoltId(row.bayName, volt.id, projectName);
         row.bayCode = exist || existingBay?.bayCode || generateCode("B");
       }
       const bay = bayRepo.upsert({
@@ -229,12 +281,20 @@ export function importPointExcel(
       });
       row.bayCode = bay.bayCode;
       bayCodeCache.set(bayCacheKey, bay.bayCode);
+      if (hierarchy.depth === 2) {
+        if (existingBay) result.updated++;
+        else result.inserted++;
+        continue;
+      }
 
       // 3. 主设备编码
-      const mainCacheKey = row.voltName + "|" + row.bayName + "|" + row.mainDeviceName;
+      const mainCacheKey = pathKey(row.voltName, row.bayName, row.mainDeviceName);
+      let existingMain = row.mainDeviceCode ? mainRepo.findByMainDeviceCode(row.mainDeviceCode, projectName) : undefined;
+      if (!existingMain) {
+        existingMain = mainRepo.findByMainDeviceNameAndBayId(row.mainDeviceName, bay.id, projectName);
+      }
       if (!row.mainDeviceCode) {
         const exist = mainCodeCache.get(mainCacheKey);
-        const existingMain = mainRepo.findByMainDeviceNameAndBayId(row.mainDeviceName, bay.id, projectName);
         row.mainDeviceCode = exist || existingMain?.mainDeviceCode || generateCode("MD");
       }
       const main = mainRepo.upsert({
@@ -272,12 +332,20 @@ export function importPointExcel(
       });
       row.mainDeviceCode = main.mainDeviceCode;
       mainCodeCache.set(mainCacheKey, main.mainDeviceCode);
+      if (hierarchy.depth === 3) {
+        if (existingMain) result.updated++;
+        else result.inserted++;
+        continue;
+      }
 
       // 4. 部件编码
-      const compCacheKey = row.voltName + "|" + row.bayName + "|" + row.mainDeviceName + "|" + row.componentName;
+      const compCacheKey = pathKey(row.voltName, row.bayName, row.mainDeviceName, row.componentName);
+      let existingComp = row.componentCode ? compRepo.findByComponentCode(row.componentCode, projectName) : undefined;
+      if (!existingComp) {
+        existingComp = compRepo.findByComponentNameAndMainDeviceId(row.componentName, main.id, projectName);
+      }
       if (!row.componentCode) {
         const exist = compCodeCache.get(compCacheKey);
-        const existingComp = compRepo.findByComponentNameAndMainDeviceId(row.componentName, main.id, projectName);
         row.componentCode = exist || existingComp?.componentCode || generateCode("C");
       }
       const comp = compRepo.upsert({
@@ -308,6 +376,11 @@ export function importPointExcel(
       });
       row.componentCode = comp.componentCode;
       compCodeCache.set(compCacheKey, comp.componentCode);
+      if (hierarchy.depth === 4) {
+        if (existingComp) result.updated++;
+        else result.inserted++;
+        continue;
+      }
 
       // 5. 点位：有编码按编码匹配；无编码按完整树路径匹配，避免重复导入生成新点位。
       const pointCacheKey = pathKey(row.voltName, row.bayName, row.mainDeviceName, row.componentName, row.pointName);
@@ -431,7 +504,7 @@ export function importPointExcel(
         result.inserted++;
       }
     } catch (e: any) {
-      result.errors.push(`行 "${row.pointName}": ${e.message}`);
+      result.errors.push(`第 ${index + 1} 行 "${describeRow(row)}": ${e.message}`);
     }
   }
 

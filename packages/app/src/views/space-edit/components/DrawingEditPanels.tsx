@@ -5,6 +5,7 @@ import DeviceAreaPanel from "./DeviceAreaPanel";
 interface CabinetSaveData {
   area: { id: number; name: string; code: string };
   bay: { id: number; name: string; code: string };
+  cabinetRow?: { key: string; code: string; name: string } | null;
   rows: { key: string; code: string; name: string }[];
 }
 
@@ -14,6 +15,7 @@ interface DrawingEditPanelsProps {
   cabinetCount: number;
   onCabinetClose: () => void;
   onCabinetSave: (data: CabinetSaveData) => void;
+  onCabinetDraftChange?: (data: CabinetSaveData | null) => void;
   onCabinetNamesChange: (names: string[]) => void;
 
   chargingMode: boolean;
@@ -48,6 +50,7 @@ export default function DrawingEditPanels({
   cabinetCount,
   onCabinetClose,
   onCabinetSave,
+  onCabinetDraftChange,
   onCabinetNamesChange,
   chargingMode,
   chargingPointCount,
@@ -75,6 +78,7 @@ export default function DrawingEditPanels({
           cabinetCount={cabinetCount}
           onClose={onCabinetClose}
           onSave={onCabinetSave}
+          onDraftChange={onCabinetDraftChange}
           onNamesChange={onCabinetNamesChange}
         />
       )}

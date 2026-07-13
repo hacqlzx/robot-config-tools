@@ -3534,10 +3534,16 @@ public class DevicePointServiceImpl extends ServiceImpl<DevicePointMapper, Devic
             if (Objects.isNull(deviceVoltage)) {
                 deviceVoltage = insertOrUpdateVoltage(voltUniquenessName2VoltageMap, facInfo, pointExcelBO.getVoltName(), pointExcelBO.getVoltCode());
             }
+            if (StrUtil.isBlank(pointExcelBO.getBayName())) {
+                continue;
+            }
             // 处理间隔
             DeviceBay deviceBay = bayUniquenessName2BayMap.get(deviceVoltage.getVoltName() + StrUtil.UNDERLINE + pointExcelBO.getBayName());
             if (Objects.isNull(deviceBay)) {
                 deviceBay = insertOrUpdateBay(bayUniquenessName2BayMap, deviceVoltage, pointExcelBO.getBayName(), pointExcelBO.getBayType(), pointExcelBO.getBayCode());
+            }
+            if (StrUtil.isBlank(pointExcelBO.getMainDeviceName())) {
+                continue;
             }
             // 处理主设备信息
             String mainUniquenessName = deviceBay.getVoltName() + StrUtil.UNDERLINE + deviceBay.getBayName() + StrUtil.UNDERLINE + pointExcelBO.getMainDeviceName();
@@ -3545,11 +3551,17 @@ public class DevicePointServiceImpl extends ServiceImpl<DevicePointMapper, Devic
             if (Objects.isNull(deviceMain)) {
                 deviceMain = insertOrUpdateMain(mainUniquenessName2MainMap, deviceBay, pointExcelBO.getMainDeviceName(), pointExcelBO.getMainDeviceType(), pointExcelBO.getPhaseType(), pointExcelBO.getMainDeviceCode());
             }
+            if (StrUtil.isBlank(pointExcelBO.getComponentName())) {
+                continue;
+            }
             // 处理部件信息
             String comUniquenessName = deviceMain.getVoltName() + StrUtil.UNDERLINE + deviceMain.getBayName() + StrUtil.UNDERLINE + deviceMain.getMainDeviceName() + StrUtil.UNDERLINE + pointExcelBO.getComponentName();
             DeviceComponent deviceComponent = componentUniquenessName2ComponentMap.get(comUniquenessName);
             if (Objects.isNull(deviceComponent)) {
                 deviceComponent = insertOrUpdateComponent(componentUniquenessName2ComponentMap, deviceMain, pointExcelBO.getComponentName(), pointExcelBO.getComponentType(), pointExcelBO.getComponentCode());
+            }
+            if (StrUtil.isBlank(pointExcelBO.getPointName())) {
+                continue;
             }
             // 处理巡检点信息
             String pointUniquenessName = deviceComponent.getVoltName() + StrUtil.UNDERLINE + deviceComponent.getBayName() + StrUtil.UNDERLINE + deviceComponent.getMainDeviceName() + StrUtil.UNDERLINE + deviceComponent.getComponentName() + StrUtil.UNDERLINE + pointExcelBO.getPointName();
@@ -4136,24 +4148,24 @@ public class DevicePointServiceImpl extends ServiceImpl<DevicePointMapper, Devic
         for (int i = 0; i < excelMapList.size(); i++) {
             lineDataMap = excelMapList.get(i);
             int rowIndex = i + DigitalConstant.ONE;
-            String pointName = Objects.toString(lineDataMap.get(LocalPointExcelEnum.POINT_NAME.getDesc())).trim();
+            String pointName = Objects.toString(lineDataMap.get(LocalPointExcelEnum.POINT_NAME.getDesc()), "").trim();
             String pointCode = Objects.toString(lineDataMap.get(LocalPointExcelEnum.POINT_CODE.getDesc()), "").trim();
             String recType1 = Objects.toString(Objects.nonNull(lineDataMap.get(LocalPointExcelEnum.REC_TYPE1.getDesc())) ? lineDataMap.get(LocalPointExcelEnum.REC_TYPE1.getDesc()) : "").trim();
             String recType2 = Objects.toString(Objects.nonNull(lineDataMap.get(LocalPointExcelEnum.REC_TYPE2.getDesc())) ? lineDataMap.get(LocalPointExcelEnum.REC_TYPE2.getDesc()) : "").trim();
-            String collectType = Objects.toString(lineDataMap.get(LocalPointExcelEnum.COLLECT_TYPE.getDesc())).trim();
-            String meterTypeStr = Objects.toString(lineDataMap.get(LocalPointExcelEnum.METER_TYPE.getDesc())).trim();
-            String positionStateTypeStr = Objects.toString(lineDataMap.get(LocalPointExcelEnum.POSITION_STATE_TYPE.getDesc()), "");
-            String importantLevel = Objects.toString(lineDataMap.get(LocalPointExcelEnum.IMPORTANT_LEVEL.getDesc())).trim();
-            String componentName = Objects.toString(lineDataMap.get(LocalPointExcelEnum.COMPONENT_NAME.getDesc())).trim();
+            String collectType = Objects.toString(lineDataMap.get(LocalPointExcelEnum.COLLECT_TYPE.getDesc()), "").trim();
+            String meterTypeStr = Objects.toString(lineDataMap.get(LocalPointExcelEnum.METER_TYPE.getDesc()), "").trim();
+            String positionStateTypeStr = Objects.toString(lineDataMap.get(LocalPointExcelEnum.POSITION_STATE_TYPE.getDesc()), "").trim();
+            String importantLevel = Objects.toString(lineDataMap.get(LocalPointExcelEnum.IMPORTANT_LEVEL.getDesc()), "").trim();
+            String componentName = Objects.toString(lineDataMap.get(LocalPointExcelEnum.COMPONENT_NAME.getDesc()), "").trim();
             String componentCode = Objects.toString(lineDataMap.get(LocalPointExcelEnum.COMPONENT_CODE.getDesc()), "").trim();
-            String mainDeviceName = Objects.toString(lineDataMap.get(LocalPointExcelEnum.MAIN_DEVICE_NAME.getDesc())).trim();
+            String mainDeviceName = Objects.toString(lineDataMap.get(LocalPointExcelEnum.MAIN_DEVICE_NAME.getDesc()), "").trim();
             String mainDeviceCode = Objects.toString(lineDataMap.get(LocalPointExcelEnum.MAIN_DEVICE_CODE.getDesc()), "").trim();
-            String mainDeviceType = Objects.toString(lineDataMap.get(LocalPointExcelEnum.MAIN_DEVICE_TYPE.getDesc())).trim();
-            String phaseType = Objects.toString(lineDataMap.get(LocalPointExcelEnum.PHASE_TYPE.getDesc())).trim();
-            String bayName = Objects.toString(lineDataMap.get(LocalPointExcelEnum.BAY_NAME.getDesc())).trim();
+            String mainDeviceType = Objects.toString(lineDataMap.get(LocalPointExcelEnum.MAIN_DEVICE_TYPE.getDesc()), "").trim();
+            String phaseType = Objects.toString(lineDataMap.get(LocalPointExcelEnum.PHASE_TYPE.getDesc()), "").trim();
+            String bayName = Objects.toString(lineDataMap.get(LocalPointExcelEnum.BAY_NAME.getDesc()), "").trim();
             String bayCode = Objects.toString(lineDataMap.get(LocalPointExcelEnum.BAY_CODE.getDesc()), "").trim();
             String bayType = Objects.toString(lineDataMap.get(LocalPointExcelEnum.BAY_TYPE.getDesc()), "").trim();
-            String voltName = Objects.toString(lineDataMap.get(LocalPointExcelEnum.VOLT_NAME.getDesc())).trim();
+            String voltName = Objects.toString(lineDataMap.get(LocalPointExcelEnum.VOLT_NAME.getDesc()), "").trim();
             String voltCode = Objects.toString(lineDataMap.get(LocalPointExcelEnum.VOLT_CODE.getDesc()), "").trim();
             String inspectionType1 = Objects.toString(lineDataMap.get(LocalPointExcelEnum.INSPECTION_TYPE_1.getDesc()), "").trim();
             String inspectionType2 = Objects.toString(lineDataMap.get(LocalPointExcelEnum.INSPECTION_TYPE_2.getDesc()), "").trim();
@@ -4195,6 +4207,35 @@ public class DevicePointServiceImpl extends ServiceImpl<DevicePointMapper, Devic
 
             pointExcelBO.setRobotName(robot.getRobotName());
             pointExcelBO.setRobotId(robot.getId());
+            int errorCountBeforeRow = errorMessageMap.size();
+            boolean hasVolt = StrUtil.isNotBlank(voltName);
+            boolean hasBay = StrUtil.isNotBlank(bayName);
+            boolean hasMain = StrUtil.isNotBlank(mainDeviceName);
+            boolean hasComponent = StrUtil.isNotBlank(componentName);
+            boolean hasPoint = StrUtil.isNotBlank(pointName);
+
+            if (!hasVolt) {
+                errorMessageMap.put(rowIndex + StrUtil.UNDERLINE + voltNameIndex, "区域不能为空");
+                continue;
+            }
+            if (!hasBay && (hasMain || hasComponent || hasPoint)) {
+                errorMessageMap.put(rowIndex + StrUtil.UNDERLINE + bayNameIndex, "间隔为空时，下层层级也必须为空");
+                continue;
+            }
+            if (!hasMain && (hasComponent || hasPoint)) {
+                errorMessageMap.put(rowIndex + StrUtil.UNDERLINE + mainDeviceNameIndex, "主设备为空时，下层层级也必须为空");
+                continue;
+            }
+            if (!hasComponent && hasPoint) {
+                errorMessageMap.put(rowIndex + StrUtil.UNDERLINE + componentNameIndex, "部件为空时，下层层级也必须为空");
+                continue;
+            }
+
+            List<String> recTypeList = new ArrayList<>();
+            Integer meterType = null;
+            Integer positionStateType = null;
+
+            if (hasPoint) {
             // 校验点位名称
             if (StrUtil.isBlank(pointName)) {
                 errorMessageMap.put(rowIndex + StrUtil.UNDERLINE + pointNameIndex, "点位名称必填");
@@ -4229,7 +4270,6 @@ public class DevicePointServiceImpl extends ServiceImpl<DevicePointMapper, Devic
             }
 
             // 校验识别类型2
-            List<String> recTypeList = new ArrayList<>();
             RecTypeEnum recTypeEnum2 = null;
             if (StrUtil.isNotBlank(recType2)) {
                 recTypeEnum2 = RecTypeEnum.getByDesc(recType2);
@@ -4295,7 +4335,6 @@ public class DevicePointServiceImpl extends ServiceImpl<DevicePointMapper, Devic
             }
 
             // 校验表计类型
-            Integer meterType = null;
             if (recTypeList.contains(String.valueOf(RecTypeEnum.METER.getType()))) {
                 if (StrUtil.isBlank(meterTypeStr)) {
                     errorMessageMap.put(rowIndex + StrUtil.UNDERLINE + meterTypeIndex, "识别类型包含表计类型，需要选择表计类型");
@@ -4311,7 +4350,6 @@ public class DevicePointServiceImpl extends ServiceImpl<DevicePointMapper, Devic
             }
 
             // 校验位置状态类型
-            Integer positionStateType = null;
             if (recTypeList.contains(String.valueOf(RecTypeEnum.POSITION.getType()))) {
                 if (StrUtil.isBlank(positionStateTypeStr)) {
                     errorMessageMap.put(rowIndex + StrUtil.UNDERLINE + positionStateIndex, "识别类型包含位置状态类型，需要选择位置状态类型");
@@ -4341,6 +4379,7 @@ public class DevicePointServiceImpl extends ServiceImpl<DevicePointMapper, Devic
                 }
             } else {
                 pointExcelBO.setImportantLevel(ImportantLevelEnum.ONE.getLevel());
+            }
             }
 
             // 校验电压区域
@@ -4389,6 +4428,12 @@ public class DevicePointServiceImpl extends ServiceImpl<DevicePointMapper, Devic
             voltageCodes.add(voltCode);
             voltageNames.add(voltName);
             pointExcelBO.setVoltCode(voltCode);
+            if (!hasBay) {
+                if (errorMessageMap.size() == errorCountBeforeRow) {
+                    tourPointExcelList.add(pointExcelBO);
+                }
+                continue;
+            }
 
             // 校验间隔名称
             if (StrUtil.isBlank(bayName)) {
@@ -4451,6 +4496,12 @@ public class DevicePointServiceImpl extends ServiceImpl<DevicePointMapper, Devic
             bayCodes.add(bayCode);
             bayNames.add(bayName);
             pointExcelBO.setBayCode(bayCode);
+            if (!hasMain) {
+                if (errorMessageMap.size() == errorCountBeforeRow) {
+                    tourPointExcelList.add(pointExcelBO);
+                }
+                continue;
+            }
 
             // 校验主设备名称
             if (StrUtil.isBlank(mainDeviceName)) {
@@ -4525,6 +4576,12 @@ public class DevicePointServiceImpl extends ServiceImpl<DevicePointMapper, Devic
             mainDeviceCodes.add(mainDeviceCode);
             mainDeviceNames.add(mainDeviceName);
             pointExcelBO.setMainDeviceCode(mainDeviceCode);
+            if (!hasComponent) {
+                if (errorMessageMap.size() == errorCountBeforeRow) {
+                    tourPointExcelList.add(pointExcelBO);
+                }
+                continue;
+            }
 
             // 校验部件名称
             if (StrUtil.isBlank(componentName)) {
@@ -4576,6 +4633,12 @@ public class DevicePointServiceImpl extends ServiceImpl<DevicePointMapper, Devic
             componentCodes.add(componentCode);
             componentNames.add(componentName);
             pointExcelBO.setComponentCode(componentCode);
+            if (!hasPoint) {
+                if (errorMessageMap.size() == errorCountBeforeRow) {
+                    tourPointExcelList.add(pointExcelBO);
+                }
+                continue;
+            }
 
             // 校验巡视类型
             if (CollUtil.isEmpty(recTypeList)) {
@@ -4691,7 +4754,7 @@ public class DevicePointServiceImpl extends ServiceImpl<DevicePointMapper, Devic
                 }
             }
             pointExcelBO.setInspectionSubType(StrUtil.join(StrUtil.COMMA, inspectionSubTypeList.stream().distinct().collect(Collectors.toList())));
-            if (MapUtil.isEmpty(errorMessageMap)) {
+            if (errorMessageMap.size() == errorCountBeforeRow) {
                 tourPointExcelList.add(pointExcelBO);
             }
         }
