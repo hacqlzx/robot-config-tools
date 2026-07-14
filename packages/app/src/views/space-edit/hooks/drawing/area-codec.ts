@@ -19,7 +19,6 @@ import {
 } from "./drawing-coordinate-transform";
 import {
   formatCoord,
-  formatTime,
   isRecord,
   positiveInt,
   valueText,
@@ -333,14 +332,13 @@ function legacyItemsToRobotAreas(items: DrawingItem[]): RobotAreaRecord[] {
   const records: RobotAreaRecord[] = [];
   const usedCabinetIds = new Set<number>();
   const usedDeviceIds = new Set<number>();
-  const time = formatTime();
   for (const item of items || []) {
     if (item?.type === "cabinet") {
       const rootId = nextAvailableId(usedCabinetIds);
       records.push(...makeCabinetRobotAreas(item, rootId, usedCabinetIds));
     } else if (item?.type === "charging-area") {
       const pose = boxPoseFromVerts(item.geometry?.verts || []);
-      if (pose) records.push({ id: "1", type: AREA_TYPE_CHARGING, name: "充电区域", pose, time: item.updatedAt || time });
+      if (pose) records.push({ id: "1", type: AREA_TYPE_CHARGING, name: "充电区域", pose });
     } else if (item?.type === "device-area") {
       const pose = boxPoseFromVerts(item.geometry?.verts || []);
       if (!pose) continue;
@@ -351,7 +349,6 @@ function legacyItemsToRobotAreas(items: DrawingItem[]): RobotAreaRecord[] {
         type: AREA_TYPE_DEVICE,
         name: item.bay?.name || defaultDeviceAreaName(id),
         pose,
-        time: item.updatedAt || time,
       });
     }
   }

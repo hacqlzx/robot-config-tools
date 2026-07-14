@@ -1,28 +1,24 @@
 import { useCallback, useEffect, useState } from "react";
-import { Modal, Form, Input, Select, Button, App, Alert } from "antd";
+import { Modal, App } from "antd";
 import { useSelectedProject } from "@/stores/appContextStore";
+import ExportMapPicker, { ExportMapFooter, type ExportMapOption } from "./ExportMapPicker";
 
 interface SurveyImageExportProps {
   open: boolean;
   onClose: () => void;
 }
 
-const SURVEY_DIR_NAME = "勘察数据";
-
 export default function SurveyImageExport({ open, onClose }: SurveyImageExportProps) {
   const { message } = App.useApp();
-  const [form] = Form.useForm();
-  const [mapOptions, setMapOptions] = useState<{ label: string; value: string }[]>([]);
-  const [surveyDataPath, setSurveyDataPath] = useState("");
+  const [mapOptions, setMapOptions] = useState<ExportMapOption[]>([]);
+  const [selectedMap, setSelectedMap] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const currentProject = useSelectedProject();
-  const selectedMap = Form.useWatch("map", form) as string | undefined;
 
   const resetModalState = useCallback(() => {
-    form.resetFields();
-    setSurveyDataPath("");
-  }, [form]);
+    setSelectedMap(undefined);
+  }, []);
 
   const handleClose = useCallback(() => {
     if (exporting) return;
@@ -39,29 +35,23 @@ export default function SurveyImageExport({ open, onClose }: SurveyImageExportPr
     const api = window.electronAPI?.project;
     if (!api || !currentProject) {
       setMapOptions([]);
-      setSurveyDataPath("");
+      setSelectedMap(undefined);
       return;
     }
 
     setLoading(true);
     api.listTree(currentProject, "地图")
       .then((tree) => {
-        setMapOptions(tree.filter((node) => node.isDir).map((node) => ({ label: node.name, value: node.name })));
+        const options = tree.filter((node) => node.isDir).map((node) => ({ label: node.name, value: node.name }));
+        setMapOptions(options);
+        setSelectedMap((current) => options.some((option) => option.value === current) ? current : options[0]?.value);
       })
-      .catch(() => setMapOptions([]))
+      .catch(() => {
+        setMapOptions([]);
+        setSelectedMap(undefined);
+      })
       .finally(() => setLoading(false));
   }, [currentProject, open, resetModalState]);
-
-  useEffect(() => {
-    if (!open || !selectedMap || !currentProject || !window.electronAPI) {
-      setSurveyDataPath("");
-      return;
-    }
-
-    window.electronAPI.getProjectRoot()
-      .then((root) => setSurveyDataPath(`${root}\\${currentProject}\\${SURVEY_DIR_NAME}\\${selectedMap}`))
-      .catch(() => setSurveyDataPath(""));
-  }, [currentProject, open, selectedMap]);
 
   const handleExport = async () => {
     if (!currentProject) {
@@ -85,7 +75,7 @@ export default function SurveyImageExport({ open, onClose }: SurveyImageExportPr
         message.error(`导出失败: ${result?.error || "未知错误"}`);
         return;
       }
-      message.success(`导出成功: ${result.zipName}`);
+      message.success("导出成功");
       resetModalState();
       onClose();
     } catch (e: any) {
@@ -97,41 +87,27 @@ export default function SurveyImageExport({ open, onClose }: SurveyImageExportPr
 
   return (
     <Modal
-      title="勘察图像导出"
+      title={<span style={{ fontSize: 14 }}>勘察图像导出</span>}
       open={open}
       onCancel={handleClose}
       destroyOnHidden
       centered
-      confirmLoading={exporting}
+      width={480}
       footer={
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <Button onClick={handleClose} disabled={exporting}>取消</Button>
-          <Button type="primary" onClick={handleExport} loading={exporting} disabled={!selectedMap}>
-            导出
-          </Button>
-        </div>
+        <ExportMapFooter
+          selectedMap={selectedMap}
+          confirming={exporting}
+          disabled={!selectedMap}
+          onConfirm={handleExport}
+        />
       }
     >
-      <Form form={form} layout="vertical">
-        <div style={{ display: "flex", gap: 12 }}>
-          <Form.Item label="当前项目" style={{ flex: 1, marginBottom: 24 }}>
-            <Input value={currentProject || "未选择"} disabled />
-          </Form.Item>
-          <Form.Item name="map" label="选择地图" style={{ flex: 1, marginBottom: 24 }}>
-            <Select placeholder="请选择地图" allowClear loading={loading} options={mapOptions} />
-          </Form.Item>
-        </div>
-      </Form>
-
-      <div style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 13, color: "#666", marginBottom: 6 }}>勘察数据路径</div>
-        <Input value={surveyDataPath} disabled placeholder="暂无可导出的勘察数据路径" />
-      </div>
-
-      <Alert
-        type={selectedMap ? "info" : "warning"}
-        showIcon
-        message={selectedMap ? "点击导出后选择压缩包保存目录；图像标识/标定数据不在此处导出" : "请选择需要导出的地图"}
+      <ExportMapPicker
+        currentProject={currentProject}
+        loading={loading}
+        mapOptions={mapOptions}
+        selectedMap={selectedMap}
+        onSelect={setSelectedMap}
       />
     </Modal>
   );

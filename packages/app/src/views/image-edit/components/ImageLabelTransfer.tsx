@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Modal, Form, Input, Select, Button, App, Alert } from "antd";
 import { FolderOpenOutlined } from "@ant-design/icons";
 import { useSelectedProject } from "@/stores/appContextStore";
+import ExportMapPicker, { ExportMapFooter, type ExportMapOption } from "./ExportMapPicker";
 
 interface ImageLabelTransferProps {
   open: boolean;
@@ -16,20 +17,21 @@ const CALIBRATION_FILE_NAME = "勘察数据.json";
 export default function ImageLabelTransfer({ open, mode, onClose, onImported }: ImageLabelTransferProps) {
   const { message } = App.useApp();
   const [form] = Form.useForm();
-  const [mapOptions, setMapOptions] = useState<{ label: string; value: string }[]>([]);
+  const [mapOptions, setMapOptions] = useState<ExportMapOption[]>([]);
   const [surveyDataPath, setSurveyDataPath] = useState("");
   const [calibrationPath, setCalibrationPath] = useState("");
   const [zipPath, setZipPath] = useState("");
+  const [selectedMap, setSelectedMap] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const currentProject = useSelectedProject();
-  const selectedMap = Form.useWatch("map", form) as string | undefined;
 
   const resetModalState = useCallback(() => {
     form.resetFields();
     setSurveyDataPath("");
     setCalibrationPath("");
     setZipPath("");
+    setSelectedMap(undefined);
   }, [form]);
 
   const handleClose = useCallback(() => {
@@ -47,20 +49,28 @@ export default function ImageLabelTransfer({ open, mode, onClose, onImported }: 
     const api = window.electronAPI?.project;
     if (!api || !currentProject) {
       setMapOptions([]);
+      setSelectedMap(undefined);
       return;
     }
 
     setLoading(true);
     api.listTree(currentProject, "地图")
       .then((tree) => {
-        setMapOptions(tree.filter((node) => node.isDir).map((node) => ({ label: node.name, value: node.name })));
+        const options = tree.filter((node) => node.isDir).map((node) => ({ label: node.name, value: node.name }));
+        setMapOptions(options);
+        if (mode === "export") {
+          setSelectedMap((currentMap) => options.some((option) => option.value === currentMap) ? currentMap : options[0]?.value);
+        }
       })
-      .catch(() => setMapOptions([]))
+      .catch(() => {
+        setMapOptions([]);
+        setSelectedMap(undefined);
+      })
       .finally(() => setLoading(false));
-  }, [currentProject, open, resetModalState]);
+  }, [currentProject, mode, open, resetModalState]);
 
   useEffect(() => {
-    if (!open || !selectedMap || !currentProject || !window.electronAPI) {
+    if (mode === "export" || !open || !selectedMap || !currentProject || !window.electronAPI) {
       setSurveyDataPath("");
       setCalibrationPath("");
       return;
@@ -76,7 +86,7 @@ export default function ImageLabelTransfer({ open, mode, onClose, onImported }: 
         setSurveyDataPath("");
         setCalibrationPath("");
       });
-  }, [currentProject, open, selectedMap]);
+  }, [currentProject, mode, open, selectedMap]);
 
   const handleSelectZip = async () => {
     const filePath = await window.electronAPI?.selectZipFile?.();
@@ -103,7 +113,7 @@ export default function ImageLabelTransfer({ open, mode, onClose, onImported }: 
           message.error(`导出失败: ${result?.error || "未知错误"}`);
           return;
         }
-        message.success(`导出成功: ${result.zipName}，共 ${result.exportedCount || 0} 个标识`);
+        message.success("导出成功");
         resetModalState();
         onClose();
         return;
@@ -134,59 +144,77 @@ export default function ImageLabelTransfer({ open, mode, onClose, onImported }: 
 
   return (
     <Modal
-      title={title}
+      title={mode === "export" ? <span style={{ fontSize: 14 }}>{title}</span> : title}
       open={open}
       onCancel={handleClose}
       destroyOnHidden
       centered
+      width={mode === "export" ? 480 : undefined}
       footer={
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <Button onClick={handleClose} disabled={submitting}>取消</Button>
-          <Button type="primary" onClick={handleSubmit} loading={submitting} disabled={!selectedMap || (mode === "import" && !zipPath)}>
-            {mode === "export" ? "导出" : "加载"}
-          </Button>
-        </div>
+        mode === "export" ? (
+          <ExportMapFooter
+            selectedMap={selectedMap}
+            confirming={submitting}
+            disabled={!selectedMap}
+            onConfirm={handleSubmit}
+          />
+        ) : (
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Button onClick={handleClose} disabled={submitting}>取消</Button>
+            <Button type="primary" onClick={handleSubmit} loading={submitting} disabled={!selectedMap || !zipPath}>
+              加载
+            </Button>
+          </div>
+        )
       }
     >
-      <Form form={form} layout="vertical">
-        <div style={{ display: "flex", gap: 12 }}>
-          <Form.Item label="当前项目" style={{ flex: 1, marginBottom: 24 }}>
-            <Input value={currentProject || "未选择"} disabled />
-          </Form.Item>
-          <Form.Item name="map" label="选择地图" style={{ flex: 1, marginBottom: 24 }}>
-            <Select placeholder="请选择地图" allowClear loading={loading} options={mapOptions} />
-          </Form.Item>
-        </div>
+      {mode === "export" ? (
+        <ExportMapPicker
+          currentProject={currentProject}
+          loading={loading}
+          mapOptions={mapOptions}
+          selectedMap={selectedMap}
+          onSelect={setSelectedMap}
+        />
+      ) : (
+        <>
+          <Form form={form} layout="vertical">
+            <div style={{ display: "flex", gap: 12 }}>
+              <Form.Item label="当前项目" style={{ flex: 1, marginBottom: 24 }}>
+                <Input value={currentProject || "未选择"} disabled />
+              </Form.Item>
+              <Form.Item label="选择地图" style={{ flex: 1, marginBottom: 24 }}>
+                <Select placeholder="请选择地图" allowClear loading={loading} options={mapOptions} value={selectedMap} onChange={setSelectedMap} />
+              </Form.Item>
+            </div>
 
-        {mode === "import" && (
-          <Form.Item label="图像标识 ZIP" style={{ marginBottom: 12 }}>
-            <Input
-              value={zipPath}
-              readOnly
-              placeholder="请选择图像标识 ZIP"
-              addonAfter={<Button type="text" size="small" icon={<FolderOpenOutlined />} onClick={handleSelectZip} disabled={submitting} />}
-            />
-          </Form.Item>
-        )}
-      </Form>
+            <Form.Item label="图像标识 ZIP" style={{ marginBottom: 12 }}>
+              <Input
+                value={zipPath}
+                readOnly
+                placeholder="请选择图像标识 ZIP"
+                addonAfter={<Button type="text" size="small" icon={<FolderOpenOutlined />} onClick={handleSelectZip} disabled={submitting} />}
+              />
+            </Form.Item>
+          </Form>
 
-      <div style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 13, color: "#666", marginBottom: 6 }}>勘察数据路径</div>
-        <Input value={surveyDataPath} disabled placeholder="暂无勘察数据路径" />
-      </div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 13, color: "#666", marginBottom: 6 }}>勘察数据路径</div>
+            <Input value={surveyDataPath} disabled placeholder="暂无勘察数据路径" />
+          </div>
 
-      <div style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 13, color: "#666", marginBottom: 6 }}>内部标识数据</div>
-        <Input value={calibrationPath} disabled placeholder="暂无内部标识数据路径" />
-      </div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 13, color: "#666", marginBottom: 6 }}>内部标识数据</div>
+            <Input value={calibrationPath} disabled placeholder="暂无内部标识数据路径" />
+          </div>
 
-      <Alert
-        type="info"
-        showIcon
-        message={mode === "export"
-          ? "导出 ZIP 包含 calib_device 和 calib_cabinet；device_name 为设备区名称，point_name/point_code 用于工具回绑"
-          : "加载 ZIP 会按 point_code 优先回绑点表，替换所选地图已有图像标识，其他地图不受影响"}
-      />
+          <Alert
+            type="info"
+            showIcon
+            message="加载 ZIP 会按 point_code 优先回绑点表，替换所选地图已有图像标识，其他地图不受影响"
+          />
+        </>
+      )}
     </Modal>
   );
 }
