@@ -4,7 +4,7 @@ import { MinusOutlined, BorderOutlined, CloseOutlined, SettingOutlined, ProjectO
 import type { MenuProps } from "antd";
 import { useNavigate, useLocation } from "react-router-dom";
 import { menuConfig } from "@/config/menu";
-import BackendModal from "@/pages/backend-modal";
+import SettingsModal from "@/pages/settings-modal";
 import {
   getSelectedProject,
   getSelectedRobot,
@@ -54,7 +54,7 @@ export default function AppHeader() {
     backendIpVersion,
     connectionStatus: connStatus,
   } = useAppContext();
-  const [backendOpen, setBackendOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [editProjectOpen, setEditProjectOpen] = useState(false);
   const [projectName, setProjectName] = useState("");
@@ -286,14 +286,6 @@ export default function AppHeader() {
     }
   };
 
-  const settingMenu: MenuProps["items"] = [
-    {
-      key: "backend",
-      label: "连接后台",
-      onClick: () => setBackendOpen(true),
-    },
-  ];
-
   const projectMenu: MenuProps["items"] = [
     {
       key: "add-project",
@@ -328,20 +320,19 @@ export default function AppHeader() {
         </Dropdown>
         <Select placeholder="选择项目" style={{ width: 160 }} size="small" value={selectedProject} onChange={(v) => { setSelectedProject(v); }} allowClear options={projects.map((p) => ({ label: p, value: p }))} />
         <Select placeholder="选择机器人" style={{ width: 120 }} size="small" value={selectedRobot} onChange={(v) => { setSelectedRobot(v ?? null); }} allowClear options={robotOptions} />
-        <Dropdown menu={{ items: settingMenu }} trigger={["hover"]}>
-          <div style={{ position: "relative", display: "inline-flex" }}>
-            <Button type="text" size="small" icon={<SettingOutlined />} />
-            <span style={{
-              position: "absolute",
-              top: 4,
-              right: 4,
-              width: 6,
-              height: 6,
-              borderRadius: "50%",
-              backgroundColor: connStatus === "connected" ? "#52c41a" : connStatus === "failed" ? "#ff4d4f" : "#bfbfbf",
-            }} />
-          </div>
-        </Dropdown>
+        <div style={{ position: "relative", display: "inline-flex" }}>
+          <Button type="text" size="small" icon={<SettingOutlined />} onClick={() => setSettingsOpen(true)} />
+          <span style={{
+            position: "absolute",
+            top: 4,
+            right: 4,
+            width: 6,
+            height: 6,
+            borderRadius: "50%",
+            pointerEvents: "none",
+            backgroundColor: connStatus === "connected" ? "#52c41a" : connStatus === "failed" ? "#ff4d4f" : "#bfbfbf",
+          }} />
+        </div>
         <div className="app-header__controls">
           <Button type="text" size="small" icon={<MinusOutlined />} onClick={() => window.electronAPI?.minimize()} />
           <Button type="text" size="small" icon={<BorderOutlined />} onClick={() => window.electronAPI?.maximize()} />
@@ -513,7 +504,7 @@ export default function AppHeader() {
         </div>
       </Modal>
 
-      <BackendModal open={backendOpen} onClose={() => setBackendOpen(false)} />
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }

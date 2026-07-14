@@ -19,8 +19,9 @@
 
 - `packages/app/src/router/index.tsx`：HashRouter 路由，默认进入 `space-edit`。
 - `packages/app/src/App.tsx`：全局 Ant Design 外壳、顶部栏、页面 Outlet。
-- `packages/app/src/pages/app-header`：顶部菜单、项目选择、机器人选择、后台连接、窗口控制。
-- `packages/app/src/pages/backend-modal`：后台 IP 保存和 ping 连接。
+- `packages/app/src/pages/app-header`：顶部菜单、项目选择、机器人选择、设置入口、窗口控制。
+- `packages/app/src/pages/settings-modal`：统一设置弹窗，左侧设置菜单、右侧功能内容；目前仅接入后台连接。
+- `packages/app/src/pages/backend-modal`：可嵌入设置弹窗的后台 IP 保存和 ping 连接面板。
 - `packages/app/src/api/config.js`：后台接口封装。
 - `packages/app/src/services/http.ts`：axios 实例，动态读取当前后台 IP，baseURL 为 `https://{ip}`。
 - `packages/app/src/stores/appContextStore.ts`：统一管理并持久化当前项目、机器人、后台 IP 和连接状态，React 侧通过 `useSyncExternalStore` 订阅。
@@ -105,6 +106,8 @@
 - `useClipSave`：裁切保存 LAS 时会保持原模型 floating-origin 对应的 header bbox 中心，仅扩展范围到包含裁切点；不要改成裁切结果自身的紧包围盒，否则重新加载后模型会被居中偏移，无法和原模型重合。
 - `useSaveHandlers`：保存屏柜、充电区域、设备区、可行路径，提供手动保存状态和 30 秒自动保存。
 - `useCabinetDrawing`、`useChargingAreaDrawing`、`useDeviceAreaDrawing`、`usePathDrawing`：空间绘制交互。
+- `hooks/drawing/drawing-schema.ts`：空间绘制、路径和机器人区域协议的纯类型/常量；`drawing-coordinate-transform.ts` 负责 LAS/scene 纯坐标转换，`area-codec.ts` 负责区域协议和几何双向转换，`path-codec.ts` 负责参考路径、机器人路径和停靠点的纯编解码与拓扑校验。
+- `hooks/drawing/drawing-storage.ts`：现有绘制持久化兼容入口，目前保留文件 IO、坐标转换编排和屏柜数据库同步，后续继续拆分 repository 和屏柜设备同步。
 - `useDrawingHistory`：统一撤销/恢复入口，工具栏和 `Ctrl+Z`、`Ctrl+Shift+Z`/`Ctrl+Y` 已接入。
 - `SidePanel`：地图树、设备台账树、屏柜树、设备区树。
 - `Toolbar`、`ViewCube`、`ClipController`、各类浮动编辑面板。

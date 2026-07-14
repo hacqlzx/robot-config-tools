@@ -15,6 +15,7 @@
 - ✅ 勘察数据按地图导入/导出、图像标识导入/导出、标定串行保存队列和视口缩略图加载已接入。
 - ✅ 项目、机器人、后台 IP 和连接状态已收敛到 `appContextStore`，业务页面不再直接读写对应 localStorage key，也不再回退到默认项目。
 - ✅ 项目重命名/删除已同步目录、清单和数据库六张项目关联表，删除前会展示数据库影响数量。
+- 🟡 源码模块化复核已完成，空间绘制 schema、区域 codec、路径 codec 两阶段拆分已落地；下一步继续拆分文件 repository 和屏柜设备同步。
 - ⬜ Electron 网络/证书安全、LAZ worker/取消、LOD、typecheck/lint/回归脚本仍未完成。
 
 ## 原则
@@ -23,6 +24,177 @@
 - `project/` 和 `data/` 是运行时目录，不作为源码任务处理。
 - `doc/*.java` 和 `doc/导入逻辑总结.md` 保留，后续点表导入逻辑还会参考。
 - 优先保证 Electron 客户端闭环，浏览器模式只作为 UI/前端逻辑调试入口。
+
+## 当前重点：代码结构与组件化专项
+
+复核时间：2026-07-13。
+
+拆分原则：
+- 不以行数作为唯一标准；优先处理同时承担 UI、状态、协议转换、文件 IO 或 IPC 注册的文件。
+- 协议转换、坐标转换、点表导入等高风险逻辑先补样例/回归，再做文件移动，避免“拆完能编译但数据格式变了”。
+- 页面组件只负责布局和交互编排；可复用业务流程进入 hooks/controllers，Electron/数据库访问进入 service/repository。
+- 不为了“通用化”引入复杂 schema 引擎、全局状态框架或多层基类；相似行为稳定出现两到三处后再抽象。
+
+### 1. 🟡 拆分空间绘制协议与持久化模块（最高优先级）
+
+现状：`views/space-edit/hooks/drawing/drawing-storage.ts` 原约 1256 行，同时包含类型、机器人区域协议、坐标转换、屏柜分段、路径格式转换、Electron 文件 IO 和数据库清理。
+
+第一阶段已完成：
+- 新增 `drawing-schema.ts`，集中绘制对象、路径数据、机器人区域协议类型和文件/区域类型常量。
+- 路径纯数据类型从 `PathDrawing.ts` 移入 schema，`PathDrawing.ts` 继续重新导出以兼容现有调用。
+- 新增 `drawing-coordinate-transform.ts`，抽离顶点和路径的 LAS/scene 双向转换。
+- 新增 `drawing-codec-utils.ts` 和 `area-codec.ts`，抽离 pose/8 顶点转换、屏柜分段、旧格式兼容及机器人区域协议双向转换。
+- `drawing-storage.ts` 保留兼容门面，现有业务调用方无需一次性迁移。
+- 已验证顶点及含贝塞尔控制点路径的坐标 round-trip；区域 smoke test 覆盖柜排/子屏柜、独立屏柜、充电区、设备区和旧 `{items}` 格式。
+
+第二阶段已完成：
+- 新增 `path-codec.ts`，抽离 `reference_path.txt`、`path.json` 和停靠点文件的纯解析/生成逻辑。
+- 路径 codec 统一负责机器人路线拓扑重建、连续单路线校验、充电区域起点判断和稳定坐标文本生成，不访问 Electron 或文件系统。
+- `drawing-storage.ts` 仅保留路径候选文件查找、停靠点文件读取、LAS/scene 坐标转换和 Electron 写入编排，文件降至约 530 行。
+- 路径 smoke test 覆盖停靠点包装格式、waypoint 首尾去重、机器人路线重建、参考文本往返、分支拒绝和充电区边界判定。
+
+建议边界：
+- ✅ `drawing-schema.ts`：`CabinetItem`、`DeviceAreaItem`、`ChargingAreaItem`、`RobotAreaRecord`、路径类型等类型和协议常量。
+- ✅ `area-codec.ts`：`description_file.json` 与前端绘制对象的双向转换、兼容旧格式。
+- ✅ `path-codec.ts`：`reference_path.txt`、`path.json`、停靠点文件的解析和生成。
+- ✅ `drawing-coordinate-transform.ts`：LAS/scene 顶点和路径转换，不包含文件访问。
+- `drawing-repository.ts`：读写、删除和项目相对路径处理，仅通过 `electronAPI.project` 访问文件。
+- `cabinet-device-sync.ts`：屏柜删除时的数据库设备同步，不放在 JSON codec 中。
+
+已完成验证：
+- 区域协议 round-trip 样例覆盖柜排/子屏柜、充电区、设备区和旧格式兼容。
+- 路径样例覆盖参考路径、机器人路径、停靠点、连续性校验和坐标变换。
+
+验收：
+- codec 可以在没有 React、PlayCanvas 和 Electron 的环境中独立测试。
+- 文件 IO 层不再包含几何计算，协议层不再直接调用 `window.electronAPI`。
+- 现有项目 JSON/TXT 重新加载后位置、ID、设备绑定和导出内容不变。
+
+### 2. ⬜ 拆分勘察标定视图和共享协议
+
+现状：`CalibrationView.tsx` 约 992 行，混合图片读取、标定文件合并、自动保存队列、Canvas 绘制、缩放拖拽、矩形编辑、点位绑定和右侧表单；`image-edit/index.tsx` 约 513 行，继续承担任务加载、三维联动、筛选和多个弹窗状态。
+
+建议边界：
+- `calibration-types.ts`：标定文件、矩形和点位绑定类型。
+- `calibration-codec.ts`：跨地图 `勘察数据.json` 的 normalize/merge，不依赖 React。
+- `useCalibrationPersistence.ts`：加载、防抖、串行保存、失败重试和离开页面 flush。
+- `useCalibrationCanvas.ts`：viewport、缩放、拖拽、框选、命中测试和绘制调度。
+- `CalibrationToolbar.tsx`、`CalibrationCanvas.tsx`、`PointBindingPanel.tsx`：拆分可见 UI。
+- `useSurveyWorkspace.ts`：从 `image-edit/index.tsx` 接管地图、任务、图像索引和三维选中联动。
+- 增加 renderer/Electron 共用的 survey protocol 模块，统一 `勘察数据`、`勘察数据.json`、mapCode 和标定 normalize 规则。
+
+验收：
+- `CalibrationView` 只负责组合 hooks 和子组件，不再直接拼项目路径或合并共享文件。
+- 自动保存、快速连续编辑、跨地图合并和导入导出使用同一套协议函数。
+- Canvas 交互拆分后缩放、框选、拖拽和快捷键行为不回退。
+
+### 3. ⬜ 拆分 Electron 归档 IPC 和格式转换
+
+现状：`electron/ipc/archive-ipc.ts` 约 882 行，既注册 ZIP/勘察/图像标识 IPC，又负责路径扫描、标定格式转换、图片匹配、坐标归一化和文件命名。
+
+建议边界：
+- `ipc/archive-ipc.ts`：只保留 channel 注册、参数校验和结果返回。
+- `services/survey-archive.service.ts`：勘察数据导入导出和 ZIP 目录结构。
+- `services/image-label.service.ts`：图像标识导入导出流程。
+- `services/image-label-converter.ts`：客户端标定与机器人 label 的纯数据转换。
+- `services/survey-context.ts`：任务图片索引、设备区和点位上下文加载。
+- `types/survey-protocol.ts`：与 renderer 共享的数据类型和常量。
+
+验收：
+- 每个 IPC handler 只做编排，不出现大段转换循环。
+- 图像标识转换可以用固定 JSON fixture 独立回归，不需要启动 Electron。
+- 路径越界保护仍集中走 `project-paths.ts`，拆分后不能分散复制校验。
+
+### 4. ⬜ 拆分顶部栏和项目管理工作流
+
+现状：`pages/app-header/index.tsx` 约 510 行，包含导航、项目 CRUD、删除影响统计、机器人列表缓存、后台自动连接、设置弹窗和窗口控制。设置弹窗已开始独立，但项目管理仍集中在头部组件。
+
+建议边界：
+- `useProjectManagement.ts`：项目列表、项目根、创建、切换、重命名、删除和影响统计。
+- `useRobotOptions.ts`：机器人缓存、后台切换刷新和无效选项清理。
+- `HeaderProjectControls.tsx`、`HeaderRobotSelect.tsx`、`WindowControls.tsx`：顶部可见控件。
+- `ProjectCreateModal.tsx`、`ProjectManagerModal.tsx`、`ProjectDeleteModal.tsx`：项目弹窗。
+- `settings-modal/menu.ts`：设置菜单登记；新增设置项时不再修改 `AppHeader`。
+
+验收：
+- `AppHeader` 只保留导航和子组件编排，不直接执行项目文件/数据库操作。
+- 项目删除弹窗、项目编辑弹窗可以独立渲染和测试。
+- 新增设置页只新增菜单项和面板组件，不改顶部栏代码。
+
+### 5. ⬜ 拆分项目服务和数据库 IPC
+
+现状：`electron/project-core/project-service.ts` 约 546 行，混合项目生命周期、地图文件/ZIP 导入、树操作、项目文件操作和导出；`electron/db-ipc.ts` 约 343 行，混合通用 Repository IPC、批处理、点表导入和屏柜设备领域逻辑。
+
+建议边界：
+- `project-lifecycle.service.ts`：项目列举、创建、重命名、删除及数据库同步编排。
+- `map-import.service.ts`：LAS/LAZ/ZIP 校验、解压、目录归一化和 manifest 更新。
+- `project-file.service.ts`：树、写入、删除、重命名和打开目录。
+- `project-export.service.ts`：单文件与项目 ZIP 导出。
+- `ipc/db-repository-ipc.ts`：通用 CRUD handler 注册。
+- `ipc/point-import-ipc.ts`、`ipc/cabinet-device-ipc.ts`：领域 IPC；实际事务逻辑继续下沉 database service。
+
+验收：
+- 项目生命周期不依赖地图 ZIP/导出实现。
+- IPC 文件只做参数适配，数据库事务和业务校验在 service 中可独立测试。
+- preload、IPC channel 和 renderer 类型保持一一对应。
+
+### 6. ⬜ 组件化导入导出和后台配置页
+
+现状：`import-export/index.tsx` 约 504 行，包含卡片配置、文件选择、本地临时文件、后台调用和所有导入导出 handler；`config/platform/index.tsx` 约 388 行，三个独立配置表单集中在一个文件。厂站、机器人、地图配置页重复加载状态、后台切换刷新、表格 CRUD 和弹窗状态。
+
+建议边界：
+- `ImportExportCard.tsx`：纯展示卡片；操作状态由父级传入。
+- `useLocalProjectTransfer.ts`、`useBackendTransfer.ts`：明确区分本地项目与后台机器人流程。
+- 按领域拆 `point-table-actions.ts`、`survey-actions.ts`、`communication-actions.ts`、`model-actions.ts`。
+- 将 platform 拆为 `BackendPlatformForm`、`AnalysisServiceForm`、`UpstreamHostForm`。
+- 抽取轻量 `useBackendRefresh` 和列表页加载/错误处理约定；不要做能够动态生成所有配置页的复杂 schema 引擎。
+- 统一 `ApiResponse<T>` 和配置 DTO，移除每个页面重复声明及主要 handler 中的 `any`。
+
+验收：
+- `import-export/index.tsx` 只保留操作注册和网格布局。
+- 后台切换刷新、loading、错误提示在配置页行为一致。
+- 表单字段仍由领域组件明确声明，便于排查后台字段差异。
+
+### 7. ⬜ 收敛 Electron API 类型和访问入口
+
+现状：preload、IPC handler、`vite-env.d.ts` 和各页面分别维护调用签名；业务代码中仍有 `(window as any).electronAPI`、非空断言和大量 `any`，接口变更容易只改一侧。
+
+具体任务：
+- 将 `ElectronAPI`、Project API、数据库 Repo API、归档 DTO 拆到 `types/electron-api/*.ts`，`vite-env.d.ts` 只做 Window 全局挂载。
+- 提供 renderer 侧 `getElectronAPI()`/能力检测 helper，统一 Electron-only 错误提示。
+- 为 IPC channel 建立共享常量和请求/响应类型，逐步减少字符串散落。
+- 新增接口时要求同时更新 handler、preload、共享类型和最小调用回归。
+
+验收：
+- 业务代码不再通过 `window as any` 访问 Electron API。
+- IPC 参数或返回值变更能在构建/typecheck 阶段发现不一致。
+
+### 8. 🟡 整理三维绘制类，避免过早重写底层引擎
+
+现状：`PathDrawing.ts`、`CabinetDrawing.ts`、`DeviceAreaDrawing.ts`、`ChargingAreaDrawing.ts` 各约 500-800 行，重复处理 pointer 生命周期、drag 标记、点击抢占、标签和销毁；`DrawingRenderer.ts` 约 594 行，同时渲染区域、路径、标签和选中态。
+
+具体任务：
+- 先抽 `DrawingInteractionSession`/工具函数，统一 pointer 注册、drag 状态、click claim 和 dispose；不要立即改成深继承基类。
+- 将 `DrawingRenderer` 拆为 area/path/label renderer，共享材质和实体生命周期 helper。
+- 为每类绘制补最小交互回归后，再评估是否存在稳定的 controller 接口。
+- `PointCloudLoader.ts` 和 `playcanvas-core` 的 camera/scene/splat 等算法文件暂不因行数强拆，先完成 P2 性能埋点、任务取消和缓存边界。
+
+验收：
+- 绘制模式切换和销毁不再依赖多处手工设置 `window.__drawingDragging`。
+- 区域/路径 renderer 可以独立启停，点击高亮和标签行为保持一致。
+
+### 9. ⬜ 建立拆分保护网和完成标准
+
+具体任务：
+- 为 drawing codec、survey calibration、image label converter、项目生命周期和点表导入增加 fixture 测试。
+- 增加组件级检查：项目删除弹窗、设置弹窗、标定保存失败/重试、导入导出禁用状态。
+- 增加模块依赖约束：纯协议模块不得导入 React、Ant Design、PlayCanvas、Electron。
+- 每次拆分保持同一提交只处理一个领域，避免文件移动与行为改动混在一起。
+
+验收：
+- 拆分前后的 fixture 输出一致。
+- `pnpm typecheck`、相关回归和 Electron 构建成为组件化任务的固定门槛。
+- 新文件边界有明确所有者，不产生只转发一层、没有实际职责的空抽象。
 
 ## P0：客户端工作上下文和稳定性
 

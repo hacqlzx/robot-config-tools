@@ -10,6 +10,10 @@ import {
   claimSpaceEditClick,
   hasSpaceEditClickClaim,
 } from "./drawing-utils";
+import type { PathData, PathPoint, PathSegment } from "./drawing-schema";
+
+// 路径数据类型已集中到纯协议模块；这里继续重新导出，兼容历史上从 PathDrawing 引用类型的调用方。
+export type { PathData, PathPoint, PathSegment } from "./drawing-schema";
 
 export interface PathDrawingOptions {
   pointColor?: pc.Color;
@@ -22,28 +26,6 @@ export interface PathDrawingOptions {
   onChange?: (data: PathData) => void;
   onSelectChange?: (selected: boolean) => void;
   onHistory?: (before: PathDrawingSnapshot, after: PathDrawingSnapshot, label: string) => void;
-}
-
-export interface PathPoint {
-  id: string;
-  x: number;
-  y: number;
-  z: number;
-}
-
-export interface PathSegment {
-  id: string;
-  from: string;
-  to: string;
-  bezier: {
-    cp1: [number, number, number];
-    cp2: [number, number, number];
-  } | null;
-}
-
-export interface PathData {
-  points: PathPoint[];
-  paths: PathSegment[];
 }
 
 export interface PathDrawingSnapshot {
