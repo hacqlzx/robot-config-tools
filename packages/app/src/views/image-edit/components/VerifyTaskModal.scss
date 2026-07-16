@@ -1,0 +1,131 @@
+.verify-task-modal {
+  .ant-modal-title {
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .ant-modal-body {
+    padding-top: 8px;
+  }
+}
+
+.verify-task-tabs {
+  .ant-tabs-nav {
+    margin-bottom: 14px;
+  }
+
+  .ant-tabs-tab {
+    padding: 8px 0;
+    font-size: 14px;
+  }
+}
+
+.verify-task-filter {
+  display: grid;
+  align-items: end;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 12px;
+  background: #fafafa;
+  border-radius: 6px;
+
+  .ant-btn {
+    min-width: 68px;
+  }
+}
+
+.verify-task-filter-bay,
+.verify-task-filter-point {
+  grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) minmax(160px, 1fr) 68px 68px;
+}
+
+.verify-task-filter-item {
+  min-width: 0;
+}
+
+.verify-task-filter-label {
+  display: block;
+  margin-bottom: 6px;
+  color: #737373;
+  font-size: 13px;
+}
+
+.verify-task-filter .ant-select,
+.verify-task-filter .ant-input {
+  width: 100%;
+  font-size: 13px;
+}
+
+.verify-task-list-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  color: #666;
+  font-size: 13px;
+}
+
+.verify-task-selected-count {
+  color: #4096ff;
+}
+
+.verify-task-table {
+  border: 1px solid #e6e6e6;
+  border-radius: 6px;
+  overflow: hidden;
+
+  .ant-table {
+    border-radius: 6px;
+    font-size: 13px;
+  }
+
+  .ant-table-thead > tr > th {
+    height: 34px;
+    padding: 6px 10px;
+    color: #595959;
+    font-weight: 600;
+    background: #fafafa;
+  }
+
+  .ant-table-tbody > tr > td {
+    height: 36px;
+    padding: 6px 10px;
+    color: #404040;
+  }
+
+  .ant-table-selection-column {
+    width: 42px;
+  }
+
+  .ant-btn-sm {
+    width: 28px;
+    padding-inline: 0;
+  }
+}
+
+.verify-task-point-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.verify-task-point-pane {
+  min-width: 0;
+}
+
+.verify-task-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+
+  .ant-btn {
+    min-width: 64px;
+  }
+}
+
+.verify-task-footer-count {
+  margin-right: auto;
+  color: #737373;
+  font-size: 13px;
+}

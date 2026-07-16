@@ -162,6 +162,44 @@ export function importProspectCalibration(file, robotId) {
   return http.post("/robot/tool/file/importProspectCalibration", formData);
 }
 
+// ========== 任务下发 ==========
+
+/**
+ * 设备区勘察图拍照
+ * @param {number} robotId - 机器人 ID
+ * @param {string[]} deviceCodeList - 设备区 ID 列表，对应空间模型 description_file.json 的设备区 id
+ */
+export function equipmentDeviceMainCollect(robotId, deviceCodeList) {
+  return http.post("/robot/tool/task/equipmentDeviceMainCollect", {
+    robotId,
+    deviceCodeList,
+  });
+}
+
+/**
+ * 设备区补充勘察图拍照
+ * @param {number} robotId - 机器人 ID
+ * @param {string[]} stopPointIdList - 停靠点 ID 列表
+ */
+export function stopPointCollect(robotId, stopPointIdList) {
+  return http.post("/robot/tool/task/stopPointCollect", {
+    robotId,
+    stopPointIdList,
+  });
+}
+
+/**
+ * 屏柜区屏柜拍照
+ * @param {number} robotId - 机器人 ID
+ * @param {string[]} deviceCodeList - 屏柜区 ID 列表，对应空间模型 description_file.json 的屏柜 id
+ */
+export function cabinetDeviceMainCollect(robotId, deviceCodeList) {
+  return http.post("/robot/tool/task/cabinetDeviceMainCollect", {
+    robotId,
+    deviceCodeList,
+  });
+}
+
 // ========== 导出 ==========
 
 /**

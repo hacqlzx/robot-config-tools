@@ -14,13 +14,16 @@ import SurveyImageLoad from "./components/SurveyImageLoad";
 import SurveyImageExport from "./components/SurveyImageExport";
 import ImageLabelTransfer from "./components/ImageLabelTransfer";
 import SurveyPhotoModal, { type SurveyPhotoDispatchItem, type SurveyPhotoMode } from "./components/SurveyPhotoModal";
+import CabinetPhotoModal, { type CabinetPhotoDispatchItem } from "./components/CabinetPhotoModal";
+import VerifyTaskModal from "./components/VerifyTaskModal";
 import CalibrationView from "./components/CalibrationView";
 import { useThreeDViewer } from "@/components/three-d-engine";
 import { useResizable } from "@/components/useResizable";
 import ImageCanvas from "@/components/image-canvas/ImageCanvas";
 import type { ImageItem } from "@/components/image-canvas/ImageCanvas";
 import { useTaskLoader } from "./hooks/useTaskLoader";
-import { useSelectedProject } from "@/stores/appContextStore";
+import { useSelectedProject, useSelectedRobot } from "@/stores/appContextStore";
+import { cabinetDeviceMainCollect, equipmentDeviceMainCollect, getAllRobot, stopPointCollect } from "@/api/config.js";
 import "./index.scss";
 
 type CalibrationImageItem = ImageItem & { img: HTMLImageElement };
@@ -51,6 +54,7 @@ function getCalibrationEntryMapCode(entry: any, fileMapCode?: string): string {
 export default function ImageEdit() {
   const { message } = App.useApp();
   const selectedProject = useSelectedProject();
+  const selectedRobot = useSelectedRobot();
   const containerRef = useRef<HTMLDivElement>(null);
 
   const { width: leftWidth, resizing, onMouseDown } = useResizable({
@@ -187,6 +191,8 @@ export default function ImageEdit() {
   const [imageLabelExportOpen, setImageLabelExportOpen] = useState(false);
   const [surveyPhotoOpen, setSurveyPhotoOpen] = useState(false);
   const [surveyPhotoMode, setSurveyPhotoMode] = useState<SurveyPhotoMode>("normal");
+  const [cabinetPhotoOpen, setCabinetPhotoOpen] = useState(false);
+  const [verifyTaskOpen, setVerifyTaskOpen] = useState(false);
 
   // 已加载的地图数据
   const [loadedMap, setLoadedMap] = useState<string | null>(null);
@@ -288,10 +294,6 @@ export default function ImageEdit() {
     }
   }, [ptzSide]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const placeholder = (label: string) => {
-    message.info(`${label}（功能待接入）`);
-  };
-
   const handleOpenSurveyPhoto = useCallback((mode: SurveyPhotoMode = "normal") => {
     if (!selectedProject) {
       message.warning("请先选择项目");
@@ -305,11 +307,110 @@ export default function ImageEdit() {
     setSurveyPhotoOpen(true);
   }, [message, selectedProject]);
 
+  const handleOpenCabinetPhoto = useCallback(() => {
+    if (!selectedProject) {
+      message.warning("请先选择项目");
+      return;
+    }
+    if (!loadedMapRef.current) {
+      message.warning("请先加载勘察图像");
+      return;
+    }
+    setCabinetPhotoOpen(true);
+  }, [message, selectedProject]);
+
+  const handleOpenVerifyTask = useCallback(() => {
+    if (!selectedProject) {
+      message.warning("请先选择项目");
+      return;
+    }
+    setVerifyTaskOpen(true);
+  }, [message, selectedProject]);
+
+  const resolveSelectedRobotId = useCallback(async (): Promise<number | null> => {
+    if (!selectedRobot) {
+      message.warning("请先在顶部选择机器人");
+      return null;
+    }
+
+    const robotRes = await getAllRobot();
+    const robotBody = robotRes.data;
+    if (!robotBody.success || !Array.isArray(robotBody.data)) {
+      message.error("获取机器人列表失败");
+      return null;
+    }
+
+    const robot = robotBody.data.find((item: any) => item.robotName === selectedRobot);
+    if (!robot) {
+      message.error(`未找到机器人「${selectedRobot}」`);
+      return null;
+    }
+
+    const robotId = Number(robot.id);
+    if (!Number.isFinite(robotId)) {
+      message.error(`机器人「${selectedRobot}」ID 无效`);
+      return null;
+    }
+    return robotId;
+  }, [message, selectedRobot]);
+
   const handleSurveyPhotoDispatch = useCallback(async (areas: SurveyPhotoDispatchItem[]) => {
     const label = surveyPhotoMode === "supplement" ? "补充勘察拍照" : "勘察拍照";
     const unit = surveyPhotoMode === "supplement" ? "条停靠点记录" : "个设备区";
-    message.info(`已选择 ${areas.length} ${unit}，${label}下发接口待接入`);
-  }, [message, surveyPhotoMode]);
+    try {
+      const robotId = await resolveSelectedRobotId();
+      if (robotId == null) return false;
+
+      const ids = surveyPhotoMode === "supplement"
+        ? Array.from(new Set(areas.map((item) => String(item.stopPointId || "")).filter(Boolean)))
+        : Array.from(new Set(areas.map((item) => String(item.regionId || item.bayId)).filter(Boolean)));
+      if (ids.length === 0) {
+        message.warning(`请选择有效的${surveyPhotoMode === "supplement" ? "停靠点" : "设备区"}`);
+        return false;
+      }
+
+      const res = surveyPhotoMode === "supplement"
+        ? await stopPointCollect(robotId, ids)
+        : await equipmentDeviceMainCollect(robotId, ids);
+      const body = res.data;
+      if (!body.success) {
+        message.error(body.message || `${label}下发失败`);
+        return false;
+      }
+
+      message.success(`已下发 ${areas.length} ${unit}`);
+      return true;
+    } catch (e: any) {
+      message.error(`${label}下发失败: ${e?.message || e}`);
+      return false;
+    }
+  }, [message, resolveSelectedRobotId, surveyPhotoMode]);
+
+  const handleCabinetPhotoDispatch = useCallback(async (items: CabinetPhotoDispatchItem[]) => {
+    try {
+      const robotId = await resolveSelectedRobotId();
+      if (robotId == null) return false;
+
+      const ids = Array.from(new Set(items.map((item) => String(item.fileCabinetId || "")).filter(Boolean)));
+      if (ids.length === 0) {
+        message.warning("请选择有效的屏柜");
+        return false;
+      }
+
+      const res = await cabinetDeviceMainCollect(robotId, ids);
+      const body = res.data;
+      if (!body.success) {
+        message.error(body.message || "屏柜拍照下发失败");
+        return false;
+      }
+
+      message.success(`已下发 ${items.length} 个屏柜`);
+      return true;
+    } catch (e: any) {
+      message.error("屏柜拍照下发失败: " + (e?.message || e));
+      return false;
+    }
+  }, [message, resolveSelectedRobotId]);
 
   const surveyPhotoMenu: MenuProps = {
     items: [
@@ -346,13 +447,13 @@ export default function ImageEdit() {
             <CameraOutlined />
             <span>勘察拍照</span>
           </Dropdown.Button>
-          <Button icon={<HddOutlined />} onClick={() => placeholder("屏柜拍照")}>
+          <Button icon={<HddOutlined />} onClick={handleOpenCabinetPhoto}>
             屏柜拍照
           </Button>
 
           <Divider orientation="vertical" />
 
-          <Button icon={<CheckCircleOutlined />} onClick={() => placeholder("验证任务")}>
+          <Button icon={<CheckCircleOutlined />} onClick={handleOpenVerifyTask}>
             验证任务
           </Button>
         </Space>
@@ -533,6 +634,20 @@ export default function ImageEdit() {
         mapName={loadedMap}
         onClose={() => setSurveyPhotoOpen(false)}
         onDispatch={handleSurveyPhotoDispatch}
+      />
+
+      <CabinetPhotoModal
+        open={cabinetPhotoOpen}
+        projectName={selectedProject}
+        mapName={loadedMap}
+        onClose={() => setCabinetPhotoOpen(false)}
+        onDispatch={handleCabinetPhotoDispatch}
+      />
+
+      <VerifyTaskModal
+        open={verifyTaskOpen}
+        projectName={selectedProject}
+        onClose={() => setVerifyTaskOpen(false)}
       />
 
       {/* 标定视图（双击图片进入） */}

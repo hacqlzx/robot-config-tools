@@ -51,7 +51,7 @@ interface SurveyPhotoModalProps {
   projectName?: string | null;
   mapName?: string | null;
   onClose: () => void;
-  onDispatch?: (items: SurveyPhotoDispatchItem[]) => void | Promise<void>;
+  onDispatch?: (items: SurveyPhotoDispatchItem[]) => boolean | void | Promise<boolean | void>;
 }
 
 interface StopPointRecord {
@@ -371,7 +371,8 @@ export default function SurveyPhotoModal({
 
     setSubmitting(true);
     try {
-      await onDispatch?.(selectedAreas);
+      const shouldClose = await onDispatch?.(selectedAreas);
+      if (shouldClose === false) return;
       resetModalState();
       onClose();
     } finally {
