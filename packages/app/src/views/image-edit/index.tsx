@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from "react";
-import { Button, Space, Divider, App, Spin, Radio, Select, Input, Checkbox } from "antd";
+import { Button, Space, Divider, App, Spin, Radio, Select, Input, Checkbox, Dropdown } from "antd";
 import {
   UploadOutlined,
   DownloadOutlined,
@@ -7,10 +7,13 @@ import {
   CameraOutlined,
   HddOutlined,
   CheckCircleOutlined,
+  DownOutlined,
 } from "@ant-design/icons";
+import type { MenuProps } from "antd";
 import SurveyImageLoad from "./components/SurveyImageLoad";
 import SurveyImageExport from "./components/SurveyImageExport";
 import ImageLabelTransfer from "./components/ImageLabelTransfer";
+import SurveyPhotoModal, { type SurveyPhotoDispatchItem, type SurveyPhotoMode } from "./components/SurveyPhotoModal";
 import CalibrationView from "./components/CalibrationView";
 import { useThreeDViewer } from "@/components/three-d-engine";
 import { useResizable } from "@/components/useResizable";
@@ -182,6 +185,8 @@ export default function ImageEdit() {
   const [surveyExportOpen, setSurveyExportOpen] = useState(false);
   const [imageLabelImportOpen, setImageLabelImportOpen] = useState(false);
   const [imageLabelExportOpen, setImageLabelExportOpen] = useState(false);
+  const [surveyPhotoOpen, setSurveyPhotoOpen] = useState(false);
+  const [surveyPhotoMode, setSurveyPhotoMode] = useState<SurveyPhotoMode>("normal");
 
   // 已加载的地图数据
   const [loadedMap, setLoadedMap] = useState<string | null>(null);
@@ -287,6 +292,33 @@ export default function ImageEdit() {
     message.info(`${label}（功能待接入）`);
   };
 
+  const handleOpenSurveyPhoto = useCallback((mode: SurveyPhotoMode = "normal") => {
+    if (!selectedProject) {
+      message.warning("请先选择项目");
+      return;
+    }
+    if (!loadedMapRef.current) {
+      message.warning("请先加载勘察图像");
+      return;
+    }
+    setSurveyPhotoMode(mode);
+    setSurveyPhotoOpen(true);
+  }, [message, selectedProject]);
+
+  const handleSurveyPhotoDispatch = useCallback(async (areas: SurveyPhotoDispatchItem[]) => {
+    const label = surveyPhotoMode === "supplement" ? "补充勘察拍照" : "勘察拍照";
+    const unit = surveyPhotoMode === "supplement" ? "条停靠点记录" : "个设备区";
+    message.info(`已选择 ${areas.length} ${unit}，${label}下发接口待接入`);
+  }, [message, surveyPhotoMode]);
+
+  const surveyPhotoMenu: MenuProps = {
+    items: [
+      { key: "normal", label: "勘察拍照", icon: <CameraOutlined /> },
+      { key: "supplement", label: "补充勘察拍照", icon: <CameraOutlined /> },
+    ],
+    onClick: ({ key }) => handleOpenSurveyPhoto(key as SurveyPhotoMode),
+  };
+
   return (
     <div className={`image-edit-page${resizing || rightResizing ? " is-resizing" : ""}`}>
       {/* 顶部工具栏 */}
@@ -310,9 +342,10 @@ export default function ImageEdit() {
 
           <Divider orientation="vertical" />
 
-          <Button icon={<CameraOutlined />} onClick={() => placeholder("勘察拍照")}>
-            勘察拍照
-          </Button>
+          <Dropdown.Button menu={surveyPhotoMenu} icon={<DownOutlined />} onClick={() => handleOpenSurveyPhoto("normal")}>
+            <CameraOutlined />
+            <span>勘察拍照</span>
+          </Dropdown.Button>
           <Button icon={<HddOutlined />} onClick={() => placeholder("屏柜拍照")}>
             屏柜拍照
           </Button>
@@ -490,6 +523,16 @@ export default function ImageEdit() {
         open={imageLabelExportOpen}
         mode="export"
         onClose={() => setImageLabelExportOpen(false)}
+      />
+
+      <SurveyPhotoModal
+        open={surveyPhotoOpen}
+        title={surveyPhotoMode === "supplement" ? "补充勘察拍照" : "勘察拍照"}
+        mode={surveyPhotoMode}
+        projectName={selectedProject}
+        mapName={loadedMap}
+        onClose={() => setSurveyPhotoOpen(false)}
+        onDispatch={handleSurveyPhotoDispatch}
       />
 
       {/* 标定视图（双击图片进入） */}

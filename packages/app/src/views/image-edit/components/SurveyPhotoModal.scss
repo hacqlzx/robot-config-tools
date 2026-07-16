@@ -1,0 +1,104 @@
+.survey-photo-modal {
+  .ant-modal-title {
+    font-size: 14px;
+    font-weight: 600;
+  }
+}
+
+.survey-photo-filter-form {
+  margin-bottom: 12px;
+
+  .ant-form-item {
+    margin-bottom: 0;
+  }
+
+  .ant-form-item-label > label {
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .ant-input {
+    font-size: 13px;
+  }
+}
+
+.survey-photo-supplement-filter {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 12px;
+  padding: 12px;
+  background: #fafafa;
+  border-radius: 6px;
+
+  .ant-form-item {
+    margin-right: 0;
+    margin-bottom: 0;
+  }
+
+  .ant-form-item-label {
+    padding-bottom: 0;
+  }
+
+  .ant-form-item-control {
+    width: 180px;
+  }
+
+  .ant-btn {
+    min-width: 76px;
+  }
+}
+
+.survey-photo-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  color: #666;
+  font-size: 13px;
+}
+
+.survey-photo-selected-count {
+  color: #40a9ff;
+}
+
+.survey-photo-table {
+  border: 1px solid #e5e5e5;
+  border-radius: 5px;
+  overflow: hidden;
+
+  .ant-table {
+    border-radius: 5px;
+    font-size: 13px;
+  }
+
+  .ant-table-thead > tr > th {
+    height: 34px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    color: #595959;
+    font-weight: 600;
+    background: #fafafa;
+  }
+
+  .ant-table-tbody > tr > td {
+    height: 34px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    color: #404040;
+  }
+
+  .ant-table-selection-column {
+    width: 42px;
+  }
+}
+
+.survey-photo-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+
+  .ant-btn {
+    min-width: 64px;
+  }
+}
