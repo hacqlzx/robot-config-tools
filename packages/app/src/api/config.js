@@ -200,6 +200,18 @@ export function cabinetDeviceMainCollect(robotId, deviceCodeList) {
   });
 }
 
+/**
+ * 下发巡视任务
+ * @param {number} robotId - 机器人 ID
+ * @param {{ pointCodeList?: string[], bayCodeList?: string[] }} data - 点位编码或间隔编码，二选一
+ */
+export function startTask(robotId, data) {
+  return http.post("/robot/tool/task/startTask", {
+    robotId,
+    ...data,
+  });
+}
+
 // ========== 导出 ==========
 
 /**

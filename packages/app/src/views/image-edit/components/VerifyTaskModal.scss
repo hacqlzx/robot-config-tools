@@ -5,62 +5,120 @@
   }
 
   .ant-modal-body {
-    padding-top: 8px;
+    padding-top: 4px;
   }
 }
 
 .verify-task-tabs {
   .ant-tabs-nav {
-    margin-bottom: 14px;
+    margin-bottom: 10px;
   }
 
   .ant-tabs-tab {
-    padding: 8px 0;
+    padding: 6px 0;
     font-size: 14px;
   }
 }
 
 .verify-task-filter {
   display: grid;
-  align-items: end;
-  gap: 12px;
-  margin-bottom: 14px;
-  padding: 12px;
+  align-items: center;
+  column-gap: 18px;
+  row-gap: 10px;
+  margin-bottom: 12px;
+  padding: 12px 16px;
   background: #fafafa;
   border-radius: 6px;
-
-  .ant-btn {
-    min-width: 68px;
-  }
 }
 
 .verify-task-filter-bay,
 .verify-task-filter-point {
-  grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) minmax(160px, 1fr) 68px 68px;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) 184px;
 }
 
 .verify-task-filter-item {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 10px;
   min-width: 0;
+  width: 100%;
 }
 
 .verify-task-filter-label {
   display: block;
-  margin-bottom: 6px;
   color: #737373;
   font-size: 13px;
+  line-height: 34px;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .verify-task-filter .ant-select,
-.verify-task-filter .ant-input {
+.verify-task-filter .ant-input,
+.verify-task-filter .ant-input-affix-wrapper {
   width: 100%;
+  height: 34px;
   font-size: 13px;
+}
+
+.verify-task-filter .ant-select-selector,
+.verify-task-filter .ant-input,
+.verify-task-filter .ant-input-affix-wrapper {
+  height: 34px !important;
+  min-height: 34px !important;
+  overflow: hidden !important;
+}
+
+.verify-task-filter .ant-input-affix-wrapper {
+  display: flex;
+  align-items: center;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.verify-task-filter .ant-input-affix-wrapper .ant-input {
+  height: 30px;
+  min-height: 30px;
+  line-height: 30px;
+}
+
+.verify-task-filter .ant-select-selection-overflow {
+  flex-wrap: nowrap;
+  max-height: 32px;
+  overflow: hidden;
+  align-items: center;
+}
+
+.verify-task-filter .ant-select-selection-item,
+.verify-task-filter .ant-select-selection-placeholder,
+.verify-task-filter .ant-select-selection-search-input {
+  line-height: 24px;
+}
+
+.verify-task-filter .ant-select-selection-search {
+  height: 24px;
+  line-height: 24px;
+}
+
+.verify-task-filter-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  min-width: 184px;
+
+  .ant-btn {
+    min-width: 82px;
+    height: 34px;
+  }
 }
 
 .verify-task-list-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 6px;
+  margin-bottom: 5px;
   color: #666;
   font-size: 13px;
 }
@@ -80,33 +138,88 @@
   }
 
   .ant-table-thead > tr > th {
-    height: 34px;
-    padding: 6px 10px;
+    height: 32px;
+    padding: 5px 10px;
     color: #595959;
     font-weight: 600;
     background: #fafafa;
   }
 
   .ant-table-tbody > tr > td {
-    height: 36px;
-    padding: 6px 10px;
+    height: 34px;
+    padding: 5px 10px;
     color: #404040;
   }
 
   .ant-table-selection-column {
-    width: 42px;
+    width: 54px;
+  }
+
+  .ant-table-body {
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+  }
+
+  .ant-table-pagination.ant-pagination {
+    margin: 16px 20px 18px 0;
   }
 
   .ant-btn-sm {
-    width: 28px;
+    width: 36px;
     padding-inline: 0;
   }
+}
+
+.verify-task-table .ant-table-cell:last-child {
+  padding-left: 12px;
+  padding-right: 12px;
+}
+
+.verify-task-table-bay .ant-table-body {
+  max-height: 220px !important;
+}
+
+.verify-task-table-point .ant-table-body {
+  height: 214px !important;
+  max-height: 214px !important;
+}
+
+.verify-task-table-point-selected .ant-table-body {
+  height: 280px !important;
+  max-height: 280px !important;
+}
+
+.verify-task-table-point-selected .ant-table-placeholder > .ant-table-cell {
+  height: 280px !important;
+  padding: 0;
+}
+
+.verify-task-table-point-selected .ant-empty {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  height: 248px;
+  margin: 0;
+}
+
+.verify-task-point-pane .verify-task-table-point {
+  min-height: 318px;
+}
+
+.verify-task-table-point .ant-btn-sm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0;
 }
 
 .verify-task-point-layout {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 14px;
+  gap: 12px;
 }
 
 .verify-task-point-pane {

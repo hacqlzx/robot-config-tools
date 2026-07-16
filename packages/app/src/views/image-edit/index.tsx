@@ -15,7 +15,7 @@ import SurveyImageExport from "./components/SurveyImageExport";
 import ImageLabelTransfer from "./components/ImageLabelTransfer";
 import SurveyPhotoModal, { type SurveyPhotoDispatchItem, type SurveyPhotoMode } from "./components/SurveyPhotoModal";
 import CabinetPhotoModal, { type CabinetPhotoDispatchItem } from "./components/CabinetPhotoModal";
-import VerifyTaskModal from "./components/VerifyTaskModal";
+import VerifyTaskModal, { type VerifyTaskBayItem, type VerifyTaskPointItem } from "./components/VerifyTaskModal";
 import CalibrationView from "./components/CalibrationView";
 import { useThreeDViewer } from "@/components/three-d-engine";
 import { useResizable } from "@/components/useResizable";
@@ -23,7 +23,7 @@ import ImageCanvas from "@/components/image-canvas/ImageCanvas";
 import type { ImageItem } from "@/components/image-canvas/ImageCanvas";
 import { useTaskLoader } from "./hooks/useTaskLoader";
 import { useSelectedProject, useSelectedRobot } from "@/stores/appContextStore";
-import { cabinetDeviceMainCollect, equipmentDeviceMainCollect, getAllRobot, stopPointCollect } from "@/api/config.js";
+import { cabinetDeviceMainCollect, equipmentDeviceMainCollect, getAllRobot, startTask, stopPointCollect } from "@/api/config.js";
 import "./index.scss";
 
 type CalibrationImageItem = ImageItem & { img: HTMLImageElement };
@@ -412,6 +412,42 @@ export default function ImageEdit() {
     }
   }, [message, resolveSelectedRobotId]);
 
+  const handleVerifyTaskDispatch = useCallback(async (payload: {
+    type: "bay" | "point";
+    bays: VerifyTaskBayItem[];
+    points: VerifyTaskPointItem[];
+  }) => {
+    try {
+      const robotId = await resolveSelectedRobotId();
+      if (robotId == null) return false;
+
+      const isBayTask = payload.type === "bay";
+      const codes = Array.from(new Set(
+        (isBayTask ? payload.bays.map((item) => item.bayCode) : payload.points.map((item) => item.pointCode))
+          .map((code) => String(code || "").trim())
+          .filter(Boolean),
+      ));
+
+      if (codes.length === 0) {
+        message.warning(isBayTask ? "请选择带有效编码的间隔" : "请选择带有效编码的点位");
+        return false;
+      }
+
+      const res = await startTask(robotId, isBayTask ? { bayCodeList: codes } : { pointCodeList: codes });
+      const body = res.data;
+      if (!body.success) {
+        message.error(body.message || "巡视任务下发失败");
+        return false;
+      }
+
+      message.success(isBayTask ? `已下发 ${codes.length} 个间隔` : `已下发 ${codes.length} 个点位`);
+      return true;
+    } catch (e: any) {
+      message.error("巡视任务下发失败: " + (e?.message || e));
+      return false;
+    }
+  }, [message, resolveSelectedRobotId]);
+
   const surveyPhotoMenu: MenuProps = {
     items: [
       { key: "normal", label: "勘察拍照", icon: <CameraOutlined /> },
@@ -443,7 +479,7 @@ export default function ImageEdit() {
 
           <Divider orientation="vertical" />
 
-          <Dropdown.Button menu={surveyPhotoMenu} icon={<DownOutlined />} onClick={() => handleOpenSurveyPhoto("normal")}>
+          <Dropdown.Button menu={surveyPhotoMenu} icon={<DownOutlined />}>
             <CameraOutlined />
             <span>勘察拍照</span>
           </Dropdown.Button>
@@ -648,6 +684,7 @@ export default function ImageEdit() {
         open={verifyTaskOpen}
         projectName={selectedProject}
         onClose={() => setVerifyTaskOpen(false)}
+        onDispatch={handleVerifyTaskDispatch}
       />
 
       {/* 标定视图（双击图片进入） */}

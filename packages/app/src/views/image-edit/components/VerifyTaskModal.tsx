@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useMemo, useState, type Key } from "react";
 import { App, Button, Empty, Input, Modal, Select, Spin, Table, Tabs, Tooltip } from "antd";
 import { CloseOutlined, RightOutlined } from "@ant-design/icons";
-import type { ColumnsType } from "antd/es/table";
+import type { ColumnsType, TablePaginationConfig } from "antd/es/table";
 import type { DeviceBay, DevicePoint, DeviceVoltage } from "@robot/database";
 import "./VerifyTaskModal.scss";
 
 const VERIFY_BAY_TYPES = ["设备区", "屏柜区"] as const;
+const BAY_TABLE_SCROLL = { y: 220 } as const;
+const POINT_TABLE_SCROLL = { y: 214 } as const;
+const SELECT_MAX_TAG_COUNT = 1;
+const DEFAULT_PAGE_SIZE = 20;
+const PAGE_SIZE_OPTIONS = ["20", "50", "100", "500"];
 
 type VerifyBayType = typeof VERIFY_BAY_TYPES[number];
 type TabKey = "bay" | "point";
@@ -25,6 +30,11 @@ interface PointFilters {
 interface OptionItem {
   label: string;
   value: string;
+}
+
+interface PageState {
+  current: number;
+  pageSize: number;
 }
 
 export interface VerifyTaskBayItem {
@@ -54,6 +64,11 @@ interface VerifyTaskModalProps {
   open: boolean;
   projectName?: string | null;
   onClose: () => void;
+  onDispatch?: (payload: {
+    type: TabKey;
+    bays: VerifyTaskBayItem[];
+    points: VerifyTaskPointItem[];
+  }) => Promise<boolean> | boolean;
 }
 
 function createBayFilters(): BayFilters {
@@ -62,6 +77,10 @@ function createBayFilters(): BayFilters {
 
 function createPointFilters(): PointFilters {
   return { areaKeys: [], bayKeys: [], pointName: "" };
+}
+
+function createPageState(): PageState {
+  return { current: 1, pageSize: DEFAULT_PAGE_SIZE };
 }
 
 function valueText(value: unknown): string {
@@ -191,10 +210,36 @@ function toPointItem(row: DevicePoint): VerifyTaskPointItem {
   };
 }
 
+function paginationConfig(page: PageState, total: number, onChange: (next: PageState) => void): TablePaginationConfig {
+  return {
+    current: page.current,
+    pageSize: page.pageSize,
+    total,
+    size: "small",
+    showSizeChanger: true,
+    pageSizeOptions: PAGE_SIZE_OPTIONS,
+    showTotal: (count) => `共 ${count} 条`,
+    locale: {
+      items_per_page: "条/页",
+      jump_to: "跳至",
+      page: "页",
+      prev_page: "上一页",
+      next_page: "下一页",
+      prev_5: "向前 5 页",
+      next_5: "向后 5 页",
+      prev_3: "向前 3 页",
+      next_3: "向后 3 页",
+      page_size: "页码",
+    },
+    onChange: (current, pageSize) => onChange({ current, pageSize }),
+  };
+}
+
 export default function VerifyTaskModal({
   open,
   projectName,
   onClose,
+  onDispatch,
 }: VerifyTaskModalProps) {
   const { message } = App.useApp();
   const [activeTab, setActiveTab] = useState<TabKey>("bay");
@@ -209,6 +254,8 @@ export default function VerifyTaskModal({
   const [pointFilters, setPointFilters] = useState<PointFilters>(() => createPointFilters());
   const [selectedBayKeys, setSelectedBayKeys] = useState<Key[]>([]);
   const [selectedPointKeys, setSelectedPointKeys] = useState<Key[]>([]);
+  const [bayPage, setBayPage] = useState<PageState>(() => createPageState());
+  const [pointPage, setPointPage] = useState<PageState>(() => createPageState());
 
   const resetFilters = useCallback(() => {
     setBayDraft(createBayFilters());
@@ -217,6 +264,8 @@ export default function VerifyTaskModal({
     setPointFilters(createPointFilters());
     setSelectedBayKeys([]);
     setSelectedPointKeys([]);
+    setBayPage(createPageState());
+    setPointPage(createPageState());
   }, []);
 
   const resetModalState = useCallback(() => {
@@ -344,9 +393,34 @@ export default function VerifyTaskModal({
     return verifyPoints.filter((row) => selectedSet.has(pointRowKey(row)));
   }, [selectedPointKeys, verifyPoints]);
 
+  useEffect(() => {
+    setBayPage((prev) => {
+      const maxPage = Math.max(1, Math.ceil(filteredBays.length / prev.pageSize));
+      return prev.current > maxPage ? { ...prev, current: maxPage } : prev;
+    });
+  }, [filteredBays.length]);
+
+  useEffect(() => {
+    setPointPage((prev) => {
+      const maxPage = Math.max(1, Math.ceil(filteredPoints.length / prev.pageSize));
+      return prev.current > maxPage ? { ...prev, current: maxPage } : prev;
+    });
+  }, [filteredPoints.length]);
+
+  const handleBaySelectionChange = useCallback((keys: Key[]) => {
+    setSelectedBayKeys(keys);
+  }, []);
+
+  const handlePointSelectionChange = useCallback((keys: Key[]) => {
+    setSelectedPointKeys(keys);
+  }, []);
+
   const addPoint = useCallback((row: DevicePoint) => {
     const key = pointRowKey(row);
-    setSelectedPointKeys((prev) => prev.map(String).includes(key) ? prev : [...prev, key]);
+    setSelectedPointKeys((prev) => {
+      const prevSet = new Set(prev.map(String));
+      return prevSet.has(key) ? prev : [...prev, key];
+    });
   }, []);
 
   const removePoint = useCallback((row: DevicePoint) => {
@@ -358,25 +432,37 @@ export default function VerifyTaskModal({
     const empty = createBayFilters();
     setBayDraft(empty);
     setBayFilters(empty);
+    setBayPage(createPageState());
   };
 
   const resetPointSearch = () => {
     const empty = createPointFilters();
     setPointDraft(empty);
     setPointFilters(empty);
+    setPointPage(createPageState());
   };
 
   const handleConfirm = async () => {
-    if (selectedBays.length === 0 && selectedPoints.length === 0) {
-      message.warning("请选择间隔或点位");
+    const isBayTab = activeTab === "bay";
+    const currentCount = isBayTab ? selectedBays.length : selectedPoints.length;
+    if (currentCount === 0) {
+      message.warning(isBayTab ? "请选择间隔" : "请选择点位");
       return;
     }
 
     setSubmitting(true);
     try {
-      const bayItems = selectedBays.map(toBayItem);
-      const pointItems = selectedPoints.map(toPointItem);
-      message.success(`已确认验证任务选择：${bayItems.length} 个间隔、${pointItems.length} 个点位`);
+      if (isBayTab) {
+        const bayItems = selectedBays.map(toBayItem);
+        const ok = onDispatch ? await onDispatch({ type: "bay", bays: bayItems, points: [] }) : true;
+        if (!ok) return;
+        if (!onDispatch) message.success(`已确认验证任务间隔：${bayItems.length} 个间隔`);
+      } else {
+        const pointItems = selectedPoints.map(toPointItem);
+        const ok = onDispatch ? await onDispatch({ type: "point", bays: [], points: pointItems }) : true;
+        if (!ok) return;
+        if (!onDispatch) message.success(`已确认验证任务点位：${pointItems.length} 个点位`);
+      }
       resetModalState();
       onClose();
     } finally {
@@ -384,7 +470,7 @@ export default function VerifyTaskModal({
     }
   };
 
-  const bayColumns: ColumnsType<DeviceBay> = [
+  const bayColumns: ColumnsType<DeviceBay> = useMemo(() => [
     {
       title: "序号",
       width: 64,
@@ -393,11 +479,13 @@ export default function VerifyTaskModal({
     },
     {
       title: "区域",
+      width: "28%",
       ellipsis: true,
       render: (_value, record) => rowAreaName(record),
     },
     {
       title: "间隔",
+      width: "44%",
       ellipsis: true,
       render: (_value, record) => rowBayName(record),
     },
@@ -406,9 +494,9 @@ export default function VerifyTaskModal({
       width: 120,
       render: (_value, record) => valueText(record.bayType),
     },
-  ];
+  ], []);
 
-  const pointColumns: ColumnsType<DevicePoint> = [
+  const pointColumns: ColumnsType<DevicePoint> = useMemo(() => [
     {
       title: "序号",
       width: 58,
@@ -418,17 +506,18 @@ export default function VerifyTaskModal({
     {
       title: "点位名称",
       dataIndex: "pointName",
+      width: "44%",
       ellipsis: true,
     },
     {
       title: "间隔名称",
-      width: 140,
+      width: "34%",
       ellipsis: true,
       render: (_value, record) => rowBayName(record),
     },
     {
       title: "操作",
-      width: 58,
+      width: 76,
       align: "center",
       render: (_value, record) => (
         <Tooltip title="添加">
@@ -441,9 +530,9 @@ export default function VerifyTaskModal({
         </Tooltip>
       ),
     },
-  ];
+  ], [addPoint]);
 
-  const selectedPointColumns: ColumnsType<DevicePoint> = [
+  const selectedPointColumns: ColumnsType<DevicePoint> = useMemo(() => [
     {
       title: "序号",
       width: 58,
@@ -453,17 +542,18 @@ export default function VerifyTaskModal({
     {
       title: "点位名称",
       dataIndex: "pointName",
+      width: "46%",
       ellipsis: true,
     },
     {
       title: "间隔名称",
-      width: 140,
+      width: "34%",
       ellipsis: true,
       render: (_value, record) => rowBayName(record),
     },
     {
       title: "操作",
-      width: 58,
+      width: 76,
       align: "center",
       render: (_value, record) => (
         <Tooltip title="移除">
@@ -475,10 +565,13 @@ export default function VerifyTaskModal({
         </Tooltip>
       ),
     },
-  ];
+  ], [removePoint]);
 
   const bayTypeOptions = VERIFY_BAY_TYPES.map((type) => ({ label: type, value: type }));
-  const selectedCount = selectedBays.length + selectedPoints.length;
+  const bayPagination = paginationConfig(bayPage, filteredBays.length, setBayPage);
+  const pointPagination = paginationConfig(pointPage, filteredPoints.length, setPointPage);
+  const activeSelectedCount = activeTab === "bay" ? selectedBays.length : selectedPoints.length;
+  const activeSelectedLabel = activeTab === "bay" ? `已选择 ${activeSelectedCount} 个间隔` : `已选择 ${activeSelectedCount} 个点位`;
 
   return (
     <Modal
@@ -488,12 +581,12 @@ export default function VerifyTaskModal({
       onCancel={handleClose}
       destroyOnHidden
       centered
-      width={920}
+      width={1080}
       footer={(
         <div className="verify-task-footer">
-          <span className="verify-task-footer-count">已选择 {selectedBays.length} 个间隔、{selectedPoints.length} 个点位</span>
+          <span className="verify-task-footer-count">{activeSelectedLabel}</span>
           <Button onClick={handleClose} disabled={submitting}>取消</Button>
-          <Button type="primary" onClick={handleConfirm} loading={submitting} disabled={selectedCount === 0}>
+          <Button type="primary" onClick={handleConfirm} loading={submitting} disabled={activeSelectedCount === 0}>
             确定
           </Button>
         </div>
@@ -515,7 +608,9 @@ export default function VerifyTaskModal({
                     <Select
                       mode="multiple"
                       allowClear
-                      maxTagCount="responsive"
+                      showSearch
+                      optionFilterProp="label"
+                      maxTagCount={SELECT_MAX_TAG_COUNT}
                       placeholder="请选择区域"
                       value={bayDraft.areaKeys}
                       onChange={(areaKeys) => setBayDraft((prev) => ({ ...prev, areaKeys }))}
@@ -537,15 +632,17 @@ export default function VerifyTaskModal({
                     <Select
                       mode="multiple"
                       allowClear
-                      maxTagCount="responsive"
+                      maxTagCount={SELECT_MAX_TAG_COUNT}
                       placeholder="请选择间隔类型"
                       value={bayDraft.bayTypes}
                       onChange={(bayTypes) => setBayDraft((prev) => ({ ...prev, bayTypes }))}
                       options={bayTypeOptions}
                     />
                   </div>
-                  <Button type="primary" onClick={() => setBayFilters(bayDraft)}>搜索</Button>
-                  <Button onClick={resetBaySearch}>重置</Button>
+                  <div className="verify-task-filter-actions">
+                    <Button type="primary" onClick={() => { setBayFilters(bayDraft); setBayPage(createPageState()); }}>搜索</Button>
+                    <Button onClick={resetBaySearch}>重置</Button>
+                  </div>
                 </div>
 
                 <div className="verify-task-list-head">
@@ -555,18 +652,19 @@ export default function VerifyTaskModal({
 
                 <Spin spinning={loading}>
                   <Table<DeviceBay>
-                    className="verify-task-table"
+                    className="verify-task-table verify-task-table-bay"
                     rowKey={bayRowKey}
                     columns={bayColumns}
                     dataSource={filteredBays}
                     size="small"
-                    pagination={false}
-                    scroll={{ y: 300 }}
+                    pagination={bayPagination}
+                    tableLayout="fixed"
+                    scroll={BAY_TABLE_SCROLL}
                     locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无间隔" /> }}
                     rowSelection={{
                       selectedRowKeys: selectedBayKeys,
                       preserveSelectedRowKeys: true,
-                      onChange: (keys) => setSelectedBayKeys(keys),
+                      onChange: (keys) => handleBaySelectionChange(keys),
                     }}
                   />
                 </Spin>
@@ -584,7 +682,9 @@ export default function VerifyTaskModal({
                     <Select
                       mode="multiple"
                       allowClear
-                      maxTagCount="responsive"
+                      showSearch
+                      optionFilterProp="label"
+                      maxTagCount={SELECT_MAX_TAG_COUNT}
                       placeholder="请选择区域"
                       value={pointDraft.areaKeys}
                       onChange={(areaKeys) => setPointDraft((prev) => ({ ...prev, areaKeys, bayKeys: [] }))}
@@ -598,7 +698,7 @@ export default function VerifyTaskModal({
                       allowClear
                       showSearch
                       optionFilterProp="label"
-                      maxTagCount="responsive"
+                      maxTagCount={SELECT_MAX_TAG_COUNT}
                       placeholder="请选择间隔"
                       value={pointDraft.bayKeys}
                       onChange={(bayKeys) => setPointDraft((prev) => ({ ...prev, bayKeys }))}
@@ -615,8 +715,10 @@ export default function VerifyTaskModal({
                       onPressEnter={() => setPointFilters(pointDraft)}
                     />
                   </div>
-                  <Button type="primary" onClick={() => setPointFilters(pointDraft)}>搜索</Button>
-                  <Button onClick={resetPointSearch}>重置</Button>
+                  <div className="verify-task-filter-actions">
+                    <Button type="primary" onClick={() => { setPointFilters(pointDraft); setPointPage(createPageState()); }}>搜索</Button>
+                    <Button onClick={resetPointSearch}>重置</Button>
+                  </div>
                 </div>
 
                 <Spin spinning={loading}>
@@ -627,18 +729,19 @@ export default function VerifyTaskModal({
                         <span className="verify-task-selected-count">可选点位 {filteredPoints.length} 个</span>
                       </div>
                       <Table<DevicePoint>
-                        className="verify-task-table"
+                        className="verify-task-table verify-task-table-point"
                         rowKey={pointRowKey}
                         columns={pointColumns}
                         dataSource={filteredPoints}
                         size="small"
-                        pagination={false}
-                        scroll={{ y: 292 }}
+                        pagination={pointPagination}
+                        tableLayout="fixed"
+                        scroll={POINT_TABLE_SCROLL}
                         locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无点位" /> }}
                         rowSelection={{
                           selectedRowKeys: selectedPointKeys,
                           preserveSelectedRowKeys: true,
-                          onChange: (keys) => setSelectedPointKeys(keys),
+                          onChange: (keys) => handlePointSelectionChange(keys),
                         }}
                       />
                     </div>
@@ -648,13 +751,14 @@ export default function VerifyTaskModal({
                         <span className="verify-task-selected-count">已选点位 {selectedPoints.length} 个</span>
                       </div>
                       <Table<DevicePoint>
-                        className="verify-task-table"
+                        className="verify-task-table verify-task-table-point verify-task-table-point-selected"
                         rowKey={pointRowKey}
                         columns={selectedPointColumns}
                         dataSource={selectedPoints}
                         size="small"
                         pagination={false}
-                        scroll={{ y: 292 }}
+                        tableLayout="fixed"
+                        scroll={POINT_TABLE_SCROLL}
                         locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无已选点位" /> }}
                       />
                     </div>
