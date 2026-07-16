@@ -1,6 +1,7 @@
 import { useCallback, useRef, useEffect } from "react";
 import * as pc from "playcanvas";
-import { saveCabinetDrawing, saveChargingArea, saveDeviceAreas, savePathDrawing, DRAWING_FILE_NAME, PATH_FILE_NAME, type CabinetItem, type ChargingAreaItem, type DeviceAreaItem, type DrawingType } from "../hooks/drawing/drawing-storage";
+import { loadChargingArea, saveCabinetDrawing, saveChargingArea, saveDeviceAreas, savePathDrawing, DRAWING_FILE_NAME, PATH_FILE_NAME, type CabinetItem, type ChargingAreaItem, type DeviceAreaItem, type DrawingType, type PathData } from "../hooks/drawing/drawing-storage";
+import { isPathStartInChargingArea, orderedPathPoints, PATH_START_CHARGING_AREA_MESSAGE } from "./drawing/path-codec";
 import type { SaveStatus, SpaceMessageApi } from "../types";
 import { getCurrentModelPathFromRefs } from "../utils/model-state";
 import { mapSiblingFilePath } from "../utils/space-paths";
@@ -27,7 +28,7 @@ interface UseSaveHandlersParams {
   getBoxDatas: () => { id: string; verts: number[][]; height: number; bay: any }[];
   markDeviceAreaSaved: () => void;
   /** 路径相关 */
-  getPathData: () => any;
+  getPathData: () => PathData | null;
   onDrawingFileSaved?: (jsonPath: string, type: DrawingType) => void;
   onPathFileSaved?: (jsonPath: string) => void;
 }
@@ -219,10 +220,14 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
       params.onPathFileSaved?.(getPathJsonPath(modelPath));
       return true;
     } catch (e: any) {
-      if (showError) message.error("保存路径失败: " + (e?.message || e));
+      if (showError) {
+        const errorMessage = e?.message || String(e);
+        if (errorMessage === PATH_START_CHARGING_AREA_MESSAGE) message.warning(errorMessage);
+        else message.error("保存路径失败: " + errorMessage);
+      }
       return false;
     }
-  }, [isAutoSavingRef, message, params, getCurrentModelPath, selectedProject]);
+  }, [message, params, getCurrentModelPath, selectedProject]);
 
   /** 保存可行路径 */
   const handleSavePath = useCallback(async () => {
@@ -238,27 +243,64 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     const drawing = params.chargingDrawingRef.current;
     const hasCharging = drawing?.hasBox();
     const hasDeviceAreas = params.getBoxDatas().length > 0;
-    const hasPath = !!params.getPathData();
+    const pathData = params.getPathData();
+    const hasPath = !!pathData;
+    const modelPath = getCurrentModelPath();
 
     // 自动保存时：无任何数据且 JSON 文件不存在 → 不创建空文件。
     // 这样新项目只打开地图不会生成空的 description_file.json。
     if (silent && !hasCharging && !hasDeviceAreas && !hasPath) {
-      const modelPath = getCurrentModelPath();
-      if (!modelPath) return;
+      if (!modelPath) {
+        isAutoSavingRef.current = false;
+        return;
+      }
       try {
         const buf = await window.electronAPI?.readLargeFile?.(getDrawingJsonPath(modelPath));
-        if (!buf) return;
+        if (!buf) {
+          isAutoSavingRef.current = false;
+          return;
+        }
       } catch {
+        isAutoSavingRef.current = false;
         return; // JSON 不存在，跳过自动保存
+      }
+    }
+
+    // 路径依赖充电区域，先校验再写任何文件，避免保存到一半才失败。
+    if (pathData && modelPath && window.electronAPI) {
+      try {
+        const orderedPoints = orderedPathPoints(pathData);
+        if (orderedPoints.length > 0) {
+          const verts = drawing?.getBoxVerts();
+          const chargingArea: ChargingAreaItem | null = verts ? {
+            id: "current",
+            type: "charging-area",
+            geometry: { verts },
+            updatedAt: "",
+          } : await loadChargingArea(window.electronAPI, modelPath);
+          if (!isPathStartInChargingArea(orderedPoints[0], chargingArea)) {
+            isAutoSavingRef.current = false;
+            if (!silent) message.warning(PATH_START_CHARGING_AREA_MESSAGE);
+            return;
+          }
+        }
+      } catch (e: any) {
+        isAutoSavingRef.current = false;
+        if (!silent) message.error("保存路径失败: " + (e?.message || e));
+        return;
       }
     }
 
     if (!silent) saveStatusSetter("saving");
     isAutoSavingRef.current = true;
-    if (hasCharging) await handleSaveChargingArea();
-    await handleSaveDeviceAreas();
-    const pathSaved = await savePathInternal(!silent);
-    isAutoSavingRef.current = false;
+    let pathSaved = false;
+    try {
+      if (hasCharging) await handleSaveChargingArea();
+      await handleSaveDeviceAreas();
+      pathSaved = await savePathInternal(!silent);
+    } finally {
+      isAutoSavingRef.current = false;
+    }
     if (!pathSaved) {
       if (!silent) saveStatusSetter("idle");
       return;

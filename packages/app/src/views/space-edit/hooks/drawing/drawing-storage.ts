@@ -60,6 +60,7 @@ import {
 import {
   isPathStartInChargingArea,
   orderedPathPoints,
+  PATH_START_CHARGING_AREA_MESSAGE,
   parseReferencePathText,
   parseRobotRoutePathData,
   parseRobotStopPoints,
@@ -493,7 +494,7 @@ export async function savePathDrawing(params: {
   const orderedScenePoints = orderedPathPoints(data);
   const chargingArea = await loadChargingArea(api, modelPath);
   if (!isPathStartInChargingArea(orderedScenePoints[0], chargingArea)) {
-    throw new Error("示意路径起点需要在充电区域内");
+    throw new Error(PATH_START_CHARGING_AREA_MESSAGE);
   }
   const robotPoints = scenePathDataToLas({
     points: orderedScenePoints,
