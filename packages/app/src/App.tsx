@@ -1,6 +1,6 @@
-﻿import { useEffect } from "react";
+﻿import { lazy, Suspense, useEffect, useState } from "react";
 import { Layout, ConfigProvider, App, message as antdMessage } from "antd";
-import { Outlet } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
 import AppHeader from "./pages/app-header";
 import { useSelectedProject } from "./stores/appContextStore";
 import "./styles/global.css";
@@ -12,14 +12,25 @@ export const APP_HEADER_HEIGHT = 48;
 export const MESSAGE_TOP_OFFSET = APP_HEADER_HEIGHT + 12;
 
 const { Content } = Layout;
+const ScreenVerify = lazy(() => import("./views/screen-verify"));
 
 export default function AppLayout() {
   const selectedProject = useSelectedProject();
+  const location = useLocation();
+  const isScreenVerify = location.pathname === "/screen-verify";
+  const projectPageKey = selectedProject || "no-project";
+  const [screenVerifyCacheKey, setScreenVerifyCacheKey] = useState(isScreenVerify ? projectPageKey : "");
 
   useEffect(() => {
     antdMessage.config({ top: MESSAGE_TOP_OFFSET });
     window.__removeSplash?.();
   }, []);
+
+  useEffect(() => {
+    if (isScreenVerify) {
+      setScreenVerifyCacheKey(projectPageKey);
+    }
+  }, [isScreenVerify, projectPageKey]);
 
   return (
     <ConfigProvider
@@ -28,6 +39,9 @@ export default function AppLayout() {
           Modal: {
             titleFontSize: 16,
             titleColor: "#1a1a1a",
+          },
+          Select: {
+            zIndexPopup: 2100,
           },
         },
       }}
@@ -46,7 +60,17 @@ export default function AppLayout() {
           <AppHeader />
           <Content style={{ height: `calc(100vh - ${APP_HEADER_HEIGHT}px)`, padding: 0, background: "#f5f5f5", overflow: "hidden" }}>
             <div style={{ height: "100%", boxSizing: "border-box" }}>
-              <Outlet key={selectedProject || "no-project"} />
+              {(isScreenVerify || screenVerifyCacheKey === projectPageKey) && (
+                <div
+                  key={projectPageKey}
+                  style={{ display: isScreenVerify ? "block" : "none", height: "100%" }}
+                >
+                  <Suspense fallback={<div style={{ padding: 24, textAlign: "center" }}>Loading...</div>}>
+                    <ScreenVerify />
+                  </Suspense>
+                </div>
+              )}
+              {!isScreenVerify && <Outlet key={projectPageKey} />}
             </div>
           </Content>
         </Layout>

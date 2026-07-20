@@ -2,6 +2,7 @@ import { ipcMain } from "electron";
 import AdmZip from "adm-zip";
 import fs from "fs";
 import path from "path";
+import * as XLSX from "xlsx";
 import { ZipArchive } from "archiver";
 import { getDatabase } from "@robot/database";
 import { getProjectRoot } from "../project-core/project-root";
@@ -72,6 +73,37 @@ interface ImageLabelRecord {
   fileName: string;
   data: any;
 }
+
+interface CabinetImageSource {
+  id: string;
+  mime: string;
+  size: number;
+}
+
+interface CabinetImageSourceRef extends CabinetImageSource {
+  kind: "zip" | "file";
+  packagePath?: string;
+  entryName?: string;
+  filePath?: string;
+}
+
+interface CabinetImagePackageRecord {
+  stationName: string;
+  stationCode: string;
+  bayName: string;
+  bayCode: string;
+  mainDeviceName: string;
+  mainDeviceCode: string;
+  componentName: string;
+  componentCode: string;
+  calibrationId: string;
+  imageName: string;
+  imageSource?: CabinetImageSource;
+  imageDataUrl: string;
+}
+
+const cabinetImageSources = new Map<string, CabinetImageSourceRef>();
+let cabinetImageSourceSeq = 0;
 
 export function registerArchiveIpc(): void {
   ipcMain.handle("extract-zip", async (_event, zipPath: string, destDir: string) => {
@@ -270,6 +302,219 @@ export function registerArchiveIpc(): void {
       return { success: false, error: e.message };
     }
   });
+
+  ipcMain.handle("import-cabinet-image-package", async (_event, packagePath: string) => {
+    try {
+      const sourcePath = String(packagePath || "").trim();
+      if (!sourcePath || !path.isAbsolute(sourcePath)) throw new Error("压缩包路径无效");
+      if (!fs.existsSync(sourcePath)) throw new Error("压缩包不存在");
+
+      const stat = fs.statSync(sourcePath);
+      cabinetImageSources.clear();
+      const result = stat.isDirectory()
+        ? readCabinetImagePackageFromDir(sourcePath)
+        : readCabinetImagePackageFromZip(sourcePath);
+
+      if (result.records.length === 0) throw new Error("未解析到屏柜部件记录");
+      return {
+        success: true,
+        packageName: path.basename(sourcePath),
+        ...result,
+      };
+    } catch (e: any) {
+      console.error("[import-cabinet-image-package] 导入失败:", e.message);
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle("load-cabinet-image", async (_event, sourceId: string) => {
+    try {
+      const source = cabinetImageSources.get(String(sourceId || ""));
+      if (!source) throw new Error("图片来源已失效，请重新导入屏柜图像压缩包");
+      const dataUrl = readCabinetImageDataUrl(source);
+      return { success: true, dataUrl };
+    } catch (e: any) {
+      console.error("[load-cabinet-image] 加载失败:", e.message);
+      return { success: false, error: e.message };
+    }
+  });
+}
+
+function readCabinetImagePackageFromZip(zipPath: string): { records: CabinetImagePackageRecord[]; warnings: string[] } {
+  if (path.extname(zipPath).toLowerCase() !== ".zip") throw new Error("请选择 ZIP 压缩包");
+  const zip = new AdmZip(zipPath);
+  const entries = zip.getEntries().filter((entry) => !entry.isDirectory);
+  const xlsxEntry = entries.find((entry) => {
+    const baseName = path.posix.basename(normalizeZipEntryName(entry.entryName));
+    return /\.(xlsx|xls)$/i.test(baseName) && !baseName.startsWith("~$");
+  });
+  if (!xlsxEntry) throw new Error("压缩包内未找到屏柜部件表 Excel");
+
+  const rows = parseCabinetComponentRows(xlsxEntry.getData());
+  const imageMap = new Map<string, { name: string; source: CabinetImageSource }>();
+  for (const entry of entries) {
+    const entryName = normalizeZipEntryName(entry.entryName);
+    const ext = path.posix.extname(entryName).toLowerCase();
+    const mime = imageMimeType(ext);
+    if (!mime) continue;
+    const code = path.posix.basename(entryName, ext).trim();
+    if (!code) continue;
+    const current = imageMap.get(code);
+    const entryInImgDir = entryName.split("/").some((part) => part.toLowerCase() === "img");
+    if (!current || entryInImgDir) {
+      imageMap.set(code, {
+        name: path.posix.basename(entryName),
+        source: registerCabinetImageSource({
+          kind: "zip",
+          packagePath: zipPath,
+          entryName,
+          mime,
+          size: entry.header.size,
+        }),
+      });
+    }
+  }
+
+  return attachCabinetImages(rows, imageMap);
+}
+
+function readCabinetImagePackageFromDir(dirPath: string): { records: CabinetImagePackageRecord[]; warnings: string[] } {
+  const files = fs.readdirSync(dirPath, { withFileTypes: true });
+  const xlsx = files.find((item) => item.isFile() && /\.(xlsx|xls)$/i.test(item.name) && !item.name.startsWith("~$"));
+  if (!xlsx) throw new Error("目录内未找到屏柜部件表 Excel");
+
+  const rows = parseCabinetComponentRows(fs.readFileSync(path.join(dirPath, xlsx.name)));
+  const imageMap = new Map<string, { name: string; source: CabinetImageSource }>();
+  const imgDir = path.join(dirPath, "img");
+  const searchDir = fs.existsSync(imgDir) && fs.statSync(imgDir).isDirectory() ? imgDir : dirPath;
+  for (const filePath of collectFiles(searchDir)) {
+    const ext = path.extname(filePath).toLowerCase();
+    const mime = imageMimeType(ext);
+    if (!mime) continue;
+    const code = path.basename(filePath, ext).trim();
+    const stat = fs.statSync(filePath);
+    imageMap.set(code, {
+      name: path.basename(filePath),
+      source: registerCabinetImageSource({
+        kind: "file",
+        filePath,
+        mime,
+        size: stat.size,
+      }),
+    });
+  }
+
+  return attachCabinetImages(rows, imageMap);
+}
+
+function parseCabinetComponentRows(xlsxBuffer: Buffer): Omit<CabinetImagePackageRecord, "imageName" | "imageDataUrl">[] {
+  const wb = XLSX.read(xlsxBuffer, { type: "buffer" });
+  for (const sheetName of wb.SheetNames) {
+    const ws = wb.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
+    const parsed = rows
+      .map((row) => ({
+        stationName: valueText(row["厂站名称"]),
+        stationCode: valueText(row["厂站编码"]),
+        bayName: valueText(row["间隔名称"]),
+        bayCode: valueText(row["间隔编码"]),
+        mainDeviceName: valueText(row["主设备名称"]),
+        mainDeviceCode: valueText(row["主设备编码"]),
+        componentName: valueText(row["部件名称"]),
+        componentCode: valueText(row["部件编码"]),
+        calibrationId: valueText(row["标定id"]),
+      }))
+      .filter((row) => row.componentCode);
+    if (parsed.length > 0) return parsed;
+  }
+  throw new Error("Excel 中未找到有效的部件编码");
+}
+
+function attachCabinetImages(
+  rows: Omit<CabinetImagePackageRecord, "imageName" | "imageDataUrl">[],
+  imageMap: Map<string, { name: string; source: CabinetImageSource }>,
+): { records: CabinetImagePackageRecord[]; warnings: string[] } {
+  const warnings: string[] = [];
+  const records = rows.map((row) => {
+    const image = imageMap.get(row.componentCode);
+    if (!image) warnings.push(`未找到部件图片：${row.componentName || row.componentCode}`);
+    return {
+      ...row,
+      imageName: image?.name || "",
+      imageSource: image?.source,
+      imageDataUrl: "",
+    };
+  });
+  return { records, warnings };
+}
+
+function readCabinetImageDataUrl(source: CabinetImageSourceRef): string {
+  if (!source || !source.mime) throw new Error("图片来源无效");
+
+  if (source.kind === "zip") {
+    const packagePath = String(source.packagePath || "").trim();
+    const entryName = normalizeZipEntryName(source.entryName || "");
+    if (!packagePath || !path.isAbsolute(packagePath)) throw new Error("压缩包路径无效");
+    if (!fs.existsSync(packagePath)) throw new Error("压缩包不存在");
+    if (!entryName) throw new Error("压缩包图片路径无效");
+
+    const zip = new AdmZip(packagePath);
+    const entry = zip.getEntries().find((item) => !item.isDirectory && normalizeZipEntryName(item.entryName) === entryName);
+    if (!entry) throw new Error("压缩包内未找到图片");
+    return `data:${source.mime};base64,${entry.getData().toString("base64")}`;
+  }
+
+  if (source.kind === "file") {
+    const filePath = String(source.filePath || "").trim();
+    if (!filePath || !path.isAbsolute(filePath)) throw new Error("图片路径无效");
+    if (!fs.existsSync(filePath)) throw new Error("图片文件不存在");
+    return `data:${source.mime};base64,${fs.readFileSync(filePath).toString("base64")}`;
+  }
+
+  throw new Error("不支持的图片来源");
+}
+
+function registerCabinetImageSource(source: Omit<CabinetImageSourceRef, "id">): CabinetImageSource {
+  const id = `cabinet-image:${Date.now()}:${++cabinetImageSourceSeq}`;
+  cabinetImageSources.set(id, { ...source, id });
+  return {
+    id,
+    mime: source.mime,
+    size: source.size,
+  };
+}
+
+function collectFiles(dirPath: string): string[] {
+  const files: string[] = [];
+  for (const item of fs.readdirSync(dirPath, { withFileTypes: true })) {
+    const fullPath = path.join(dirPath, item.name);
+    if (item.isDirectory()) {
+      files.push(...collectFiles(fullPath));
+    } else if (item.isFile()) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+function normalizeZipEntryName(entryName: string): string {
+  return String(entryName || "").replace(/\\/g, "/");
+}
+
+function imageMimeType(ext: string): string {
+  switch (ext.toLowerCase()) {
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".png":
+      return "image/png";
+    case ".webp":
+      return "image/webp";
+    case ".bmp":
+      return "image/bmp";
+    default:
+      return "";
+  }
 }
 
 function cpMerge(src: string, dst: string): void {

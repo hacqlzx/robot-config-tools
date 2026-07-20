@@ -1,0 +1,374 @@
+.screen-verify-page {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #f5f5f5;
+  position: relative;
+
+  &.is-resizing {
+    cursor: col-resize;
+    user-select: none;
+
+    * {
+      cursor: col-resize;
+      user-select: none;
+    }
+  }
+}
+
+.screen-verify-toolbar {
+  flex-shrink: 0;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  background: #fff;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.screen-verify-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  padding: 6px;
+  gap: 2px;
+}
+
+.screen-verify-left,
+.screen-verify-main,
+.screen-verify-right {
+  background: #fff;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.screen-verify-left,
+.screen-verify-right {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.screen-verify-left-filters {
+  flex-shrink: 0;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.screen-verify-status-select {
+  width: 110px;
+  flex-shrink: 0;
+}
+
+.screen-verify-search {
+  flex: 1;
+  min-width: 0;
+}
+
+.screen-verify-tree {
+  flex: 1;
+  overflow: auto;
+  padding: 8px;
+
+  .ant-tree-treenode {
+    white-space: nowrap;
+  }
+
+  .ant-tree-node-content-wrapper {
+    overflow: hidden;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .ant-tree-title {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ant-tree-indent-unit {
+    width: 14px;
+  }
+
+  .ant-tree-switcher {
+    width: 16px;
+    flex-shrink: 0;
+  }
+}
+
+.screen-verify-tree-empty {
+  height: 100%;
+  min-height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.screen-verify-tree-title {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.screen-verify-tree-title-editable {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+}
+
+.screen-verify-tree-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.screen-verify-tree-rename {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: #8c8c8c;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+
+  &:hover {
+    color: #1677ff;
+    background: #e6f4ff;
+  }
+}
+
+.screen-verify-resizer {
+  flex-shrink: 0;
+  width: 2px;
+  margin: 0 2px;
+  cursor: col-resize;
+  background: transparent;
+  border-radius: 1px;
+  transition: background 0.15s;
+
+  &:hover {
+    background: #d9d9d9;
+  }
+}
+
+.screen-verify-main {
+  flex: 1;
+  min-width: 360px;
+  display: flex;
+  flex-direction: column;
+  border-left: none;
+  border-right: none;
+}
+
+.screen-verify-actionbar {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 0;
+  padding: 14px 10px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.screen-verify-action-group {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+
+  .ant-btn {
+    height: 30px;
+    padding: 0 11px;
+    font-size: 13px;
+  }
+
+  .ant-btn-compact-first-item,
+  .ant-btn-compact-last-item {
+    height: 30px;
+  }
+}
+
+.screen-verify-action-spacer {
+  flex: 1 1 3px;
+  min-width: 3px;
+  height: 30px;
+  margin: 0 3px;
+  position: relative;
+
+  &::before {
+    content: "";
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    left: 50%;
+    border-left: 1px solid #f0f0f0;
+  }
+}
+
+.screen-verify-canvas {
+  flex: 1;
+  overflow: hidden;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  position: relative;
+}
+
+.screen-verify-image-canvas-wrap {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.screen-verify-image-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  user-select: none;
+  outline: none;
+
+  &:active {
+    cursor: grabbing;
+  }
+
+  &.is-drawing {
+    cursor: crosshair;
+
+    &:active {
+      cursor: crosshair;
+    }
+  }
+}
+
+.screen-verify-ocr-result {
+  max-height: 360px;
+  overflow: auto;
+  padding: 4px 0;
+}
+
+.screen-verify-ocr-result-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 22px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #f0f0f0;
+  word-break: break-all;
+
+  &:last-child {
+    border-bottom: 0;
+  }
+}
+
+.screen-verify-ocr-result-text {
+  color: #262626;
+}
+
+.screen-verify-ocr-result-meta {
+  color: #8c8c8c;
+  font-size: 12px;
+}
+
+.screen-verify-check {
+  flex-shrink: 0;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border-bottom: 1px solid #d9d9d9;
+}
+
+.screen-verify-table {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  padding: 8px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+
+  .ant-spin-nested-loading,
+  .ant-spin-container,
+  .ant-table,
+  .ant-table-container,
+  .ant-table-content {
+    flex: 1;
+    width: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .ant-table,
+  .ant-table-container {
+    border-radius: 2px;
+  }
+
+  .ant-table-content > table {
+    width: 100%;
+    height: 100%;
+    table-layout: fixed;
+  }
+
+  .ant-table-thead {
+    height: 38px;
+    flex-shrink: 0;
+  }
+
+  .ant-table-tbody {
+    height: 100%;
+  }
+
+  .ant-table-thead > tr > th {
+    background: #e5e5e5;
+    font-weight: 400;
+  }
+
+  .ant-table-thead > tr > th:first-child {
+    border-start-start-radius: 2px !important;
+  }
+
+  .ant-table-thead > tr > th:last-child {
+    border-start-end-radius: 2px !important;
+  }
+
+  .ant-table-tbody > tr > td {
+    height: 46px;
+  }
+
+  .ant-table-tbody > tr {
+    cursor: pointer;
+  }
+
+  .ant-table-placeholder {
+    height: 100%;
+  }
+
+  .ant-table-placeholder > .ant-table-cell {
+    height: 100%;
+    vertical-align: middle;
+    border-bottom: 0;
+  }
+}

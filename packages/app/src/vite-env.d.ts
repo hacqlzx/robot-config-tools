@@ -53,6 +53,41 @@ declare global {
     total: number;
   }
 
+  interface CabinetImagePackageRecord {
+    stationName: string;
+    stationCode: string;
+    bayName: string;
+    bayCode: string;
+    mainDeviceName: string;
+    mainDeviceCode: string;
+    componentName: string;
+    componentCode: string;
+    calibrationId: string;
+    imageName: string;
+    imageSource?: CabinetImageSource;
+    imageDataUrl: string;
+  }
+
+  interface CabinetImageSource {
+    id: string;
+    mime: string;
+    size: number;
+  }
+
+  interface CabinetImagePackageResult {
+    success: boolean;
+    error?: string;
+    packageName?: string;
+    records?: CabinetImagePackageRecord[];
+    warnings?: string[];
+  }
+
+  interface CabinetImageLoadResult {
+    success: boolean;
+    error?: string;
+    dataUrl?: string;
+  }
+
   interface Window {
     electronAPI?: {
       platform: string;
@@ -103,6 +138,8 @@ declare global {
       exportSurveyData: (projectName: string, mapName: string, destDir: string) => Promise<{ success: boolean; error?: string; zipPath?: string; zipName?: string }>;
       exportImageLabels: (projectName: string, mapName: string, destDir: string) => Promise<{ success: boolean; error?: string; zipPath?: string; zipName?: string; exportedCount?: number }>;
       importImageLabels: (projectName: string, mapName: string, zipPath: string) => Promise<{ success: boolean; error?: string; importedCount?: number; warnings?: string[] }>;
+      importCabinetImagePackage: (zipPath: string) => Promise<CabinetImagePackageResult>;
+      loadCabinetImage: (sourceId: string) => Promise<CabinetImageLoadResult>;
       getProjectRoot: () => Promise<string>;
       setDataPath: (newPath: string) => Promise<boolean>;
       startBatch: () => Promise<void>;

@@ -88,6 +88,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("export-image-labels", projectName, mapName, destDir),
   importImageLabels: (projectName, mapName, zipPath) =>
     ipcRenderer.invoke("import-image-labels", projectName, mapName, zipPath),
+  importCabinetImagePackage: (zipPath) =>
+    ipcRenderer.invoke("import-cabinet-image-package", zipPath),
+  loadCabinetImage: (sourceId) =>
+    ipcRenderer.invoke("load-cabinet-image", sourceId),
   getProjectRoot: () => ipcRenderer.invoke("get-project-root"),
   setDataPath: (newPath) => ipcRenderer.invoke("set-data-path", newPath),
   startBatch: () => ipcRenderer.invoke("db:startBatch"),

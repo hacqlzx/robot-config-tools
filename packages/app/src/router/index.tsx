@@ -20,6 +20,7 @@ const router = createHashRouter([
       { index: true, element: <Navigate to="space-edit" replace /> },
       { path: "space-edit", element: <SpaceEdit /> },
       { path: "image-edit", element: <LazyPage><ImageEdit /></LazyPage> },
+      { path: "screen-verify", element: <></> },
       { path: "device-verify", element: <LazyPage><DeviceVerify /></LazyPage> },
       { path: "import-export", element: <LazyPage><ImportExport /></LazyPage> },
       { path: "config", element: <LazyPage><Config /></LazyPage> },
