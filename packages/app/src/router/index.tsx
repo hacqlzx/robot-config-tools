@@ -4,7 +4,6 @@ import AppLayout from "../App";
 import SpaceEdit from "../views/space-edit";
 
 const ImageEdit = lazy(() => import("../views/image-edit"));
-const DeviceVerify = lazy(() => import("../views/device-verify"));
 const ImportExport = lazy(() => import("../views/import-export"));
 const Config = lazy(() => import("../views/config"));
 
@@ -21,7 +20,7 @@ const router = createHashRouter([
       { path: "space-edit", element: <SpaceEdit /> },
       { path: "image-edit", element: <LazyPage><ImageEdit /></LazyPage> },
       { path: "screen-verify", element: <></> },
-      { path: "device-verify", element: <LazyPage><DeviceVerify /></LazyPage> },
+      { path: "device-verify", element: <></> },
       { path: "import-export", element: <LazyPage><ImportExport /></LazyPage> },
       { path: "config", element: <LazyPage><Config /></LazyPage> },
     ],

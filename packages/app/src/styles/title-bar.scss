@@ -1,7 +1,7 @@
 .app-header {
   display: flex;
-  align-items: center;
-  padding: 0 8px;
+  align-items: flex-start;
+  padding: 0;
   height: 48px;
   line-height: 48px;
   flex-shrink: 0;
@@ -17,12 +17,22 @@
   font-size: 15px;
   flex: 1 1 0; // 宽度由剩余弹性空间决定，放大窗口时随之变宽，避免折叠后锁死出不来
   min-width: 0;
+  height: 48px;
+  line-height: 48px;
+
+  &.ant-menu-horizontal {
+    line-height: 48px;
+  }
 
   // 仅菜单项与溢出项保留可点击，空白处交还给拖拽区
   .ant-menu-item,
   .ant-menu-submenu,
   .ant-menu-overflow-item {
     -webkit-app-region: no-drag;
+    height: 48px;
+    line-height: 48px;
+    display: inline-flex;
+    align-items: center;
   }
 
   // 全部状态去掉底部指示线
@@ -42,6 +52,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  height: 48px;
   margin-left: auto;
   min-width: 0;
   flex-shrink: 1;
@@ -56,12 +67,41 @@
 
 .app-header__controls {
   display: flex;
+  align-self: flex-start;
   flex-shrink: 0; // 三个窗口控制按钮始终显示，永不被压缩
   -webkit-app-region: no-drag;
 
   .ant-btn {
     width: 36px;
-    height: 36px;
+    height: 48px;
     font-size: 14px;
+  }
+
+  .app-header__control-btn {
+    border-radius: 0;
+
+    &:hover,
+    &:focus-visible {
+      color: #1f1f1f !important;
+      background: #f2f3f5 !important;
+    }
+
+    &:active {
+      color: #1f1f1f !important;
+      background: #e6e8eb !important;
+    }
+  }
+
+  .app-header__control-btn--close {
+    &:hover,
+    &:focus-visible {
+      color: #fff !important;
+      background: #ff4d4f !important;
+    }
+
+    &:active {
+      color: #fff !important;
+      background: #d9363e !important;
+    }
   }
 }

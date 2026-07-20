@@ -12,12 +12,12 @@ export function registerSystemIpc(): void {
     });
   });
 
-  ipcMain.handle("dialog:select-dir", async () => {
+  ipcMain.handle("dialog:select-dir", async (_event, title?: string) => {
     const win = BrowserWindow.getFocusedWindow();
     if (!win) return null;
     const result = await dialog.showOpenDialog(win, {
       properties: ["openDirectory"],
-      title: "选择保存目录",
+      title: String(title || "").trim() || "选择保存目录",
     });
     return result.canceled ? null : result.filePaths[0];
   });

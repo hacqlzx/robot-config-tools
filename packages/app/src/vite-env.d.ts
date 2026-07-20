@@ -88,11 +88,56 @@ declare global {
     dataUrl?: string;
   }
 
+  interface AppWindowState {
+    isMaximized: boolean;
+    isFullScreen: boolean;
+  }
+
+  type DeviceVerificationNodeKind = "region" | "bay" | "mainDevice" | "component" | "point";
+
+  interface DeviceVerificationTreeNode {
+    key: string;
+    title: string;
+    code: string;
+    kind: DeviceVerificationNodeKind;
+    isLeaf: boolean;
+    hasImage: boolean;
+    children?: DeviceVerificationTreeNode[];
+  }
+
+  interface DeviceVerificationPackageResult {
+    success: boolean;
+    hasData?: boolean;
+    error?: string;
+    sessionId?: string;
+    packageName?: string;
+    localDir?: string;
+    roots?: DeviceVerificationTreeNode[];
+    expandedKeys?: string[];
+    pointCount?: number;
+    imageCount?: number;
+  }
+
+  interface DeviceVerificationChildrenResult {
+    success: boolean;
+    error?: string;
+    children?: DeviceVerificationTreeNode[];
+  }
+
+  interface DeviceVerificationImageResult {
+    success: boolean;
+    error?: string;
+    fileName?: string;
+    dataUrl?: string;
+  }
+
   interface Window {
     electronAPI?: {
       platform: string;
       minimize: () => void;
       maximize: () => void;
+      getWindowState: () => Promise<AppWindowState>;
+      onWindowStateChange: (callback: (state: AppWindowState) => void) => () => void;
       close: () => void;
       ping: (ip: string) => Promise<boolean>;
       readFileChunk: (path: string, offset: number, length: number) => Promise<ArrayBuffer>;
@@ -114,7 +159,7 @@ declare global {
         openDir: (targetPath: string) => Promise<void>;
         exportFile: (projectName: string, subPath: string, destDir: string) => Promise<string>;
       };
-      selectDir: () => Promise<string | null>;
+      selectDir: (title?: string) => Promise<string | null>;
       selectZipFile: () => Promise<string | null>;
       onExportProgress: (callback: (data: { step: string; pct: number }) => void) => () => void;
       importPoints: (rows: any[], stationName: string, stationCode: string, projectName: string) => Promise<{ total: number; inserted: number; updated: number; errors: string[] }>;
@@ -140,6 +185,10 @@ declare global {
       importImageLabels: (projectName: string, mapName: string, zipPath: string) => Promise<{ success: boolean; error?: string; importedCount?: number; warnings?: string[] }>;
       importCabinetImagePackage: (zipPath: string) => Promise<CabinetImagePackageResult>;
       loadCabinetImage: (sourceId: string) => Promise<CabinetImageLoadResult>;
+      importDeviceVerificationPackage: (projectName: string, sourcePath: string) => Promise<DeviceVerificationPackageResult>;
+      loadLocalDeviceVerificationPackage: (projectName: string) => Promise<DeviceVerificationPackageResult>;
+      loadDeviceVerificationChildren: (sessionId: string, parentId: string) => Promise<DeviceVerificationChildrenResult>;
+      loadDeviceVerificationImage: (sessionId: string, pointNodeId: string) => Promise<DeviceVerificationImageResult>;
       getProjectRoot: () => Promise<string>;
       setDataPath: (newPath: string) => Promise<boolean>;
       startBatch: () => Promise<void>;

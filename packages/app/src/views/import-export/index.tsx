@@ -1,14 +1,20 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { App, Button, Card } from "antd";
-import { UploadOutlined, DownloadOutlined } from "@ant-design/icons";
+import { App, Button, Card, Modal, Radio, Upload } from "antd";
+import type { UploadFile } from "antd";
+import { DownloadOutlined, InboxOutlined, UploadOutlined } from "@ant-design/icons";
 import {
   getAllRobot,
   getFacInfo,
   importDevicePoint,
+  importSpaceModel,
+  importBack,
   importCommunicateExcel,
   importProspectCalibration,
+  importCorrection,
   exportSpaceModel,
   exportProspectImage,
+  exportDeviceImage,
+  exportBack,
   exportDeviceCheckImage,
   downLoadExcelTemplate,
   downloadCommunicateExcel,
@@ -20,6 +26,7 @@ interface IEAction {
   key: "import" | "export" | "export-log" | "export-error";
   label: string;
   desc?: string;
+  disabled?: boolean;
 }
 
 interface IECard {
@@ -28,6 +35,16 @@ interface IECard {
   desc?: string;
   templateDownload?: boolean;
   actions?: IEAction[];
+}
+
+type BackupImportType = "1" | "2";
+
+interface ImportDialogConfig {
+  title: string;
+  accept: string;
+  acceptHint: string;
+  showBackupType?: boolean;
+  onImport: (file: File, backupType: BackupImportType) => Promise<void>;
 }
 
 const cardList: IECard[] = [
@@ -75,7 +92,7 @@ const cardList: IECard[] = [
     title: "设备验证图",
     actions: [
       { key: "export", label: "设备验证图导出", desc: "导出设备验证图" },
-      { key: "import", label: "设备验证图导入", desc: "导入设备纠偏数据" },
+      { key: "import", label: "纠偏数据导入", desc: "导入设备纠偏数据" },
     ],
   },
   {
@@ -90,8 +107,8 @@ const cardList: IECard[] = [
     key: "log",
     title: "日志",
     actions: [
-      { key: "export-log", label: "运行日志导出", desc: "导出机器人日志" },
-      { key: "export-error", label: "异常数据导出", desc: "导出机器人异常数据" },
+      { key: "export-log", label: "运行日志导出", desc: "导出机器人日志", disabled: true },
+      { key: "export-error", label: "异常数据导出", desc: "导出机器人异常数据", disabled: true },
     ],
   },
 ];
@@ -112,9 +129,11 @@ export default function ImportExport() {
   const { message } = App.useApp();
   const { selectedProject, selectedRobot, backendIp } = useAppContext();
   const containerRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [columns, setColumns] = useState(4);
   const [uploadingLabel, setUploadingLabel] = useState<string | null>(null);
+  const [importDialog, setImportDialog] = useState<ImportDialogConfig | null>(null);
+  const [importFileList, setImportFileList] = useState<UploadFile[]>([]);
+  const [backupImportType, setBackupImportType] = useState<BackupImportType>("1");
 
   useEffect(() => {
     const el = containerRef.current;
@@ -126,19 +145,10 @@ export default function ImportExport() {
     return () => observer.disconnect();
   }, []);
 
-  /** 打开文件选择器 */
-  const pickFile = useCallback((onFile: (file: File) => Promise<void>, accept = ".xlsx,.xls") => {
-    const input = fileInputRef.current;
-    if (!input) return;
-    input.accept = accept;
-    input.onchange = async (e: any) => {
-      const file = e.target?.files?.[0];
-      if (file) {
-        await onFile(file);
-      }
-      input.value = "";
-    };
-    input.click();
+  const openImportDialog = useCallback((config: ImportDialogConfig) => {
+    setImportFileList([]);
+    setBackupImportType("1");
+    setImportDialog(config);
   }, []);
 
   /** 通用下载到目录：Electron 选目录下载，浏览器直接触发下载 */
@@ -286,6 +296,69 @@ export default function ImportExport() {
     return robot;
   }, [message, selectedRobot]);
 
+  /** 空间模型导入 */
+  const handleSpaceModelImport = useCallback(async (file: File) => {
+    setUploadingLabel("空间模型导入");
+    try {
+      const robot = await resolveSelectedRobot();
+      if (!robot) return;
+
+      const res = await importSpaceModel(file, robot.id);
+      const body = res.data;
+      if (body.success) {
+        message.success("空间模型导入成功");
+      } else {
+        message.error(body.message || "空间模型导入失败");
+      }
+    } catch (e: any) {
+      message.error("空间模型导入失败: " + (e?.message || e));
+    } finally {
+      setUploadingLabel(null);
+    }
+  }, [message, resolveSelectedRobot]);
+
+  /** 工程备份导入 */
+  const handleProjectBackupImport = useCallback(async (file: File, type: BackupImportType) => {
+    setUploadingLabel("工程备份导入");
+    try {
+      const robot = await resolveSelectedRobot();
+      if (!robot) return;
+
+      const res = await importBack(file, robot.id, type);
+      const body = res.data;
+      if (body.success) {
+        message.success("工程备份导入成功");
+      } else {
+        message.error(body.message || "工程备份导入失败");
+      }
+    } catch (e: any) {
+      message.error("工程备份导入失败: " + (e?.message || e));
+    } finally {
+      setUploadingLabel(null);
+    }
+  }, [message, resolveSelectedRobot]);
+
+  /** 工程备份导出 */
+  const handleProjectBackupExport = useCallback(async () => {
+    setUploadingLabel("工程备份导出");
+    try {
+      const robot = await resolveSelectedRobot();
+      if (!robot) return;
+      const res = await exportBack(robot.id);
+      const body = res.data;
+      if (!body.success || !body.data) {
+        message.error(body.message || "获取下载路径失败");
+        return;
+      }
+
+      await downloadFileToDir(body.data, "工程备份导出");
+    } catch (e: any) {
+      message.error("导出失败: " + (e?.message || e));
+    } finally {
+      setUploadingLabel(null);
+    }
+  }, [resolveSelectedRobot, message, downloadFileToDir]);
+
   /** 图像标识导入 */
   const handleImageLabelImport = useCallback(async (file: File) => {
     setUploadingLabel("图像标识导入");
@@ -302,6 +375,27 @@ export default function ImportExport() {
       }
     } catch (e: any) {
       message.error("图像标识导入失败: " + (e?.message || e));
+    } finally {
+      setUploadingLabel(null);
+    }
+  }, [resolveSelectedRobot, message]);
+
+  /** 纠偏数据导入 */
+  const handleCorrectionImport = useCallback(async (file: File) => {
+    setUploadingLabel("纠偏数据导入");
+    try {
+      const robot = await resolveSelectedRobot();
+      if (!robot) return;
+
+      const res = await importCorrection(file, robot.id);
+      const body = res.data;
+      if (body.success) {
+        message.success("纠偏数据导入成功");
+      } else {
+        message.error(body.message || "纠偏数据导入失败");
+      }
+    } catch (e: any) {
+      message.error("纠偏数据导入失败: " + (e?.message || e));
     } finally {
       setUploadingLabel(null);
     }
@@ -370,6 +464,27 @@ export default function ImportExport() {
     }
   }, [resolveSelectedRobot, message, downloadFileToDir]);
 
+  /** 屏柜验证图导出 */
+  const handleDeviceImageExport = useCallback(async () => {
+    setUploadingLabel("屏柜验证图导出");
+    try {
+      const robot = await resolveSelectedRobot();
+      if (!robot) return;
+      const res = await exportDeviceImage(robot.id);
+      const body = res.data;
+      if (!body.success || !body.data) {
+        message.error(body.message || "获取下载路径失败");
+        return;
+      }
+
+      await downloadFileToDir(body.data, "屏柜验证图导出");
+    } catch (e: any) {
+      message.error("导出失败: " + (e?.message || e));
+    } finally {
+      setUploadingLabel(null);
+    }
+  }, [resolveSelectedRobot, message, downloadFileToDir]);
+
   /** 点表模板下载 */
   const handlePatrolPointTemplateDownload = useCallback(async () => {
     try {
@@ -401,15 +516,39 @@ export default function ImportExport() {
   }, [message, downloadFileToDir]);
 
   const handleAction = (card: IECard, actionKey: IEAction["key"], label: string) => {
+    const action = card.actions?.find((item) => item.key === actionKey && item.label === label);
+    if (action?.disabled) return;
+
+    // 空间模型导入
+    if (card.key === "space-model" && actionKey === "import") {
+      openImportDialog({
+        title: "空间模型导入",
+        accept: ".zip,.las,.laz",
+        acceptHint: ".zip、.las、.laz 格式",
+        onImport: handleSpaceModelImport,
+      });
+      return;
+    }
+
     // 点表导入
     if (card.key === "patrol-point" && actionKey === "import") {
-      pickFile(handlePatrolPointImport);
+      openImportDialog({
+        title: "点表导入",
+        accept: ".xlsx,.xls",
+        acceptHint: ".xlsx、.xls 格式",
+        onImport: handlePatrolPointImport,
+      });
       return;
     }
 
     // 通信信息导入
     if (card.key === "communication" && actionKey === "import") {
-      pickFile(handleCommunicationImport);
+      openImportDialog({
+        title: "通信信息导入",
+        accept: ".xlsx,.xls",
+        acceptHint: ".xlsx、.xls 格式",
+        onImport: handleCommunicationImport,
+      });
       return;
     }
 
@@ -427,13 +566,53 @@ export default function ImportExport() {
 
     // 图像标识导入
     if (card.key === "survey-image" && actionKey === "import") {
-      pickFile(handleImageLabelImport, ".zip");
+      openImportDialog({
+        title: "图像标识导入",
+        accept: ".zip",
+        acceptHint: ".zip 格式",
+        onImport: handleImageLabelImport,
+      });
+      return;
+    }
+
+    // 屏柜验证图导出
+    if (card.key === "screen-verify" && actionKey === "export") {
+      handleDeviceImageExport();
+      return;
+    }
+
+    // 工程备份导出
+    if (card.key === "project-backup" && actionKey === "export") {
+      handleProjectBackupExport();
+      return;
+    }
+
+    // 工程备份导入
+    if (card.key === "project-backup" && actionKey === "import") {
+      openImportDialog({
+        title: "工程备份导入",
+        accept: ".zip",
+        acceptHint: ".zip 格式",
+        showBackupType: true,
+        onImport: handleProjectBackupImport,
+      });
       return;
     }
 
     // 设备验证图导出
     if (card.key === "device-verify" && actionKey === "export") {
       handleDeviceCheckImageExport();
+      return;
+    }
+
+    // 纠偏数据导入
+    if (card.key === "device-verify" && actionKey === "import") {
+      openImportDialog({
+        title: "纠偏数据导入",
+        accept: ".zip",
+        acceptHint: ".zip 格式",
+        onImport: handleCorrectionImport,
+      });
       return;
     }
 
@@ -447,6 +626,23 @@ export default function ImportExport() {
     "communication": handleCommunicationTemplateDownload,
   };
 
+  const closeImportDialog = () => {
+    if (uploadingLabel) return;
+    setImportDialog(null);
+    setImportFileList([]);
+  };
+
+  const handleImportConfirm = async () => {
+    const file = importFileList[0]?.originFileObj;
+    if (!importDialog || !file) {
+      message.warning("请先选择导入文件");
+      return;
+    }
+    await importDialog.onImport(file, backupImportType);
+    setImportDialog(null);
+    setImportFileList([]);
+  };
+
   const renderActions = (card: IECard) => {
     const actions: IEAction[] = card.actions ?? [
       { key: "import", label: "导入" },
@@ -456,6 +652,7 @@ export default function ImportExport() {
       <div className="ie-card-action" key={act.key}>
         <Button
           type="primary"
+          disabled={act.disabled}
           icon={isImportKey(act.key) ? <UploadOutlined /> : <DownloadOutlined />}
           loading={uploadingLabel === act.label}
           onClick={() => handleAction(card, act.key, act.label)}
@@ -469,17 +666,12 @@ export default function ImportExport() {
 
   return (
     <div className="import-export-page" ref={containerRef}>
-      {/* 隐藏的文件选择器 */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".xlsx,.xls"
-        style={{ display: "none" }}
-      />
-
       <div className="ie-grid" style={{ gridTemplateColumns: `repeat(${columns}, 1fr)` }}>
         {cardList.map((card) => (
-          <Card key={card.key} className="ie-card" hoverable>
+          <Card
+            key={card.key}
+            className={`ie-card${card.actions?.every((action) => action.disabled) ? " is-disabled" : ""}`}
+          >
             <div className="ie-card-head">
               <span className="ie-card-bar" />
               <span className="ie-card-title">{card.title}</span>
@@ -499,6 +691,63 @@ export default function ImportExport() {
           </Card>
         ))}
       </div>
+
+      <Modal
+        className="ie-import-modal"
+        title={importDialog?.title}
+        open={Boolean(importDialog)}
+        width={680}
+        centered
+        okText="确定"
+        cancelText="取消"
+        confirmLoading={Boolean(importDialog && uploadingLabel === importDialog.title)}
+        okButtonProps={{ disabled: importFileList.length === 0 }}
+        onOk={handleImportConfirm}
+        onCancel={closeImportDialog}
+        destroyOnHidden
+      >
+        {importDialog?.showBackupType && (
+          <section className="ie-import-section">
+            <div className="ie-import-label">选择下发类型</div>
+            <Radio.Group
+              className="ie-backup-type-group"
+              value={backupImportType}
+              onChange={(event) => setBackupImportType(event.target.value)}
+            >
+              <Radio value="2" className="ie-backup-type-option">
+                <span className="ie-backup-type-title">复制</span>
+                <span className="ie-backup-type-desc">
+                  包含机器人台账、后台通信数据、地图、拍照点、勘察图片、勘察标定数据、纠偏数据
+                </span>
+              </Radio>
+              <Radio value="1" className="ie-backup-type-option">
+                <span className="ie-backup-type-title">厂站数据</span>
+                <span className="ie-backup-type-desc">包含地图、拍照点</span>
+              </Radio>
+            </Radio.Group>
+          </section>
+        )}
+
+        <section className="ie-import-section">
+          <div className="ie-import-label">上传文件</div>
+          <Upload.Dragger
+            accept={importDialog?.accept}
+            multiple={false}
+            maxCount={1}
+            fileList={importFileList}
+            beforeUpload={() => false}
+            onChange={({ fileList }) => setImportFileList(fileList.slice(-1))}
+            onRemove={() => {
+              setImportFileList([]);
+              return true;
+            }}
+          >
+            <p className="ie-import-icon"><InboxOutlined /></p>
+            <p className="ie-import-text">点击或拖拽上传文件</p>
+            <p className="ie-import-hint">支持 {importDialog?.acceptHint}</p>
+          </Upload.Dragger>
+        </section>
+      </Modal>
     </div>
   );
 }

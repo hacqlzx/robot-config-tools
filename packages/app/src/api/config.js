@@ -140,6 +140,23 @@ export function importDevicePoint(file, robotId, stationId) {
   return http.post("/robot/tool/file/importDevicePoint", formData);
 }
 
+/** 空间模型导入（文件上传） */
+export function importSpaceModel(file, robotId) {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("robotId", String(robotId));
+  return http.post("/robot/tool/file/importSpaceModel", formData);
+}
+
+/** 工程备份导入（文件上传） */
+export function importBack(file, robotId, type) {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("robotId", String(robotId));
+  formData.append("type", String(type));
+  return http.post("/robot/tool/file/importBack", formData);
+}
+
 /**
  * 通信信息导入（文件上传）
  * @param {File} file - Excel 文件
@@ -160,6 +177,14 @@ export function importProspectCalibration(file, robotId) {
   formData.append("file", file);
   formData.append("robotId", String(robotId));
   return http.post("/robot/tool/file/importProspectCalibration", formData);
+}
+
+/** 纠偏数据导入（文件上传） */
+export function importCorrection(file, robotId) {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("robotId", String(robotId));
+  return http.post("/robot/tool/file/importCorrection", formData);
 }
 
 // ========== 任务下发 ==========
@@ -230,6 +255,16 @@ export function exportSpaceModel(robotId) {
  */
 export function exportProspectImage(robotId) {
   return http.get("/robot/tool/file/exportProspectImage", { robotId });
+}
+
+/** 屏柜验证图导出 */
+export function exportDeviceImage(robotId) {
+  return http.get("/robot/tool/file/exportDeviceImage", { robotId });
+}
+
+/** 工程备份导出 */
+export function exportBack(robotId) {
+  return http.get("/robot/tool/file/exportBack", { robotId });
 }
 
 /**

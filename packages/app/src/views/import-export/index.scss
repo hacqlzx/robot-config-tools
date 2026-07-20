@@ -17,6 +17,10 @@
     display: flex;
     flex-direction: column;
 
+    &.is-disabled {
+      opacity: 0.62;
+    }
+
     .ant-card-body {
       flex: 1;
       display: flex;
@@ -76,5 +80,117 @@
         width: 100%;
       }
     }
+  }
+}
+
+.ie-import-modal {
+  .ant-modal-content {
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .ant-modal-header {
+    margin: 0;
+    padding: 24px 28px;
+    border-bottom: 1px solid #f0f0f0;
+  }
+
+  .ant-modal-title {
+    font-size: 20px;
+  }
+
+  .ant-modal-body {
+    max-height: calc(100vh - 230px);
+    padding: 28px;
+    overflow-y: auto;
+  }
+
+  .ant-modal-footer {
+    margin: 0;
+    padding: 16px 28px;
+    border-top: 1px solid #f0f0f0;
+  }
+
+  .ie-import-section + .ie-import-section {
+    margin-top: 28px;
+  }
+
+  .ie-import-label {
+    margin-bottom: 14px;
+    color: #262626;
+    font-size: 15px;
+    font-weight: 500;
+  }
+
+  .ie-backup-type-group {
+    display: grid;
+    gap: 12px;
+    width: 100%;
+  }
+
+  .ie-backup-type-option {
+    display: flex;
+    align-items: flex-start;
+    width: 100%;
+    min-height: 96px;
+    margin: 0;
+    padding: 18px 20px;
+    box-sizing: border-box;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: #fafafa;
+
+    &.ant-radio-wrapper-checked {
+      border-color: #91caff;
+      background: #f0f7ff;
+    }
+
+    .ant-radio {
+      margin-top: 2px;
+    }
+  }
+
+  .ie-backup-type-title,
+  .ie-backup-type-desc {
+    display: block;
+  }
+
+  .ie-backup-type-title {
+    color: #262626;
+    font-size: 16px;
+    line-height: 22px;
+  }
+
+  .ie-backup-type-desc {
+    margin-top: 10px;
+    color: #8c8c8c;
+    font-size: 13px;
+    line-height: 20px;
+    white-space: normal;
+  }
+
+  .ant-upload-wrapper .ant-upload-drag {
+    min-height: 220px;
+    border-radius: 6px;
+    background: #fff;
+  }
+
+  .ie-import-icon {
+    margin-bottom: 12px;
+    color: #8c96a5;
+    font-size: 52px;
+    line-height: 1;
+  }
+
+  .ie-import-text {
+    margin: 0;
+    color: #595959;
+    font-size: 16px;
+  }
+
+  .ie-import-hint {
+    margin: 6px 0 0;
+    color: #a3a9b3;
+    font-size: 13px;
   }
 }

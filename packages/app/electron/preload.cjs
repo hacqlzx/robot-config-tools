@@ -13,6 +13,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   platform: process.platform,
   minimize: () => ipcRenderer.send("win:minimize"),
   maximize: () => ipcRenderer.send("win:maximize"),
+  getWindowState: () => ipcRenderer.invoke("win:get-state"),
+  onWindowStateChange: (callback) => {
+    const handler = (_event, state) => callback(state);
+    ipcRenderer.on("win:state", handler);
+    return () => ipcRenderer.removeListener("win:state", handler);
+  },
   close: () => ipcRenderer.send("win:close"),
   ping: (ip) => ipcRenderer.invoke("ping", ip),
   getFilePath: (file) => webUtils.getPathForFile(file),
@@ -47,7 +53,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     exportFile: (projectName, subPath, destDir) =>
       ipcRenderer.invoke("project:export-file", projectName, subPath, destDir),
   },
-  selectDir: () => ipcRenderer.invoke("dialog:select-dir"),
+  selectDir: (title) => ipcRenderer.invoke("dialog:select-dir", title),
   selectZipFile: () => ipcRenderer.invoke("dialog:select-zip-file"),
   onExportProgress: (callback) => {
     const handler = (_event, data) => callback(data);
@@ -92,6 +98,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("import-cabinet-image-package", zipPath),
   loadCabinetImage: (sourceId) =>
     ipcRenderer.invoke("load-cabinet-image", sourceId),
+  importDeviceVerificationPackage: (projectName, sourcePath) =>
+    ipcRenderer.invoke("device-verify:import-package", projectName, sourcePath),
+  loadLocalDeviceVerificationPackage: (projectName) =>
+    ipcRenderer.invoke("device-verify:load-local", projectName),
+  loadDeviceVerificationChildren: (sessionId, parentId) =>
+    ipcRenderer.invoke("device-verify:list-children", sessionId, parentId),
+  loadDeviceVerificationImage: (sessionId, pointNodeId) =>
+    ipcRenderer.invoke("device-verify:load-image", sessionId, pointNodeId),
   getProjectRoot: () => ipcRenderer.invoke("get-project-root"),
   setDataPath: (newPath) => ipcRenderer.invoke("set-data-path", newPath),
   startBatch: () => ipcRenderer.invoke("db:startBatch"),

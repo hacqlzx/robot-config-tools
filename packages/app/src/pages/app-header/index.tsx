@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect, useCallback } from "react";
 import { Menu, Button, Select, Dropdown, Modal, Input, Alert, message, Tooltip } from "antd";
-import { MinusOutlined, BorderOutlined, CloseOutlined, SettingOutlined, ProjectOutlined, PlusOutlined, EditOutlined, DeleteOutlined, CheckOutlined, FolderOpenOutlined } from "@ant-design/icons";
+import { MinusOutlined, BorderOutlined, CloseOutlined, SettingOutlined, ProjectOutlined, PlusOutlined, EditOutlined, DeleteOutlined, CheckOutlined, FolderOpenOutlined, SwitcherOutlined } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 import { useNavigate, useLocation } from "react-router-dom";
 import { menuConfig } from "@/config/menu";
@@ -68,6 +68,7 @@ export default function AppHeader() {
   const [deleteSummaryError, setDeleteSummaryError] = useState("");
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [robotOptions, setRobotOptions] = useState<{ label: string; value: string }[]>([]);
+  const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const [messageApi, contextHolder] = message.useMessage({ top: MESSAGE_TOP_OFFSET });
 
   const loadRobotList = useCallback(async () => {
@@ -108,6 +109,21 @@ export default function AppHeader() {
       setConnectionStatus(ok ? "connected" : "failed");
     });
   }, [backendIp]);
+
+  useEffect(() => {
+    const api = window.electronAPI;
+    let disposed = false;
+    const syncWindowState = (state: AppWindowState) => {
+      if (!disposed) setIsWindowMaximized(Boolean(state?.isMaximized || state?.isFullScreen));
+    };
+
+    api?.getWindowState?.().then(syncWindowState).catch(() => {});
+    const unsubscribe = api?.onWindowStateChange?.(syncWindowState);
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  }, []);
 
   const loadProjectRoot = useCallback(async () => {
     if (!window.electronAPI?.getProjectRoot) {
@@ -334,9 +350,17 @@ export default function AppHeader() {
           }} />
         </div>
         <div className="app-header__controls">
-          <Button type="text" size="small" icon={<MinusOutlined />} onClick={() => window.electronAPI?.minimize()} />
-          <Button type="text" size="small" icon={<BorderOutlined />} onClick={() => window.electronAPI?.maximize()} />
-          <Button type="text" size="small" icon={<CloseOutlined />} onClick={() => window.electronAPI?.close()} />
+          <Button className="app-header__control-btn" type="text" size="small" aria-label="最小化" title="最小化" icon={<MinusOutlined />} onClick={() => window.electronAPI?.minimize()} />
+          <Button
+            className="app-header__control-btn"
+            type="text"
+            size="small"
+            aria-label={isWindowMaximized ? "还原窗口" : "最大化"}
+            title={isWindowMaximized ? "还原窗口" : "最大化"}
+            icon={isWindowMaximized ? <SwitcherOutlined /> : <BorderOutlined />}
+            onClick={() => window.electronAPI?.maximize()}
+          />
+          <Button className="app-header__control-btn app-header__control-btn--close" type="text" size="small" aria-label="关闭" title="关闭" icon={<CloseOutlined />} onClick={() => window.electronAPI?.close()} />
         </div>
       </div>
 
