@@ -192,12 +192,12 @@ export function importCorrection(file, robotId) {
 /**
  * 设备区勘察图拍照
  * @param {number} robotId - 机器人 ID
- * @param {string[]} deviceCodeList - 设备区 ID 列表，对应空间模型 description_file.json 的设备区 id
+ * @param {string[]} deviceList - 设备区 ID 列表，对应空间模型 description_file.json 的设备区 id
  */
-export function equipmentDeviceMainCollect(robotId, deviceCodeList) {
+export function equipmentDeviceMainCollect(robotId, deviceList) {
   return http.post("/robot/tool/task/equipmentDeviceMainCollect", {
     robotId,
-    deviceCodeList,
+    deviceList,
   });
 }
 
@@ -216,12 +216,12 @@ export function stopPointCollect(robotId, stopPointIdList) {
 /**
  * 屏柜区屏柜拍照
  * @param {number} robotId - 机器人 ID
- * @param {string[]} deviceCodeList - 屏柜区 ID 列表，对应空间模型 description_file.json 的屏柜 id
+ * @param {string[]} deviceList - 屏柜区主设备编码列表
  */
-export function cabinetDeviceMainCollect(robotId, deviceCodeList) {
+export function cabinetDeviceMainCollect(robotId, deviceList) {
   return http.post("/robot/tool/task/cabinetDeviceMainCollect", {
     robotId,
-    deviceCodeList,
+    deviceList,
   });
 }
 
@@ -265,15 +265,6 @@ export function exportDeviceImage(robotId) {
 /** 工程备份导出 */
 export function exportBack(robotId) {
   return http.get("/robot/tool/file/exportBack", { robotId });
-}
-
-/**
- * 设备验证图导出
- * @param {number} robotId - 机器人 ID
- * @returns 返回 { data: "/robot/robot/..." } 文件路径
- */
-export function exportDeviceCheckImage(robotId) {
-  return http.get("/robot/tool/file/exportDeviceCheckImage", { robotId });
 }
 
 /** 点表模板下载 */

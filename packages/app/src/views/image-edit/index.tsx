@@ -312,10 +312,6 @@ export default function ImageEdit() {
       message.warning("请先选择项目");
       return;
     }
-    if (!loadedMapRef.current) {
-      message.warning("请先加载勘察图像");
-      return;
-    }
     setCabinetPhotoOpen(true);
   }, [message, selectedProject]);
 
@@ -391,20 +387,20 @@ export default function ImageEdit() {
       const robotId = await resolveSelectedRobotId();
       if (robotId == null) return false;
 
-      const ids = Array.from(new Set(items.map((item) => String(item.fileCabinetId || "")).filter(Boolean)));
-      if (ids.length === 0) {
-        message.warning("请选择有效的屏柜");
+      const codes = Array.from(new Set(items.map((item) => String(item.mainDeviceCode || item.cabinetCode || "").trim()).filter(Boolean)));
+      if (codes.length === 0) {
+        message.warning("请选择带有效编码的主设备");
         return false;
       }
 
-      const res = await cabinetDeviceMainCollect(robotId, ids);
+      const res = await cabinetDeviceMainCollect(robotId, codes);
       const body = res.data;
       if (!body.success) {
         message.error(body.message || "屏柜拍照下发失败");
         return false;
       }
 
-      message.success(`已下发 ${items.length} 个屏柜`);
+      message.success(`已下发 ${codes.length} 个主设备`);
       return true;
     } catch (e: any) {
       message.error("屏柜拍照下发失败: " + (e?.message || e));
@@ -675,7 +671,6 @@ export default function ImageEdit() {
       <CabinetPhotoModal
         open={cabinetPhotoOpen}
         projectName={selectedProject}
-        mapName={loadedMap}
         onClose={() => setCabinetPhotoOpen(false)}
         onDispatch={handleCabinetPhotoDispatch}
       />

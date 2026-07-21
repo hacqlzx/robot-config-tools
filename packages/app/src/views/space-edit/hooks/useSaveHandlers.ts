@@ -46,6 +46,10 @@ interface CabinetSaveData {
   rows: CabinetDeviceInput[];
 }
 
+interface SaveFileMarkOptions {
+  markFileShown?: boolean;
+}
+
 export function useSaveHandlers(params: UseSaveHandlersParams) {
   const selectedProject = useSelectedProject();
   const { entitiesRef, filePathRef, isAutoSavingRef, saveStatusSetter, message } = params;
@@ -147,7 +151,8 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
   }, [getCurrentModelPath, message, params, saveCabinetMainDevices, saveStatusSetter, selectedProject, showSavedStatus]);
 
   /** 保存充电区域 */
-  const handleSaveChargingArea = useCallback(async () => {
+  const handleSaveChargingArea = useCallback(async (options: SaveFileMarkOptions = {}) => {
+    const markFileShown = options.markFileShown !== false;
     const api = window.electronAPI;
     if (!api) { if (!isAutoSavingRef.current) message.warning("仅 Electron 模式下可保存"); return; }
     if (!selectedProject) { if (!isAutoSavingRef.current) message.warning("请先选择项目"); return; }
@@ -168,7 +173,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
 
     try {
       await saveChargingArea({ api, projectName: selectedProject, modelPath, item });
-      if (item) params.onDrawingFileSaved?.(getDrawingJsonPath(modelPath), "charging-area");
+      if (item && markFileShown) params.onDrawingFileSaved?.(getDrawingJsonPath(modelPath), "charging-area");
       if (!isAutoSavingRef.current) showSavedStatus();
       if (params.chargingMode) params.handleToggleCharging();
     } catch (e: any) {
@@ -177,7 +182,8 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
   }, [getCurrentModelPath, isAutoSavingRef, message, params, selectedProject, showSavedStatus]);
 
   /** 保存设备区 */
-  const handleSaveDeviceAreas = useCallback(async () => {
+  const handleSaveDeviceAreas = useCallback(async (options: SaveFileMarkOptions = {}) => {
+    const markFileShown = options.markFileShown !== false;
     const silent = isAutoSavingRef.current;
     const api = window.electronAPI;
     if (!api) { if (!silent) message.warning("仅 Electron 模式下可保存"); return; }
@@ -199,7 +205,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
 
     try {
       await saveDeviceAreas({ api, projectName: selectedProject, modelPath, items });
-      if (items.length > 0) params.onDrawingFileSaved?.(getDrawingJsonPath(modelPath), "device-area");
+      if (items.length > 0 && markFileShown) params.onDrawingFileSaved?.(getDrawingJsonPath(modelPath), "device-area");
       if (!silent) showSavedStatus();
       params.markDeviceAreaSaved();
     } catch (e: any) {
@@ -207,7 +213,8 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     }
   }, [getCurrentModelPath, isAutoSavingRef, message, params, selectedProject, showSavedStatus]);
 
-  const savePathInternal = useCallback(async (showError: boolean): Promise<boolean> => {
+  const savePathInternal = useCallback(async (showError: boolean, options: SaveFileMarkOptions = {}): Promise<boolean> => {
+    const markFileShown = options.markFileShown !== false;
     const api = window.electronAPI;
     if (!api) { if (showError) message.warning("仅 Electron 模式下可保存"); return false; }
     if (!selectedProject) { if (showError) message.warning("请先选择项目"); return false; }
@@ -217,7 +224,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     if (!modelPath) { if (showError) message.warning("未找到模型路径，无法保存"); return false; }
     try {
       await savePathDrawing({ api, projectName: selectedProject, modelPath, data });
-      params.onPathFileSaved?.(getPathJsonPath(modelPath));
+      if (markFileShown) params.onPathFileSaved?.(getPathJsonPath(modelPath));
       return true;
     } catch (e: any) {
       if (showError) {
@@ -295,9 +302,9 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     isAutoSavingRef.current = true;
     let pathSaved = false;
     try {
-      if (hasCharging) await handleSaveChargingArea();
-      await handleSaveDeviceAreas();
-      pathSaved = await savePathInternal(!silent);
+      if (hasCharging) await handleSaveChargingArea({ markFileShown: false });
+      await handleSaveDeviceAreas({ markFileShown: false });
+      pathSaved = await savePathInternal(!silent, { markFileShown: false });
     } finally {
       isAutoSavingRef.current = false;
     }

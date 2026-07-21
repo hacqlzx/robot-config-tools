@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { App, Button, Dropdown, Empty, Space, Spin, Tree, Tooltip } from "antd";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { App, Button, Dropdown, Empty, Segmented, Space, Spin, Tree, Tooltip } from "antd";
 import type { MenuProps, TreeDataNode, TreeProps } from "antd";
 import {
+  AimOutlined,
   AppstoreOutlined,
   CloudSyncOutlined,
   DatabaseOutlined,
   DownOutlined,
-  DownloadOutlined,
   FileImageOutlined,
   HddOutlined,
   PushpinOutlined,
@@ -25,6 +25,7 @@ interface VerificationTreeNode extends TreeDataNode {
   code: string;
   kind: DeviceVerificationNodeKind;
   hasImage: boolean;
+  marked: boolean;
   children?: VerificationTreeNode[];
 }
 
@@ -36,6 +37,13 @@ interface SelectedPoint {
 }
 
 type VerificationImportMode = "zip" | "directory";
+type PointMarkFilter = "all" | "marked" | "unmarked";
+
+const markFilterOptions: { label: string; value: PointMarkFilter }[] = [
+  { label: "全部", value: "all" },
+  { label: "已标记", value: "marked" },
+  { label: "未标记", value: "unmarked" },
+];
 
 function updateTreeChildren(
   nodes: VerificationTreeNode[],
@@ -49,9 +57,45 @@ function updateTreeChildren(
   });
 }
 
+function updateTreePointMarked(
+  nodes: VerificationTreeNode[],
+  targetKey: string,
+  marked: boolean,
+): VerificationTreeNode[] {
+  return nodes.map((node) => {
+    const nextNode = node.key === targetKey && node.kind === "point"
+      ? { ...node, marked, className: marked ? "device-verify-tree-node-marked" : undefined }
+      : node;
+    if (!nextNode.children) return nextNode;
+    return { ...nextNode, children: updateTreePointMarked(nextNode.children, targetKey, marked) };
+  });
+}
+
+function filterTreeByMark(nodes: VerificationTreeNode[], filter: PointMarkFilter): VerificationTreeNode[] {
+  if (filter === "all") return nodes;
+
+  const walk = (node: VerificationTreeNode): VerificationTreeNode | null => {
+    if (node.kind === "point") {
+      const matched = filter === "marked" ? node.marked : !node.marked;
+      return matched ? node : null;
+    }
+
+    const children = (node.children || [])
+      .map(walk)
+      .filter((child): child is VerificationTreeNode => Boolean(child));
+    return children.length > 0 ? { ...node, children } : null;
+  };
+
+  return nodes
+    .map(walk)
+    .filter((node): node is VerificationTreeNode => Boolean(node));
+}
+
 function toTreeNode(node: DeviceVerificationTreeNode): VerificationTreeNode {
   return {
     ...node,
+    marked: Boolean(node.marked),
+    className: node.kind === "point" && node.marked ? "device-verify-tree-node-marked" : undefined,
     children: node.children?.map(toTreeNode),
     icon: node.kind === "point"
       ? <FileImageOutlined className={node.hasImage ? "has-image" : "without-image"} />
@@ -80,7 +124,11 @@ export default function DeviceVerify() {
   const containerRef = useRef<HTMLDivElement>(null);
   const imageCacheRef = useRef(new Map<string, string>());
   const imageRequestRef = useRef(0);
+  const correctionRequestRef = useRef(0);
   const autoLoadingRef = useRef(false);
+  const autoLoadRequestRef = useRef(0);
+  const autoLoadActiveRequestRef = useRef(0);
+  const mountedRef = useRef(true);
   const [sessionId, setSessionId] = useState("");
   const [packageName, setPackageName] = useState("");
   const [treeData, setTreeData] = useState<VerificationTreeNode[]>([]);
@@ -91,6 +139,11 @@ export default function DeviceVerify() {
   const [imageError, setImageError] = useState("");
   const [loadingPackage, setLoadingPackage] = useState(false);
   const [loadingImage, setLoadingImage] = useState(false);
+  const [exportingMarkedPoints, setExportingMarkedPoints] = useState(false);
+  const [markFilter, setMarkFilter] = useState<PointMarkFilter>("all");
+  const [correctionMode, setCorrectionMode] = useState(false);
+  const [correctionRect, setCorrectionRect] = useState<DeviceCorrectionRect | null>(null);
+  const [savingCorrection, setSavingCorrection] = useState(false);
 
   const { width: leftWidth, onMouseDown } = useResizable({
     containerRef,
@@ -103,6 +156,41 @@ export default function DeviceVerify() {
     message.info(`${label}（功能待接入）`);
   };
 
+  const handleExportMarkedPoints = async () => {
+    const api = window.electronAPI;
+    if (!selectedProject) {
+      message.warning("请先选择项目");
+      return;
+    }
+    if (!api?.exportMarkedDevicePoints || !api.selectDir) {
+      message.warning("仅 Electron 环境支持导出标记点位");
+      return;
+    }
+
+    const destDir = await api.selectDir("选择标记点位导出目录");
+    if (!destDir) return;
+
+    setExportingMarkedPoints(true);
+    try {
+      const result = await api.exportMarkedDevicePoints(selectedProject, destDir);
+      if (!result.success) throw new Error(result.error || "导出标记点位失败");
+      message.success(`已导出 ${result.exportedCount || 0} 个标记点位：${result.fileName || ""}`);
+    } catch (error: any) {
+      const text = error?.message || "导出标记点位失败";
+      if (text.includes("暂无标记点位")) message.warning(text);
+      else message.error(text);
+    } finally {
+      setExportingMarkedPoints(false);
+    }
+  };
+
+  const filteredTreeData = useMemo(() => filterTreeByMark(treeData, markFilter), [markFilter, treeData]);
+  const filterEmptyDescription = markFilter === "marked"
+    ? "暂无已标记点位"
+    : markFilter === "unmarked"
+      ? "暂无未标记点位"
+      : "请加载验证图";
+
   const resetSelection = useCallback(() => {
     imageRequestRef.current += 1;
     setSelectedKeys([]);
@@ -110,6 +198,7 @@ export default function DeviceVerify() {
     setImageDataUrl("");
     setImageError("");
     setLoadingImage(false);
+    setCorrectionRect(null);
   }, []);
 
   const applyPackageResult = useCallback((result: DeviceVerificationPackageResult, showSuccess: boolean) => {
@@ -153,6 +242,9 @@ export default function DeviceVerify() {
       : await api.selectZipFile();
     if (!sourcePath) return;
 
+    autoLoadRequestRef.current += 1;
+    autoLoadingRef.current = false;
+    autoLoadActiveRequestRef.current = 0;
     setLoadingPackage(true);
     try {
       const result = await api.importDeviceVerificationPackage(selectedProject, sourcePath);
@@ -170,32 +262,47 @@ export default function DeviceVerify() {
   ];
 
   useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      autoLoadRequestRef.current += 1;
+      autoLoadingRef.current = false;
+      autoLoadActiveRequestRef.current = 0;
+    };
+  }, []);
+
+  useEffect(() => {
     const api = window.electronAPI;
     const isActive = location.pathname === "/device-verify";
     if (!isActive || !selectedProject || treeData.length > 0) return;
-    if (!api?.loadLocalDeviceVerificationPackage) return;
+    if (!api?.loadLocalDeviceVerificationPackage) {
+      if (import.meta.env.DEV) {
+        console.warn("[device-verify] loadLocalDeviceVerificationPackage 不可用，请重启 Electron 进程以加载最新 preload/main。");
+      }
+      return;
+    }
     if (autoLoadingRef.current) return;
 
-    let canceled = false;
+    const requestId = ++autoLoadRequestRef.current;
     autoLoadingRef.current = true;
-    setLoadingPackage(true);
+    autoLoadActiveRequestRef.current = requestId;
     api.loadLocalDeviceVerificationPackage(selectedProject)
       .then((result) => {
-        if (canceled) return;
+        if (!mountedRef.current || autoLoadRequestRef.current !== requestId) return;
         if (result.hasData === false) return;
         applyPackageResult(result, false);
       })
       .catch((error: any) => {
-        if (!canceled) message.error(error?.message || "本地设备验证图加载失败");
+        if (mountedRef.current && autoLoadRequestRef.current === requestId) {
+          message.error(error?.message || "本地设备验证图加载失败");
+        }
       })
       .finally(() => {
-        autoLoadingRef.current = false;
-        if (!canceled) setLoadingPackage(false);
+        if (autoLoadActiveRequestRef.current === requestId) {
+          autoLoadingRef.current = false;
+          autoLoadActiveRequestRef.current = 0;
+        }
       });
-
-    return () => {
-      canceled = true;
-    };
   }, [applyPackageResult, location.pathname, message, selectedProject, treeData.length]);
 
   const loadTreeChildren: TreeProps<VerificationTreeNode>["loadData"] = async (node) => {
@@ -251,23 +358,135 @@ export default function DeviceVerify() {
     }
   }, [sessionId]);
 
+  const loadPointCorrection = useCallback(async (point: SelectedPoint) => {
+    const requestId = ++correctionRequestRef.current;
+    setCorrectionRect(null);
+
+    const api = window.electronAPI;
+    if (!selectedProject || !point.code || !api?.loadDeviceCorrection) return;
+
+    try {
+      const result = await api.loadDeviceCorrection(selectedProject, point.code);
+      if (requestId !== correctionRequestRef.current) return;
+      if (!result.success) throw new Error(result.error || "设备纠偏加载失败");
+      setCorrectionRect(result.rect || null);
+    } catch (error: any) {
+      if (requestId === correctionRequestRef.current) message.error(error?.message || "设备纠偏加载失败");
+    }
+  }, [message, selectedProject]);
+
+  const handleCorrectionChange = useCallback(async (rect: DeviceCorrectionRect) => {
+    const api = window.electronAPI;
+    if (!selectedProject || !selectedPoint || !api?.saveDeviceCorrection) {
+      message.warning("当前环境不支持保存设备纠偏");
+      return;
+    }
+
+    setCorrectionRect(rect);
+    setSavingCorrection(true);
+    try {
+      const result = await api.saveDeviceCorrection(selectedProject, {
+        pointCode: selectedPoint.code,
+        pointName: selectedPoint.title,
+        rect,
+      });
+      if (!result.success) throw new Error(result.error || "设备纠偏保存失败");
+      if (result.rect) setCorrectionRect(result.rect);
+    } catch (error: any) {
+      message.error(error?.message || "设备纠偏保存失败");
+    } finally {
+      setSavingCorrection(false);
+    }
+  }, [message, selectedPoint, selectedProject]);
+
+  const handleCorrectionDelete = useCallback(async () => {
+    const api = window.electronAPI;
+    if (!selectedProject || !selectedPoint || !api?.deleteDeviceCorrection) return;
+
+    setCorrectionRect(null);
+    setSavingCorrection(true);
+    try {
+      const result = await api.deleteDeviceCorrection(selectedProject, selectedPoint.code);
+      if (!result.success) throw new Error(result.error || "设备纠偏删除失败");
+    } catch (error: any) {
+      message.error(error?.message || "设备纠偏删除失败");
+    } finally {
+      setSavingCorrection(false);
+    }
+  }, [message, selectedPoint, selectedProject]);
+
+  const handleTogglePointMark = useCallback(async (node: VerificationTreeNode) => {
+    const api = window.electronAPI;
+    if (!selectedProject || !api?.setDevicePointMark) {
+      message.warning("当前环境不支持标记点位");
+      return;
+    }
+    if (node.kind !== "point" || !node.code) return;
+
+    const nextMarked = !node.marked;
+    setTreeData((current) => updateTreePointMarked(current, node.key, nextMarked));
+    try {
+      const result = await api.setDevicePointMark(selectedProject, {
+        pointCode: node.code,
+        pointName: String(node.title || ""),
+        marked: nextMarked,
+      });
+      if (!result.success) throw new Error(result.error || "标记点位保存失败");
+      setTreeData((current) => updateTreePointMarked(current, node.key, Boolean(result.marked)));
+    } catch (error: any) {
+      setTreeData((current) => updateTreePointMarked(current, node.key, node.marked));
+      message.error(error?.message || "标记点位保存失败");
+    }
+  }, [message, selectedProject]);
+
+  const renderTreeTitle = useCallback((node: VerificationTreeNode) => {
+    const isPoint = node.kind === "point";
+    return (
+      <div className={`device-verify-tree-title${isPoint && node.marked ? " is-marked" : ""}`}>
+        <span className="device-verify-tree-title-text">{node.title}</span>
+        {isPoint && (
+          <Tooltip title={node.marked ? "取消标记" : "标记遮挡或不在画面中央的点位"}>
+            <Button
+              className="device-verify-point-mark-button"
+              type={node.marked ? "primary" : "text"}
+              danger={node.marked}
+              size="small"
+              icon={<PushpinOutlined />}
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                void handleTogglePointMark(node);
+              }}
+            >
+              {node.marked ? "取消" : "标记"}
+            </Button>
+          </Tooltip>
+        )}
+      </div>
+    );
+  }, [handleTogglePointMark]);
+
   const handleSelect: TreeProps<VerificationTreeNode>["onSelect"] = (keys, info) => {
     setSelectedKeys(keys);
     const node = info.node;
     if (node.kind !== "point") {
       imageRequestRef.current += 1;
+      correctionRequestRef.current += 1;
       setSelectedPoint(null);
       setImageDataUrl("");
       setImageError("");
       setLoadingImage(false);
+      setCorrectionRect(null);
       return;
     }
-    void loadPointImage({
+    const point = {
       key: String(node.key),
       title: String(node.title || ""),
       code: node.code,
       hasImage: node.hasImage,
-    });
+    };
+    void loadPointImage(point);
+    void loadPointCorrection(point);
   };
 
   return (
@@ -286,9 +505,8 @@ export default function DeviceVerify() {
               <Button icon={<DownOutlined />} disabled={loadingPackage} />
             </Dropdown>
           </Space.Compact>
-          <Button icon={<DownloadOutlined />} onClick={() => placeholder("验证图导出")}>验证图导出</Button>
           <Button icon={<SyncOutlined />} onClick={() => placeholder("导出纠偏数据")}>导出纠偏数据</Button>
-          <Button icon={<PushpinOutlined />} onClick={() => placeholder("导出标记点位")}>导出标记点位</Button>
+          <Button icon={<PushpinOutlined />} loading={exportingMarkedPoints} onClick={handleExportMarkedPoints}>导出标记点位</Button>
           <Button icon={<CloudSyncOutlined />} onClick={() => placeholder("同步分析主机")}>同步分析主机</Button>
         </Space>
       </div>
@@ -299,25 +517,37 @@ export default function DeviceVerify() {
             <span className="device-verify-title-text">点位树</span>
             {packageName && <Tooltip title={packageName}><span className="device-verify-package-name">{packageName}</span></Tooltip>}
           </div>
+          {treeData.length > 0 && (
+            <div className="device-verify-tree-filter">
+              <span className="device-verify-tree-filter-label">过滤</span>
+              <Segmented
+                size="small"
+                value={markFilter}
+                options={markFilterOptions}
+                onChange={(value) => setMarkFilter(value as PointMarkFilter)}
+              />
+            </div>
+          )}
           <div className="device-verify-tree">
             {loadingPackage ? (
               <div className="device-verify-tree-loading">
                 <Spin />
               </div>
-            ) : treeData.length > 0 ? (
+            ) : filteredTreeData.length > 0 ? (
               <Tree<VerificationTreeNode>
                 blockNode
                 showIcon
                 showLine
-                treeData={treeData}
+                treeData={filteredTreeData}
                 loadData={loadTreeChildren}
                 selectedKeys={selectedKeys}
                 expandedKeys={expandedKeys}
                 onExpand={(keys) => setExpandedKeys(keys)}
                 onSelect={handleSelect}
+                titleRender={renderTreeTitle}
               />
             ) : (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="请加载验证图" />
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={filterEmptyDescription} />
             )}
           </div>
         </div>
@@ -327,8 +557,21 @@ export default function DeviceVerify() {
         <div className="device-verify-right">
           {selectedPoint && (
             <div className="device-verify-image-header">
-              <span className="device-verify-point-name">{selectedPoint.title}</span>
-              <span className="device-verify-point-code">{selectedPoint.code}</span>
+              <div className="device-verify-image-meta">
+                <span className="device-verify-point-name">{selectedPoint.title}</span>
+                <span className="device-verify-point-code">{selectedPoint.code}</span>
+              </div>
+              <Button
+                className="device-verify-correction-button"
+                size="small"
+                icon={<AimOutlined />}
+                type={correctionMode ? "primary" : "default"}
+                loading={savingCorrection}
+                disabled={!imageDataUrl}
+                onClick={() => setCorrectionMode((current) => !current)}
+              >
+                设备纠偏
+              </Button>
             </div>
           )}
           <div className="device-verify-image-stage">
@@ -338,6 +581,10 @@ export default function DeviceVerify() {
               <VerificationImageCanvas
                 src={imageDataUrl}
                 label={selectedPoint?.title || "点位图片"}
+                correctionMode={correctionMode}
+                correctionRect={correctionRect}
+                onCorrectionChange={handleCorrectionChange}
+                onCorrectionDelete={handleCorrectionDelete}
                 onLoadError={(error) => {
                   setImageDataUrl("");
                   setImageError(error);

@@ -102,6 +102,7 @@ declare global {
     kind: DeviceVerificationNodeKind;
     isLeaf: boolean;
     hasImage: boolean;
+    marked?: boolean;
     children?: DeviceVerificationTreeNode[];
   }
 
@@ -129,6 +130,47 @@ declare global {
     error?: string;
     fileName?: string;
     dataUrl?: string;
+  }
+
+  interface DeviceCorrectionRect {
+    x: number;
+    y: number;
+    size: number;
+    imageWidth: number;
+    imageHeight: number;
+  }
+
+  interface DeviceCorrectionRecord {
+    pointCode: string;
+    pointName: string;
+    rect: DeviceCorrectionRect;
+    updatedAt?: string;
+  }
+
+  interface DeviceCorrectionResult {
+    success: boolean;
+    error?: string;
+    rect?: DeviceCorrectionRect | null;
+  }
+
+  interface DevicePointMarkRecord {
+    pointCode: string;
+    pointName: string;
+    marked: boolean;
+  }
+
+  interface DevicePointMarkResult {
+    success: boolean;
+    error?: string;
+    marked?: boolean;
+  }
+
+  interface DeviceMarkedPointExportResult {
+    success: boolean;
+    error?: string;
+    filePath?: string;
+    fileName?: string;
+    exportedCount?: number;
   }
 
   interface Window {
@@ -189,6 +231,11 @@ declare global {
       loadLocalDeviceVerificationPackage: (projectName: string) => Promise<DeviceVerificationPackageResult>;
       loadDeviceVerificationChildren: (sessionId: string, parentId: string) => Promise<DeviceVerificationChildrenResult>;
       loadDeviceVerificationImage: (sessionId: string, pointNodeId: string) => Promise<DeviceVerificationImageResult>;
+      loadDeviceCorrection: (projectName: string, pointCode: string) => Promise<DeviceCorrectionResult>;
+      saveDeviceCorrection: (projectName: string, record: DeviceCorrectionRecord) => Promise<DeviceCorrectionResult>;
+      deleteDeviceCorrection: (projectName: string, pointCode: string) => Promise<{ success: boolean; error?: string }>;
+      setDevicePointMark: (projectName: string, record: DevicePointMarkRecord) => Promise<DevicePointMarkResult>;
+      exportMarkedDevicePoints: (projectName: string, destDir: string) => Promise<DeviceMarkedPointExportResult>;
       getProjectRoot: () => Promise<string>;
       setDataPath: (newPath: string) => Promise<boolean>;
       startBatch: () => Promise<void>;

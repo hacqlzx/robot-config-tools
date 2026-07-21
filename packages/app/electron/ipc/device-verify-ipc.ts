@@ -5,6 +5,7 @@ import { ipcMain } from "electron";
 import AdmZip from "adm-zip";
 import * as XLSX from "xlsx";
 import { isPathInside, resolveProjectDir, resolveProjectPath } from "../project-core/project-paths";
+import { generatePointExcelFromRows, type PointExcelExportRow } from "../export-points";
 
 type DeviceVerificationNodeKind = "region" | "bay" | "mainDevice" | "component" | "point";
 type DeviceVerificationSourceType = "zip" | "directory";
@@ -16,6 +17,7 @@ interface DeviceVerificationNodeRecord {
   kind: DeviceVerificationNodeKind;
   parentId: string | null;
   childrenIds: string[];
+  marked?: boolean;
   imagePath?: string;
   imageMime?: string;
 }
@@ -38,8 +40,43 @@ interface DeviceVerificationSource {
   type: DeviceVerificationSourceType;
 }
 
+interface DeviceCorrectionRect {
+  x: number;
+  y: number;
+  size: number;
+  imageWidth: number;
+  imageHeight: number;
+}
+
+interface DeviceCorrectionRecord {
+  pointCode: string;
+  pointName: string;
+  rect: DeviceCorrectionRect;
+  updatedAt: string;
+}
+
+interface DeviceCorrectionFile {
+  version: number;
+  updatedAt: string;
+  records: Record<string, DeviceCorrectionRecord>;
+}
+
+interface DeviceMarkedPointRecord {
+  pointCode: string;
+  pointName: string;
+  updatedAt: string;
+}
+
+interface DeviceMarkedPointFile {
+  version: number;
+  updatedAt: string;
+  records: Record<string, DeviceMarkedPointRecord>;
+}
+
 const OVERVIEW_DIR_NAME = "总览图";
 const DEVICE_VERIFY_DIR_NAME = "设备验证图";
+const DEVICE_CORRECTION_FILE_NAME = "设备纠偏.json";
+const DEVICE_MARKED_POINT_FILE_NAME = "标记点位.json";
 
 const hierarchyColumns: Array<{
   kind: DeviceVerificationNodeKind;
@@ -121,6 +158,99 @@ export function registerDeviceVerifyIpc(): void {
       return { success: false, error: error?.message || "点位图片加载失败" };
     }
   });
+
+  ipcMain.handle("device-verify:load-correction", async (_event, projectName: string, pointCode: string) => {
+    try {
+      const code = valueText(pointCode);
+      if (!code) return { success: true, rect: null };
+
+      const file = readDeviceCorrectionFile(getDeviceCorrectionFilePath(projectName));
+      return {
+        success: true,
+        rect: file.records[code]?.rect || null,
+      };
+    } catch (error: any) {
+      console.error("[device-verify] 加载设备纠偏失败:", error?.message || error);
+      return { success: false, error: error?.message || "设备纠偏加载失败" };
+    }
+  });
+
+  ipcMain.handle("device-verify:save-correction", async (_event, projectName: string, record: Partial<DeviceCorrectionRecord>) => {
+    try {
+      const pointCode = valueText(record?.pointCode);
+      if (!pointCode) throw new Error("点位编码不能为空");
+      const rect = normalizeCorrectionRect(record?.rect);
+      const correctionPath = getDeviceCorrectionFilePath(projectName);
+      const file = readDeviceCorrectionFile(correctionPath);
+      const now = new Date().toISOString();
+      file.records[pointCode] = {
+        pointCode,
+        pointName: valueText(record?.pointName),
+        rect,
+        updatedAt: now,
+      };
+      file.updatedAt = now;
+      writeDeviceCorrectionFile(correctionPath, file);
+      return { success: true, rect };
+    } catch (error: any) {
+      console.error("[device-verify] 保存设备纠偏失败:", error?.message || error);
+      return { success: false, error: error?.message || "设备纠偏保存失败" };
+    }
+  });
+
+  ipcMain.handle("device-verify:delete-correction", async (_event, projectName: string, pointCode: string) => {
+    try {
+      const code = valueText(pointCode);
+      if (!code) return { success: true };
+      const correctionPath = getDeviceCorrectionFilePath(projectName);
+      const file = readDeviceCorrectionFile(correctionPath);
+      if (file.records[code]) {
+        delete file.records[code];
+        file.updatedAt = new Date().toISOString();
+        writeDeviceCorrectionFile(correctionPath, file);
+      }
+      return { success: true };
+    } catch (error: any) {
+      console.error("[device-verify] 删除设备纠偏失败:", error?.message || error);
+      return { success: false, error: error?.message || "设备纠偏删除失败" };
+    }
+  });
+
+  ipcMain.handle("device-verify:set-point-mark", async (_event, projectName: string, record: { pointCode?: string; pointName?: string; marked?: boolean }) => {
+    try {
+      const pointCode = valueText(record?.pointCode);
+      if (!pointCode) throw new Error("点位编码不能为空");
+      const marked = Boolean(record?.marked);
+      const markedPath = getDeviceMarkedPointFilePath(projectName);
+      const file = readDeviceMarkedPointFile(markedPath);
+      const now = new Date().toISOString();
+      if (marked) {
+        file.records[pointCode] = {
+          pointCode,
+          pointName: valueText(record?.pointName),
+          updatedAt: now,
+        };
+      } else if (file.records[pointCode]) {
+        delete file.records[pointCode];
+      }
+      file.updatedAt = now;
+      writeDeviceMarkedPointFile(markedPath, file);
+      updateActiveSessionMarked(pointCode, marked);
+      return { success: true, marked };
+    } catch (error: any) {
+      console.error("[device-verify] 保存标记点位失败:", error?.message || error);
+      return { success: false, error: error?.message || "标记点位保存失败" };
+    }
+  });
+
+  ipcMain.handle("device-verify:export-marked-points", async (_event, projectName: string, destDir: string) => {
+    try {
+      return exportMarkedDeviceVerificationPoints(projectName, destDir);
+    } catch (error: any) {
+      console.error("[device-verify] 导出标记点位失败:", error?.message || error);
+      return { success: false, error: error?.message || "导出标记点位失败" };
+    }
+  });
 }
 
 function importDeviceVerificationSource(projectName: string, source: DeviceVerificationSource): string {
@@ -134,6 +264,9 @@ function importDeviceVerificationSource(projectName: string, source: DeviceVerif
 
   const targetDir = getDeviceVerificationDir(safeProjectName);
   if (source.type === "directory") {
+    if (isSameFsPath(source.path, targetDir)) {
+      return targetDir;
+    }
     assertDirectoryDoesNotOverlap(source.path, targetDir);
   }
 
@@ -150,8 +283,52 @@ function importDeviceVerificationSource(projectName: string, source: DeviceVerif
   return targetDir;
 }
 
+function exportMarkedDeviceVerificationPoints(projectName: string, destDir: string) {
+  const safeProjectName = String(projectName || "").trim();
+  if (!safeProjectName) throw new Error("请先选择项目");
+
+  const outputDir = path.resolve(String(destDir || "").trim());
+  if (!path.isAbsolute(outputDir) || !fs.existsSync(outputDir) || !fs.statSync(outputDir).isDirectory()) {
+    throw new Error("导出目录无效");
+  }
+
+  const localDir = getDeviceVerificationDir(safeProjectName);
+  if (!fs.existsSync(localDir) || !fs.statSync(localDir).isDirectory()) {
+    throw new Error("请先加载设备验证图");
+  }
+
+  const markedFile = readDeviceMarkedPointFile(getDeviceMarkedPointFilePath(safeProjectName));
+  const markedPointCodes = new Set(Object.keys(markedFile.records).map((code) => code.toLowerCase()));
+  if (markedPointCodes.size === 0) throw new Error("暂无标记点位");
+
+  const workbookPath = findPointWorkbookPath(collectFiles(localDir));
+  if (!workbookPath) throw new Error("未找到点表.xlsx");
+
+  const exportRows = readMarkedPointExportRows(fs.readFileSync(workbookPath), markedPointCodes);
+  if (exportRows.length === 0) throw new Error("点表.xlsx 中未找到已标记点位");
+
+  const fileName = uniqueFileName(outputDir, `${safeProjectName}_标记点位_${formatExportTime(new Date())}.xlsx`);
+  const filePath = path.join(outputDir, fileName);
+  fs.writeFileSync(filePath, generatePointExcelFromRows(exportRows));
+
+  return {
+    success: true,
+    filePath,
+    fileName,
+    exportedCount: exportRows.length,
+  };
+}
+
 function getDeviceVerificationDir(projectName: string): string {
   return resolveProjectPath(projectName, OVERVIEW_DIR_NAME, DEVICE_VERIFY_DIR_NAME);
+}
+
+function getDeviceCorrectionFilePath(projectName: string): string {
+  return resolveProjectPath(projectName, OVERVIEW_DIR_NAME, DEVICE_VERIFY_DIR_NAME, DEVICE_CORRECTION_FILE_NAME);
+}
+
+function getDeviceMarkedPointFilePath(projectName: string): string {
+  return resolveProjectPath(projectName, OVERVIEW_DIR_NAME, DEVICE_VERIFY_DIR_NAME, DEVICE_MARKED_POINT_FILE_NAME);
 }
 
 function buildPackageResult(session: DeviceVerificationSession) {
@@ -190,7 +367,8 @@ function readDeviceVerificationDirectory(sourceDir: string, packageName: string)
     imageByPointCode.set(pointCode.toLowerCase(), { filePath, mime });
   }
 
-  const { nodes, rootIds } = buildVerificationTree(fs.readFileSync(workbookPath), imageByPointCode);
+  const markedPointCodes = readMarkedPointCodes(path.join(sourceDir, DEVICE_MARKED_POINT_FILE_NAME));
+  const { nodes, rootIds } = buildVerificationTree(fs.readFileSync(workbookPath), imageByPointCode, markedPointCodes);
   if (rootIds.length === 0) throw new Error("点表.xlsx 中未解析到有效的区域数据");
 
   return {
@@ -202,9 +380,35 @@ function readDeviceVerificationDirectory(sourceDir: string, packageName: string)
   };
 }
 
+function readMarkedPointExportRows(workbookBuffer: Buffer, markedPointCodes: Set<string>): PointExcelExportRow[] {
+  const workbook = XLSX.read(workbookBuffer, { type: "buffer" });
+  const sheetName = workbook.SheetNames.find((name) => name.toLowerCase() === "sheet1") || workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  if (!sheet) throw new Error("点表.xlsx 中没有可读取的工作表");
+
+  const grid = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+    header: 1,
+    defval: "",
+    raw: false,
+  }) as unknown[][];
+  const headerIndex = findHeaderRowIndex(grid);
+  if (headerIndex < 0) throw new Error("点表.xlsx 中未找到点位表头");
+
+  const headers = grid[headerIndex].map(valueText);
+  const rows: PointExcelExportRow[] = [];
+  for (let rowIndex = headerIndex + 1; rowIndex < grid.length; rowIndex++) {
+    const row = mapRow(headers, grid[rowIndex]);
+    const pointCode = firstValue(row, ["点位编码"]);
+    if (!pointCode || !markedPointCodes.has(pointCode.toLowerCase())) continue;
+    rows.push(row);
+  }
+  return rows;
+}
+
 function buildVerificationTree(
   workbookBuffer: Buffer,
   imageByPointCode: Map<string, ImageEntryInfo>,
+  markedPointCodes: Set<string>,
 ): { nodes: Map<string, DeviceVerificationNodeRecord>; rootIds: string[] } {
   const workbook = XLSX.read(workbookBuffer, { type: "buffer" });
   const sheetName = workbook.SheetNames.find((name) => name.toLowerCase() === "sheet1") || workbook.SheetNames[0];
@@ -250,6 +454,7 @@ function buildVerificationTree(
           kind: level.kind,
           parentId,
           childrenIds: [],
+          marked: level.kind === "point" && code ? markedPointCodes.has(code.toLowerCase()) : false,
           imagePath: image?.filePath,
           imageMime: image?.mime,
         });
@@ -319,6 +524,7 @@ function toPublicNode(session: DeviceVerificationSession, node: DeviceVerificati
     kind: node.kind,
     isLeaf: node.childrenIds.length === 0,
     hasImage: Boolean(node.imagePath),
+    marked: Boolean(node.marked),
     ...(includeChildren && node.childrenIds.length > 0
       ? { children: node.childrenIds.map((id) => toPublicNode(session, session.nodes.get(id)!, true)) }
       : {}),
@@ -365,6 +571,28 @@ function assertDirectoryDoesNotOverlap(sourceDir: string, targetDir: string): vo
   }
 }
 
+function isSameFsPath(leftPath: string, rightPath: string): boolean {
+  const left = path.resolve(leftPath);
+  const right = path.resolve(rightPath);
+  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+function uniqueFileName(dir: string, preferredName: string): string {
+  const ext = path.extname(preferredName);
+  const base = path.basename(preferredName, ext);
+  let fileName = preferredName;
+  let index = 1;
+  while (fs.existsSync(path.join(dir, fileName))) {
+    fileName = `${base}_${index}${ext}`;
+    index++;
+  }
+  return fileName;
+}
+
+function formatExportTime(date: Date): string {
+  return `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")}_${String(date.getHours()).padStart(2, "0")}${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
 function extractZipToDir(zipPath: string, targetDir: string): void {
   const zip = new AdmZip(zipPath);
   for (const entry of zip.getEntries()) {
@@ -408,6 +636,125 @@ function collectFiles(dir: string): string[] {
     }
   }
   return files;
+}
+
+function readMarkedPointCodes(filePath: string): Set<string> {
+  const file = readDeviceMarkedPointFile(filePath);
+  return new Set(Object.keys(file.records).map((code) => code.toLowerCase()));
+}
+
+function readDeviceMarkedPointFile(filePath: string): DeviceMarkedPointFile {
+  if (!fs.existsSync(filePath)) {
+    return { version: 1, updatedAt: "", records: {} };
+  }
+
+  const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+  const records: Record<string, DeviceMarkedPointRecord> = {};
+  if (Array.isArray(parsed?.records)) {
+    for (const item of parsed.records) {
+      const record = normalizeMarkedPointRecord(item);
+      if (record) records[record.pointCode] = record;
+    }
+  } else if (parsed?.records && typeof parsed.records === "object") {
+    for (const item of Object.values(parsed.records)) {
+      const record = normalizeMarkedPointRecord(item);
+      if (record) records[record.pointCode] = record;
+    }
+  }
+
+  return {
+    version: 1,
+    updatedAt: valueText(parsed?.updatedAt),
+    records,
+  };
+}
+
+function writeDeviceMarkedPointFile(filePath: string, file: DeviceMarkedPointFile): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(file, null, 2)}\n`, "utf-8");
+}
+
+function normalizeMarkedPointRecord(value: any): DeviceMarkedPointRecord | null {
+  const pointCode = valueText(value?.pointCode ?? value?.code);
+  if (!pointCode) return null;
+  return {
+    pointCode,
+    pointName: valueText(value?.pointName ?? value?.name),
+    updatedAt: valueText(value?.updatedAt),
+  };
+}
+
+function updateActiveSessionMarked(pointCode: string, marked: boolean): void {
+  const code = valueText(pointCode).toLowerCase();
+  if (!code || !activeSession) return;
+  for (const node of activeSession.nodes.values()) {
+    if (node.kind === "point" && node.code.toLowerCase() === code) {
+      node.marked = marked;
+    }
+  }
+}
+
+function readDeviceCorrectionFile(filePath: string): DeviceCorrectionFile {
+  if (!fs.existsSync(filePath)) {
+    return { version: 1, updatedAt: "", records: {} };
+  }
+
+  const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+  const records: Record<string, DeviceCorrectionRecord> = {};
+  if (Array.isArray(parsed?.records)) {
+    for (const item of parsed.records) {
+      const record = normalizeCorrectionRecord(item);
+      if (record) records[record.pointCode] = record;
+    }
+  } else if (parsed?.records && typeof parsed.records === "object") {
+    for (const item of Object.values(parsed.records)) {
+      const record = normalizeCorrectionRecord(item);
+      if (record) records[record.pointCode] = record;
+    }
+  }
+
+  return {
+    version: 1,
+    updatedAt: valueText(parsed?.updatedAt),
+    records,
+  };
+}
+
+function writeDeviceCorrectionFile(filePath: string, file: DeviceCorrectionFile): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(file, null, 2)}\n`, "utf-8");
+}
+
+function normalizeCorrectionRecord(value: any): DeviceCorrectionRecord | null {
+  const pointCode = valueText(value?.pointCode);
+  if (!pointCode) return null;
+  try {
+    return {
+      pointCode,
+      pointName: valueText(value?.pointName),
+      rect: normalizeCorrectionRect(value?.rect),
+      updatedAt: valueText(value?.updatedAt),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeCorrectionRect(value: any): DeviceCorrectionRect {
+  const imageWidth = Math.max(1, Math.round(Number(value?.imageWidth) || 0));
+  const imageHeight = Math.max(1, Math.round(Number(value?.imageHeight) || 0));
+  const maxSize = Math.max(1, Math.min(imageWidth, imageHeight));
+  const size = Math.min(maxSize, Math.max(1, Number(value?.size) || 0));
+  const x = Math.min(Math.max(0, Number(value?.x) || 0), Math.max(0, imageWidth - size));
+  const y = Math.min(Math.max(0, Number(value?.y) || 0), Math.max(0, imageHeight - size));
+
+  return {
+    x: Math.round(x),
+    y: Math.round(y),
+    size: Math.round(size),
+    imageWidth,
+    imageHeight,
+  };
 }
 
 function normalizeArchiveEntryName(entryName: string): string {

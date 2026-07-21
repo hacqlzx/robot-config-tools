@@ -49,6 +49,7 @@ const CURVE_SEGMENTS = 16;
 
 const CLICK_THRESHOLD = 3;
 const CLICK_CLAIM_OWNER = "path";
+const POINT_LABEL_COLOR = "#44e95f";
 
 let _idCounter = 0;
 function genId(): string {
@@ -82,7 +83,9 @@ export class PathDrawing {
 
   private points: pc.Vec3[] = [];
   private pointIds: string[] = [];
+  private pointNames: (string | undefined)[] = [];
   private spheres: pc.Entity[] = [];
+  private pointLabels: (HTMLDivElement | null)[] = [];
   // connections 保存点数组下标；pointIds/pathIds 是持久化用的稳定 id。
   private connections: [number, number][] = [];
   private pathIds: string[] = [];
@@ -103,6 +106,8 @@ export class PathDrawing {
   private dragStartScreen: { x: number; y: number } | null = null;
   private pointDragBeforeSnapshot: PathDrawingSnapshot | null = null;
   private cpDragBeforeSnapshot: PathDrawingSnapshot | null = null;
+  private labelContainer: HTMLDivElement | null = null;
+  private labelRafId = 0;
 
   constructor(
     app: pc.Application,
@@ -126,6 +131,7 @@ export class PathDrawing {
     this.canvas.addEventListener("mouseleave", this.cancelDrag);
     document.addEventListener("mouseleave", this.cancelDrag);
     window.addEventListener("blur", this.cancelDrag);
+    this.initLabels();
   }
 
   // ============ 对外 API ============
@@ -163,6 +169,7 @@ export class PathDrawing {
     return {
       points: this.points.map((p, i) => ({
         id: this.pointIds[i],
+        ...(this.pointNames[i] ? { name: this.pointNames[i] } : {}),
         x: p.x,
         y: p.y,
         z: p.z,
@@ -201,7 +208,9 @@ export class PathDrawing {
     this.clearEntities();
     this.points.length = 0;
     this.pointIds.length = 0;
+    this.pointNames.length = 0;
     this.spheres.length = 0;
+    this.pointLabels.length = 0;
     this.connections.length = 0;
     this.pathIds.length = 0;
     this.bezierParams.length = 0;
@@ -222,7 +231,9 @@ export class PathDrawing {
         const pos = new pc.Vec3(x, y, z);
         this.points.push(pos);
         this.pointIds.push(genId());
+        this.pointNames.push(undefined);
         this.spheres.push(createSphere(this.app, pos, this.opts.pointColor, this.opts.sphereScale));
+        this.pointLabels.push(null);
       }
       for (const [from, to] of data.connections) {
         this.addConnectionInternal(from, to);
@@ -235,7 +246,9 @@ export class PathDrawing {
         const pos = new pc.Vec3(pt.x, pt.y, pt.z);
         this.points.push(pos);
         this.pointIds.push(pt.id);
+        this.pointNames.push(pt.name);
         this.spheres.push(createSphere(this.app, pos, this.opts.pointColor, this.opts.sphereScale));
+        this.pointLabels.push(pt.name ? this.createPointLabel(pt.name) : null);
         indexMap.set(pt.id, idx);
       }
       for (const seg of data.paths) {
@@ -254,7 +267,9 @@ export class PathDrawing {
     this.clearEntities();
     this.points.length = 0;
     this.pointIds.length = 0;
+    this.pointNames.length = 0;
     this.spheres.length = 0;
+    this.pointLabels.length = 0;
     this.connections.length = 0;
     this.pathIds.length = 0;
     this.bezierParams.length = 0;
@@ -276,9 +291,12 @@ export class PathDrawing {
     const idx = this.points.length - 1;
     this.removeConnectionsForInner(idx);
     this.spheres[idx].destroy();
+    this.pointLabels[idx]?.remove();
     this.points.splice(idx, 1);
     this.pointIds.splice(idx, 1);
+    this.pointNames.splice(idx, 1);
     this.spheres.splice(idx, 1);
+    this.pointLabels.splice(idx, 1);
     this.lastConnectedIdx = Math.min(this.lastConnectedIdx, this.points.length - 1);
     if (this.selectedPointIdx >= this.points.length) { this.selectedPointIdx = -1; this.selectedPathIdx = -1; }
     if (this.selectedPathIdx >= this.connections.length) this.selectedPathIdx = -1;
@@ -295,10 +313,15 @@ export class PathDrawing {
     this.canvas.removeEventListener("mouseleave", this.cancelDrag);
     document.removeEventListener("mouseleave", this.cancelDrag);
     window.removeEventListener("blur", this.cancelDrag);
+    if (this.labelRafId) cancelAnimationFrame(this.labelRafId);
     this.clearEntities();
+    this.labelContainer?.remove();
+    this.labelContainer = null;
     this.points.length = 0;
     this.pointIds.length = 0;
+    this.pointNames.length = 0;
     this.spheres.length = 0;
+    this.pointLabels.length = 0;
     this.connections.length = 0;
     this.pathIds.length = 0;
     this.bezierParams.length = 0;
@@ -315,13 +338,64 @@ export class PathDrawing {
 
   private clearEntities() {
     this.spheres.forEach((e) => e.destroy());
+    this.pointLabels.forEach((el) => el?.remove());
     this.lines.forEach((e) => e.destroy());
     this.cpSpheres.forEach((cs) => { cs.cp1?.destroy(); cs.cp2?.destroy(); });
     this.curveSegs.forEach((segs) => segs.forEach((e) => e.destroy()));
     this.spheres.length = 0;
+    this.pointLabels.length = 0;
     this.lines.length = 0;
     this.cpSpheres.length = 0;
     this.curveSegs.length = 0;
+  }
+
+  private initLabels() {
+    const parent = this.canvas.parentElement;
+    if (!parent) return;
+    const style = window.getComputedStyle(parent);
+    if (style.position === "static") parent.style.position = "relative";
+    const container = document.createElement("div");
+    container.style.cssText = "position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:16;";
+    parent.appendChild(container);
+    this.labelContainer = container;
+    const loop = () => {
+      this.updateLabels();
+      this.labelRafId = requestAnimationFrame(loop);
+    };
+    this.labelRafId = requestAnimationFrame(loop);
+  }
+
+  private createPointLabel(name: string): HTMLDivElement | null {
+    if (!this.labelContainer) return null;
+    const el = document.createElement("div");
+    el.textContent = name;
+    el.style.cssText = "position:absolute;transform:translate(-50%,-145%);" +
+      `color:${POINT_LABEL_COLOR};font-size:16px;font-weight:700;white-space:nowrap;` +
+      "text-shadow:0 0 3px #000,0 0 3px #000;pointer-events:none;display:none;";
+    this.labelContainer.appendChild(el);
+    return el;
+  }
+
+  private updateLabels() {
+    if (!this.labelContainer || this.pointLabels.length === 0) return;
+    const camComp = this.camera.camera;
+    if (!camComp) return;
+    const rect = this.canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const viewMat = this.camera.getWorldTransform().clone().invert();
+    const vpMat = new pc.Mat4().mul2(camComp.projectionMatrix, viewMat);
+    for (let index = 0; index < this.pointLabels.length; index++) {
+      const label = this.pointLabels[index];
+      if (!label || !this.points[index]) continue;
+      const sp = worldToScreen(this.points[index], vpMat, rect.width, rect.height);
+      if (!sp) {
+        label.style.display = "none";
+        continue;
+      }
+      label.style.left = `${sp.sx}px`;
+      label.style.top = `${sp.sy}px`;
+      label.style.display = "block";
+    }
   }
 
   private emitChange() {
@@ -566,9 +640,12 @@ export class PathDrawing {
     const before = this.getSnapshot();
     this.removeConnectionsForInner(idx);
     this.spheres[idx].destroy();
+    this.pointLabels[idx]?.remove();
     this.points.splice(idx, 1);
     this.pointIds.splice(idx, 1);
+    this.pointNames.splice(idx, 1);
     this.spheres.splice(idx, 1);
+    this.pointLabels.splice(idx, 1);
     // 点数组删除后，所有大于 idx 的连接下标都要前移一位。
     for (let i = 0; i < this.connections.length; i++) {
       const [a, b] = this.connections[i];
@@ -675,7 +752,9 @@ export class PathDrawing {
     const idx = this.points.length;
     this.points.push(pos.clone());
     this.pointIds.push(genId());
+    this.pointNames.push(undefined);
     this.spheres.push(createSphere(this.app, pos, this.opts.pointColor, this.opts.sphereScale));
+    this.pointLabels.push(null);
     if (this.lastConnectedIdx >= 0) {
       // 放置模式下，新点会自动和上一个放置/连接的点连线，形成连续路径。
       this.addConnectionInternal(this.lastConnectedIdx, idx);

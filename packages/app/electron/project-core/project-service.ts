@@ -7,7 +7,11 @@ import {
   deleteProjectData,
   getDatabase,
   getProjectDataCounts,
+  DeviceBayRepo,
+  DeviceMainRepo,
   renameProjectData,
+  type CreateDeviceMainDTO,
+  type DeviceBay,
   type ProjectDataCounts,
 } from "@robot/database";
 import { exportSpaceZip, type PointTableExportData } from "../export-points";
@@ -37,7 +41,12 @@ import { readDirTree, type TreeNode } from "./project-tree";
 
 const MAP_MODEL_FILE_NAME = "map.las";
 const MAP_INFO_FILE_NAME = "map_info.json";
+const DESCRIPTION_FILE_NAME = "description_file.json";
 const MAP_DIR_NAME = "地图";
+const AREA_TYPE_CABINET_ROW = "1";
+const AREA_TYPE_CABINET = "2";
+const MAIN_DEVICE_TYPE_CABINET = 29;
+const CODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
 interface ImportedSpaceModelZipResult {
   mapName: string;
@@ -82,6 +91,239 @@ function removeProjectDirectory(dirPath: string): void {
 
 function assertProjectName(name: string): string {
   return assertSafePathSegment(name, "项目名称");
+}
+
+function formatMapInfoTime(date = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function buildMapInfoText(mapName: string, mapCode?: string): string {
+  const data: Record<string, string> = {};
+  if (mapCode?.trim()) data.map_code = mapCode.trim();
+  data.map_name = mapName;
+  data.time = formatMapInfoTime();
+  return `${JSON.stringify(data, null, 2)}\n`;
+}
+
+function textValue(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function areaType(record: Record<string, unknown>): string {
+  return textValue(record.type);
+}
+
+function splitTextList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap((item) => splitTextList(item));
+  return textValue(value)
+    .split(/[,，;；|]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function uniqueTexts(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function bayCodesFromAreaRecord(record: Record<string, unknown> | null | undefined): string[] {
+  if (!record) return [];
+  return uniqueTexts([...splitTextList(record.bay_code), ...splitTextList(record.bay_codes)]);
+}
+
+function findDescriptionFiles(rootDir: string): string[] {
+  const result: string[] = [];
+  const queue = [rootDir];
+  while (queue.length > 0) {
+    const dir = queue.shift()!;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory() && !entry.name.startsWith(".") && !entry.name.startsWith("__")) {
+        queue.push(fullPath);
+      } else if (entry.isFile() && entry.name === DESCRIPTION_FILE_NAME) {
+        result.push(fullPath);
+      }
+    }
+  }
+  return result;
+}
+
+interface CabinetMainImportItem {
+  code: string;
+  name: string;
+  bayCode: string;
+}
+
+function collectCabinetMainImportItems(records: Record<string, unknown>[]): CabinetMainImportItem[] {
+  const byId = new Map<string, Record<string, unknown>>();
+  const childrenByParent = new Map<string, Record<string, unknown>[]>();
+  for (const record of records) {
+    const type = areaType(record);
+    if (type !== AREA_TYPE_CABINET_ROW && type !== AREA_TYPE_CABINET) continue;
+    const id = textValue(record.id);
+    if (id) byId.set(id, record);
+
+    if (type === AREA_TYPE_CABINET) {
+      const parentId = textValue(record.parent_id);
+      if (parentId) {
+        const children = childrenByParent.get(parentId) || [];
+        children.push(record);
+        childrenByParent.set(parentId, children);
+      }
+    }
+  }
+
+  const items: CabinetMainImportItem[] = [];
+  const seen = new Set<string>();
+  const push = (record: Record<string, unknown>, bayCodes: string[]) => {
+    const code = textValue(record.code);
+    const name = textValue(record.name) || code;
+    if (!name && !code) return;
+    for (const bayCode of uniqueTexts(bayCodes)) {
+      const key = `${bayCode}\u0000${code}\u0000${name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push({ code, name, bayCode });
+    }
+  };
+
+  for (const record of records) {
+    const type = areaType(record);
+    if (type === AREA_TYPE_CABINET_ROW) {
+      const childBayCodes = (childrenByParent.get(textValue(record.id)) || [])
+        .flatMap((child) => bayCodesFromAreaRecord(child));
+      const bayCodes = bayCodesFromAreaRecord(record);
+      push(record, bayCodes.length > 0 ? bayCodes : childBayCodes);
+    } else if (type === AREA_TYPE_CABINET) {
+      let bayCodes = bayCodesFromAreaRecord(record);
+      if (bayCodes.length === 0) {
+        const parentCodes = bayCodesFromAreaRecord(byId.get(textValue(record.parent_id)));
+        if (parentCodes.length === 1) bayCodes = parentCodes;
+      }
+      push(record, bayCodes);
+    }
+  }
+  return items;
+}
+
+function generateMainDeviceCode(): string {
+  let result = "MD";
+  for (let i = result.length; i < 32; i++) {
+    result += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
+  }
+  return result;
+}
+
+function createCabinetMainDto(projectName: string, bay: DeviceBay, item: CabinetMainImportItem, sortNum: number): CreateDeviceMainDTO {
+  return {
+    mainDeviceType: MAIN_DEVICE_TYPE_CABINET,
+    mainDeviceName: item.name,
+    mainDeviceCode: item.code || generateMainDeviceCode(),
+    phaseType: 0,
+    threePhaseFlag: 0,
+    threePhaseAssociateId: "",
+    entityId: "",
+    alarmLevel: 0,
+    bayId: bay.id,
+    bayType: bay.bayType || "屏柜区",
+    bayName: bay.bayName || "",
+    bayCode: bay.bayCode || item.bayCode,
+    voltId: bay.voltId || 0,
+    voltName: bay.voltName || "",
+    voltCode: bay.voltCode || "",
+    stationId: bay.stationId || 0,
+    stationName: bay.stationName || "",
+    stationCode: bay.stationCode || "",
+    sortNum,
+    projectName,
+    createBy: "space-model-import",
+    updateBy: "space-model-import",
+    deviceModel: "",
+    deviceSource: "",
+    manufacturer: "",
+    productionCode: "",
+    useCompany: "",
+    productionDate: "",
+    commissioningDate: "",
+    remarkInfo: "",
+    repairFlag: 0,
+  };
+}
+
+function syncCabinetMainDevicesFromImportedMap(projectName: string, mapDir: string): void {
+  const files = findDescriptionFiles(mapDir);
+  if (files.length === 0) return;
+
+  const items: CabinetMainImportItem[] = [];
+  for (const filePath of files) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      if (Array.isArray(parsed)) {
+        items.push(...collectCabinetMainImportItems(parsed.filter(isRecord)));
+      }
+    } catch (error) {
+      console.warn("[空间模型导入][屏柜主设备] 解析 description_file.json 失败", { filePath, error });
+    }
+  }
+  if (items.length === 0) return;
+
+  const db = getDatabase();
+  const bayRepo = new DeviceBayRepo(db);
+  const mainRepo = new DeviceMainRepo(db);
+  const bayCache = new Map<string, DeviceBay | null>();
+  const skippedMissingBay = new Set<string>();
+  let inserted = 0;
+  let skippedExisting = 0;
+
+  db.transaction(() => {
+    for (const item of items) {
+      const bayCode = textValue(item.bayCode);
+      if (!bayCode) continue;
+      if (!bayCache.has(bayCode)) {
+        bayCache.set(bayCode, bayRepo.findByBayCode(bayCode, projectName) ?? null);
+      }
+      const bay = bayCache.get(bayCode);
+      if (!bay) {
+        skippedMissingBay.add(bayCode);
+        continue;
+      }
+
+      const existingByBay = mainRepo.findByBayId(bay.id, projectName);
+      const exists = existingByBay.some((main) =>
+        main.mainDeviceType === MAIN_DEVICE_TYPE_CABINET
+        && ((item.code && main.mainDeviceCode === item.code) || (item.name && main.mainDeviceName === item.name))
+      );
+      if (exists) {
+        skippedExisting += 1;
+        continue;
+      }
+
+      mainRepo.create(createCabinetMainDto(projectName, bay, item, existingByBay.length + 1));
+      inserted += 1;
+    }
+  })();
+  db.saveToDisk();
+
+  console.log("[空间模型导入][屏柜主设备] 同步完成", {
+    projectName,
+    mapDir,
+    files: files.length,
+    parsedItems: items.length,
+    inserted,
+    skippedExisting,
+    skippedMissingBay: Array.from(skippedMissingBay),
+  });
 }
 
 export async function listProjects(): Promise<string[]> {
@@ -233,7 +475,7 @@ export async function importProjectModel(projectName: string, sourcePath: string
 
   const mapInfoPath = resolveProjectPath(projectName, manifest.layout.dirs.maps, safeBaseName, MAP_INFO_FILE_NAME);
   if (!fs.existsSync(mapInfoPath)) {
-    const mapInfoText = `${JSON.stringify({ mapName: safeBaseName }, null, 2)}\n`;
+    const mapInfoText = buildMapInfoText(safeBaseName);
     await fs.promises.writeFile(mapInfoPath, mapInfoText, "utf-8");
     updateManifestForWrittenFile(projectName, mapInfoPath, Buffer.byteLength(mapInfoText));
   }
@@ -290,12 +532,14 @@ export async function importProjectModelZip(projectName: string, sourcePath: str
 
     const mapInfoPath = path.join(targetDir, MAP_INFO_FILE_NAME);
     if (!fs.existsSync(mapInfoPath)) {
-      const mapInfoText = `${JSON.stringify({ mapName }, null, 2)}\n`;
+      const mapInfoText = buildMapInfoText(mapName);
       await fs.promises.writeFile(mapInfoPath, mapInfoText, "utf-8");
       updateManifestForWrittenFile(projectName, mapInfoPath, Buffer.byteLength(mapInfoText));
     } else {
       updateManifestForWrittenFile(projectName, mapInfoPath, fs.statSync(mapInfoPath).size);
     }
+
+    syncCabinetMainDevicesFromImportedMap(projectName, targetDir);
 
     return { mapName, mapDir: targetDir, modelPath };
   } finally {

@@ -50,6 +50,51 @@ export function defaultDeviceAreaName(id: string | number): string {
   return `设备区域${valueText(id)}`;
 }
 
+function splitTextList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => splitTextList(item));
+  }
+  return valueText(value)
+    .split(/[,，;；|]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function uniqueTexts(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function recordBayCodes(record: RobotAreaRecord): string[] {
+  return uniqueTexts(splitTextList(record.bay_code));
+}
+
+function bayFromRecord(record: RobotAreaRecord, fallback?: CabinetItem["bay"]): CabinetItem["bay"] {
+  const code = recordBayCodes(record)[0] || valueText(fallback?.code);
+  const name = valueText(fallback?.name);
+  return { id: fallback?.id && fallback.id > 0 ? fallback.id : 0, name, code };
+}
+
+function bayRecordFields(bay?: CabinetItem["bay"] | null): Partial<RobotAreaRecord> {
+  const code = valueText(bay?.code);
+  const fields: Partial<RobotAreaRecord> = {};
+  if (code) fields.bay_code = code;
+  return fields;
+}
+
+function aggregateBayRecordFields(bays: Array<CabinetItem["bay"] | null | undefined>): Partial<RobotAreaRecord> {
+  const codes = uniqueTexts(bays.map((bay) => valueText(bay?.code)).filter(Boolean));
+  const fields: Partial<RobotAreaRecord> = {};
+  if (codes.length > 0) fields.bay_code = codes[0];
+  return fields;
+}
+
 function deviceAreaBayFromRecord(record: RobotAreaRecord): DeviceAreaItem["bay"] {
   // 默认名称表示“只有几何、尚未绑定间隔”，不能伪造一个设备台账关联。
   const id = positiveInt(record.id);
@@ -258,15 +303,18 @@ export function makeCabinetRobotAreas(item: CabinetItem, rootId: number, usedIds
       pose: rowPose,
       type: AREA_TYPE_CABINET,
       code: valueText(cabinet?.code),
+      ...bayRecordFields(cabinet?.bay ?? item.bay),
     }];
   }
 
+  const rowBay = item.cabinetRow?.bay ?? item.bay;
   const records: RobotAreaRecord[] = [{
     id: rootIdText,
     name: item.cabinetRow?.name || `柜排${rootIdText}`,
     pose: rowPose,
     type: AREA_TYPE_CABINET_ROW,
     code: valueText(item.cabinetRow?.code),
+    ...aggregateBayRecordFields([rowBay, ...item.cabinets.map((cabinet) => cabinet.bay ?? item.bay)]),
   }];
   const bounds = sortedSplitBounds(item.geometry.splits || []);
   // cabinets 和 splits 可能来自旧数据且数量不完全一致，取能表达信息最多的数量并用等分位置兜底。
@@ -288,6 +336,7 @@ export function makeCabinetRobotAreas(item: CabinetItem, rootId: number, usedIds
       type: AREA_TYPE_CABINET,
       parent_id: rootIdText,
       code: valueText(cabinet?.code),
+      ...bayRecordFields(cabinet?.bay ?? item.bay),
     });
   }
   return records;
@@ -381,18 +430,19 @@ function buildCabinetItem(row: RobotAreaRecord, children: RobotAreaRecord[]): Ca
       return (positiveInt(a.child.id) ?? a.index) - (positiveInt(b.child.id) ?? b.index);
     });
   const cabinets = childInfos.length > 0
-    ? childInfos.map(({ child }, index) => ({ code: cabinetMainDeviceCode(child), name: valueText(child.name) || `屏柜${index + 1}` }))
-    : [{ code: cabinetMainDeviceCode(row), name: rowName }];
+    ? childInfos.map(({ child }, index) => ({ code: cabinetMainDeviceCode(child), name: valueText(child.name) || `屏柜${index + 1}`, bay: bayFromRecord(child, bayFromRecord(row)) }))
+    : [{ code: cabinetMainDeviceCode(row), name: rowName, bay: bayFromRecord(row) }];
   const splits = childInfos.length > 1
     // 每个非末尾子屏柜的右边界就是一条分割线；无法投影时使用等分值保持可编辑性。
     ? childInfos.slice(0, -1).map((info, index) => info.end == null ? (index + 1) / childInfos.length : clamp01(info.end))
     : [];
+  const bay = bayFromRecord(row, cabinets[0]?.bay ?? { id: 0, name: "", code: "" });
   return {
     id: valueText(row.id) || String(rowId),
     type: "cabinet",
     area: { id: 0, name: "", code: "" },
-    bay: { id: 0, name: "", code: "" },
-    cabinetRow: childInfos.length > 0 ? { code: cabinetMainDeviceCode(row), name: rowName } : null,
+    bay,
+    cabinetRow: childInfos.length > 0 ? { code: cabinetMainDeviceCode(row), name: rowName, bay } : null,
     geometry: { verts: rowVerts, splits },
     cabinets,
     updatedAt: valueText(row.time),
@@ -409,10 +459,10 @@ function buildStandaloneCabinetItem(record: RobotAreaRecord): CabinetItem | null
     id: recordId || String(positiveInt(record.id) ?? 0),
     type: "cabinet",
     area: { id: 0, name: "", code: "" },
-    bay: { id: 0, name: "", code: "" },
+    bay: bayFromRecord(record),
     cabinetRow: null,
     geometry: { verts: cabinetPoseToVerts(pose), splits: [] },
-    cabinets: [{ code: cabinetMainDeviceCode(record), name }],
+    cabinets: [{ code: cabinetMainDeviceCode(record), name, bay: bayFromRecord(record) }],
     updatedAt: valueText(record.time),
   };
 }

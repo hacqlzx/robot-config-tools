@@ -15,7 +15,6 @@ import {
   exportProspectImage,
   exportDeviceImage,
   exportBack,
-  exportDeviceCheckImage,
   downLoadExcelTemplate,
   downloadCommunicateExcel,
 } from "@/api/config.js";
@@ -91,7 +90,6 @@ const cardList: IECard[] = [
     key: "device-verify",
     title: "设备验证图",
     actions: [
-      { key: "export", label: "设备验证图导出", desc: "导出设备验证图" },
       { key: "import", label: "纠偏数据导入", desc: "导入设备纠偏数据" },
     ],
   },
@@ -443,27 +441,6 @@ export default function ImportExport() {
     }
   }, [resolveSelectedRobot, message, downloadFileToDir]);
 
-  /** 设备验证图导出 */
-  const handleDeviceCheckImageExport = useCallback(async () => {
-    setUploadingLabel("设备验证图导出");
-    try {
-      const robot = await resolveSelectedRobot();
-      if (!robot) return;
-      const res = await exportDeviceCheckImage(robot.id);
-      const body = res.data;
-      if (!body.success || !body.data) {
-        message.error(body.message || "获取下载路径失败");
-        return;
-      }
-
-      await downloadFileToDir(body.data, "设备验证图导出");
-    } catch (e: any) {
-      message.error("导出失败: " + (e?.message || e));
-    } finally {
-      setUploadingLabel(null);
-    }
-  }, [resolveSelectedRobot, message, downloadFileToDir]);
-
   /** 屏柜验证图导出 */
   const handleDeviceImageExport = useCallback(async () => {
     setUploadingLabel("屏柜验证图导出");
@@ -596,12 +573,6 @@ export default function ImportExport() {
         showBackupType: true,
         onImport: handleProjectBackupImport,
       });
-      return;
-    }
-
-    // 设备验证图导出
-    if (card.key === "device-verify" && actionKey === "export") {
-      handleDeviceCheckImageExport();
       return;
     }
 

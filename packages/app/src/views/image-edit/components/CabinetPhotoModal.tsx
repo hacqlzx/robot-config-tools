@@ -1,81 +1,33 @@
 import { useCallback, useEffect, useMemo, useState, type Key } from "react";
 import { App, Button, Empty, Input, Modal, Select, Spin, Table } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import type { RobotAreaRecord } from "@/components/three-d-engine/drawing-data";
+import type { DeviceMain } from "@robot/database";
 import "./CabinetPhotoModal.scss";
 
-const MAP_DIR_NAME = "地图";
-const DESCRIPTION_FILE_NAME = "description_file.json";
-const CABINET_TYPE = "2";
+const CABINET_BAY_TYPE = "屏柜区";
 
 export interface CabinetPhotoDispatchItem {
   id: string;
   areaId: string;
   areaName: string;
+  areaCode: string;
   bayId: string;
   bayName: string;
+  bayCode: string;
   cabinetId: string;
   cabinetCode: string;
   cabinetName: string;
-  fileCabinetId: string;
-  sourceType: "description-file+db";
+  mainDeviceId: string;
+  mainDeviceCode: string;
+  mainDeviceName: string;
+  sourceType: "db-main-device";
 }
 
 interface CabinetPhotoModalProps {
   open: boolean;
   projectName?: string | null;
-  mapName?: string | null;
   onClose: () => void;
   onDispatch?: (items: CabinetPhotoDispatchItem[]) => boolean | void | Promise<boolean | void>;
-}
-
-interface TreeNode {
-  name: string;
-  path: string;
-  isDir: boolean;
-  children?: TreeNode[];
-}
-
-interface DeviceMainLike {
-  id: number;
-  mainDeviceName: string;
-  mainDeviceCode: string;
-  bayId: number;
-  bayName: string;
-  voltId: number;
-  voltName: string;
-  sortNum: number;
-}
-
-function walkTree(nodes: TreeNode[], visit: (node: TreeNode) => void): void {
-  for (const node of nodes) {
-    visit(node);
-    if (node.children) walkTree(node.children, visit);
-  }
-}
-
-function findFilePath(nodes: TreeNode[], names: readonly string[]): string {
-  let found = "";
-  walkTree(nodes, (node) => {
-    if (!node.isDir && !found && names.includes(node.name)) {
-      found = node.path;
-    }
-  });
-  return found;
-}
-
-function parseJsonText(text: string): unknown {
-  return JSON.parse(text.replace(/,\s*([}\]])/g, "$1"));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function getRobotAreaRecords(value: unknown): RobotAreaRecord[] {
-  if (Array.isArray(value)) return value.filter(isRecord) as RobotAreaRecord[];
-  if (isRecord(value) && Array.isArray(value.data)) return value.data.filter(isRecord) as RobotAreaRecord[];
-  return [];
 }
 
 function valueText(value: unknown): string {
@@ -86,8 +38,26 @@ function normalizeKeyword(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function areaKey(row: Pick<CabinetPhotoDispatchItem, "areaId" | "areaName">): string {
-  return row.areaId || row.areaName;
+function entityKey(id: unknown, name: unknown, code?: unknown): string {
+  const idText = valueText(id);
+  if (idText && idText !== "0") return `id:${idText}`;
+  const codeText = valueText(code);
+  if (codeText) return `code:${codeText}`;
+  const nameText = valueText(name);
+  if (nameText) return `name:${nameText}`;
+  return "unknown";
+}
+
+function rowAreaName(row: Pick<DeviceMain, "voltId" | "voltName">): string {
+  return valueText(row.voltName) || (row.voltId ? `区域${row.voltId}` : "未绑定区域");
+}
+
+function rowBayName(row: Pick<DeviceMain, "bayId" | "bayName">): string {
+  return valueText(row.bayName) || (row.bayId ? `间隔${row.bayId}` : "未绑定间隔");
+}
+
+function areaKey(row: Pick<CabinetPhotoDispatchItem, "areaId" | "areaName" | "areaCode">): string {
+  return entityKey(row.areaId, row.areaName, row.areaCode);
 }
 
 function rowKey(row: CabinetPhotoDispatchItem): string {
@@ -97,46 +67,46 @@ function rowKey(row: CabinetPhotoDispatchItem): string {
 function sortRows(a: CabinetPhotoDispatchItem, b: CabinetPhotoDispatchItem): number {
   const areaCompare = a.areaName.localeCompare(b.areaName, "zh-Hans-CN", { numeric: true });
   if (areaCompare !== 0) return areaCompare;
+  const bayCompare = a.bayName.localeCompare(b.bayName, "zh-Hans-CN", { numeric: true });
+  if (bayCompare !== 0) return bayCompare;
   return a.cabinetName.localeCompare(b.cabinetName, "zh-Hans-CN", { numeric: true });
 }
 
-function collectFileCabinetCodes(records: RobotAreaRecord[]): Map<string, RobotAreaRecord> {
-  const codeToCabinet = new Map<string, RobotAreaRecord>();
-  for (const record of records) {
-    if (valueText(record.type) !== CABINET_TYPE) continue;
-    const code = valueText((record as Record<string, unknown>).code);
-    if (!code || codeToCabinet.has(code)) continue;
-    codeToCabinet.set(code, record);
-  }
-  return codeToCabinet;
-}
+function buildRows(mainDevices: DeviceMain[]): CabinetPhotoDispatchItem[] {
+  const seenCodes = new Set<string>();
+  const rows: CabinetPhotoDispatchItem[] = [];
 
-function buildRows(fileCodeMap: Map<string, RobotAreaRecord>, mainDevices: DeviceMainLike[]): CabinetPhotoDispatchItem[] {
-  return mainDevices
-    .filter((device) => fileCodeMap.has(valueText(device.mainDeviceCode)))
-    .map((device) => {
-      const code = valueText(device.mainDeviceCode);
-      const fileCabinet = fileCodeMap.get(code);
-      return {
-        id: `main-${device.id}`,
-        areaId: valueText(device.voltId),
-        areaName: valueText(device.voltName) || "未绑定区域",
-        bayId: valueText(device.bayId),
-        bayName: valueText(device.bayName),
-        cabinetId: valueText(device.id),
-        cabinetCode: code,
-        cabinetName: valueText(device.mainDeviceName) || valueText(fileCabinet?.name) || `屏柜${valueText(fileCabinet?.id) || device.id}`,
-        fileCabinetId: valueText(fileCabinet?.id),
-        sourceType: "description-file+db" as const,
-      };
-    })
-    .sort(sortRows);
+  for (const device of mainDevices) {
+    const code = valueText(device.mainDeviceCode);
+    if (valueText(device.bayType) !== CABINET_BAY_TYPE || !code || seenCodes.has(code)) continue;
+    seenCodes.add(code);
+
+    const mainDeviceId = valueText(device.id);
+    const mainDeviceName = valueText(device.mainDeviceName) || `主设备${device.id}`;
+    rows.push({
+      id: `main-${device.id}`,
+      areaId: valueText(device.voltId),
+      areaName: rowAreaName(device),
+      areaCode: valueText(device.voltCode),
+      bayId: valueText(device.bayId),
+      bayName: rowBayName(device),
+      bayCode: valueText(device.bayCode),
+      cabinetId: mainDeviceId,
+      cabinetCode: code,
+      cabinetName: mainDeviceName,
+      mainDeviceId,
+      mainDeviceCode: code,
+      mainDeviceName,
+      sourceType: "db-main-device",
+    });
+  }
+
+  return rows.sort(sortRows);
 }
 
 export default function CabinetPhotoModal({
   open,
   projectName,
-  mapName,
   onClose,
   onDispatch,
 }: CabinetPhotoModalProps) {
@@ -169,7 +139,7 @@ export default function CabinetPhotoModal({
       return;
     }
 
-    if (!projectName || !mapName || !window.electronAPI?.project || !window.electronAPI?.readLargeFile || !window.electronAPI?.db?.mainDevice) {
+    if (!projectName || !window.electronAPI?.db?.mainDevice) {
       setRows([]);
       setSelectedKeys([]);
       return;
@@ -179,29 +149,9 @@ export default function CabinetPhotoModal({
     setLoading(true);
     (async () => {
       try {
-        const tree = await window.electronAPI!.project.listTree(projectName, `${MAP_DIR_NAME}/${mapName}`);
-        const descriptionPath = findFilePath(tree as TreeNode[], [DESCRIPTION_FILE_NAME]);
-        if (!descriptionPath) {
-          if (!ignore) {
-            setRows([]);
-            setSelectedKeys([]);
-          }
-          return;
-        }
-
-        const buf = await window.electronAPI!.readLargeFile(descriptionPath);
-        const records = getRobotAreaRecords(parseJsonText(new TextDecoder().decode(buf)));
-        const fileCodeMap = collectFileCabinetCodes(records);
-        if (fileCodeMap.size === 0) {
-          if (!ignore) {
-            setRows([]);
-            setSelectedKeys([]);
-          }
-          return;
-        }
         const mainDevices = await window.electronAPI!.db.mainDevice.list(projectName);
         if (ignore) return;
-        setRows(buildRows(fileCodeMap, mainDevices as DeviceMainLike[]));
+        setRows(buildRows(mainDevices));
         setSelectedKeys([]);
       } catch (e: any) {
         if (!ignore) {
@@ -217,7 +167,7 @@ export default function CabinetPhotoModal({
     return () => {
       ignore = true;
     };
-  }, [mapName, message, open, projectName, resetModalState]);
+  }, [message, open, projectName, resetModalState]);
 
   const areaOptions = useMemo(() => {
     const map = new Map<string, { label: string; value: string }>();
@@ -234,7 +184,7 @@ export default function CabinetPhotoModal({
     const keyword = normalizeKeyword(cabinetKeyword);
     return rows
       .filter((row) => areaSet.size === 0 || areaSet.has(areaKey(row)))
-      .filter((row) => !keyword || row.cabinetName.toLowerCase().includes(keyword));
+      .filter((row) => !keyword || `${row.bayName} ${row.cabinetName} ${row.cabinetCode}`.toLowerCase().includes(keyword));
   }, [areaFilter, cabinetKeyword, rows]);
 
   useEffect(() => {
@@ -264,7 +214,12 @@ export default function CabinetPhotoModal({
       ellipsis: true,
     },
     {
-      title: "屏柜",
+      title: "间隔",
+      dataIndex: "bayName",
+      ellipsis: true,
+    },
+    {
+      title: "主设备",
       dataIndex: "cabinetName",
       ellipsis: true,
     },
@@ -322,7 +277,7 @@ export default function CabinetPhotoModal({
           <span className="cabinet-photo-filter-label">屏柜</span>
           <Input
             allowClear
-            placeholder="请输入屏柜名称"
+            placeholder="请输入间隔/主设备名称"
             value={cabinetKeyword}
             onChange={(event) => setCabinetKeyword(event.target.value)}
           />

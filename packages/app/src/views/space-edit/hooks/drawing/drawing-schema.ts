@@ -15,12 +15,18 @@ export interface CabinetItem {
   area: { id: number; name: string; code: string };
   bay: { id: number; name: string; code: string };
   /** 有值时表示整组几何是一排屏柜；独立屏柜保持 null 或省略。 */
-  cabinetRow?: { code: string; name: string } | null;
+  cabinetRow?: { code: string; name: string; bay?: CabinetBayRef | null } | null;
   /** verts 为场景中的 8 个包围盒顶点；splits 为沿柜排宽度方向、取值在 (0, 1) 的分割比例。 */
   geometry: { verts: number[][]; splits: number[] };
   /** 按柜排从左到右排列；顺序必须与 splits 划分出的几何分段一致。 */
-  cabinets: { code: string; name: string }[];
+  cabinets: { code: string; name: string; bay?: CabinetBayRef | null }[];
   updatedAt: string;
+}
+
+export interface CabinetBayRef {
+  id: number;
+  name: string;
+  code: string;
 }
 
 export interface ChargingAreaItem {
@@ -42,6 +48,8 @@ export interface DeviceAreaItem {
 export interface PathPoint {
   /** 路径拓扑通过稳定 id 关联，不依赖点在数组中的位置。 */
   id: string;
+  /** 外部机器人停靠点名称；编辑器手绘点通常没有名称。 */
+  name?: string;
   x: number;
   y: number;
   z: number;
@@ -97,6 +105,8 @@ export interface RobotAreaRecord {
   start_time?: string;
   end_time?: string;
   code?: string | number;
+  /** 屏柜/柜排所属间隔编码。 */
+  bay_code?: string | number;
   [key: string]: unknown;
 }
 

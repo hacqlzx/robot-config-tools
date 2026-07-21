@@ -28,6 +28,18 @@ interface ClipSaveParams {
 // 裁切遍历点云时的批大小。过大会卡住渲染线程，过小会让 IPC/循环开销变高。
 const CHUNK = 200_000;
 
+function formatMapInfoTime(date = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function buildMapInfoText(mapName: string): string {
+  return `${JSON.stringify({
+    map_name: mapName,
+    time: formatMapInfoTime(),
+  }, null, 2)}\n`;
+}
+
 export async function performClipSave({
   entity, app, origFilePath, bounds, entityName,
   originalMeshRef, onProgress, setProgress, setSaving,
@@ -362,7 +374,7 @@ export async function performClipSave({
         clipName = baseName + "_" + idx;
         const clipSubPath = mapModelFileSubPath(clipName, ".las");
         await window.electronAPI.project.writeFile(selectedProject, clipSubPath, out.buffer.slice(0, outIdx));
-        const mapInfoText = `${JSON.stringify({ mapName: clipName }, null, 2)}\n`;
+        const mapInfoText = buildMapInfoText(clipName);
         const mapInfoBytes = new TextEncoder().encode(mapInfoText);
         const mapInfoBuffer = mapInfoBytes.buffer.slice(mapInfoBytes.byteOffset, mapInfoBytes.byteOffset + mapInfoBytes.byteLength);
         await window.electronAPI.project.writeFile(selectedProject, `${mapDirSubPath(clipName)}/${MAP_INFO_FILE_NAME}`, mapInfoBuffer);

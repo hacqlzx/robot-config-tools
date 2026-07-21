@@ -5,6 +5,8 @@ import {
   loadCabinetItems,
   loadPathDrawing,
   DRAWING_FILE_NAME,
+  PATH_FILE_NAME,
+  ROBOT_PATH_FILE_NAME,
   type CabinetItem,
   type ChargingAreaItem,
   type DeviceAreaItem,
@@ -19,6 +21,21 @@ function cabinetKey(item: CabinetItem): number | null {
   const n = Number.parseInt(String(item.id ?? ""), 10);
   if (Number.isInteger(n) && n > 0) return n;
   return item.bay.id > 0 ? item.bay.id : null;
+}
+
+function fileNameFromPath(filePath: string): string {
+  return filePath.split(/[\\/]/).pop() || filePath;
+}
+
+function siblingPath(filePath: string, fileName: string): string {
+  return filePath.replace(/[^\\/]+$/, fileName);
+}
+
+function exclusivePathSibling(filePath: string): string | null {
+  const fileName = fileNameFromPath(filePath);
+  if (fileName === ROBOT_PATH_FILE_NAME) return siblingPath(filePath, PATH_FILE_NAME);
+  if (fileName === PATH_FILE_NAME) return siblingPath(filePath, ROBOT_PATH_FILE_NAME);
+  return null;
 }
 
 interface UseMapDrawingVisibilityParams {
@@ -100,11 +117,17 @@ export function useMapDrawingVisibility({
   const handleTogglePathFile = useCallback(async (jsonPath: string, checked: boolean) => {
     const api = window.electronAPI;
     if (!api) return;
+    const exclusiveSibling = exclusivePathSibling(jsonPath);
     if (checked) {
       // 路径编辑器本身也承担回显，所以勾选路径文件时直接把保存数据加载进去。
       const data = await loadPathDrawing(api, jsonPath);
       if (data) pathDrawingRef.current?.loadData(data);
-      setPathShown((prev) => new Set(prev).add(jsonPath));
+      setPathShown((prev) => {
+        const next = new Set(prev);
+        if (exclusiveSibling) next.delete(exclusiveSibling);
+        next.add(jsonPath);
+        return next;
+      });
     } else {
       pathDrawingRef.current?.clear();
       setPathShown((prev) => { const next = new Set(prev); next.delete(jsonPath); return next; });

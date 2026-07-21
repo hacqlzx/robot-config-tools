@@ -8,9 +8,12 @@ import { Transform } from "stream";
 
 const MAP_MODEL_FILE_NAME = "map.las";
 const MAP_INFO_FILE_NAME = "map_info.json";
+const DESCRIPTION_FILE_NAME = "description_file.json";
 const REFERENCE_PATH_FILE_NAME = "reference_path.txt";
 const LEGACY_REFERENCE_PATH_FILE_NAME = "可行驶路径.json";
 const MAP_MODEL_EXT_RE = /\.(las|laz)$/i;
+const AREA_TYPE_CABINET_ROW = "1";
+const AREA_TYPE_CABINET = "2";
 
 // 逆向映射
 const RECOGNITION_REV: Record<string, string> = {
@@ -60,6 +63,8 @@ const IMPORT_TIPS = `1、加*号的必填；
 4、识别类型1、识别类型2都为识别类型，点位有两个识别类型时分别填入；
 5、识别类型、表计类型、位置状态类型、主设备类型、相位、电压区域通过下拉选择，若位置状态类型、电压区域发生变化修改方式参考表'下拉选项变更操作说明'；
 6、重要等级未填写时默认为Ⅰ类；`;
+
+export type PointExcelExportRow = Record<string, unknown>;
 
 export interface PointTableExportData {
   points: DevicePoint[];
@@ -166,12 +171,10 @@ function getStationName(data: PointTableExportData): string {
     || "未知厂站";
 }
 
-function generatePointExcel(data: PointTableExportData): Buffer {
-  const rows = buildPointExportRows(data);
-
+export function generatePointExcelFromRows(rows: PointExcelExportRow[]): Buffer {
   // 构建数据：第1行=提示, 第2行=表头, 后续=数据
   const headerRow = EXPORT_COLS;
-  const dataRows = rows.map((r) => headerRow.map((c) => r[c]));
+  const dataRows = rows.map((r) => headerRow.map((c) => r[c] ?? ""));
   const allData: any[][] = [
     [IMPORT_TIPS],
     headerRow,
@@ -209,6 +212,10 @@ function generatePointExcel(data: PointTableExportData): Buffer {
   return Buffer.from(XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer);
 }
 
+function generatePointExcel(data: PointTableExportData): Buffer {
+  return generatePointExcelFromRows(buildPointExportRows(data));
+}
+
 /** 递归计算目录总字节数 */
 function getDirSize(dir: string): number {
   let size = 0;
@@ -243,19 +250,155 @@ function directChildPriority(root: string, filePath: string): number {
   return 2;
 }
 
+function formatMapInfoTime(date = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
 function buildMapInfo(mapName: string, existingText: string | null): string {
-  let data: Record<string, unknown> = {};
+  let mapCode = "";
   if (existingText) {
     try {
       const parsed = JSON.parse(existingText);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) data = parsed;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        mapCode = typeof parsed.map_code === "string" ? parsed.map_code.trim() : "";
+      }
     } catch {}
   }
 
-  return `${JSON.stringify({ ...data, mapName }, null, 2)}\n`;
+  const data: Record<string, string> = {};
+  if (mapCode) data.map_code = mapCode;
+  data.map_name = mapName;
+  data.time = formatMapInfoTime();
+  return `${JSON.stringify(data, null, 2)}\n`;
 }
 
-function appendMapContents(archive: ZipArchive, src: string, mapName: string) {
+function textValue(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function areaType(record: Record<string, unknown>): string {
+  return textValue(record.type);
+}
+
+function splitTextList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap((item) => splitTextList(item));
+  return textValue(value)
+    .split(/[,，;；|]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function uniqueTexts(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+function bayCodesFromRecord(record: Record<string, unknown>): string[] {
+  return uniqueTexts([...splitTextList(record.bay_code), ...splitTextList(record.bay_codes)]);
+}
+
+function applyBayCodeField(record: Record<string, unknown>, bayCodes: string[]): void {
+  const codes = uniqueTexts(bayCodes);
+  delete record.bay_name;
+  delete record.bay_names;
+  delete record.bay_codes;
+  if (codes.length > 0) record.bay_code = codes[0];
+}
+
+function buildMainLookup(mains: DeviceMain[]) {
+  const byCode = new Map<string, DeviceMain>();
+  const names = new Map<string, DeviceMain[]>();
+  for (const main of mains.filter((item) => item.mainDeviceType === 29)) {
+    const code = textValue(main.mainDeviceCode);
+    if (code && !byCode.has(code)) byCode.set(code, main);
+
+    const name = textValue(main.mainDeviceName);
+    if (name) {
+      const list = names.get(name) || [];
+      list.push(main);
+      names.set(name, list);
+    }
+  }
+  return { byCode, names };
+}
+
+function findMainForArea(record: Record<string, unknown>, lookup: ReturnType<typeof buildMainLookup>): DeviceMain | null {
+  const code = textValue(record.code);
+  if (code) {
+    const byCode = lookup.byCode.get(code);
+    if (byCode) return byCode;
+  }
+
+  const name = textValue(record.name);
+  if (!name) return null;
+  const byName = lookup.names.get(name) || [];
+  return byName.length === 1 ? byName[0] : null;
+}
+
+function descriptionTextWithBayCode(existingText: string, data: PointTableExportData): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(existingText);
+  } catch {
+    return existingText;
+  }
+  if (!Array.isArray(parsed)) return existingText;
+
+  const records = parsed
+    .filter(isRecord)
+    .map((record) => ({ ...record }));
+  if (records.length !== parsed.length) return existingText;
+
+  const lookup = buildMainLookup(data.mains || []);
+  const childrenByParent = new Map<string, Record<string, unknown>[]>();
+  for (const record of records) {
+    if (areaType(record) !== AREA_TYPE_CABINET) continue;
+    const parentId = textValue(record.parent_id);
+    if (!parentId) continue;
+    const children = childrenByParent.get(parentId) || [];
+    children.push(record);
+    childrenByParent.set(parentId, children);
+  }
+
+  for (const record of records) {
+    const type = areaType(record);
+    if (type !== AREA_TYPE_CABINET_ROW && type !== AREA_TYPE_CABINET) continue;
+    applyBayCodeField(record, bayCodesFromRecord(record));
+    const main = findMainForArea(record, lookup);
+    if (!main) continue;
+    applyBayCodeField(record, [textValue(main.bayCode)]);
+  }
+
+  for (const record of records) {
+    if (areaType(record) !== AREA_TYPE_CABINET_ROW) continue;
+    const children = childrenByParent.get(textValue(record.id)) || [];
+    const bayCodes = uniqueTexts([
+      ...bayCodesFromRecord(record),
+      ...children.flatMap((child) => bayCodesFromRecord(child)),
+    ]);
+    applyBayCodeField(record, bayCodes);
+    if (bayCodes.length === 1) {
+      for (const child of children) {
+        if (bayCodesFromRecord(child).length === 0) applyBayCodeField(child, bayCodes);
+      }
+    }
+  }
+
+  return `${JSON.stringify(records, null, 2)}\n`;
+}
+
+function appendMapContents(archive: ZipArchive, src: string, mapName: string, data: PointTableExportData) {
   const added = new Set<string>();
   let mapInfoText: string | null = null;
 
@@ -283,6 +426,10 @@ function appendMapContents(archive: ZipArchive, src: string, mapName: string) {
 
     if (added.has(outputRel)) continue;
     added.add(outputRel);
+    if (base === DESCRIPTION_FILE_NAME) {
+      archive.append(descriptionTextWithBayCode(fs.readFileSync(filePath, "utf-8"), data), { name: outputRel });
+      continue;
+    }
     archive.file(filePath, { name: outputRel });
   }
 
@@ -294,12 +441,12 @@ function mapPackageName(projectName: string, timeStr: string, index: number): st
   return index === 0 ? base : `${base}_${index + 1}`;
 }
 
-async function createMapZipFile(src: string, mapName: string, tempDir: string): Promise<string> {
+async function createMapZipFile(src: string, mapName: string, tempDir: string, data: PointTableExportData): Promise<string> {
   const zipPath = path.join(tempDir, `${mapName}.zip`);
   const output = fs.createWriteStream(zipPath);
   const archive = new ZipArchive({ zlib: { level: 0 } });
   archive.pipe(output);
-  appendMapContents(archive, src, mapName);
+  appendMapContents(archive, src, mapName, data);
 
   await Promise.all([
     archive.finalize(),
@@ -363,7 +510,7 @@ export async function exportSpaceZip(
       const src = path.join(mapRoot, dirName);
       if (fs.existsSync(src)) {
         const innerMapName = mapPackageName(projectName, timeStr, i);
-        const mapZipPath = await createMapZipFile(src, innerMapName, tempDir);
+        const mapZipPath = await createMapZipFile(src, innerMapName, tempDir, pointTableData);
         mapZipFiles.push({ filePath: mapZipPath, zipName: `${innerMapName}.zip` });
       }
     }

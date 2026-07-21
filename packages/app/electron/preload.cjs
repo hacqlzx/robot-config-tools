@@ -106,6 +106,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("device-verify:list-children", sessionId, parentId),
   loadDeviceVerificationImage: (sessionId, pointNodeId) =>
     ipcRenderer.invoke("device-verify:load-image", sessionId, pointNodeId),
+  loadDeviceCorrection: (projectName, pointCode) =>
+    ipcRenderer.invoke("device-verify:load-correction", projectName, pointCode),
+  saveDeviceCorrection: (projectName, record) =>
+    ipcRenderer.invoke("device-verify:save-correction", projectName, record),
+  deleteDeviceCorrection: (projectName, pointCode) =>
+    ipcRenderer.invoke("device-verify:delete-correction", projectName, pointCode),
+  setDevicePointMark: (projectName, record) =>
+    ipcRenderer.invoke("device-verify:set-point-mark", projectName, record),
+  exportMarkedDevicePoints: (projectName, destDir) =>
+    ipcRenderer.invoke("device-verify:export-marked-points", projectName, destDir),
   getProjectRoot: () => ipcRenderer.invoke("get-project-root"),
   setDataPath: (newPath) => ipcRenderer.invoke("set-data-path", newPath),
   startBatch: () => ipcRenderer.invoke("db:startBatch"),

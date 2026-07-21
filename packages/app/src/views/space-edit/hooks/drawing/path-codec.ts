@@ -58,6 +58,7 @@ function parseRobotStopPoint(record: Record<string, unknown>): { id: string; poi
     point: {
       // 添加命名空间，避免机器人停靠点 id 与编辑器生成的普通路径点 id 碰撞。
       id: `stop:${id}`,
+      name: valueText(record.name) || id,
       x,
       y,
       z,

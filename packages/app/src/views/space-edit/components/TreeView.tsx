@@ -39,10 +39,21 @@ function displayNodeName(node: SpaceTreeNode): string {
   if (node.isDir) return node.name;
   if (isLasOrLazFileName(node.name)) return "地图模型";
   if (node.name === DRAWING_FILE_NAME) return "区域";
-  if (node.name === ROBOT_PATH_FILE_NAME) return "路径";
-  if (node.name === PATH_FILE_NAME) return "示意路径";
-  if ((ROBOT_STOP_POINTS_FILE_NAMES as readonly string[]).includes(node.name)) return "停靠点";
+  if (node.name === ROBOT_PATH_FILE_NAME) return "巡视路径";
+  if (node.name === PATH_FILE_NAME) return "参考路径";
   return node.name;
+}
+
+function parentPath(filePath: string): string {
+  return filePath.replace(/[\\/][^\\/]*$/, "");
+}
+
+function siblingPath(filePath: string, fileName: string): string {
+  return filePath.replace(/[^\\/]+$/, fileName);
+}
+
+function isRobotStopPointFileName(name: string): boolean {
+  return (ROBOT_STOP_POINTS_FILE_NAMES as readonly string[]).includes(name);
 }
 
 export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, onLoadLas, onToggleVisible, loadChildren, onRequestDelete, onRequestOpenDir, drawingShown, onToggleDrawing, pathShown, onTogglePath }: Props) {
@@ -85,7 +96,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
   const isLas = isLasOrLazFileName;
   const isDrawing = isDrawingDataFileName;
   const isPath = isReferencePathFileName;
-  const isHiddenFile = (name: string) => name === MAP_INFO_FILE_NAME;
+  const isHiddenFile = (name: string) => name === MAP_INFO_FILE_NAME || isRobotStopPointFileName(name);
   const isVisibleTreeNode = (node: SpaceTreeNode) => node.isDir || !isHiddenFile(node.name);
 
   /** 合并节点自身的 children 与懒加载的 children */
@@ -148,6 +159,9 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
     if (isPath(node.name)) {
       return { checked: pathShown?.has(node.path) || false };
     }
+    if (isRobotStopPointFileName(node.name)) {
+      return { checked: pathShown?.has(siblingPath(node.path, ROBOT_PATH_FILE_NAME)) || false };
+    }
     if (isLas(node.name)) {
       return { checked: loadedFiles.has(loadedFileKey(node.path)) };
     }
@@ -162,9 +176,11 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
         const lasNodes: SpaceTreeNode[] = [];
         const drawNodes: SpaceTreeNode[] = [];
         const pathNodes: SpaceTreeNode[] = [];
+        const robotPathDirs = new Set<string>();
+        const stopPointDirs = new Set<string>();
         const collect = (items: SpaceTreeNode[]) => {
           items.forEach((child) => {
-            if (!isVisibleTreeNode(child)) {
+            if (!child.isDir && child.name === MAP_INFO_FILE_NAME) {
               return;
             }
             if (child.isDir && child.children) {
@@ -175,10 +191,22 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
               drawNodes.push(child);
             } else if (isPath(child.name)) {
               pathNodes.push(child);
+              if (child.name === ROBOT_PATH_FILE_NAME) robotPathDirs.add(parentPath(child.path));
+            } else if (isRobotStopPointFileName(child.name)) {
+              stopPointDirs.add(parentPath(child.path));
             }
           });
         };
         collect(list);
+        const robotRouteDirs = new Set(
+          Array.from(robotPathDirs).filter((dir) => stopPointDirs.has(dir)),
+        );
+        const effectivePathNodes = checked
+          ? pathNodes.filter((child) => child.name !== PATH_FILE_NAME || !robotRouteDirs.has(parentPath(child.path)))
+          : pathNodes;
+        const skippedReferencePathNodes = checked
+          ? pathNodes.filter((child) => child.name === PATH_FILE_NAME && robotRouteDirs.has(parentPath(child.path)))
+          : [];
 
         for (const child of lasNodes) {
           const isLoaded = loadedFiles.has(loadedFileKey(child.path));
@@ -193,7 +221,11 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
           onToggleDrawing?.(child.path, checked);
         }
 
-        for (const child of pathNodes) {
+        for (const child of skippedReferencePathNodes) {
+          if (pathShown?.has(child.path)) onTogglePath?.(child.path, false);
+        }
+
+        for (const child of effectivePathNodes) {
           onTogglePath?.(child.path, checked);
         }
       };
@@ -202,6 +234,8 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
       onToggleDrawing?.(node.path, checked);
     } else if (isPath(node.name)) {
       onTogglePath?.(node.path, checked);
+    } else if (isRobotStopPointFileName(node.name)) {
+      onTogglePath?.(siblingPath(node.path, ROBOT_PATH_FILE_NAME), checked);
     } else if (isLas(node.name)) {
       const isLoaded = loadedFiles.has(loadedFileKey(node.path));
       if (checked) {

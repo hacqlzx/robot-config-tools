@@ -80,6 +80,27 @@
   text-align: right;
 }
 
+.device-verify-tree-filter {
+  flex-shrink: 0;
+  min-height: 34px;
+  padding: 5px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fff;
+  border-bottom: 1px solid #f0f0f0;
+
+  .ant-segmented {
+    min-width: 0;
+  }
+}
+
+.device-verify-tree-filter-label {
+  flex-shrink: 0;
+  color: #595959;
+  font-size: 12px;
+}
+
 .device-verify-tree {
   flex: 1;
   overflow: auto;
@@ -89,6 +110,8 @@
     min-height: 24px;
     padding: 0;
     white-space: nowrap;
+    display: flex;
+    align-items: center;
   }
 
   .ant-tree-indent-unit {
@@ -107,22 +130,62 @@
     min-height: 24px;
     padding: 0 2px;
     flex: 1;
+    display: inline-flex;
+    align-items: center;
     overflow: hidden;
     line-height: 24px;
     white-space: nowrap;
   }
 
   .ant-tree-title {
-    display: inline-block;
-    max-width: calc(100% - 24px);
-    vertical-align: middle;
+    min-width: 0;
+    flex: 1;
+    display: block;
+    width: auto;
+    max-width: 100%;
     overflow: hidden;
+  }
+
+  .device-verify-tree-title {
+    min-width: 0;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+
+    &.is-marked {
+      .device-verify-tree-title-text {
+        color: #ff4d4f;
+        font-weight: 500;
+      }
+    }
+  }
+
+  .device-verify-tree-title-text {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    color: inherit;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
+  .device-verify-point-mark-button {
+    flex-shrink: 0;
+    height: 20px;
+    padding: 0 4px;
+    font-size: 12px;
+    line-height: 18px;
+
+    .anticon {
+      font-size: 12px;
+    }
+  }
+
   .ant-tree-iconEle {
+    flex-shrink: 0;
     width: 18px;
+    min-width: 18px;
     line-height: 24px;
     color: #8c8c8c;
 
@@ -132,6 +195,12 @@
 
     .without-image {
       color: #bfbfbf;
+    }
+  }
+
+  .device-verify-tree-node-marked {
+    .ant-tree-iconEle .anticon {
+      color: #ff4d4f !important;
     }
   }
 
@@ -179,6 +248,14 @@
   border-bottom: 1px solid #f0f0f0;
 }
 
+.device-verify-image-meta {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .device-verify-point-name {
   min-width: 0;
   color: #262626;
@@ -198,6 +275,10 @@
   white-space: nowrap;
 }
 
+.device-verify-correction-button {
+  flex-shrink: 0;
+}
+
 .device-verify-image-stage {
   flex: 1;
   min-height: 0;
@@ -215,6 +296,10 @@
   min-height: 0;
   position: relative;
   overflow: hidden;
+
+  &:focus {
+    outline: none;
+  }
 }
 
 .device-verify-image-canvas {
@@ -227,6 +312,10 @@
 
   &.is-dragging {
     cursor: grabbing;
+  }
+
+  &.is-correcting {
+    cursor: crosshair;
   }
 }
 
