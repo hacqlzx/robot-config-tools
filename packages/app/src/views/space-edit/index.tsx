@@ -143,6 +143,7 @@ export default function SpaceEdit() {
     pathShown,
     markDrawingFileShown,
     markPathFileShown,
+    clearMapDrawingVisibility,
     handleCabinetCheck,
     handleTogglePathFile,
     handleToggleDrawing,
@@ -246,9 +247,10 @@ export default function SpaceEdit() {
   }, [clearDrawingDrafts, drawingHistory.clear, handleLoadLasFromPath]);
   const handleFileSelectWithHistoryReset = useCallback(async (file: File) => {
     drawingHistory.clear();
+    clearMapDrawingVisibility();
     clearDrawingDrafts();
     await handleFileSelect(file);
-  }, [clearDrawingDrafts, drawingHistory.clear, handleFileSelect]);
+  }, [clearDrawingDrafts, clearMapDrawingVisibility, drawingHistory.clear, handleFileSelect]);
   const handleToggleVisibleWithHistoryReset = useCallback((filePath: string) => {
     drawingHistory.clear();
     clearDrawingDrafts();

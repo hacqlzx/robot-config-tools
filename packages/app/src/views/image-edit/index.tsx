@@ -24,6 +24,7 @@ import {
   loadRobotRouteDrawingData,
   useThreeDViewer,
 } from "@/components/three-d-engine";
+import { loadSurveyRayDrawingData } from "./utils/survey-ray-data";
 import { useResizable } from "@/components/useResizable";
 import ImageCanvas from "@/components/image-canvas/ImageCanvas";
 import type { ImageItem } from "@/components/image-canvas/ImageCanvas";
@@ -173,6 +174,7 @@ export default function ImageEdit() {
   const resetViewRef = useRef<(() => void) | null>(null);
   const surveyDirRef = useRef<string>("");
   const loadedMapRef = useRef<string | null>(null);
+  const loadedModelPathRef = useRef<string>("");
 
   // 加载已标定的图片 ID 集合 + 已标定点位编码集合
   const refreshCalibratedRects = useCallback(async (mapName?: string | null) => {
@@ -287,6 +289,7 @@ export default function ImageEdit() {
     loaderRef.current?.destroy();
     drawingRef.current?.clear();
     loadedMapRef.current = null;
+    loadedModelPathRef.current = "";
     setLoadedMap(null);
     surveyDirRef.current = "";
     clearTask();
@@ -330,14 +333,17 @@ export default function ImageEdit() {
       if (lasFiles.length === 0) {
         message.warning("未找到 LAS 点云文件");
         loadedMapRef.current = mapName;
+        loadedModelPathRef.current = "";
         setLoadedMap(mapName);
         return;
       }
 
+      const primaryModelPath = lasFiles.find((filePath) => /[\\/]map\.(las|laz)$/i.test(filePath)) || lasFiles[0];
       // 加载 LAS
       for (let i = 0; i < lasFiles.length; i++) {
         await loadFile(lasFiles[i]);
       }
+      loadedModelPathRef.current = primaryModelPath;
 
       // 区域等绘制 JSON 仍按原格式加载；路径文件单独走 path.json + stop_points.json，不读 reference_path.txt。
       for (const jsonPath of drawingJsonFiles) {
@@ -375,9 +381,22 @@ export default function ImageEdit() {
     surveyDirRef.current = taskDir;
     try {
       clearTask();
+      drawingRef.current?.clearRays();
       setTaskImages([]);
       const result = await loadTask(taskDir);
       surveyDirRef.current = result.surveyDir;
+      if (loadedModelPathRef.current) {
+        try {
+          const rayData = await loadSurveyRayDrawingData({
+            fileSource: electronFileSource,
+            deviceDir: result.deviceDir,
+            modelPath: loadedModelPathRef.current,
+          });
+          if (rayData) loadDrawingData(rayData);
+        } catch (rayError) {
+          console.error("[handleTaskLoad] 射线加载失败:", rayError);
+        }
+      }
       // 按当前选中的云台侧计算布局
       const items = setSide(ptzSide);
       setTaskImages(items);
@@ -388,7 +407,7 @@ export default function ImageEdit() {
       console.error("[handleTaskLoad] 失败:", e);
       message.error("加载任务数据失败: " + (e?.message || ""));
     }
-  }, [loadTask, clearTask, setSide, ptzSide, message, refreshCalibratedRects]);
+  }, [loadTask, clearTask, setSide, ptzSide, message, refreshCalibratedRects, loadDrawingData, drawingRef]);
 
   // ptzSide 切换时重新计算布局
   useEffect(() => {

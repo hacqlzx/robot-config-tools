@@ -5,6 +5,7 @@ import {
   isDrawingItemsData,
   isPathPointObject,
   isPathRenderData,
+  isRayRenderData,
   isRobotAreaList,
   drawingDataLasToScene,
   pointToTuple,
@@ -16,6 +17,8 @@ import {
   type PathPointValue,
   type PathRenderData,
   type PathSegmentValue,
+  type RayRenderData,
+  type RayRenderItem,
 } from "./drawing-data";
 import { electronFileSource, type FileSource } from "./file-source";
 import { loadLasCoordinateTransform } from "./coordinate-transform";
@@ -33,10 +36,12 @@ import {
 const RED = new pc.Color(1, 0.1, 0.1);
 const GREEN = new pc.Color(0.2, 1, 0.3);
 const PATH_COLOR = new pc.Color(0.3, 0.9, 0.4);
+const RAY_COLOR = new pc.Color(1, 0.84, 0.12);
 const CHARGING_COLOR = new pc.Color(1, 0.55, 0.1);
 const DEVICE_COLOR = new pc.Color(0.2, 0.6, 1);
 const DEVICE_LABEL_COLOR = "#3399ff";
 const PATH_LABEL_COLOR = "#44e95f";
+const RAY_LABEL_COLOR = "#ffd666";
 const THICKNESS = 0.01;
 const HIGHLIGHT_THICKNESS = 0.025;
 const CLICK_THRESHOLD = 8;
@@ -45,6 +50,10 @@ const PATH_HIGHLIGHT_THICKNESS = 0.08;
 const PATH_HIT_DISTANCE_SQ = 100;
 const PATH_SPHERE_SCALE = 0.12;
 const PATH_SPHERE_HIGHLIGHT_SCALE = 0.18;
+const RAY_DEFAULT_LENGTH = 4;
+const RAY_THICKNESS = 0.025;
+const RAY_ORIGIN_SCALE = 0.09;
+const RAY_END_SCALE = 0.05;
 
 const RED_EDGES: [number, number][] = [[0, 1], [1, 2], [2, 6]];
 const GREEN_EDGES: [number, number][] = [
@@ -54,6 +63,14 @@ const BOX_EDGES: [number, number][] = [...RED_EDGES, ...GREEN_EDGES];
 
 function v3(arr: [number, number, number] | number[]): pc.Vec3 {
   return new pc.Vec3(arr[0], arr[1], arr[2]);
+}
+
+function finiteVec3(arr: unknown): arr is [number, number, number] {
+  return Array.isArray(arr)
+    && arr.length >= 3
+    && Number.isFinite(arr[0])
+    && Number.isFinite(arr[1])
+    && Number.isFinite(arr[2]);
 }
 
 function cabinetTopCenters(verts: pc.Vec3[], splits: number[]): pc.Vec3[] {
@@ -148,6 +165,7 @@ export class DrawingRenderer {
   private boxes: BoxItem[] = [];
   private cabinets: CabItem[] = [];
   private pathEntities: pc.Entity[] = [];
+  private rayEntities: pc.Entity[] = [];
   private pathPoints: PathPointItem[] = [];
   private pathLines: PathLineItem[] = [];
   private labelContainer: HTMLDivElement | null = null;
@@ -156,6 +174,7 @@ export class DrawingRenderer {
   private canvas: HTMLCanvasElement;
   private downPos: { x: number; y: number } | null = null;
   private allLabels: LabelInfo[] = [];
+  private rayLabels: LabelInfo[] = [];
   private fileSource: FileSource;
   onSelect?: (info: DrawingRendererSelectInfo) => void;
 
@@ -191,6 +210,10 @@ export class DrawingRenderer {
 
   loadData(data: DrawingRenderData | unknown) {
     // 同一个地图目录下可能同时存在区域 JSON 和路径 JSON；按数据形状判断具体渲染入口。
+    if (isRayRenderData(data)) {
+      this.renderRays(data);
+      return;
+    }
     if (isPathRenderData(data)) {
       this.renderPaths(data);
     }
@@ -218,9 +241,24 @@ export class DrawingRenderer {
     this.boxes = [];
     this.cabinets = [];
     this.pathEntities = [];
+    this.rayEntities = [];
     this.pathPoints = [];
     this.pathLines = [];
     this.allLabels = [];
+    this.rayLabels = [];
+  }
+
+  clearRays() {
+    if (this.rayEntities.length === 0 && this.rayLabels.length === 0) return;
+    const rayEntities = new Set(this.rayEntities);
+    const rayLabels = new Set(this.rayLabels);
+    for (const e of this.rayEntities) this.app.root.removeChild(e);
+    for (const l of this.rayLabels) l.el.remove();
+    this.entities = this.entities.filter((e) => !rayEntities.has(e));
+    this.allLabels = this.allLabels.filter((l) => !rayLabels.has(l));
+    this.rayEntities = [];
+    this.rayLabels = [];
+    this.requestRender();
   }
 
   destroy() {
@@ -326,6 +364,48 @@ export class DrawingRenderer {
       this.pathEntities.push(line);
       this.pathLines.push({ index, from: p1, to: p2, line, selected: false });
     });
+  }
+
+  private renderRays(data: RayRenderData) {
+    this.clearRays();
+    for (const ray of data.rays || []) {
+      const created = this.renderRay(ray);
+      if (created.length > 0) {
+        this.entities.push(...created);
+        this.rayEntities.push(...created);
+      }
+    }
+  }
+
+  private renderRay(ray: RayRenderItem): pc.Entity[] {
+    if (!finiteVec3(ray.origin) || !finiteVec3(ray.direction)) return [];
+    const origin = v3(ray.origin);
+    const dir = v3(ray.direction);
+    const mag = dir.length();
+    if (!Number.isFinite(mag) || mag < 1e-6) return [];
+
+    dir.mulScalar(1 / mag);
+    const length = typeof ray.length === "number" && Number.isFinite(ray.length) && ray.length > 0
+      ? Math.max(0.1, ray.length)
+      : RAY_DEFAULT_LENGTH;
+    const end = origin.clone().add(dir.clone().mulScalar(length));
+    const entities = [
+      createSphere(this.app, origin, RAY_COLOR, RAY_ORIGIN_SCALE),
+      createLine(this.app, origin, end, RAY_COLOR, RAY_THICKNESS),
+      createSphere(this.app, end, RAY_COLOR, RAY_END_SCALE),
+    ];
+
+    if (ray.name) {
+      const el = this.createLabelEl();
+      el.style.color = RAY_LABEL_COLOR;
+      el.style.fontSize = "12px";
+      el.style.transform = "translate(-50%,-140%)";
+      const label = { center: origin, name: ray.name, el };
+      this.allLabels.push(label);
+      this.rayLabels.push(label);
+    }
+
+    return entities;
   }
 
   private toPathVertex(point: PathPointValue): { pos: pc.Vec3; id?: string | number; name?: string } | null {

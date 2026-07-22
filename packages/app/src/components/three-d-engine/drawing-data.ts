@@ -78,13 +78,26 @@ export interface PathRenderData {
   paths: PathSegmentValue[];
 }
 
-export type DrawingRenderData = DrawingItemsData | PathRenderData;
+export interface RayRenderItem {
+  id?: string | number;
+  name?: string;
+  origin: VecTuple;
+  direction: VecTuple;
+  length?: number;
+}
+
+export interface RayRenderData {
+  rays: RayRenderItem[];
+}
+
+export type DrawingRenderData = DrawingItemsData | PathRenderData | RayRenderData;
 
 export interface RobotAreaRecord {
   id?: string | number;
   type?: string | number;
   name?: string;
   pose?: string;
+  pose_3d?: string;
   time?: string;
   parent_id?: string | number;
   [key: string]: unknown;
@@ -125,6 +138,11 @@ export function isPathRenderData(data: unknown): data is PathRenderData {
   if (!isRecord(data)) return false;
   // 路径文件的核心特征是 points + paths；具体点/边格式在渲染时再逐条容错。
   return Array.isArray(data.points) && Array.isArray(data.paths);
+}
+
+export function isRayRenderData(data: unknown): data is RayRenderData {
+  if (!isRecord(data)) return false;
+  return Array.isArray(data.rays);
 }
 
 export function isDrawingItemsData(data: unknown): data is DrawingItemsData {
@@ -178,6 +196,10 @@ function parsePose(pose: unknown): VecTuple[] | null {
   return points.length === 4 && points.every(Boolean) ? points as VecTuple[] : null;
 }
 
+function parseAreaPose(record: RobotAreaRecord): VecTuple[] | null {
+  return parsePose(record.pose_3d) ?? parsePose(record.pose);
+}
+
 function add(a: VecTuple, b: VecTuple): VecTuple {
   return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 }
@@ -228,14 +250,14 @@ function frontBottomParam(rowVerts: number[][], point: number[]): number | null 
 }
 
 function buildCabinetRenderItem(row: RobotAreaRecord, children: RobotAreaRecord[]): CabinetRenderItem | null {
-  const rowPose = parsePose(row.pose);
+  const rowPose = parseAreaPose(row);
   if (!rowPose) return null;
   const rowVerts = cabinetPoseToVerts(rowPose);
   const rowId = positiveInt(row.id) ?? 0;
   const rowName = valueText(row.name) || `柜排${valueText(row.id) || rowId}`;
   const childInfos = children
     .map((child, index) => {
-      const pose = parsePose(child.pose);
+      const pose = parseAreaPose(child);
       const verts = pose ? cabinetPoseToVerts(pose) : null;
       const start = verts ? frontBottomParam(rowVerts, verts[0]) : null;
       const end = verts ? frontBottomParam(rowVerts, verts[1]) : null;
@@ -263,7 +285,7 @@ function buildCabinetRenderItem(row: RobotAreaRecord, children: RobotAreaRecord[
 }
 
 function buildStandaloneCabinetRenderItem(record: RobotAreaRecord): CabinetRenderItem | null {
-  const pose = parsePose(record.pose);
+  const pose = parseAreaPose(record);
   if (!pose) return null;
   const name = valueText(record.name) || `屏柜${valueText(record.id) || "1"}`;
   return {
@@ -296,7 +318,7 @@ export function robotAreasToDrawingItemsData(records: RobotAreaRecord[]): Drawin
       const item = buildStandaloneCabinetRenderItem(record);
       if (item) items.push(item);
     } else if (type === AREA_TYPE_CHARGING) {
-      const pose = parsePose(record.pose);
+      const pose = parseAreaPose(record);
       if (!pose) continue;
       items.push({
         type: "charging-area",
@@ -304,7 +326,7 @@ export function robotAreasToDrawingItemsData(records: RobotAreaRecord[]): Drawin
         geometry: { verts: boxPoseToVerts(pose) },
       });
     } else if (type === AREA_TYPE_DEVICE) {
-      const pose = parsePose(record.pose);
+      const pose = parseAreaPose(record);
       if (!pose) continue;
       const name = valueText(record.name);
       items.push({
@@ -369,6 +391,20 @@ function transformBezierToScene(bezier: unknown, coordinate: LasCoordinateTransf
   };
 }
 
+function transformRayToScene(ray: RayRenderItem, coordinate: LasCoordinateTransform): RayRenderItem {
+  const origin = tupleFromArray(ray.origin);
+  const direction = tupleFromArray(ray.direction);
+  if (!origin || !direction) return ray;
+
+  const sceneOrigin = coordinate.lasToScene(origin);
+  const sceneEnd = coordinate.lasToScene(add(origin, direction));
+  return {
+    ...ray,
+    origin: sceneOrigin,
+    direction: sub(sceneEnd, sceneOrigin),
+  };
+}
+
 export function drawingDataLasToScene(data: DrawingRenderData, coordinate: LasCoordinateTransform): DrawingRenderData {
   if (isPathRenderData(data)) {
     return {
@@ -378,6 +414,13 @@ export function drawingDataLasToScene(data: DrawingRenderData, coordinate: LasCo
         ...path,
         bezier: transformBezierToScene(path.bezier, coordinate),
       })),
+    };
+  }
+
+  if (isRayRenderData(data)) {
+    return {
+      ...data,
+      rays: data.rays.map((ray) => transformRayToScene(ray, coordinate)),
     };
   }
 

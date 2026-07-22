@@ -121,6 +121,10 @@ function parsePose(pose: unknown): VecTuple[] | null {
   return points.length === 4 && points.every(Boolean) ? points as VecTuple[] : null;
 }
 
+function parseAreaPose(record: RobotAreaRecord): VecTuple[] | null {
+  return parsePose(record.pose_3d) ?? parsePose(record.pose);
+}
+
 function poseString(points: VecTuple[]): string {
   // 坐标格式由 formatCoord 统一，避免重复保存产生纯格式差异。
   return points.map((point) => point.map(formatCoord).join(",")).join(";");
@@ -301,6 +305,7 @@ export function makeCabinetRobotAreas(item: CabinetItem, rootId: number, usedIds
       id: rootIdText,
       name: cabinet?.name || `屏柜${rootIdText}`,
       pose: rowPose,
+      pose_3d: rowPose,
       type: AREA_TYPE_CABINET,
       code: valueText(cabinet?.code),
       ...bayRecordFields(cabinet?.bay ?? item.bay),
@@ -312,6 +317,7 @@ export function makeCabinetRobotAreas(item: CabinetItem, rootId: number, usedIds
     id: rootIdText,
     name: item.cabinetRow?.name || `柜排${rootIdText}`,
     pose: rowPose,
+    pose_3d: rowPose,
     type: AREA_TYPE_CABINET_ROW,
     code: valueText(item.cabinetRow?.code),
     ...aggregateBayRecordFields([rowBay, ...item.cabinets.map((cabinet) => cabinet.bay ?? item.bay)]),
@@ -333,6 +339,7 @@ export function makeCabinetRobotAreas(item: CabinetItem, rootId: number, usedIds
       id: String(childId),
       name: cabinet?.name || `屏柜${index + 1}`,
       pose,
+      pose_3d: pose,
       type: AREA_TYPE_CABINET,
       parent_id: rootIdText,
       code: valueText(cabinet?.code),
@@ -387,7 +394,7 @@ function legacyItemsToRobotAreas(items: DrawingItem[]): RobotAreaRecord[] {
       records.push(...makeCabinetRobotAreas(item, rootId, usedCabinetIds));
     } else if (item?.type === "charging-area") {
       const pose = boxPoseFromVerts(item.geometry?.verts || []);
-      if (pose) records.push({ id: "1", type: AREA_TYPE_CHARGING, name: "充电区域", pose });
+      if (pose) records.push({ id: "1", type: AREA_TYPE_CHARGING, name: "充电区域", pose, pose_3d: pose });
     } else if (item?.type === "device-area") {
       const pose = boxPoseFromVerts(item.geometry?.verts || []);
       if (!pose) continue;
@@ -398,6 +405,7 @@ function legacyItemsToRobotAreas(items: DrawingItem[]): RobotAreaRecord[] {
         type: AREA_TYPE_DEVICE,
         name: item.bay?.name || defaultDeviceAreaName(id),
         pose,
+        pose_3d: pose,
       });
     }
   }
@@ -406,14 +414,14 @@ function legacyItemsToRobotAreas(items: DrawingItem[]): RobotAreaRecord[] {
 
 function buildCabinetItem(row: RobotAreaRecord, children: RobotAreaRecord[]): CabinetItem | null {
   // flat 协议本身不保证子记录数组顺序，因此不能直接用文件顺序恢复“从左到右”的屏柜列表。
-  const rowPose = parsePose(row.pose);
+  const rowPose = parseAreaPose(row);
   if (!rowPose) return null;
   const rowVerts = cabinetPoseToVerts(rowPose);
   const rowId = positiveInt(row.id) ?? 0;
   const rowName = valueText(row.name) || `柜排${valueText(row.id) || rowId}`;
   const childInfos = children
     .map((child, index) => {
-      const pose = parsePose(child.pose);
+      const pose = parseAreaPose(child);
       const verts = pose ? cabinetPoseToVerts(pose) : null;
       return {
         child,
@@ -451,7 +459,7 @@ function buildCabinetItem(row: RobotAreaRecord, children: RobotAreaRecord[]): Ca
 
 function buildStandaloneCabinetItem(record: RobotAreaRecord): CabinetItem | null {
   // 没有 parent_id 的 type=2 是独立屏柜，在编辑器中不生成 cabinetRow 和 splits。
-  const pose = parsePose(record.pose);
+  const pose = parseAreaPose(record);
   if (!pose) return null;
   const recordId = valueText(record.id);
   const name = valueText(record.name) || `屏柜${recordId || "1"}`;
@@ -488,7 +496,7 @@ function robotAreasToDrawingItems(records: RobotAreaRecord[]): DrawingItem[] {
       const item = buildStandaloneCabinetItem(record);
       if (item) items.push(item);
     } else if (type === AREA_TYPE_CHARGING) {
-      const pose = parsePose(record.pose);
+      const pose = parseAreaPose(record);
       if (pose) items.push({
         id: valueText(record.id) || "1",
         type: "charging-area",
@@ -496,7 +504,7 @@ function robotAreasToDrawingItems(records: RobotAreaRecord[]): DrawingItem[] {
         updatedAt: valueText(record.time),
       });
     } else if (type === AREA_TYPE_DEVICE) {
-      const pose = parsePose(record.pose);
+      const pose = parseAreaPose(record);
       if (pose) items.push({
         id: valueText(record.id) || String(items.length + 1),
         type: "device-area",

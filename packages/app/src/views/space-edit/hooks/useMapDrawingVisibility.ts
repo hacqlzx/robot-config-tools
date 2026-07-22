@@ -94,6 +94,29 @@ export function useMapDrawingVisibility({
     refreshTree();
   }, [refreshTree]);
 
+  const clearMapDrawingVisibility = useCallback(() => {
+    cabinetViewerRef.current?.clear();
+    pathDrawingRef.current?.clear();
+    chargingDrawingRef.current?.clear();
+    deviceAreaDrawingRef.current?.clearAll();
+    shownByJsonRef.current.clear();
+    chargingExistingRef.current = false;
+    chargingAreaSavedRef.current = false;
+    chargedJsonPathRef.current = "";
+    savedCabinetRef.current = null;
+    setDrawingShown(new Set());
+    setPathShown(new Set());
+    refreshTree();
+  }, [
+    cabinetViewerRef,
+    chargingDrawingRef,
+    chargingExistingRef,
+    deviceAreaDrawingRef,
+    pathDrawingRef,
+    refreshTree,
+    savedCabinetRef,
+  ]);
+
   const handleCabinetCheck = useCallback(async (bayIds: number[]) => {
     // 设备台账树按 bayId 控制屏柜显示；这里从当前模型同目录 JSON 中取对应屏柜记录。
     const viewer = cabinetViewerRef.current;
@@ -228,6 +251,7 @@ export function useMapDrawingVisibility({
     pathShown,
     markDrawingFileShown,
     markPathFileShown,
+    clearMapDrawingVisibility,
     handleCabinetCheck,
     handleTogglePathFile,
     handleToggleDrawing,

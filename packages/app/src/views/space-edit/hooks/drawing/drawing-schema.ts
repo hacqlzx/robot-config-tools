@@ -94,6 +94,8 @@ export interface RobotAreaRecord {
   name?: string;
   /** 4 个三维点组成的字符串，格式为 x,y,z;x,y,z;x,y,z;x,y,z。 */
   pose?: string;
+  /** 保留编辑器 3D 区域四点；点序与旧 pose 一致。 */
+  pose_3d?: string;
   time?: string;
   ip?: string;
   port?: string | number;

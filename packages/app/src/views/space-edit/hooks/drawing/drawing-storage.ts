@@ -247,6 +247,7 @@ export async function saveChargingArea(params: {
         type: AREA_TYPE_CHARGING,
         name: valueText(oldCharging?.name) || "充电区域",
         pose,
+        pose_3d: pose,
       });
     }
   }
@@ -287,6 +288,7 @@ export async function saveDeviceAreas(params: {
       type: AREA_TYPE_DEVICE,
       name: item.bay?.name || defaultDeviceAreaName(id),
       pose,
+      pose_3d: pose,
     });
   }
   await writeAreaRecords(api, projectName, modelPath, next);
