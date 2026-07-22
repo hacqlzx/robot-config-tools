@@ -4,7 +4,8 @@ import type { ColumnsType } from "antd/es/table";
 import { ReloadOutlined, PlusOutlined } from "@ant-design/icons";
 import StationFormModal from "./StationFormModal";
 import { getFacInfo, addFac, editFac, deleteFac, setCurrentFac } from "@/api/config.js";
-import { subscribeBackendContext } from "@/stores/appContextStore";
+import { getRequestErrorMessage } from "@/services/http";
+import { getConnectionStatus, subscribeBackendContext } from "@/stores/appContextStore";
 
 export interface StationRecord {
   id: number;
@@ -53,15 +54,15 @@ export default function StationConfig() {
       } else {
         message.error(body.message || "获取厂站列表失败");
       }
-    } catch {
-      message.error("获取厂站列表失败");
+    } catch (error) {
+      message.error(getRequestErrorMessage(error, "获取厂站列表失败"));
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (!fetchedRef.current) {
+    if (!fetchedRef.current && getConnectionStatus() === "connected") {
       fetchedRef.current = true;
       fetchStations();
     }
@@ -71,7 +72,7 @@ export default function StationConfig() {
   // IP 切换时重新加载
   useEffect(() => {
     return subscribeBackendContext(() => {
-      fetchStations();
+      if (getConnectionStatus() === "connected") fetchStations();
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -87,8 +88,8 @@ export default function StationConfig() {
       } else {
         message.error(body.message || "切换失败");
       }
-    } catch {
-      message.error("切换失败");
+    } catch (error) {
+      message.error(getRequestErrorMessage(error, "切换失败"));
     }
   };
 
@@ -116,8 +117,8 @@ export default function StationConfig() {
           } else {
             message.error(body.message || "删除失败");
           }
-        } catch {
-          message.error("删除失败");
+        } catch (error) {
+          message.error(getRequestErrorMessage(error, "删除失败"));
         }
       },
     });
@@ -147,8 +148,8 @@ export default function StationConfig() {
       } else {
         message.error(body.message || (editRecord ? "编辑失败" : "新增失败"));
       }
-    } catch {
-      message.error(editRecord ? "编辑失败" : "新增失败");
+    } catch (error) {
+      message.error(getRequestErrorMessage(error, editRecord ? "编辑失败" : "新增失败"));
     } finally {
       setSubmitting(false);
     }

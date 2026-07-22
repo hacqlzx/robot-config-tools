@@ -36,6 +36,7 @@ const PATH_COLOR = new pc.Color(0.3, 0.9, 0.4);
 const CHARGING_COLOR = new pc.Color(1, 0.55, 0.1);
 const DEVICE_COLOR = new pc.Color(0.2, 0.6, 1);
 const DEVICE_LABEL_COLOR = "#3399ff";
+const PATH_LABEL_COLOR = "#44e95f";
 const THICKNESS = 0.01;
 const HIGHLIGHT_THICKNESS = 0.025;
 const CLICK_THRESHOLD = 8;
@@ -298,13 +299,20 @@ export class DrawingRenderer {
     // 路径文件历史上有两种格式：数组下标连线、id 连线。这里统一转成 Vec3 + 可选 id。
     const points = data.points
       .map((pt) => this.toPathVertex(pt))
-      .filter((pt): pt is { pos: pc.Vec3; id?: string | number } => !!pt);
+      .filter((pt): pt is { pos: pc.Vec3; id?: string | number; name?: string } => !!pt);
     const pointById = new Map<string | number, pc.Vec3>();
 
     points.forEach((pt, index) => {
       if (pt.id !== undefined) pointById.set(pt.id, pt.pos);
       const p = pt.pos;
       const sphere = createSphere(this.app, p, PATH_COLOR, PATH_SPHERE_SCALE);
+      if (pt.name) {
+        const el = this.createLabelEl();
+        el.style.color = PATH_LABEL_COLOR;
+        el.style.fontSize = "16px";
+        el.style.transform = "translate(-50%,-145%)";
+        this.allLabels.push({ center: p, name: pt.name, el });
+      }
       this.entities.push(sphere);
       this.pathEntities.push(sphere);
       this.pathPoints.push({ index, pos: p, sphere, selected: false });
@@ -320,12 +328,13 @@ export class DrawingRenderer {
     });
   }
 
-  private toPathVertex(point: PathPointValue): { pos: pc.Vec3; id?: string | number } | null {
+  private toPathVertex(point: PathPointValue): { pos: pc.Vec3; id?: string | number; name?: string } | null {
     const tuple = pointToTuple(point);
     if (!tuple) return null;
     return {
       pos: v3(tuple),
       id: isPathPointObject(point) ? point.id : undefined,
+      name: isPathPointObject(point) ? point.name : undefined,
     };
   }
 

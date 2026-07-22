@@ -284,6 +284,8 @@ declare global {
           getById: (id: number) => Promise<import('@robot/database').DevicePoint | null>;
           findByPointCode: (pointCode: string, projectName?: string) => Promise<import('@robot/database').DevicePoint | null>;
           findByCalibrationId: (calibrationId: string, projectName?: string) => Promise<import('@robot/database').DevicePoint | null>;
+          bindCalibrationId: (pointCode: string, projectName: string) => Promise<string>;
+          clearCalibrationId: (pointCode: string, projectName: string) => Promise<void>;
           findByStationId: (stationId: number, projectName?: string) => Promise<import('@robot/database').DevicePoint[]>;
           findByComponentId: (componentId: number, projectName?: string) => Promise<import('@robot/database').DevicePoint[]>;
           paginate: (page: number, pageSize: number, stationId?: number, projectName?: string) => Promise<{ data: import('@robot/database').DevicePoint[]; total: number }>;

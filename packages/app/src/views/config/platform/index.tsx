@@ -2,7 +2,8 @@
 import { Card, Form, Input, Button, Select, Tag, message } from "antd";
 import IpInput from "@/components/ip-input";
 import { getRobotInfo, saveRobotInfo, getAnalysisMachineInfo, saveAnalysisMachineInfo, getSuperSystemInfo, saveSuperSystemInfo } from "@/api/config.js";
-import { subscribeBackendContext } from "@/stores/appContextStore";
+import { getRequestErrorMessage } from "@/services/http";
+import { getConnectionStatus, subscribeBackendContext } from "@/stores/appContextStore";
 
 interface ApiResponse<T> {
   code: number;
@@ -49,7 +50,7 @@ export default function PlatformConfig() {
       }
     } catch (err) {
       console.error("获取后台配置失败:", err);
-      message.error("获取后台配置失败");
+      message.error(getRequestErrorMessage(err, "获取后台配置失败"));
     }
   };
 
@@ -68,7 +69,7 @@ export default function PlatformConfig() {
       }
     } catch (err) {
       console.error("获取分析主机失败:", err);
-      message.error("获取分析主机失败");
+      message.error(getRequestErrorMessage(err, "获取分析主机失败"));
     }
   };
 
@@ -88,22 +89,26 @@ export default function PlatformConfig() {
       }
     } catch (err) {
       console.error("获取上级主机失败:", err);
-      message.error("获取上级主机失败");
+      message.error(getRequestErrorMessage(err, "获取上级主机失败"));
     }
   };
 
   useEffect(() => {
-    fetchBackend();
-    fetchAnalysis();
-    fetchHost();
+    if (getConnectionStatus() === "connected") {
+      fetchBackend();
+      fetchAnalysis();
+      fetchHost();
+    }
   }, []);
 
   // IP 切换时重新加载
   useEffect(() => {
     return subscribeBackendContext(() => {
-      fetchBackend();
-      fetchAnalysis();
-      fetchHost();
+      if (getConnectionStatus() === "connected") {
+        fetchBackend();
+        fetchAnalysis();
+        fetchHost();
+      }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -125,7 +130,7 @@ export default function PlatformConfig() {
       }
     } catch (err) {
       console.error("保存后台配置失败:", err);
-      message.error("保存失败");
+      message.error(getRequestErrorMessage(err, "保存失败"));
     } finally {
       setLoading(false);
     }
@@ -147,7 +152,7 @@ export default function PlatformConfig() {
       }
     } catch (err) {
       console.error("保存分析主机失败:", err);
-      message.error("保存失败");
+      message.error(getRequestErrorMessage(err, "保存失败"));
     } finally {
       setAnalysisLoading(false);
     }
@@ -169,7 +174,7 @@ export default function PlatformConfig() {
       }
     } catch (err) {
       console.error("保存上级主机失败:", err);
-      message.error("保存失败");
+      message.error(getRequestErrorMessage(err, "保存失败"));
     } finally {
       setHostLoading(false);
     }

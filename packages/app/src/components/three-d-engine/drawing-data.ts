@@ -53,6 +53,7 @@ export interface DrawingItemsData {
 
 export interface PathPointObject {
   id: string | number;
+  name?: string;
   x: number;
   y: number;
   z: number;
@@ -61,6 +62,7 @@ export interface PathPointObject {
 export type PathPointValue = PathPointObject | number[];
 
 export interface PathSegmentValue {
+  id?: string | number;
   /** 旧格式：通过点数组下标连线。 */
   start?: number;
   end?: number;

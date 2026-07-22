@@ -201,6 +201,17 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
         const entries = normalizeCalibrationEntries(json);
         const currentMapCode = mapNameRef.current || json.mapCode || "";
         allDataRef.current = entries;
+        const boundPointCodes = new Set(
+          entries.flatMap((item) => item.rects || [])
+            .flatMap((rect) => rect.bindings || [])
+            .map((binding) => binding.pointCode)
+            .filter(Boolean),
+        );
+        if (selectedProject && window.electronAPI?.db?.point?.bindCalibrationId) {
+          void Promise.all(
+            [...boundPointCodes].map((pointCode) => window.electronAPI!.db.point.bindCalibrationId(pointCode, selectedProject)),
+          ).catch((error) => console.error("[Calibration] 补齐标定 ID 失败:", error));
+        }
         const entry = json.data?.find(
           (d) => d.imageId === image.id && isSameMapCode(getEntryMapCode(d, json.mapCode), currentMapCode)
         );
@@ -216,7 +227,7 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
       }
     };
     loadData();
-  }, [taskDir, image.spId, image.side]);
+  }, [taskDir, image.spId, image.side, selectedProject]);
 
   const buildSaveData = useCallback((rectSnapshot: RectData[]): CalibrationFileData => ({
     version: 2,
@@ -752,18 +763,31 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
       if (e.key !== "Delete") return;
       const rid = selectedRef.current;
       if (!rid) return;
-      // 删除选中的矩形
-      setRects((prev) => prev.filter((r) => r.id !== rid));
-      setPendingRect((prev) => (prev?.id === rid ? null : prev));
-      setSelectedRectId(null);
-      scheduleSave();
+      const target = rectsRef.current.find((rect) => rect.id === rid) || (pendingRef.current?.id === rid ? pendingRef.current : null);
+      const pointCodes = [...new Set((target?.bindings || []).map((binding) => binding.pointCode).filter(Boolean))];
+      void (async () => {
+        try {
+          if (pointCodes.length > 0) {
+            if (!selectedProject || !window.electronAPI?.db?.point?.clearCalibrationId) {
+              throw new Error("当前环境无法清除标定 ID");
+            }
+            await Promise.all(pointCodes.map((pointCode) => window.electronAPI!.db.point.clearCalibrationId(pointCode, selectedProject)));
+          }
+          setRects((prev) => prev.filter((r) => r.id !== rid));
+          setPendingRect((prev) => (prev?.id === rid ? null : prev));
+          setSelectedRectId(null);
+          scheduleSave();
+        } catch (error) {
+          message.error("删除标定框失败: " + (error instanceof Error ? error.message : String(error)));
+        }
+      })();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [scheduleSave]);
+  }, [message, scheduleSave, selectedProject]);
 
   // 绑定：将点位绑定到选中/待定的矩形
-  const handleBindPoint = (pointCode: string, pointName: string) => {
+  const handleBindPoint = async (pointCode: string, pointName: string) => {
     const pend = pendingRef.current;
     const bindTo = pend || rectsRef.current.find((r) => r.id === selectedRef.current);
     if (!bindTo) {
@@ -774,8 +798,26 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
       message.info("该点位已绑定到此矩形");
       return;
     }
+    if (bindTo.bindings.length > 0) {
+      message.warning("一个标定框只能绑定一个点位");
+      return;
+    }
+    if (getPointBindCount(pointCode) > 0) {
+      message.warning("该点位已绑定到其他标定框，请先解绑");
+      return;
+    }
+    if (!selectedProject || !window.electronAPI?.db?.point?.bindCalibrationId) {
+      message.error("当前环境无法生成标定 ID");
+      return;
+    }
+    try {
+      await window.electronAPI.db.point.bindCalibrationId(pointCode, selectedProject);
+    } catch (error) {
+      message.error("绑定失败: " + (error instanceof Error ? error.message : String(error)));
+      return;
+    }
     const binding: PointBinding = { pointCode, pointName };
-    const updated = { ...bindTo, bindings: [...bindTo.bindings, binding] };
+    const updated = { ...bindTo, bindings: [binding] };
     if (pend && pend.id === bindTo.id) {
       setPendingRect(null);
       setRects((prev) => [...prev, updated]);
@@ -788,7 +830,7 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
   };
 
   // 解绑：从选中矩形中移除该点位绑定
-  const handleUnbindPoint = (pointCode: string) => {
+  const handleUnbindPoint = async (pointCode: string) => {
     const bindTo = rectsRef.current.find((r) => r.id === selectedRef.current);
     if (!bindTo) {
       message.warning("请先选中一个矩形框");
@@ -796,6 +838,16 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
     }
     if (!bindTo.bindings.some((b) => b.pointCode === pointCode)) {
       message.info("该点位未绑定到此矩形");
+      return;
+    }
+    if (!selectedProject || !window.electronAPI?.db?.point?.clearCalibrationId) {
+      message.error("当前环境无法清除标定 ID");
+      return;
+    }
+    try {
+      await window.electronAPI.db.point.clearCalibrationId(pointCode, selectedProject);
+    } catch (error) {
+      message.error("解绑失败: " + (error instanceof Error ? error.message : String(error)));
       return;
     }
     const newBindings = bindTo.bindings.filter((b) => b.pointCode !== pointCode);
@@ -816,8 +868,7 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
     let count = 0;
     const currentMapCode = mapNameRef.current || "";
     for (const entry of allDataRef.current) {
-      if (!isSameMapCode(entry.mapCode, currentMapCode)) continue;
-      if (entry.imageId === imageRef.current.id) continue;
+      if (entry.imageId === imageRef.current.id && isSameMapCode(entry.mapCode, currentMapCode)) continue;
       for (const r of entry.rects) {
         count += r.bindings.filter((b) => b.pointCode === pointCode).length;
       }

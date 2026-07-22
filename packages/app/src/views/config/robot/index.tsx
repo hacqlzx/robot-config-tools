@@ -5,7 +5,8 @@ import { ReloadOutlined, PlusOutlined } from "@ant-design/icons";
 import RobotFormModal from "./RobotFormModal";
 import CameraTableModal, { type CameraVO } from "./CameraTableModal";
 import { getAllRobot, addRobot, updateRobot, deleteRobot, getFacInfo } from "@/api/config.js";
-import { subscribeBackendContext } from "@/stores/appContextStore";
+import { getRequestErrorMessage } from "@/services/http";
+import { getConnectionStatus, subscribeBackendContext } from "@/stores/appContextStore";
 
 export interface RobotRecord {
   id: number;
@@ -84,8 +85,8 @@ export default function RobotConfig() {
       } else {
         message.error(body.message || "获取机器人列表失败");
       }
-    } catch {
-      message.error("获取机器人列表失败");
+    } catch (error) {
+      message.error(getRequestErrorMessage(error, "获取机器人列表失败"));
     } finally {
       setLoading(false);
     }
@@ -109,7 +110,7 @@ export default function RobotConfig() {
   };
 
   useEffect(() => {
-    if (!fetchedRef.current) {
+    if (!fetchedRef.current && getConnectionStatus() === "connected") {
       fetchedRef.current = true;
       fetchRobots();
       fetchFacOptions();
@@ -120,8 +121,10 @@ export default function RobotConfig() {
   // IP 切换时重新加载
   useEffect(() => {
     return subscribeBackendContext(() => {
-      fetchRobots();
-      fetchFacOptions();
+      if (getConnectionStatus() === "connected") {
+        fetchRobots();
+        fetchFacOptions();
+      }
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -150,8 +153,8 @@ export default function RobotConfig() {
           } else {
             message.error(body.message || "删除失败");
           }
-        } catch {
-          message.error("删除失败");
+        } catch (error) {
+          message.error(getRequestErrorMessage(error, "删除失败"));
         }
       },
     });
@@ -181,8 +184,8 @@ export default function RobotConfig() {
       } else {
         message.error(body.message || (editRecord ? "编辑失败" : "新增失败"));
       }
-    } catch {
-      message.error(editRecord ? "编辑失败" : "新增失败");
+    } catch (error) {
+      message.error(getRequestErrorMessage(error, editRecord ? "编辑失败" : "新增失败"));
     } finally {
       setSubmitting(false);
     }

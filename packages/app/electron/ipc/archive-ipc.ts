@@ -4,7 +4,7 @@ import fs from "fs";
 import path from "path";
 import * as XLSX from "xlsx";
 import { ZipArchive } from "archiver";
-import { getDatabase } from "@robot/database";
+import { DevicePointRepo, getDatabase } from "@robot/database";
 import { getProjectRoot } from "../project-core/project-root";
 
 const SURVEY_DIR_NAME = "勘察数据";
@@ -168,7 +168,7 @@ export function registerArchiveIpc(): void {
 
       const deviceDir = resolveDeviceDir(surveyDir);
       if (!deviceDir) {
-        throw new Error("未找到设备区 json_list.json，请确认压缩包包含 device/json_list.json 或 json_list.json");
+        throw new Error("未找到设备区 json_list.json，请确认压缩包包含 device/json_list.json、json_list.json 或 勘察数据/device/json_list.json");
       }
       const importedSpIds = readImportedSpIds(deviceDir);
 
@@ -236,6 +236,7 @@ export function registerArchiveIpc(): void {
 
       const context = readSurveyContext(surveyDir, deviceDir, safeMapName, readMapDeviceAreas(projectDir, safeMapName));
       const calibration = readCalibrationFile(calibrationPath);
+      ensureCalibrationIds(safeProjectName, calibration);
       const points = readProjectPoints(safeProjectName);
       const timeStr = formatMinuteStamp(new Date());
       const records = buildImageLabelRecords(calibration, context, points, timeStr);
@@ -294,6 +295,7 @@ export function registerArchiveIpc(): void {
       };
       fs.mkdirSync(surveyRoot, { recursive: true });
       fs.writeFileSync(calibrationPath, `${JSON.stringify(finalData, null, 2)}\n`, "utf-8");
+      ensureCalibrationIds(safeProjectName, finalData);
 
       console.log("[import-image-labels] 导入完成:", calibrationPath, "count:", importedCount, "warnings:", warnings.length);
       return { success: true, importedCount, warnings };
@@ -553,23 +555,29 @@ function assertInside(root: string, target: string, action: string): string {
 function flattenSingleWrapperDir(targetDir: string): void {
   const items = fs.readdirSync(targetDir, { withFileTypes: true })
     .filter((item) => !item.name.startsWith(".") && !item.name.startsWith("__"));
-  if (items.length !== 1 || !items[0].isDirectory()) return;
-
-  const wrapper = path.join(targetDir, items[0].name);
   if (
-    fs.existsSync(path.join(wrapper, "json_list.json"))
-    || fs.existsSync(path.join(wrapper, "device", "json_list.json"))
-    || fs.existsSync(path.join(wrapper, "cabinet"))
-  ) {
-    for (const item of fs.readdirSync(wrapper, { withFileTypes: true })) {
-      const src = path.join(wrapper, item.name);
-      const dst = path.join(targetDir, item.name);
-      if (item.isDirectory() && fs.existsSync(dst)) cpMerge(src, dst);
-      else fs.cpSync(src, dst, { recursive: true, force: true });
-    }
-    fs.rmSync(wrapper, { recursive: true, force: true });
-    console.log("[import-survey-data] 扁平化外层目录:", wrapper);
+    fs.existsSync(path.join(targetDir, "json_list.json"))
+    || fs.existsSync(path.join(targetDir, "device", "json_list.json"))
+  ) return;
+
+  const wrappers = items
+    .filter((item) => item.isDirectory())
+    .map((item) => path.join(targetDir, item.name))
+    .filter((wrapper) => (
+      fs.existsSync(path.join(wrapper, "json_list.json"))
+      || fs.existsSync(path.join(wrapper, "device", "json_list.json"))
+    ));
+  if (wrappers.length !== 1) return;
+
+  const wrapper = wrappers[0];
+  for (const item of fs.readdirSync(wrapper, { withFileTypes: true })) {
+    const src = path.join(wrapper, item.name);
+    const dst = path.join(targetDir, item.name);
+    if (item.isDirectory() && fs.existsSync(dst)) cpMerge(src, dst);
+    else fs.cpSync(src, dst, { recursive: true, force: true });
   }
+  fs.rmSync(wrapper, { recursive: true, force: true });
+  console.log("[import-survey-data] 扁平化外层目录:", wrapper);
 }
 
 function resolveDeviceDir(surveyDir: string): string | null {
@@ -652,6 +660,22 @@ function readProjectPoints(projectName: string): any[] {
   } catch (e) {
     console.warn("[image-labels] 读取点表失败:", e);
     return [];
+  }
+}
+
+function ensureCalibrationIds(projectName: string, calibration: CalibrationFileData): void {
+  const repo = new DevicePointRepo(getDatabase());
+  const pointCodes = new Set<string>();
+  for (const entry of normalizeCalibrationEntries(calibration)) {
+    for (const rect of entry.rects || []) {
+      for (const binding of rect.bindings || []) {
+        const pointCode = valueText(binding.pointCode);
+        if (pointCode) pointCodes.add(pointCode);
+      }
+    }
+  }
+  for (const pointCode of pointCodes) {
+    repo.bindCalibrationId(pointCode, projectName);
   }
 }
 
@@ -819,7 +843,7 @@ function buildRobotImageLabel(imageMeta: SurveyImageMeta, context: SurveyContext
   return {
     calibr_rp: spConfig.calibr_rp || { pitch: 0, roll: 0 },
     camera_id: Number(imageConfig.camera_id || 0),
-    cp_id: Number(spConfig.cp_id || 0),
+    cp_id: Number(point?.calibrationId || 0),
     current_rp: spConfig.current_rp || { pitch: 0, roll: 0 },
     device_name: deviceName,
     point_name: pointName,

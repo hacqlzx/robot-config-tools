@@ -1,5 +1,7 @@
 ﻿import http from "@/services/http";
 
+let surveyRunningEndpoint = "/robot/tool/task/survey/getSurveyRunning";
+
 // ========== 厂站 ==========
 
 /** 获取全部厂站 */
@@ -214,9 +216,26 @@ export function stopPointCollect(robotId, stopPointIdList) {
 }
 
 /**
+ * 查询勘察任务执行状态
+ * @param {number} robotId - 机器人 ID
+ */
+export async function getSurveyRunning(robotId) {
+  try {
+    return await http.get(surveyRunningEndpoint, { robotId });
+  } catch (e) {
+    if (surveyRunningEndpoint !== "/robot/tool/task/survey/check") {
+      const res = await http.get("/robot/tool/task/survey/check", { robotId });
+      surveyRunningEndpoint = "/robot/tool/task/survey/check";
+      return res;
+    }
+    throw e;
+  }
+}
+
+/**
  * 屏柜区屏柜拍照
  * @param {number} robotId - 机器人 ID
- * @param {string[]} deviceList - 屏柜区主设备编码列表
+ * @param {string[]} deviceList - 当前地图 description_file.json 中的屏柜 ID 列表
  */
 export function cabinetDeviceMainCollect(robotId, deviceList) {
   return http.post("/robot/tool/task/cabinetDeviceMainCollect", {
@@ -260,6 +279,11 @@ export function exportProspectImage(robotId) {
 /** 屏柜验证图导出 */
 export function exportDeviceImage(robotId) {
   return http.get("/robot/tool/file/exportDeviceImage", { robotId });
+}
+
+/** 设备验证图导出 */
+export function exportDeviceCheckImage(robotId) {
+  return http.get("/robot/tool/file/exportDeviceCheckImage", { robotId });
 }
 
 /** 工程备份导出 */

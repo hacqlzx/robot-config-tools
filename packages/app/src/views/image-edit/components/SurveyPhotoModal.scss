@@ -22,6 +22,50 @@
   }
 }
 
+.survey-photo-progress {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: #f6ffed;
+  border: 1px solid #b7eb8f;
+  border-radius: 6px;
+
+  &.is-error {
+    background: #fff1f0;
+    border-color: #ffa39e;
+  }
+}
+
+.survey-photo-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+  color: #404040;
+  font-size: 13px;
+
+  span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  span:last-child {
+    flex-shrink: 0;
+    color: #1677ff;
+  }
+}
+
+.survey-photo-progress-meta {
+  margin-top: 4px;
+  color: #737373;
+  font-size: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .survey-photo-supplement-filter {
   display: flex;
   align-items: center;

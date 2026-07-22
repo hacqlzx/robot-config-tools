@@ -95,6 +95,51 @@ export class DevicePointRepo {
     return this.db.prepare("SELECT * FROM device_point WHERE calibration_id = ?").get(calibrationId) as DevicePoint | undefined;
   }
 
+  bindCalibrationId(pointCode: string, projectName: string): string {
+    let assignedId = "";
+    const run = this.db.transaction(() => {
+      const point = this.findByPointCode(pointCode, projectName);
+      if (!point) throw new Error(`未找到点位：${pointCode}`);
+
+      const currentId = String(point.calibrationId ?? "").trim();
+      if (currentId) {
+        assignedId = currentId;
+        return;
+      }
+
+      const sequence = this.db.prepare("SELECT next_id FROM calibration_sequence WHERE id = 1").get() as { nextId: number } | undefined;
+      if (!sequence) throw new Error("标定 ID 序列表未初始化");
+
+      let nextId = Math.max(1, Number(sequence.nextId) || 1);
+      while (this.findByCalibrationId(String(nextId))) nextId += 1;
+      assignedId = String(nextId);
+      this.db.prepare("UPDATE calibration_sequence SET next_id = ? WHERE id = 1").run(nextId + 1);
+      this.update(point.id, { calibrationId: assignedId });
+    });
+    run();
+    return assignedId;
+  }
+
+  clearCalibrationId(pointCode: string, projectName: string): void {
+    const run = this.db.transaction(() => {
+      const point = this.findByPointCode(pointCode, projectName);
+      if (!point) throw new Error(`未找到点位：${pointCode}`);
+      if (String(point.calibrationId ?? "").trim()) {
+        this.update(point.id, { calibrationId: "" });
+      }
+    });
+    run();
+  }
+
+  listCruiseIds(): string[] {
+    const rows = this.db.prepare(`
+      SELECT cruise_id AS identifier
+      FROM device_point
+      WHERE cruise_id IS NOT NULL AND cruise_id <> ''
+    `).all() as Array<{ identifier: string }>;
+    return rows.map((row) => String(row.identifier));
+  }
+
   findByStationId(stationId: number, projectName?: string): DevicePoint[] {
     if (projectName) {
       return this.db.prepare("SELECT * FROM device_point WHERE station_id = ? AND project_name = ? ORDER BY sort_num").all(stationId, projectName) as DevicePoint[];

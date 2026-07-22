@@ -1,6 +1,7 @@
 ﻿import { Form, Button, Card, message } from "antd";
 import IpInput from "@/components/ip-input";
 import { editNetwork } from "@/api/config.js";
+import { getRequestErrorMessage } from "@/services/http";
 import type { NetworkRecord } from "./index";
 
 interface ApiResponse<T> {
@@ -30,7 +31,7 @@ export function NetworkCard({ record }: NetworkCardProps) {
       }
     } catch (err) {
       console.error("保存失败:", err);
-      message.error("保存失败");
+      message.error(getRequestErrorMessage(err, "保存失败"));
     }
   };
 

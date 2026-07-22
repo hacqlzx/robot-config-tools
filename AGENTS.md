@@ -74,7 +74,7 @@
 
 - `core/connection.ts`：sql.js 初始化、`DbWrapper`、延迟自动保存。
 - `core/migration.ts`：迁移执行和 `schema_version`。
-- `migrations/*.ts`：当前迁移到 004。
+- `migrations/*.ts`：当前迁移到 005。
 - `repositories/*.repo.ts`：电压区、间隔、主设备、部件、点位、项目厂站绑定的 CRUD/upsert。
 - `services/import.service.ts`：Excel 点表行导入，生成/复用各层级编码，并写入设备树和点位。
 - `services/project-lifecycle.service.ts`：统计、重命名和删除六张表中的项目关联数据。
@@ -92,7 +92,7 @@
 
 点表导入：`space-edit` 选择 Excel，`utils/excel-parser.ts` 解析中文表头、层级空行和枚举，原始 Excel 保存到 `project/{项目}/点表/{厂站}.xlsx`，再通过 `electronAPI.importPoints` 进入主进程，最终由 `@robot/database/services/import.service.ts` upsert 设备树和点位。首次导入会绑定项目和厂站，后续导入会校验厂站一致；点位编码和同部件下点位名称会做重复校验。
 
-空间模型导出：`ExportModal` 选择点表/地图项和目标目录，主进程查询各设备层级，调用 `exportSpaceZip`；点表在内存中生成 Excel，每张地图先生成单独 ZIP，再写入外层导出包。
+空间模型导出：`ExportModal` 选择点表/地图项和目标目录，主进程查询各设备层级，调用 `exportSpaceZip`；点表先生成包含 Excel 与 `extend.json` 的独立 ZIP，每张地图也生成单独 ZIP，再一并写入外层导出包。`extend.json` 固定输出点位编码、标定 ID、巡检 ID、主设备编码和区域 ID，并补齐未关联点位的柜排/屏柜记录；点表是项目级全量数据，区域映射始终扫描项目下全部地图，不受本次地图勾选状态影响。
 
 项目清单：每个项目根目录维护 `project.manifest.json`，记录布局以及地图、点表、勘察任务资产。项目创建、列举、重命名和项目文件写入会维护清单；目前勘察任务尚未写入 `surveyTasks`，旧项目缺少清单时也只会创建空清单，不会完整扫描回填资产。
 
@@ -133,7 +133,7 @@
 - 右侧点表按间隔筛点位，显示标定状态。
 - `SurveyImageLoad` 按地图导入勘察 ZIP 到 `勘察数据/{地图名}`，同地图导入采用全量覆盖，但保留项目级 `勘察数据/勘察数据.json` 标定结果。
 - `SurveyImageExport` 导出所选地图勘察数据；`ImageLabelTransfer` 导入/导出机器人图像标识 ZIP，优先按 `point_code` 回绑点表。
-- `CalibrationView` 使用串行保存队列和保存状态，避免连续编辑覆盖；`ImageCanvas` 按视口加载并缓存缩略图，双击时再读取全图。
+- `CalibrationView` 使用串行保存队列和保存状态，避免连续编辑覆盖；点位绑定通过数据库序列分配全局递增且不复用的 `calibration_id`，解绑或删除标定框时清空；机器人图像标识导出的 `cp_id` 直接使用该值。`ImageCanvas` 按视口加载并缓存缩略图，双击时再读取全图。
 
 这个区域仍在开发中。任务配置会一次性建立全部图像索引；缩略图使用最多 180 项的内存 LRU 和 3 路加载队列，对象 URL 会在解码后释放。超大任务的配置索引耗时、取消和磁盘缓存仍需继续验证。
 

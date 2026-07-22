@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from "react";
-import { Button, Space, Divider, App, Spin, Radio, Select, Input, Checkbox, Dropdown } from "antd";
+import { Button, Space, Divider, App, Spin, Radio, Select, Input, Checkbox, Dropdown, Progress } from "antd";
 import {
   UploadOutlined,
   DownloadOutlined,
@@ -13,17 +13,23 @@ import type { MenuProps } from "antd";
 import SurveyImageLoad from "./components/SurveyImageLoad";
 import SurveyImageExport from "./components/SurveyImageExport";
 import ImageLabelTransfer from "./components/ImageLabelTransfer";
-import SurveyPhotoModal, { type SurveyPhotoDispatchItem, type SurveyPhotoMode } from "./components/SurveyPhotoModal";
+import SurveyPhotoModal, { type SurveyPhotoDispatchItem, type SurveyPhotoMode, type SurveyRunningState } from "./components/SurveyPhotoModal";
 import CabinetPhotoModal, { type CabinetPhotoDispatchItem } from "./components/CabinetPhotoModal";
 import VerifyTaskModal, { type VerifyTaskBayItem, type VerifyTaskPointItem } from "./components/VerifyTaskModal";
 import CalibrationView from "./components/CalibrationView";
-import { useThreeDViewer } from "@/components/three-d-engine";
+import {
+  ROBOT_PATH_FILE_NAME,
+  ROBOT_STOP_POINT_FILE_NAMES,
+  electronFileSource,
+  loadRobotRouteDrawingData,
+  useThreeDViewer,
+} from "@/components/three-d-engine";
 import { useResizable } from "@/components/useResizable";
 import ImageCanvas from "@/components/image-canvas/ImageCanvas";
 import type { ImageItem } from "@/components/image-canvas/ImageCanvas";
 import { useTaskLoader } from "./hooks/useTaskLoader";
 import { useSelectedProject, useSelectedRobot } from "@/stores/appContextStore";
-import { cabinetDeviceMainCollect, equipmentDeviceMainCollect, getAllRobot, startTask, stopPointCollect } from "@/api/config.js";
+import { cabinetDeviceMainCollect, equipmentDeviceMainCollect, getAllRobot, getSurveyRunning, startTask, stopPointCollect } from "@/api/config.js";
 import "./index.scss";
 
 type CalibrationImageItem = ImageItem & { img: HTMLImageElement };
@@ -37,6 +43,8 @@ interface TreeNode {
 
 const SURVEY_DIR_NAME = "勘察数据";
 const CALIBRATION_FILE_NAME = "勘察数据.json";
+const SURVEY_POLL_INTERVAL_MS = 2000;
+const SURVEY_START_WAIT_MS = 15000;
 
 function getSharedCalibrationFilePath(surveyDir: string): string {
   const normalized = surveyDir.replace(/[\\/]+$/, "");
@@ -49,6 +57,77 @@ function getSharedCalibrationFilePath(surveyDir: string): string {
 
 function getCalibrationEntryMapCode(entry: any, fileMapCode?: string): string {
   return String(entry?.mapCode || fileMapCode || "");
+}
+
+function parseProgressPercent(value: unknown): number {
+  const match = String(value ?? "").match(/\d+(?:\.\d+)?/);
+  if (!match) return 0;
+  const parsed = Number.parseFloat(match[0]);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.min(100, Math.round(parsed)));
+}
+
+function buildSurveyRunningState(data: any): SurveyRunningState | null {
+  if (!data) return null;
+  const progressPercent = parseProgressPercent(data.progress);
+  const statusText = String(data.status ?? "");
+  const failed = statusText === "2" || ["fail", "failed", "error"].includes(statusText.toLowerCase());
+  const finished = !failed && (statusText === "1" || progressPercent >= 100);
+  if (finished) return null;
+  return {
+    robotId: Number(data.robotId) || undefined,
+    robotCode: String(data.robotCode || ""),
+    type: String(data.type || ""),
+    taskCode: String(data.taskCode || ""),
+    taskName: String(data.taskName || ""),
+    progressPercent,
+    progressText: String(data.progress || `${progressPercent}%`),
+    statusText: failed ? "执行失败" : "执行中",
+    running: !failed,
+    finished,
+    failed,
+    errorMessage: "",
+  };
+}
+
+function buildSurveyErrorState(error: unknown): SurveyRunningState {
+  const message = error instanceof Error ? error.message : String(error || "查询勘察进度失败");
+  return {
+    progressPercent: 0,
+    progressText: "0%",
+    statusText: "查询失败",
+    running: false,
+    finished: false,
+    failed: true,
+    queryFailed: true,
+    errorMessage: message,
+  };
+}
+
+function buildSurveyFailureState(message: unknown): SurveyRunningState {
+  return {
+    progressPercent: 0,
+    progressText: "0%",
+    statusText: "任务异常",
+    running: false,
+    finished: false,
+    failed: true,
+    queryFailed: false,
+    errorMessage: String(message || "勘察任务执行失败"),
+  };
+}
+
+function buildSurveyStartingState(taskName: string): SurveyRunningState {
+  return {
+    taskName,
+    progressPercent: 0,
+    progressText: "0%",
+    statusText: "执行中",
+    running: true,
+    finished: false,
+    failed: false,
+    errorMessage: "",
+  };
 }
 
 export default function ImageEdit() {
@@ -178,7 +257,7 @@ export default function ImageEdit() {
   // 公共 3D 查看器
   const viewerCanvasRef = useRef<HTMLCanvasElement>(null);
   const viewerContainerRef = useRef<HTMLDivElement>(null);
-  const { loadFile, loadDrawing, loading, loadingFile, progress, drawingRef, loaderRef } = useThreeDViewer({
+  const { loadFile, loadDrawing, loadDrawingData, loading, loadingFile, progress, drawingRef, loaderRef } = useThreeDViewer({
     canvasRef: viewerCanvasRef,
     containerRef: viewerContainerRef,
     onSelect: handle3DSelect,
@@ -193,11 +272,15 @@ export default function ImageEdit() {
   const [surveyPhotoMode, setSurveyPhotoMode] = useState<SurveyPhotoMode>("normal");
   const [cabinetPhotoOpen, setCabinetPhotoOpen] = useState(false);
   const [verifyTaskOpen, setVerifyTaskOpen] = useState(false);
+  const [surveyRunning, setSurveyRunning] = useState<SurveyRunningState | null>(null);
+  const [surveyProgressLoading, setSurveyProgressLoading] = useState(false);
+  const surveyProgressRequestRef = useRef(false);
+  const surveyPendingStartUntilRef = useRef(0);
 
   // 已加载的地图数据
   const [loadedMap, setLoadedMap] = useState<string | null>(null);
 
-  /** 加载勘察图像（地图模式：LAS + JSON） */
+  /** 加载勘察图像（地图模式：LAS + 区域绘制 + 机器人路径/停靠点） */
   const handleSurveyLoad = useCallback(async (mapName: string) => {
     if (!selectedProject || !window.electronAPI?.project) return;
     // 卸载旧模型
@@ -220,15 +303,23 @@ export default function ImageEdit() {
       const tree = await window.electronAPI.project.listTree(selectedProject, `地图/${mapName}`);
 
       const lasFiles: string[] = [];
-      const jsonFiles: string[] = [];
+      const drawingJsonFiles: string[] = [];
+      let pathFile = "";
+      let stopPointFile = "";
       const walk = (nodes: TreeNode[]) => {
         for (const n of nodes) {
           if (!n.isDir) {
-            const ext = n.name.toLowerCase();
-            if (ext.endsWith(".las") || ext.endsWith(".laz")) {
+            const fileName = n.name.toLowerCase();
+            if (fileName.endsWith(".las") || fileName.endsWith(".laz")) {
               lasFiles.push(n.path);
-            } else if (ext.endsWith(".json")) {
-              jsonFiles.push(n.path);
+            } else if (fileName === ROBOT_PATH_FILE_NAME) {
+              if (!pathFile) pathFile = n.path;
+            } else if (ROBOT_STOP_POINT_FILE_NAMES.includes(fileName as typeof ROBOT_STOP_POINT_FILE_NAMES[number])) {
+              if (!stopPointFile || fileName === ROBOT_STOP_POINT_FILE_NAMES[0]) {
+                stopPointFile = n.path;
+              }
+            } else if (fileName.endsWith(".json")) {
+              drawingJsonFiles.push(n.path);
             }
           }
           if (n.children) walk(n.children);
@@ -248,12 +339,25 @@ export default function ImageEdit() {
         await loadFile(lasFiles[i]);
       }
 
-      // 加载 JSON 绘制数据
-      for (const jsonPath of jsonFiles) {
+      // 区域等绘制 JSON 仍按原格式加载；路径文件单独走 path.json + stop_points.json，不读 reference_path.txt。
+      for (const jsonPath of drawingJsonFiles) {
         try {
           await loadDrawing(jsonPath);
         } catch (e) {
           console.error("绘制数据加载失败:", jsonPath, e);
+        }
+      }
+
+      if (pathFile && stopPointFile) {
+        try {
+          const pathData = await loadRobotRouteDrawingData({
+            fileSource: electronFileSource,
+            pathFilePath: pathFile,
+            stopPointFilePath: stopPointFile,
+          });
+          if (pathData) loadDrawingData(pathData);
+        } catch (e) {
+          console.error("路径/停靠点加载失败:", { pathFile, stopPointFile, error: e });
         }
       }
 
@@ -263,7 +367,7 @@ export default function ImageEdit() {
     } catch (e: any) {
       message.error("加载地图数据失败: " + (e?.message || ""));
     }
-  }, [message, loadFile, loadDrawing, clearTask, selectedProject]);
+  }, [message, loadFile, loadDrawing, loadDrawingData, clearTask, selectedProject]);
 
   /** 加载任务图像（任务模式：JSON + JPG 拼接） */
   const handleTaskLoad = useCallback(async (taskDir: string) => {
@@ -312,6 +416,10 @@ export default function ImageEdit() {
       message.warning("请先选择项目");
       return;
     }
+    if (!loadedMapRef.current) {
+      message.warning("请先加载当前地图");
+      return;
+    }
     setCabinetPhotoOpen(true);
   }, [message, selectedProject]);
 
@@ -323,37 +431,113 @@ export default function ImageEdit() {
     setVerifyTaskOpen(true);
   }, [message, selectedProject]);
 
-  const resolveSelectedRobotId = useCallback(async (): Promise<number | null> => {
+  const resolveSelectedRobotInfo = useCallback(async (silent = false): Promise<{ id: number; name: string } | null> => {
     if (!selectedRobot) {
-      message.warning("请先在顶部选择机器人");
+      if (!silent) message.warning("请先在顶部选择机器人");
       return null;
     }
 
     const robotRes = await getAllRobot();
     const robotBody = robotRes.data;
     if (!robotBody.success || !Array.isArray(robotBody.data)) {
-      message.error("获取机器人列表失败");
+      if (!silent) message.error("获取机器人列表失败");
       return null;
     }
 
     const robot = robotBody.data.find((item: any) => item.robotName === selectedRobot);
     if (!robot) {
-      message.error(`未找到机器人「${selectedRobot}」`);
+      if (!silent) message.error(`未找到机器人「${selectedRobot}」`);
       return null;
     }
 
     const robotId = Number(robot.id);
     if (!Number.isFinite(robotId)) {
-      message.error(`机器人「${selectedRobot}」ID 无效`);
+      if (!silent) message.error(`机器人「${selectedRobot}」ID 无效`);
       return null;
     }
-    return robotId;
+    return { id: robotId, name: selectedRobot };
   }, [message, selectedRobot]);
+
+  const resolveSelectedRobotId = useCallback(async (): Promise<number | null> => {
+    const robot = await resolveSelectedRobotInfo(false);
+    return robot?.id ?? null;
+  }, [resolveSelectedRobotInfo]);
+
+  const refreshSurveyRunning = useCallback(async (options?: { silent?: boolean }) => {
+    if (surveyProgressRequestRef.current) return;
+    const robot = await resolveSelectedRobotInfo(options?.silent ?? true);
+    if (!robot) {
+      setSurveyRunning(null);
+      return;
+    }
+
+    surveyProgressRequestRef.current = true;
+    setSurveyProgressLoading(true);
+    try {
+      const res = await getSurveyRunning(robot.id);
+      const body = res.data;
+      if (!body?.success) {
+        if (!options?.silent) message.error(body?.message || "查询勘察进度失败");
+        surveyPendingStartUntilRef.current = 0;
+        setSurveyRunning(buildSurveyFailureState(body?.message || "查询勘察进度失败"));
+        return;
+      }
+      const nextState = buildSurveyRunningState(body.data);
+      if (!nextState && Date.now() < surveyPendingStartUntilRef.current) {
+        setSurveyRunning((prev) => prev?.running ? prev : buildSurveyStartingState("勘察任务"));
+        return;
+      }
+      if (nextState) surveyPendingStartUntilRef.current = 0;
+      setSurveyRunning(nextState);
+    } catch (e) {
+      if (!options?.silent) message.error("查询勘察进度失败: " + (e instanceof Error ? e.message : String(e)));
+      setSurveyRunning(buildSurveyErrorState(e));
+    } finally {
+      surveyProgressRequestRef.current = false;
+      setSurveyProgressLoading(false);
+    }
+  }, [message, resolveSelectedRobotInfo]);
+
+  useEffect(() => {
+    refreshSurveyRunning({ silent: true });
+  }, [refreshSurveyRunning]);
+
+  useEffect(() => {
+    if (!surveyPhotoOpen) return;
+    refreshSurveyRunning({ silent: true });
+  }, [refreshSurveyRunning, surveyPhotoOpen]);
+
+  useEffect(() => {
+    if (!surveyRunning?.running) return;
+    const timer = window.setInterval(() => {
+      refreshSurveyRunning({ silent: true });
+    }, SURVEY_POLL_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [refreshSurveyRunning, surveyRunning?.running]);
+
+  useEffect(() => {
+    const handleActive = () => {
+      if (document.visibilityState === "visible") {
+        refreshSurveyRunning({ silent: true });
+      }
+    };
+    window.addEventListener("focus", handleActive);
+    document.addEventListener("visibilitychange", handleActive);
+    return () => {
+      window.removeEventListener("focus", handleActive);
+      document.removeEventListener("visibilitychange", handleActive);
+    };
+  }, [refreshSurveyRunning]);
 
   const handleSurveyPhotoDispatch = useCallback(async (areas: SurveyPhotoDispatchItem[]) => {
     const label = surveyPhotoMode === "supplement" ? "补充勘察拍照" : "勘察拍照";
     const unit = surveyPhotoMode === "supplement" ? "条停靠点记录" : "个设备区";
     try {
+      if (surveyRunning?.running) {
+        message.warning("勘察任务执行中，请等待结束后再下发");
+        return false;
+      }
+
       const robotId = await resolveSelectedRobotId();
       if (robotId == null) return false;
 
@@ -375,32 +559,35 @@ export default function ImageEdit() {
       }
 
       message.success(`已下发 ${areas.length} ${unit}`);
+      surveyPendingStartUntilRef.current = Date.now() + SURVEY_START_WAIT_MS;
+      setSurveyRunning(buildSurveyStartingState(label));
+      refreshSurveyRunning({ silent: true });
       return true;
     } catch (e: any) {
       message.error(`${label}下发失败: ${e?.message || e}`);
       return false;
     }
-  }, [message, resolveSelectedRobotId, surveyPhotoMode]);
+  }, [message, refreshSurveyRunning, resolveSelectedRobotId, surveyPhotoMode, surveyRunning?.running]);
 
   const handleCabinetPhotoDispatch = useCallback(async (items: CabinetPhotoDispatchItem[]) => {
     try {
       const robotId = await resolveSelectedRobotId();
       if (robotId == null) return false;
 
-      const codes = Array.from(new Set(items.map((item) => String(item.mainDeviceCode || item.cabinetCode || "").trim()).filter(Boolean)));
-      if (codes.length === 0) {
-        message.warning("请选择带有效编码的主设备");
+      const cabinetIds = Array.from(new Set(items.map((item) => String(item.cabinetId || "").trim()).filter(Boolean)));
+      if (cabinetIds.length === 0) {
+        message.warning("请选择带有效地图屏柜 ID 的屏柜");
         return false;
       }
 
-      const res = await cabinetDeviceMainCollect(robotId, codes);
+      const res = await cabinetDeviceMainCollect(robotId, cabinetIds);
       const body = res.data;
       if (!body.success) {
         message.error(body.message || "屏柜拍照下发失败");
         return false;
       }
 
-      message.success(`已下发 ${codes.length} 个主设备`);
+      message.success(`已下发 ${cabinetIds.length} 个屏柜`);
       return true;
     } catch (e: any) {
       message.error("屏柜拍照下发失败: " + (e?.message || e));
@@ -475,7 +662,11 @@ export default function ImageEdit() {
 
           <Divider orientation="vertical" />
 
-          <Dropdown.Button menu={surveyPhotoMenu} icon={<DownOutlined />}>
+          <Dropdown.Button
+            menu={surveyPhotoMenu}
+            icon={<DownOutlined />}
+            onClick={() => handleOpenSurveyPhoto("normal")}
+          >
             <CameraOutlined />
             <span>勘察拍照</span>
           </Dropdown.Button>
@@ -489,6 +680,26 @@ export default function ImageEdit() {
             验证任务
           </Button>
         </Space>
+
+        <div className={`survey-running-toolbar${surveyRunning?.failed ? " is-error" : ""}`}>
+          {surveyProgressLoading && !surveyRunning ? (
+            <span className="survey-running-placeholder">查询勘察进度...</span>
+          ) : surveyRunning ? (
+            <>
+              <div className="survey-running-info">
+                <span className="survey-running-title">{surveyRunning.taskName || "勘察任务"}</span>
+                <span className="survey-running-status">{surveyRunning.statusText}</span>
+              </div>
+              <Progress
+                percent={surveyRunning.progressPercent}
+                size="small"
+                status={surveyRunning.failed ? "exception" : surveyRunning.finished ? "success" : "active"}
+                showInfo={false}
+              />
+              <span className="survey-running-percent">{surveyRunning.failed ? "失败" : `${surveyRunning.progressPercent}%`}</span>
+            </>
+          ) : null}
+        </div>
       </div>
 
       {/* 主体：左右布局 */}
@@ -664,6 +875,7 @@ export default function ImageEdit() {
         mode={surveyPhotoMode}
         projectName={selectedProject}
         mapName={loadedMap}
+        surveyRunning={surveyRunning}
         onClose={() => setSurveyPhotoOpen(false)}
         onDispatch={handleSurveyPhotoDispatch}
       />
@@ -671,6 +883,7 @@ export default function ImageEdit() {
       <CabinetPhotoModal
         open={cabinetPhotoOpen}
         projectName={selectedProject}
+        mapName={loadedMap}
         onClose={() => setCabinetPhotoOpen(false)}
         onDispatch={handleCabinetPhotoDispatch}
       />

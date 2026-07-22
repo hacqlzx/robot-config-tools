@@ -3,7 +3,8 @@ import { Alert, Card, Form, Button, message } from "antd";
 import IpInput from "@/components/ip-input";
 import { getNetworkList, editNetwork } from "@/api/config.js";
 import { NetworkCard } from "./NetworkCard";
-import { subscribeBackendContext } from "@/stores/appContextStore";
+import { getRequestErrorMessage } from "@/services/http";
+import { getConnectionStatus, subscribeBackendContext } from "@/stores/appContextStore";
 
 export interface NetworkRecord {
   id: number;
@@ -57,12 +58,12 @@ export default function NetworkConfig() {
       }
     } catch (err) {
       console.error("获取网络列表失败:", err);
-      message.error("获取网络列表失败");
+      message.error(getRequestErrorMessage(err, "获取网络列表失败"));
     }
   };
 
   useEffect(() => {
-    if (!fetchedRef.current) {
+    if (!fetchedRef.current && getConnectionStatus() === "connected") {
       fetchedRef.current = true;
       fetchNetworks();
     }
@@ -72,7 +73,7 @@ export default function NetworkConfig() {
   // IP 切换时重新加载
   useEffect(() => {
     return subscribeBackendContext(() => {
-      fetchNetworks();
+      if (getConnectionStatus() === "connected") fetchNetworks();
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -91,7 +92,7 @@ export default function NetworkConfig() {
       }
     } catch (err) {
       console.error("保存失败:", err);
-      message.error("保存失败");
+      message.error(getRequestErrorMessage(err, "保存失败"));
     } finally {
       setLanSaving(false);
     }
@@ -111,7 +112,7 @@ export default function NetworkConfig() {
       }
     } catch (err) {
       console.error("保存失败:", err);
-      message.error("保存失败");
+      message.error(getRequestErrorMessage(err, "保存失败"));
     } finally {
       setIntranetSaving(false);
     }

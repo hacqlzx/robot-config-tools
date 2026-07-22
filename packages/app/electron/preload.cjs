@@ -165,6 +165,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
       getById: dbInvoke("point", "getById"),
       findByPointCode: dbInvoke("point", "findByPointCode"),
       findByCalibrationId: dbInvoke("point", "findByCalibrationId"),
+      bindCalibrationId: dbInvoke("point", "bindCalibrationId"),
+      clearCalibrationId: dbInvoke("point", "clearCalibrationId"),
       findByStationId: dbInvoke("point", "findByStationId"),
       findByComponentId: dbInvoke("point", "findByComponentId"),
       paginate: dbInvoke("point", "paginate"),

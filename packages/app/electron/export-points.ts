@@ -14,6 +14,7 @@ const LEGACY_REFERENCE_PATH_FILE_NAME = "可行驶路径.json";
 const MAP_MODEL_EXT_RE = /\.(las|laz)$/i;
 const AREA_TYPE_CABINET_ROW = "1";
 const AREA_TYPE_CABINET = "2";
+const MAIN_DEVICE_TYPE_CABINET = 29;
 
 // 逆向映射
 const RECOGNITION_REV: Record<string, string> = {
@@ -319,7 +320,7 @@ function applyBayCodeField(record: Record<string, unknown>, bayCodes: string[]):
 function buildMainLookup(mains: DeviceMain[]) {
   const byCode = new Map<string, DeviceMain>();
   const names = new Map<string, DeviceMain[]>();
-  for (const main of mains.filter((item) => item.mainDeviceType === 29)) {
+  for (const main of mains.filter((item) => item.mainDeviceType === MAIN_DEVICE_TYPE_CABINET)) {
     const code = textValue(main.mainDeviceCode);
     if (code && !byCode.has(code)) byCode.set(code, main);
 
@@ -398,6 +399,116 @@ function descriptionTextWithBayCode(existingText: string, data: PointTableExport
   return `${JSON.stringify(records, null, 2)}\n`;
 }
 
+interface CabinetRegionRef {
+  mainDeviceCode: string;
+  regionId: string;
+}
+
+interface PointExtendRecord {
+  point_code: string;
+  calibration_id: string;
+  cruise_id: string;
+  main_device_code: string;
+  region_id: string;
+}
+
+function collectCabinetRegions(mapRoot: string, mains: DeviceMain[]): CabinetRegionRef[] {
+  const result: CabinetRegionRef[] = [];
+  const seen = new Set<string>();
+  const mainLookup = buildMainLookup(mains);
+  if (!fs.existsSync(mapRoot)) return result;
+
+  const descriptionFiles = listFilesRecursive(mapRoot)
+    .filter((filePath) => path.basename(filePath).toLowerCase() === DESCRIPTION_FILE_NAME)
+    .sort((a, b) => a.localeCompare(b));
+
+  for (const filePath of descriptionFiles) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(parsed)) continue;
+
+    for (const value of parsed) {
+      if (!isRecord(value)) continue;
+      const type = areaType(value);
+      if (type !== AREA_TYPE_CABINET_ROW && type !== AREA_TYPE_CABINET) continue;
+      const mainDeviceCode = textValue(value.code) || textValue(findMainForArea(value, mainLookup)?.mainDeviceCode);
+      const regionId = textValue(value.id);
+      if (!mainDeviceCode && !regionId) continue;
+      const key = mainDeviceCode ? `code:${mainDeviceCode}` : `region:${regionId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push({ mainDeviceCode, regionId });
+    }
+  }
+
+  return result;
+}
+
+function buildPointExtendRecords(
+  points: DevicePoint[],
+  mains: DeviceMain[],
+  cabinetRegions: CabinetRegionRef[],
+): PointExtendRecord[] {
+  const regionIndexesByMainCode = new Map<string, number[]>();
+  cabinetRegions.forEach((region, index) => {
+    if (!region.mainDeviceCode) return;
+    const indexes = regionIndexesByMainCode.get(region.mainDeviceCode) || [];
+    indexes.push(index);
+    regionIndexesByMainCode.set(region.mainDeviceCode, indexes);
+  });
+
+  const usedRegionIndexes = new Set<number>();
+  const pointMainCodes = new Set<string>();
+  const records: PointExtendRecord[] = points.map((point) => {
+    const mainDeviceCode = textValue(point.mainDeviceCode);
+    if (mainDeviceCode) pointMainCodes.add(mainDeviceCode);
+    const regionIndex = mainDeviceCode ? regionIndexesByMainCode.get(mainDeviceCode)?.[0] : undefined;
+    if (regionIndex !== undefined) usedRegionIndexes.add(regionIndex);
+    return {
+      point_code: textValue(point.pointCode),
+      calibration_id: textValue(point.calibrationId),
+      cruise_id: textValue(point.cruiseId),
+      main_device_code: mainDeviceCode,
+      region_id: regionIndex === undefined ? "" : cabinetRegions[regionIndex].regionId,
+    };
+  });
+
+  const addedCabinetCodes = new Set<string>();
+  for (const main of mains) {
+    if (main.mainDeviceType !== MAIN_DEVICE_TYPE_CABINET) continue;
+    const mainDeviceCode = textValue(main.mainDeviceCode);
+    if (mainDeviceCode && (pointMainCodes.has(mainDeviceCode) || addedCabinetCodes.has(mainDeviceCode))) continue;
+    if (mainDeviceCode) addedCabinetCodes.add(mainDeviceCode);
+
+    const regionIndex = mainDeviceCode ? regionIndexesByMainCode.get(mainDeviceCode)?.[0] : undefined;
+    if (regionIndex !== undefined) usedRegionIndexes.add(regionIndex);
+    records.push({
+      point_code: "",
+      calibration_id: "",
+      cruise_id: "",
+      main_device_code: mainDeviceCode,
+      region_id: regionIndex === undefined ? "" : cabinetRegions[regionIndex].regionId,
+    });
+  }
+
+  cabinetRegions.forEach((region, index) => {
+    if (usedRegionIndexes.has(index)) return;
+    records.push({
+      point_code: "",
+      calibration_id: "",
+      cruise_id: "",
+      main_device_code: region.mainDeviceCode,
+      region_id: region.regionId,
+    });
+  });
+
+  return records;
+}
+
 function appendMapContents(archive: ZipArchive, src: string, mapName: string, data: PointTableExportData) {
   const added = new Set<string>();
   let mapInfoText: string | null = null;
@@ -460,6 +571,32 @@ async function createMapZipFile(src: string, mapName: string, tempDir: string, d
   return zipPath;
 }
 
+async function createPointTableZipFile(
+  xlsxBuf: Buffer,
+  extendRecords: PointExtendRecord[],
+  stationName: string,
+  tempDir: string,
+): Promise<{ filePath: string; zipName: string }> {
+  const zipName = `${stationName}_巡检点位.zip`;
+  const zipPath = path.join(tempDir, "point-table.zip");
+  const output = fs.createWriteStream(zipPath);
+  const archive = new ZipArchive({ zlib: { level: 0 } });
+  archive.pipe(output);
+  archive.append(xlsxBuf, { name: `${stationName}_巡检点位.xlsx` });
+  archive.append(`${JSON.stringify(extendRecords, null, 2)}\n`, { name: "extend.json" });
+
+  await Promise.all([
+    archive.finalize(),
+    new Promise<void>((resolve, reject) => {
+      output.on("close", resolve);
+      output.on("error", reject);
+      (archive as any).on("error", reject);
+    }),
+  ]);
+
+  return { filePath: zipPath, zipName };
+}
+
 export interface ExportZipResult {
   zipPath: string;
   zipName: string;
@@ -494,16 +631,30 @@ export async function exportSpaceZip(
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "robot-map-export-"));
 
   try {
-    // Step 1: 生成点表 Excel（内存中，不写磁盘）
-    let xlsxBuf: Buffer | null = null;
-    if (includePointTable && pointRows.length > 0) {
-      onProgress?.("生成点表...", 1);
-      xlsxBuf = generatePointExcel(pointTableData);
+    const mapRoot = path.join(projectRoot, projectName, "地图");
+
+    // Step 1: 点表作为独立 zip，内含 Excel 和点位/屏柜关联 extend.json。
+    let pointTableZip: { filePath: string; zipName: string } | null = null;
+    if (includePointTable) {
+      onProgress?.("生成点表包...", 1);
+      const cabinetRegions = collectCabinetRegions(mapRoot, pointTableData.mains);
+      const extendRecords = buildPointExtendRecords(pointTableData.points, pointTableData.mains, cabinetRegions);
+      pointTableZip = await createPointTableZipFile(
+        generatePointExcel(pointTableData),
+        extendRecords,
+        stationName,
+        tempDir,
+      );
+      console.log("[导出点表] extend.json 统计", {
+        points: pointTableData.points.length,
+        databaseCabinets: pointTableData.mains.filter((main) => main.mainDeviceType === MAIN_DEVICE_TYPE_CABINET).length,
+        mappedCabinetRegions: cabinetRegions.length,
+        records: extendRecords.length,
+      });
     }
 
     // Step 2: 每张地图先归档成独立 zip，外层导出包的 地图/ 下只放这些 zip 文件。
     onProgress?.("生成地图包...", 2);
-    const mapRoot = path.join(projectRoot, projectName, "地图");
     const mapZipFiles: { filePath: string; zipName: string }[] = [];
     for (let i = 0; i < mapDirs.length; i++) {
       const dirName = mapDirs[i];
@@ -518,7 +669,7 @@ export async function exportSpaceZip(
     // Step 3: 计算外层导出包需要读取的文件大小。
     onProgress?.("计算文件大小...", 2);
     let totalSize = 0;
-    if (xlsxBuf) totalSize += xlsxBuf.length;
+    if (pointTableZip) totalSize += fs.statSync(pointTableZip.filePath).size;
     for (const item of mapZipFiles) totalSize += fs.statSync(item.filePath).size;
     const totalMB = totalSize / 1024 / 1024;
 
@@ -556,9 +707,8 @@ export async function exportSpaceZip(
     const archive = new ZipArchive({ zlib: { level: 0 } });
     archive.pipe(progressStream).pipe(output);
 
-    // 点表：直接追加内存 buffer，不写磁盘
-    if (xlsxBuf) {
-      archive.append(xlsxBuf, { name: `${stationName}_巡检点位.xlsx` });
+    if (pointTableZip) {
+      archive.file(pointTableZip.filePath, { name: pointTableZip.zipName });
     }
 
     for (const item of mapZipFiles) {

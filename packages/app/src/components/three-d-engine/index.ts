@@ -9,5 +9,13 @@ export {
   type LasCoordinateTransform,
   type Vec3Tuple,
 } from "./coordinate-transform";
+export {
+  ROBOT_PATH_FILE_NAME,
+  ROBOT_STOP_POINT_FILE_NAMES,
+  loadRobotRouteDrawingData,
+  parseLooseJsonText,
+  parseRobotRoutePathData,
+  parseRobotStopPoints,
+} from "./robot-path-data";
 export { electronFileSource, type FileSource } from "./file-source";
 export { useThreeDEngine, useThreeDViewer } from "./useThreeDViewer";

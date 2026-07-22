@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type Key } from "react";
-import { App, Button, Empty, Form, Input, Modal, Spin, Table } from "antd";
+import { App, Button, Empty, Form, Input, Modal, Progress, Spin, Table } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
   robotAreasToDrawingItemsData,
@@ -13,6 +13,22 @@ const AREA_FILE_NAME = "description_file.json";
 const STOP_POINT_FILE_NAMES = ["stop_points.json", "stop_point.json"] as const;
 
 export type SurveyPhotoMode = "normal" | "supplement";
+
+export interface SurveyRunningState {
+  robotId?: number;
+  robotCode?: string;
+  type?: string;
+  taskCode?: string;
+  taskName?: string;
+  progressPercent: number;
+  progressText: string;
+  statusText: string;
+  running: boolean;
+  finished: boolean;
+  failed: boolean;
+  queryFailed?: boolean;
+  errorMessage?: string;
+}
 
 export interface SurveyPhotoDeviceArea {
   bayId: number;
@@ -50,6 +66,7 @@ interface SurveyPhotoModalProps {
   mode?: SurveyPhotoMode;
   projectName?: string | null;
   mapName?: string | null;
+  surveyRunning?: SurveyRunningState | null;
   onClose: () => void;
   onDispatch?: (items: SurveyPhotoDispatchItem[]) => boolean | void | Promise<boolean | void>;
 }
@@ -220,6 +237,7 @@ export default function SurveyPhotoModal({
   mode = "normal",
   projectName,
   mapName,
+  surveyRunning,
   onClose,
   onDispatch,
 }: SurveyPhotoModalProps) {
@@ -364,6 +382,10 @@ export default function SurveyPhotoModal({
   };
 
   const handleDispatch = async () => {
+    if (surveyRunning?.running) {
+      message.warning("勘察任务执行中，请等待结束后再下发");
+      return;
+    }
     if (selectedAreas.length === 0) {
       message.warning(mode === "supplement" ? "请选择停靠点" : "请选择设备区");
       return;
@@ -392,12 +414,31 @@ export default function SurveyPhotoModal({
       footer={
         <div className="survey-photo-modal-footer">
           <Button onClick={handleClose} disabled={submitting}>取消</Button>
-          <Button type="primary" onClick={handleDispatch} loading={submitting} disabled={selectedAreas.length === 0}>
+          <Button type="primary" onClick={handleDispatch} loading={submitting} disabled={selectedAreas.length === 0 || !!surveyRunning?.running}>
             确定
           </Button>
         </div>
       }
     >
+      {surveyRunning && !surveyRunning.queryFailed && (
+        <div className={`survey-photo-progress${surveyRunning.failed ? " is-error" : ""}`}>
+          <div className="survey-photo-progress-head">
+            <span>{surveyRunning.taskName || "勘察任务"}</span>
+            <span>{surveyRunning.statusText}</span>
+          </div>
+          <Progress
+            percent={surveyRunning.progressPercent}
+            size="small"
+            status={surveyRunning.failed ? "exception" : surveyRunning.finished ? "success" : "active"}
+          />
+          {(surveyRunning.taskCode || surveyRunning.errorMessage) && (
+            <div className="survey-photo-progress-meta">
+              {surveyRunning.errorMessage || surveyRunning.taskCode}
+            </div>
+          )}
+        </div>
+      )}
+
       {mode === "supplement" ? (
         <Form form={form} layout="inline" className="survey-photo-filter-form survey-photo-supplement-filter">
           <Form.Item label="设备区" name="deviceAreaName">

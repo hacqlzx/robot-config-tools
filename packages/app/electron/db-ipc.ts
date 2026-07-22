@@ -25,6 +25,10 @@ import {
   migration004Name,
   migration004Up,
   migration004Down,
+  migration005Version,
+  migration005Name,
+  migration005Up,
+  migration005Down,
 } from "@robot/database";
 import type { PointExcelRow, ImportResult } from "@robot/database";
 
@@ -355,6 +359,7 @@ export async function initDbIpc(): Promise<void> {
     { version: migration002Version, name: migration002Name, up: migration002Up, down: migration002Down },
     { version: migration003Version, name: migration003Name, up: migration003Up, down: migration003Down },
     { version: migration004Version, name: migration004Name, up: migration004Up, down: migration004Down },
+    { version: migration005Version, name: migration005Name, up: migration005Up, down: migration005Down },
   ]);
 
   const repos = [
@@ -362,7 +367,7 @@ export async function initDbIpc(): Promise<void> {
     { name: "bay", repo: new DeviceBayRepo(db), methods: ["list", "getById", "findByVoltId", "findByStationId", "create", "update", "delete"] },
     { name: "mainDevice", repo: new DeviceMainRepo(db), methods: ["list", "getById", "findByBayId", "findByStationId", "findByMainDeviceNameAndBayId", "findByMainDeviceCode", "create", "update", "delete", "deleteCascade"] },
     { name: "component", repo: new DeviceComponentRepo(db), methods: ["list", "getById", "findByMainDeviceId", "findByStationId", "create", "update", "delete"] },
-    { name: "point", repo: new DevicePointRepo(db), methods: ["list", "getById", "findByPointCode", "findByCalibrationId", "findByStationId", "findByComponentId", "paginate", "create", "update", "delete"] },
+    { name: "point", repo: new DevicePointRepo(db), methods: ["list", "getById", "findByPointCode", "findByCalibrationId", "bindCalibrationId", "clearCalibrationId", "findByStationId", "findByComponentId", "paginate", "create", "update", "delete"] },
   ];
 
   for (const def of repos) {

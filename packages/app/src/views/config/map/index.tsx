@@ -9,7 +9,8 @@ import {
   setCurrentMap,
   getFacInfo,
 } from "@/api/config.js";
-import { subscribeBackendContext } from "@/stores/appContextStore";
+import { getRequestErrorMessage } from "@/services/http";
+import { getConnectionStatus, subscribeBackendContext } from "@/stores/appContextStore";
 
 interface MapRecord {
   id: number;
@@ -48,8 +49,8 @@ export default function MapConfig() {
       } else {
         message.error(body.message || "获取地图列表失败");
       }
-    } catch {
-      message.error("获取地图列表失败");
+    } catch (error) {
+      message.error(getRequestErrorMessage(error, "获取地图列表失败"));
     } finally {
       setLoading(false);
     }
@@ -77,7 +78,7 @@ export default function MapConfig() {
   };
 
   useEffect(() => {
-    if (!fetchedRef.current) {
+    if (!fetchedRef.current && getConnectionStatus() === "connected") {
       fetchedRef.current = true;
       fetchMaps();
       fetchFacNames();
@@ -88,8 +89,10 @@ export default function MapConfig() {
   // IP 切换时重新加载
   useEffect(() => {
     return subscribeBackendContext(() => {
-      fetchMaps();
-      fetchFacNames();
+      if (getConnectionStatus() === "connected") {
+        fetchMaps();
+        fetchFacNames();
+      }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -104,8 +107,8 @@ export default function MapConfig() {
       } else {
         message.error(body.message || "切换失败");
       }
-    } catch {
-      message.error("切换失败");
+    } catch (error) {
+      message.error(getRequestErrorMessage(error, "切换失败"));
     }
   };
 
@@ -133,8 +136,8 @@ export default function MapConfig() {
       } else {
         message.error(body.message || "修改失败");
       }
-    } catch {
-      message.error("修改失败");
+    } catch (error) {
+      message.error(getRequestErrorMessage(error, "修改失败"));
     }
   };
 
@@ -156,8 +159,8 @@ export default function MapConfig() {
           } else {
             message.error(body.message || "删除失败");
           }
-        } catch {
-          message.error("删除失败");
+        } catch (error) {
+          message.error(getRequestErrorMessage(error, "删除失败"));
         }
       },
     });

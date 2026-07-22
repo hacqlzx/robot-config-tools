@@ -1,4 +1,4 @@
-﻿import { DbWrapper } from "../core/connection";
+﻿import type { DbWrapper } from "../core/connection";
 import { DeviceVoltageRepo } from "../repositories/device-voltage.repo";
 import { DeviceBayRepo } from "../repositories/device-bay.repo";
 import { DeviceMainRepo } from "../repositories/device-main.repo";
@@ -37,6 +37,51 @@ const textValue = (value: unknown): string => String(value ?? "").trim();
 const pathKey = (...parts: unknown[]): string => parts.map(textValue).join("|");
 const hierarchyFields = ["voltName", "bayName", "mainDeviceName", "componentName", "pointName"] as const;
 const hierarchyLabels = ["区域", "间隔", "主设备", "部件", "点位"] as const;
+
+/**
+ * 生成 16 位纯数字巡检 ID：13 位毫秒时间戳 + 3 位同毫秒序号。
+ * 已有 ID 和本批次已分配 ID 共用占用集合。
+ */
+function createCruiseIdAllocator(existingIds: Iterable<string>): {
+  reserve: (value: string) => void;
+  generate: () => string;
+} {
+  const usedIds = new Set(Array.from(existingIds, textValue).filter(Boolean));
+  let lastMillis = 0;
+  let sequence = 999;
+
+  return {
+    reserve(value: string): void {
+      const identifier = textValue(value);
+      if (identifier) usedIds.add(identifier);
+    },
+    generate(): string {
+      while (true) {
+        const now = Date.now();
+        if (now > lastMillis) {
+          lastMillis = now;
+          sequence = 0;
+        } else if (sequence < 999) {
+          sequence += 1;
+        } else {
+          lastMillis += 1;
+          sequence = 0;
+        }
+
+        const millisPart = String(lastMillis).padStart(13, "0");
+        const sequencePart = String(sequence).padStart(3, "0");
+        const identifier = `${millisPart}${sequencePart}`;
+        if (identifier.length !== 16) {
+          throw new Error("无法生成 16 位巡检 ID：系统时间超出支持范围");
+        }
+        if (!usedIds.has(identifier)) {
+          usedIds.add(identifier);
+          return identifier;
+        }
+      }
+    },
+  };
+}
 
 function normalizeRow(row: PointExcelRow): void {
   row.voltName = textValue(row.voltName);
@@ -150,6 +195,7 @@ export function importPointExcel(
   const compRepo = new DeviceComponentRepo(db);
   const pointRepo = new DevicePointRepo(db);
   const psRepo = new ProjectStationRepo(db);
+  const cruiseIdAllocator = createCruiseIdAllocator(pointRepo.listCruiseIds());
 
   voltCodeCache.clear();
   bayCodeCache.clear();
@@ -406,16 +452,16 @@ export function importPointExcel(
         const exist = pointCodeCache.get(pointCacheKey);
         row.pointCode = exist || existingPoint?.pointCode || generateCode("P");
       }
-      if (!row.cruiseId && !existingPoint) {
-        row.cruiseId = generateCode("CRU");
-      }
+      const retainedCruiseId = row.cruiseId || existingPoint?.cruiseId || "";
+      cruiseIdAllocator.reserve(retainedCruiseId);
+      row.cruiseId = retainedCruiseId || cruiseIdAllocator.generate();
       pointCodeCache.set(pointCacheKey, row.pointCode ?? "");
 
       if (existingPoint) {
         pointRepo.update(existingPoint.id, {
           pointName: row.pointName,
           pointCode: row.pointCode ?? "",
-          cruiseId: row.cruiseId || existingPoint.cruiseId,
+          cruiseId: row.cruiseId,
           recognitionTypeList: row.recognitionTypeList ?? existingPoint.recognitionTypeList,
           saveTypeList: row.saveTypeList ?? existingPoint.saveTypeList,
           meterType: row.meterType ?? existingPoint.meterType,

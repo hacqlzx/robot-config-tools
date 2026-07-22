@@ -17,6 +17,7 @@ export { version as migration001Version, name as migration001Name, up as migrati
 export { version as migration002Version, name as migration002Name, up as migration002Up, down as migration002Down } from "./migrations/002_project_station";
 export { version as migration003Version, name as migration003Name, up as migration003Up, down as migration003Down } from "./migrations/003_project_name";
 export { version as migration004Version, name as migration004Name, up as migration004Up, down as migration004Down } from "./migrations/004_point_code_index";
+export { version as migration005Version, name as migration005Name, up as migration005Up, down as migration005Down } from "./migrations/005_calibration_sequence";
 
 // Repository
 export { DeviceVoltageRepo } from "./repositories/device-voltage.repo";
