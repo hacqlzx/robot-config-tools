@@ -22,6 +22,7 @@ interface SpaceEditSceneProps {
   cabinetMode: boolean;
   cabinetCornerCount: number;
   cabinetCount: number;
+  cabinetNameSequence?: { cabinetRowStart: number; cabinetStart: number };
   onCabinetClose: () => void;
   onCabinetSave: (data: CabinetSaveData) => void;
   onCabinetDraftChange?: (data: CabinetSaveData | null) => void;
@@ -71,6 +72,7 @@ export default function SpaceEditScene({
   cabinetMode,
   cabinetCornerCount,
   cabinetCount,
+  cabinetNameSequence,
   onCabinetClose,
   onCabinetSave,
   onCabinetDraftChange,
@@ -114,6 +116,7 @@ export default function SpaceEditScene({
         cabinetMode={cabinetMode}
         cabinetCornerCount={cabinetCornerCount}
         cabinetCount={cabinetCount}
+        cabinetNameSequence={cabinetNameSequence}
         onCabinetClose={onCabinetClose}
         onCabinetSave={onCabinetSave}
         onCabinetDraftChange={onCabinetDraftChange}

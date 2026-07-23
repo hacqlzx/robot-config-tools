@@ -22,6 +22,7 @@ import {
   ROBOT_STOP_POINT_FILE_NAMES,
   electronFileSource,
   loadRobotRouteDrawingData,
+  type RayRenderData,
   useThreeDViewer,
 } from "@/components/three-d-engine";
 import { loadSurveyRayDrawingData } from "./utils/survey-ray-data";
@@ -175,6 +176,9 @@ export default function ImageEdit() {
   const surveyDirRef = useRef<string>("");
   const loadedMapRef = useRef<string | null>(null);
   const loadedModelPathRef = useRef<string>("");
+  const loadedStopPointFilePathRef = useRef<string>("");
+  const surveyRayDataRef = useRef<RayRenderData | null>(null);
+  const visibleRayIdRef = useRef("");
 
   // 加载已标定的图片 ID 集合 + 已标定点位编码集合
   const refreshCalibratedRects = useCallback(async (mapName?: string | null) => {
@@ -290,6 +294,9 @@ export default function ImageEdit() {
     drawingRef.current?.clear();
     loadedMapRef.current = null;
     loadedModelPathRef.current = "";
+    loadedStopPointFilePathRef.current = "";
+    surveyRayDataRef.current = null;
+    visibleRayIdRef.current = "";
     setLoadedMap(null);
     surveyDirRef.current = "";
     clearTask();
@@ -334,11 +341,15 @@ export default function ImageEdit() {
         message.warning("未找到 LAS 点云文件");
         loadedMapRef.current = mapName;
         loadedModelPathRef.current = "";
+        loadedStopPointFilePathRef.current = "";
+        surveyRayDataRef.current = null;
+        visibleRayIdRef.current = "";
         setLoadedMap(mapName);
         return;
       }
 
       const primaryModelPath = lasFiles.find((filePath) => /[\\/]map\.(las|laz)$/i.test(filePath)) || lasFiles[0];
+      loadedStopPointFilePathRef.current = stopPointFile;
       // 加载 LAS
       for (let i = 0; i < lasFiles.length; i++) {
         await loadFile(lasFiles[i]);
@@ -382,6 +393,8 @@ export default function ImageEdit() {
     try {
       clearTask();
       drawingRef.current?.clearRays();
+      surveyRayDataRef.current = null;
+      visibleRayIdRef.current = "";
       setTaskImages([]);
       const result = await loadTask(taskDir);
       surveyDirRef.current = result.surveyDir;
@@ -391,9 +404,11 @@ export default function ImageEdit() {
             fileSource: electronFileSource,
             deviceDir: result.deviceDir,
             modelPath: loadedModelPathRef.current,
+            stopPointFilePath: loadedStopPointFilePathRef.current || undefined,
           });
-          if (rayData) loadDrawingData(rayData);
+          surveyRayDataRef.current = rayData;
         } catch (rayError) {
+          surveyRayDataRef.current = null;
           console.error("[handleTaskLoad] 射线加载失败:", rayError);
         }
       }
@@ -408,6 +423,22 @@ export default function ImageEdit() {
       message.error("加载任务数据失败: " + (e?.message || ""));
     }
   }, [loadTask, clearTask, setSide, ptzSide, message, refreshCalibratedRects, loadDrawingData, drawingRef]);
+
+  const handleTaskImageHover = useCallback((item: ImageItem | null) => {
+    const rayId = item ? `${item.spId}:${item.visName}` : "";
+    if (visibleRayIdRef.current === rayId) return;
+    visibleRayIdRef.current = rayId;
+    if (!rayId) {
+      drawingRef.current?.clearRays();
+      return;
+    }
+    const ray = surveyRayDataRef.current?.rays.find((candidate) => String(candidate.id) === rayId);
+    if (!ray) {
+      drawingRef.current?.clearRays();
+      return;
+    }
+    loadDrawingData({ rays: [ray] });
+  }, [loadDrawingData]);
 
   // ptzSide 切换时重新计算布局
   useEffect(() => {
@@ -784,6 +815,7 @@ export default function ImageEdit() {
                 calibrationRects={calibrationRects}
                 resetViewRef={resetViewRef}
                 onImageDoubleClick={handleImageDoubleClick}
+                onImageHover={handleTaskImageHover}
               />
               {taskLoading && (
                 <div className="map-loading-overlay">

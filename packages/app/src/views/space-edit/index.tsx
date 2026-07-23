@@ -21,7 +21,8 @@ import { useResizable } from "@/components/useResizable";
 import ExportModal from "./components/ExportModal";
 import SpaceEditLayout from "./components/SpaceEditLayout";
 import SpaceEditScene from "./components/SpaceEditScene";
-import type { CabinetItem } from "./hooks/drawing/drawing-storage";
+import { loadCabinetNameSequence, type CabinetItem } from "./hooks/drawing/drawing-storage";
+import { getCurrentModelPathFromRefs } from "./utils/model-state";
 import type { ModelCenter, ModelPointStats, SaveStatus, ViewDirection } from "./types";
 
 interface CabinetSaveData {
@@ -53,6 +54,7 @@ export default function SpaceEdit() {
   const [clipEntityName, setClipEntityName] = useState("");
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  const [cabinetNameSequence, setCabinetNameSequence] = useState({ cabinetRowStart: 1, cabinetStart: 1 });
   const entitiesRef = useRef<Map<string, pc.Entity>>(new Map());
   const { width: panelWidth, resizing, onMouseDown: onResizeStart } = useResizable({
     containerRef: useRef(null),
@@ -127,6 +129,23 @@ export default function SpaceEdit() {
   });
 
   const refreshTree = useCallback(() => setTreeKey((k) => k + 1), []);
+  const refreshCabinetNameSequence = useCallback(async () => {
+    const api = window.electronAPI;
+    const modelPath = getCurrentModelPathFromRefs(entitiesRef.current, filePathRef.current);
+    if (!api || !modelPath) {
+      setCabinetNameSequence({ cabinetRowStart: 1, cabinetStart: 1 });
+      return;
+    }
+    try {
+      setCabinetNameSequence(await loadCabinetNameSequence(api, modelPath));
+    } catch {
+      setCabinetNameSequence({ cabinetRowStart: 1, cabinetStart: 1 });
+    }
+  }, []);
+  const toggleCabinetWithNameSequence = useCallback(async () => {
+    if (!cabinetMode) await refreshCabinetNameSequence();
+    toggleCabinetExclusive();
+  }, [cabinetMode, refreshCabinetNameSequence, toggleCabinetExclusive]);
   const handleCabinetDraftChange = useCallback((data: CabinetSaveData | null) => {
     cabinetDraftRef.current = data;
   }, []);
@@ -348,7 +367,7 @@ export default function SpaceEdit() {
         <Toolbar
           onFileSelect={handleFileSelectWithHistoryReset}
           onClipModel={handleClipModel}
-          cabinetMode={cabinetMode} onToggleCabinet={toggleCabinetExclusive}
+          cabinetMode={cabinetMode} onToggleCabinet={toggleCabinetWithNameSequence}
           chargingMode={chargingMode} onToggleCharging={toggleChargingExclusive}
           deviceAreaMode={deviceAreaMode} onToggleDeviceArea={toggleDeviceAreaExclusive}
           pathMode={pathMode} onTogglePath={togglePathExclusive}
@@ -385,6 +404,7 @@ export default function SpaceEdit() {
           cabinetMode={cabinetMode}
           cabinetCornerCount={cornerCount}
           cabinetCount={cabinetCount}
+          cabinetNameSequence={cabinetNameSequence}
           onCabinetClose={handleToggleCabinet}
           onCabinetSave={handleSaveCabinet}
           onCabinetDraftChange={handleCabinetDraftChange}

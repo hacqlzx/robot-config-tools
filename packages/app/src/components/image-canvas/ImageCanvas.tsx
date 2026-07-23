@@ -23,6 +23,7 @@ interface Props {
   images: ImageItem[];
   visible?: boolean;
   onImageDoubleClick?: (item: ImageItem) => void | Promise<void>;
+  onImageHover?: (item: ImageItem | null) => void;
   calibrationRects?: Map<number, { x: number; y: number; w: number; h: number }[]>;
   resetViewRef?: React.MutableRefObject<(() => void) | null>;
 }
@@ -44,7 +45,7 @@ const CALIBRATION_BOX_WIDTH = 4;
 const CALIBRATION_BOX_HALO_WIDTH = 7;
 
 /** 图片画布：缩放/平移，rAF 驱动渲染，懒加载缩略图缓存，视口裁剪 */
-export default function ImageCanvas({ canvasRef, containerRef, images, visible = true, onImageDoubleClick, calibrationRects, resetViewRef }: Props) {
+export default function ImageCanvas({ canvasRef, containerRef, images, visible = true, onImageDoubleClick, onImageHover, calibrationRects, resetViewRef }: Props) {
   const [displayScale, setDisplayScale] = useState(1);
   const [, setCacheVersion] = useState(0);
   const panRef = useRef({ x: 0, y: 0 });
@@ -61,8 +62,39 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
   const loadQueueRef = useRef<ImageItem[]>([]);
   const activeLoadsRef = useRef(0);
   const generationRef = useRef(0);
+  const hoverImageRef = useRef<ImageItem | null>(null);
+  const onImageHoverRef = useRef(onImageHover);
+  onImageHoverRef.current = onImageHover;
 
   const imageKey = (item: ImageItem) => item.imagePath || String(item.id);
+
+  const imageIdentity = (item: ImageItem | null) => item ? `${item.id}:${item.imagePath || item.visName}` : "";
+
+  const emitImageHover = useCallback((item: ImageItem | null) => {
+    if (imageIdentity(hoverImageRef.current) === imageIdentity(item)) return;
+    hoverImageRef.current = item;
+    onImageHoverRef.current?.(item);
+  }, []);
+
+  const hitTestImage = useCallback((clientX: number, clientY: number): ImageItem | null => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const mx = clientX - rect.left;
+    const my = clientY - rect.top;
+    const s = scaleRef.current;
+    const p = panRef.current;
+    const worldX = (mx - p.x) / s;
+    const worldY = (my - p.y) / s;
+    const imgs = imagesRef.current;
+    for (let i = imgs.length - 1; i >= 0; i--) {
+      const item = imgs[i];
+      if (worldX >= item.x && worldX <= item.x + item.w && worldY >= item.y && worldY <= item.y + item.h) {
+        return item;
+      }
+    }
+    return null;
+  }, [canvasRef]);
 
   const drawColumnHeader = (
     ctx: CanvasRenderingContext2D,
@@ -179,6 +211,7 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
   useEffect(() => {
     generationRef.current++;
     loadQueueRef.current = [];
+    emitImageHover(null);
 
     const currentKeys = new Set(images.map(imageKey));
     for (const [key] of thumbCacheRef.current) {
@@ -187,7 +220,7 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
       }
     }
     scheduleDraw();
-  }, [images, scheduleDraw]);
+  }, [images, scheduleDraw, emitImageHover]);
 
   useEffect(() => {
     scheduleDraw();
@@ -418,17 +451,25 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
 
   // 拖拽：只更新 ref + 调度绘制，不经过 React state
   const onMouseDown = (e: React.MouseEvent) => {
+    emitImageHover(null);
     dragRef.current = { mx: e.clientX, my: e.clientY, sx: panRef.current.x, sy: panRef.current.y };
   };
   const onMouseMove = (e: React.MouseEvent) => {
-    if (!dragRef.current) return;
-    panRef.current = {
-      x: dragRef.current.sx + e.clientX - dragRef.current.mx,
-      y: dragRef.current.sy + e.clientY - dragRef.current.my,
-    };
-    scheduleDraw();
+    if (dragRef.current) {
+      panRef.current = {
+        x: dragRef.current.sx + e.clientX - dragRef.current.mx,
+        y: dragRef.current.sy + e.clientY - dragRef.current.my,
+      };
+      scheduleDraw();
+      return;
+    }
+    emitImageHover(hitTestImage(e.clientX, e.clientY));
   };
   const onMouseUp = () => { dragRef.current = null; };
+  const onMouseLeave = () => {
+    onMouseUp();
+    emitImageHover(null);
+  };
 
   return (
     <div ref={containerRef} style={{ display: visible ? "flex" : "none", flex: 1, position: "relative", overflow: "hidden", cursor: dragRef.current ? "grabbing" : "grab" }}>
@@ -438,7 +479,7 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}
-        onMouseLeave={onMouseUp}
+        onMouseLeave={onMouseLeave}
       />
     </div>
   );

@@ -8,6 +8,8 @@ interface Props {
   cornerCount: number;
   /** 当前屏柜数量（成体后 = 分隔数 + 1，未成体为 0） */
   cabinetCount: number;
+  /** 当前地图内新增柜排、屏柜的默认名称起始序号 */
+  nameSequence?: { cabinetRowStart: number; cabinetStart: number };
   /** 关闭绘制屏柜 */
   onClose: () => void;
   /** 保存：传出当前面板数据 */
@@ -40,11 +42,15 @@ function gen18(): string {
 }
 
 /** 绘制屏柜操作小窗（可拖动，提示 + 区域/间隔选择 + 屏柜表格） */
-export default function CabinetPanel({ cornerCount, cabinetCount, onClose, onSave, onDraftChange, onNamesChange }: Props) {
+export default function CabinetPanel({ cornerCount, cabinetCount, nameSequence, onClose, onSave, onDraftChange, onNamesChange }: Props) {
   const projectName = useSelectedProject();
+  const cabinetRowNameStart = nameSequence?.cabinetRowStart ?? 1;
+  const cabinetNameStart = nameSequence?.cabinetStart ?? 1;
   // 相对初始右上角（right:16, top:16）的拖动位移
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
+  const editedRowNameKeysRef = useRef<Set<string>>(new Set());
+  const cabinetRowNameEditedRef = useRef(false);
 
   // 区域（电压）/ 间隔数据
   const [voltList, setVoltList] = useState<any[]>([]);
@@ -73,7 +79,7 @@ export default function CabinetPanel({ cornerCount, cabinetCount, onClose, onSav
 
   // 屏柜表格：行数跟随屏柜数量增减，保留已编辑的值
   const [rows, setRows] = useState<CabinetRow[]>([]);
-  const [cabinetRow, setCabinetRow] = useState<CabinetRow>(() => ({ key: gen18(), code: gen18(), name: "柜排1" }));
+  const [cabinetRow, setCabinetRow] = useState<CabinetRow>(() => ({ key: gen18(), code: gen18(), name: `柜排${cabinetRowNameStart}` }));
   const isSplit = cabinetCount > 1;
 
   useEffect(() => {
@@ -82,17 +88,35 @@ export default function CabinetPanel({ cornerCount, cabinetCount, onClose, onSav
       if (cabinetCount < prev.length) return prev.slice(0, cabinetCount);
       const next = [...prev];
       for (let i = prev.length; i < cabinetCount; i++) {
-        next.push({ key: gen18(), code: gen18(), name: `屏柜${i + 1}` });
+        next.push({ key: gen18(), code: gen18(), name: `屏柜${cabinetNameStart + i}` });
       }
       return next;
     });
-  }, [cabinetCount]);
+  }, [cabinetCount, cabinetNameStart]);
+
+  useEffect(() => {
+    if (cabinetRowNameEditedRef.current) return;
+    setCabinetRow((prev) => ({ ...prev, name: `柜排${cabinetRowNameStart}` }));
+  }, [cabinetRowNameStart]);
+
+  useEffect(() => {
+    setRows((prev) => prev.map((row, index) =>
+      editedRowNameKeysRef.current.has(row.key)
+        ? row
+        : { ...row, name: `屏柜${cabinetNameStart + index}` }
+    ));
+  }, [cabinetNameStart]);
 
   const updateRow = useCallback((idx: number, field: "code" | "name", val: string) => {
+    if (field === "name") {
+      const key = rows[idx]?.key;
+      if (key) editedRowNameKeysRef.current.add(key);
+    }
     setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, [field]: val } : r)));
-  }, []);
+  }, [rows]);
 
   const updateCabinetRow = useCallback((field: "code" | "name", val: string) => {
+    if (field === "name") cabinetRowNameEditedRef.current = true;
     setCabinetRow((prev) => ({ ...prev, [field]: val }));
   }, []);
 

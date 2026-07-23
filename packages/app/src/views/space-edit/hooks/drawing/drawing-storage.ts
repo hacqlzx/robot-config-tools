@@ -223,6 +223,21 @@ export async function loadCabinetItems(api: ElectronAPI, modelPath: string): Pro
     .filter((it): it is CabinetItem => it.type === "cabinet");
 }
 
+export async function loadCabinetNameSequence(api: ElectronAPI, modelPath: string): Promise<{ cabinetRowStart: number; cabinetStart: number }> {
+  const records = await readAreaRecords(api, modelPath);
+  let cabinetRowCount = 0;
+  let cabinetCount = 0;
+  for (const record of records) {
+    const type = areaType(record);
+    if (type === AREA_TYPE_CABINET_ROW) cabinetRowCount += 1;
+    if (type === AREA_TYPE_CABINET) cabinetCount += 1;
+  }
+  return {
+    cabinetRowStart: cabinetRowCount + 1,
+    cabinetStart: cabinetCount + 1,
+  };
+}
+
 /**
  * 保存充电区域：读取旧记录后只替换 type=4。
  * 传入 null 表示删除充电区；重新绘制时沿用旧 id/name，减少外部系统看到的无意义变更。

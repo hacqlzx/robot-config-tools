@@ -13,6 +13,7 @@ interface DrawingEditPanelsProps {
   cabinetMode: boolean;
   cabinetCornerCount: number;
   cabinetCount: number;
+  cabinetNameSequence?: { cabinetRowStart: number; cabinetStart: number };
   onCabinetClose: () => void;
   onCabinetSave: (data: CabinetSaveData) => void;
   onCabinetDraftChange?: (data: CabinetSaveData | null) => void;
@@ -48,6 +49,7 @@ export default function DrawingEditPanels({
   cabinetMode,
   cabinetCornerCount,
   cabinetCount,
+  cabinetNameSequence,
   onCabinetClose,
   onCabinetSave,
   onCabinetDraftChange,
@@ -76,6 +78,7 @@ export default function DrawingEditPanels({
         <CabinetPanel
           cornerCount={cabinetCornerCount}
           cabinetCount={cabinetCount}
+          nameSequence={cabinetNameSequence}
           onClose={onCabinetClose}
           onSave={onCabinetSave}
           onDraftChange={onCabinetDraftChange}

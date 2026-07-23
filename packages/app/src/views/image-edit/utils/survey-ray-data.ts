@@ -13,7 +13,15 @@ interface LoadSurveyRayDrawingDataOptions {
   fileSource: FileSource;
   deviceDir: string;
   modelPath: string;
+  stopPointFilePath?: string;
   rayLength?: number;
+}
+
+interface StopPointPose {
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
 }
 
 function pathJoin(base: string, child: string): string {
@@ -27,6 +35,33 @@ async function readJson<T>(fileSource: FileSource, filePath: string): Promise<T>
 
 function finiteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function valueText(value: unknown): string {
+  return value == null ? "" : String(value).trim();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeRecordArray(data: unknown, keys: string[] = []): Record<string, unknown>[] {
+  if (Array.isArray(data)) return data.filter(isRecord);
+  if (!isRecord(data)) return [];
+  for (const key of keys) {
+    const value = data[key];
+    if (Array.isArray(value)) return value.filter(isRecord);
+  }
+  return [];
+}
+
+function parseLooseJsonText(text: string): unknown {
+  return JSON.parse(text.replace(/,\s*([}\]])/g, "$1"));
 }
 
 function degreesToRadians(value: number): number {
@@ -51,9 +86,32 @@ function normalizeDirection(direction: [number, number, number]): [number, numbe
   return [direction[0] / len, direction[1] / len, direction[2] / len];
 }
 
+function parseStopPointPose(record: Record<string, unknown>): { id: string; pose: StopPointPose } | null {
+  const id = valueText(record.id);
+  const x = asFiniteNumber(record.pose_x);
+  const y = asFiniteNumber(record.pose_y);
+  const z = asFiniteNumber(record.pose_z) ?? 0;
+  const yaw = asFiniteNumber(record.pose_yaw) ?? 0;
+  if (!id || x == null || y == null) return null;
+  return { id, pose: { x, y, z, yaw } };
+}
+
+async function loadStopPointPoseMap(fileSource: FileSource, stopPointFilePath?: string): Promise<Map<string, StopPointPose>> {
+  const result = new Map<string, StopPointPose>();
+  if (!stopPointFilePath) return result;
+  const buf = await fileSource.readAll(stopPointFilePath);
+  const data = parseLooseJsonText(new TextDecoder("utf-8").decode(buf));
+  const records = normalizeRecordArray(data, ["stop_points", "stopPoints", "items", "data"]);
+  for (const record of records) {
+    const parsed = parseStopPointPose(record);
+    if (parsed) result.set(parsed.id, parsed.pose);
+  }
+  return result;
+}
+
 function buildRay(
   spId: number,
-  pose: TaskSPPose | undefined,
+  pose: TaskSPPose | StopPointPose | undefined,
   imageKey: string,
   image: TaskImageConfig,
   options: { length: number; name?: string },
@@ -76,7 +134,7 @@ function buildRay(
   if (!direction) return null;
 
   return {
-    id: `${spId}:${imageKey}`,
+    id: `${spId}:${image.vis_name || imageKey}`,
     name: options.name,
     origin: [x, y, z + height],
     direction,
@@ -92,16 +150,22 @@ export async function loadSurveyRayDrawingData({
   fileSource,
   deviceDir,
   modelPath,
+  stopPointFilePath,
   rayLength = DEFAULT_SURVEY_RAY_LENGTH,
 }: LoadSurveyRayDrawingDataOptions): Promise<RayRenderData | null> {
-  const manifest = await readJson<TaskManifest>(fileSource, pathJoin(deviceDir, "json_list.json"));
+  const [manifest, stopPointPoses] = await Promise.all([
+    readJson<TaskManifest>(fileSource, pathJoin(deviceDir, "json_list.json")),
+    loadStopPointPoseMap(fileSource, stopPointFilePath).catch((e) => {
+      console.warn("[SurveyRayData] 停靠点坐标读取失败，回退使用任务 sp_pose:", e);
+      return new Map<string, StopPointPose>();
+    }),
+  ]);
   const fileNames = Array.isArray(manifest.file_names)
     ? manifest.file_names.filter((name): name is string => typeof name === "string" && name.trim().length > 0)
     : [];
   if (fileNames.length === 0) return null;
 
   const rays: RayRenderItem[] = [];
-  const labeledStopPoints = new Set<string>();
 
   for (let i = 0; i < fileNames.length; i++) {
     const fileName = fileNames[i];
@@ -111,6 +175,11 @@ export async function loadSurveyRayDrawingData({
     try {
       const spConfig = await readJson<TaskSPConfig>(fileSource, pathJoin(pathJoin(deviceDir, String(stopPointId)), fileName));
       const spId = finiteNumber(spConfig.sp_id) ? spConfig.sp_id : stopPointId;
+      const cpId = Math.abs(Number(spConfig.cp_id));
+      const stopPointPose = stopPointPoses.get(String(spId))
+        ?? stopPointPoses.get(String(stopPointId))
+        ?? (Number.isFinite(cpId) && cpId > 0 ? stopPointPoses.get(String(cpId)) : undefined);
+      const basePose = stopPointPose ?? spConfig.sp_pose;
       const images = Object.entries(spConfig.images || {}).sort(([keyA, a], [keyB, b]) => {
         const locA = Array.isArray(a.pic_loc) ? a.pic_loc : [0, 0];
         const locB = Array.isArray(b.pic_loc) ? b.pic_loc : [0, 0];
@@ -118,10 +187,8 @@ export async function loadSurveyRayDrawingData({
       });
 
       for (const [imageKey, image] of images) {
-        const labelKey = `${spId}:${image.pic_loc_flag}`;
-        const name = labeledStopPoints.has(labelKey) ? undefined : `SP${spId} ${sideLabel(image.pic_loc_flag)}`;
-        labeledStopPoints.add(labelKey);
-        const ray = buildRay(spId, spConfig.sp_pose, imageKey, image, { length: rayLength, name });
+        const name = `SP${spId} ${sideLabel(image.pic_loc_flag)}`;
+        const ray = buildRay(spId, basePose, imageKey, image, { length: rayLength, name });
         if (ray) rays.push(ray);
       }
     } catch (e) {
