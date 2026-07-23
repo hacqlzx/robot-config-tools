@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { Modal } from "antd";
 import * as pc from "playcanvas";
 import { parsePointExcel } from "@/utils/excel-parser";
 import { useSelectedProject } from "@/stores/appContextStore";
@@ -23,6 +24,20 @@ interface UseFileOperationsParams {
   message: SpaceMessageApi;
 }
 
+function confirmReplaceModel(plan: { mapCode: string; mapName: string; existingMapName?: string }): Promise<boolean> {
+  return new Promise((resolve) => {
+    Modal.confirm({
+      title: "确认替换空间模型",
+      content: `检测到地图编码 ${plan.mapCode || "未填写"} 已存在，将全量替换地图“${plan.existingMapName || plan.mapName}”。是否继续？`,
+      okText: "替换",
+      cancelText: "取消",
+      okButtonProps: { danger: true },
+      onOk: () => resolve(true),
+      onCancel: () => resolve(false),
+    });
+  });
+}
+
 export function useFileOperations(params: UseFileOperationsParams) {
   const selectedProject = useSelectedProject();
   const { entitiesRef, lasHeadersRef, filePathRef, pointStatsRef, modelGroundYRef, hasAutoFocusedRef,
@@ -32,13 +47,34 @@ export function useFileOperations(params: UseFileOperationsParams) {
   // 主进程返回的路径可能含 Windows 反斜杠；比较路径时统一成小写正斜杠。
   const normalizePath = (value: string) => value.replace(/\\/g, "/").toLowerCase();
 
+  const clearLoadedModels = useCallback(() => {
+    entitiesRef.current.forEach((ent) => ent.destroy());
+    entitiesRef.current.clear();
+    lasHeadersRef.current.clear();
+    filePathRef.current.clear();
+    pointStatsRef.current.clear();
+    setLoadedFiles(new Set());
+    modelGroundYRef.current = -Infinity;
+    hasAutoFocusedRef.current = false;
+    requestRender();
+  }, [
+    entitiesRef,
+    filePathRef,
+    hasAutoFocusedRef,
+    lasHeadersRef,
+    modelGroundYRef,
+    pointStatsRef,
+    requestRender,
+    setLoadedFiles,
+  ]);
+
   /** 从路径加载模型 */
   const handleLoadLasFromPath = useCallback(async (filePath: string) => {
     // 切换模型前关闭所有绘制模式，避免新旧模型点云坐标混用。
     closeAllDrawingModes();
-    hasAutoFocusedRef.current = false;
+    clearLoadedModels();
     await loadLasFromPath(filePath);
-  }, [closeAllDrawingModes, loadLasFromPath, hasAutoFocusedRef]);
+  }, [clearLoadedModels, closeAllDrawingModes, loadLasFromPath]);
 
   /** 点表 Excel 导入 */
   const handleImportPointTable = useCallback(async (file: File) => {
@@ -102,35 +138,35 @@ export function useFileOperations(params: UseFileOperationsParams) {
       return;
     }
 
-    closeAllDrawingModes();
-    // 导入新模型等价于切换当前地图：清空旧 GPU 实体和 loader 侧索引，避免可见性树误操作旧实体。
-    entitiesRef.current.forEach((ent) => ent.destroy());
-    entitiesRef.current.clear();
-    lasHeadersRef.current.clear();
-    filePathRef.current.clear();
-    pointStatsRef.current.clear();
-    setLoadedFiles(new Set());
-    modelGroundYRef.current = -Infinity;
-    hasAutoFocusedRef.current = false;
-
     try {
       const sourcePath = window.electronAPI.getFilePath(file);
       if (!sourcePath) throw new Error("无法读取源文件路径");
       let targetPath = "";
+      let replaced = false;
       if (isZip) {
+        const plan = await window.electronAPI.project.inspectModelZipImport(selectedProject, sourcePath);
+        if (plan.willReplace) {
+          const confirmed = await confirmReplaceModel(plan);
+          if (!confirmed) return;
+          replaced = true;
+        }
         const result = await window.electronAPI.project.importModelZip(selectedProject, sourcePath);
         targetPath = result.modelPath;
       } else {
         const baseName = stripModelExtension(file.name);
         targetPath = await window.electronAPI.project.importFile(selectedProject, sourcePath, baseName);
       }
+
+      closeAllDrawingModes();
+      // 导入新模型等价于切换当前地图：清空旧 GPU 实体和 loader 侧索引，避免可见性树误操作旧实体。
+      clearLoadedModels();
       await loadLasFromPath(targetPath);
       setTreeKey((k) => k + 1);
-      message.success(isZip ? "空间模型包导入成功" : "模型导入成功");
+      message.success(isZip ? (replaced ? "空间模型包替换成功" : "空间模型包导入成功") : "模型导入成功");
     } catch (err: any) {
       message.error("模型导入失败: " + (err?.message || err));
     }
-  }, [closeAllDrawingModes, entitiesRef, lasHeadersRef, filePathRef, pointStatsRef, setLoadedFiles, modelGroundYRef, hasAutoFocusedRef, loadLasFromPath, setTreeKey, message, selectedProject]);
+  }, [clearLoadedModels, closeAllDrawingModes, loadLasFromPath, setTreeKey, message, selectedProject]);
 
   /** 仅卸载指定路径对应的模型；删除文件前使用，避免误触发加载 */
   const handleUnloadModelFromPath = useCallback((filePath: string) => {
@@ -163,8 +199,9 @@ export function useFileOperations(params: UseFileOperationsParams) {
     // 已加载则卸载，未加载则加载。树节点勾选状态由 loadedFiles/实体集合间接反映。
     if (handleUnloadModelFromPath(filePath)) return;
     closeAllDrawingModes();
+    clearLoadedModels();
     loadLasFromPath(filePath);
-  }, [handleUnloadModelFromPath, loadLasFromPath, closeAllDrawingModes]);
+  }, [clearLoadedModels, handleUnloadModelFromPath, loadLasFromPath, closeAllDrawingModes]);
 
   /** 裁切模型 */
   const handleClipModel = useCallback(() => {

@@ -100,6 +100,7 @@ export default function SpaceEdit() {
   });
   drawingHistoryRecordRef.current = drawingHistory.record;
   const projectBoundBayIds = useProjectBoundBayIds(deviceAreaMode);
+  const currentModelPath = getCurrentModelPathFromRefs(entitiesRef.current, filePathRef.current);
 
   // ---- PlayCanvas 引擎 ----
   // usePlayCanvas 是 space-edit 的三维装配点：公共 ThreeDEngine + 四类编辑 Drawing + CabinetViewer。
@@ -261,9 +262,10 @@ export default function SpaceEdit() {
   });
   const handleLoadLasFromPathWithHistoryReset = useCallback(async (filePath: string) => {
     drawingHistory.clear();
+    clearMapDrawingVisibility();
     clearDrawingDrafts();
     await handleLoadLasFromPath(filePath);
-  }, [clearDrawingDrafts, drawingHistory.clear, handleLoadLasFromPath]);
+  }, [clearDrawingDrafts, clearMapDrawingVisibility, drawingHistory.clear, handleLoadLasFromPath]);
   const handleFileSelectWithHistoryReset = useCallback(async (file: File) => {
     drawingHistory.clear();
     clearMapDrawingVisibility();
@@ -272,14 +274,16 @@ export default function SpaceEdit() {
   }, [clearDrawingDrafts, clearMapDrawingVisibility, drawingHistory.clear, handleFileSelect]);
   const handleToggleVisibleWithHistoryReset = useCallback((filePath: string) => {
     drawingHistory.clear();
+    clearMapDrawingVisibility();
     clearDrawingDrafts();
     handleToggleVisible(filePath);
-  }, [clearDrawingDrafts, drawingHistory.clear, handleToggleVisible]);
+  }, [clearDrawingDrafts, clearMapDrawingVisibility, drawingHistory.clear, handleToggleVisible]);
   const handleUnloadModelFromPathWithHistoryReset = useCallback((filePath: string) => {
     drawingHistory.clear();
+    clearMapDrawingVisibility();
     clearDrawingDrafts();
     return handleUnloadModelFromPath(filePath);
-  }, [clearDrawingDrafts, drawingHistory.clear, handleUnloadModelFromPath]);
+  }, [clearDrawingDrafts, clearMapDrawingVisibility, drawingHistory.clear, handleUnloadModelFromPath]);
   const handleToggleDrawingWithHistoryReset = useCallback((jsonPath: string, checked: boolean) => {
     drawingHistory.clear();
     return handleToggleDrawing(jsonPath, checked);
@@ -437,7 +441,7 @@ export default function SpaceEdit() {
         />
       )}
       importing={importing}
-      exportModal={<ExportModal open={exportModalOpen} onClose={() => setExportModalOpen(false)} />}
+      exportModal={<ExportModal open={exportModalOpen} onClose={() => setExportModalOpen(false)} modelPath={currentModelPath} />}
     />
   );
 }

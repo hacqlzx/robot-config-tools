@@ -1,7 +1,6 @@
 import * as XLSX from "xlsx-js-style";
 import type { DeviceBay, DeviceComponent, DeviceMain, DevicePoint, DeviceVoltage } from "@robot/database";
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import { ZipArchive } from "archiver";
 import { Transform } from "stream";
@@ -434,7 +433,7 @@ function collectCabinetRegions(mapRoot: string, mains: DeviceMain[]): CabinetReg
     for (const value of parsed) {
       if (!isRecord(value)) continue;
       const type = areaType(value);
-      if (type !== AREA_TYPE_CABINET_ROW && type !== AREA_TYPE_CABINET) continue;
+      if (type !== AREA_TYPE_CABINET) continue;
       const mainDeviceCode = textValue(value.code) || textValue(findMainForArea(value, mainLookup)?.mainDeviceCode);
       const regionId = textValue(value.id);
       if (!mainDeviceCode && !regionId) continue;
@@ -547,56 +546,6 @@ function appendMapContents(archive: ZipArchive, src: string, mapName: string, da
   archive.append(buildMapInfo(mapName, mapInfoText), { name: MAP_INFO_FILE_NAME });
 }
 
-function mapPackageName(projectName: string, timeStr: string, index: number): string {
-  const base = `${projectName}_地图_${timeStr}`;
-  return index === 0 ? base : `${base}_${index + 1}`;
-}
-
-async function createMapZipFile(src: string, mapName: string, tempDir: string, data: PointTableExportData): Promise<string> {
-  const zipPath = path.join(tempDir, `${mapName}.zip`);
-  const output = fs.createWriteStream(zipPath);
-  const archive = new ZipArchive({ zlib: { level: 0 } });
-  archive.pipe(output);
-  appendMapContents(archive, src, mapName, data);
-
-  await Promise.all([
-    archive.finalize(),
-    new Promise<void>((resolve, reject) => {
-      output.on("close", resolve);
-      output.on("error", reject);
-      (archive as any).on("error", reject);
-    }),
-  ]);
-
-  return zipPath;
-}
-
-async function createPointTableZipFile(
-  xlsxBuf: Buffer,
-  extendRecords: PointExtendRecord[],
-  stationName: string,
-  tempDir: string,
-): Promise<{ filePath: string; zipName: string }> {
-  const zipName = `${stationName}_巡检点位.zip`;
-  const zipPath = path.join(tempDir, "point-table.zip");
-  const output = fs.createWriteStream(zipPath);
-  const archive = new ZipArchive({ zlib: { level: 0 } });
-  archive.pipe(output);
-  archive.append(xlsxBuf, { name: `${stationName}_巡检点位.xlsx` });
-  archive.append(`${JSON.stringify(extendRecords, null, 2)}\n`, { name: "extend.json" });
-
-  await Promise.all([
-    archive.finalize(),
-    new Promise<void>((resolve, reject) => {
-      output.on("close", resolve);
-      output.on("error", reject);
-      (archive as any).on("error", reject);
-    }),
-  ]);
-
-  return { filePath: zipPath, zipName };
-}
-
 export interface ExportZipResult {
   zipPath: string;
   zipName: string;
@@ -610,7 +559,6 @@ export async function exportSpaceZip(
   projectRoot: string,
   pointTableData: PointTableExportData,
   mapDirs: string[],
-  includePointTable: boolean,
   destDir: string,
   onProgress?: ProgressCallback,
 ): Promise<ExportZipResult> {
@@ -624,105 +572,85 @@ export async function exportSpaceZip(
     voltages: pointTableData.voltages.length,
     exportRows: pointRows.length,
   });
-  const mapNames = mapDirs.join("_");
+  if (mapDirs.length !== 1) {
+    throw new Error("请先在左侧地图树加载一个模型后再导出");
+  }
+
+  const mapName = mapDirs[0];
   const now = new Date();
   const timeStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
-  const zipName = `${stationName}_${mapNames}_${timeStr}`;
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "robot-map-export-"));
-
-  try {
-    const mapRoot = path.join(projectRoot, projectName, "地图");
-
-    // Step 1: 点表作为独立 zip，内含 Excel 和点位/屏柜关联 extend.json。
-    let pointTableZip: { filePath: string; zipName: string } | null = null;
-    if (includePointTable) {
-      onProgress?.("生成点表包...", 1);
-      const cabinetRegions = collectCabinetRegions(mapRoot, pointTableData.mains);
-      const extendRecords = buildPointExtendRecords(pointTableData.points, pointTableData.mains, cabinetRegions);
-      pointTableZip = await createPointTableZipFile(
-        generatePointExcel(pointTableData),
-        extendRecords,
-        stationName,
-        tempDir,
-      );
-      console.log("[导出点表] extend.json 统计", {
-        points: pointTableData.points.length,
-        databaseCabinets: pointTableData.mains.filter((main) => main.mainDeviceType === MAIN_DEVICE_TYPE_CABINET).length,
-        mappedCabinetRegions: cabinetRegions.length,
-        records: extendRecords.length,
-      });
-    }
-
-    // Step 2: 每张地图先归档成独立 zip，外层导出包的 地图/ 下只放这些 zip 文件。
-    onProgress?.("生成地图包...", 2);
-    const mapZipFiles: { filePath: string; zipName: string }[] = [];
-    for (let i = 0; i < mapDirs.length; i++) {
-      const dirName = mapDirs[i];
-      const src = path.join(mapRoot, dirName);
-      if (fs.existsSync(src)) {
-        const innerMapName = mapPackageName(projectName, timeStr, i);
-        const mapZipPath = await createMapZipFile(src, innerMapName, tempDir, pointTableData);
-        mapZipFiles.push({ filePath: mapZipPath, zipName: `${innerMapName}.zip` });
-      }
-    }
-
-    // Step 3: 计算外层导出包需要读取的文件大小。
-    onProgress?.("计算文件大小...", 2);
-    let totalSize = 0;
-    if (pointTableZip) totalSize += fs.statSync(pointTableZip.filePath).size;
-    for (const item of mapZipFiles) totalSize += fs.statSync(item.filePath).size;
-    const totalMB = totalSize / 1024 / 1024;
-
-    // 自动编号防重名
-    let zipPath = path.join(destDir, `${zipName}.zip`);
-    if (fs.existsSync(zipPath)) {
-      let i = 1;
-      while (fs.existsSync(zipPath)) {
-        zipPath = path.join(destDir, `${zipName}_${i}.zip`);
-        i++;
-      }
-    }
-
-    // Step 4: 流式压缩外层导出包。
-    onProgress?.(`压缩中  (共 ${totalMB.toFixed(0)}MB)...`, 3);
-    const output = fs.createWriteStream(zipPath);
-
-    let outBytes = 0;
-    const progressStream = new Transform({
-      transform(chunk, _encoding, cb) {
-        outBytes += chunk.length;
-        const processedMB = outBytes / 1024 / 1024;
-        const pct = totalSize > 0
-          ? 3 + Math.round((outBytes / totalSize) * 96)
-          : 3;
-        onProgress?.(
-          `压缩中  ${processedMB.toFixed(0)}/${totalMB.toFixed(0)}MB`,
-          Math.min(99, pct),
-        );
-        cb(null, chunk);
-      },
-    });
-
-    // store 模式：点云和地图 zip 再压缩收益极低，仅归档不压缩
-    const archive = new ZipArchive({ zlib: { level: 0 } });
-    archive.pipe(progressStream).pipe(output);
-
-    if (pointTableZip) {
-      archive.file(pointTableZip.filePath, { name: pointTableZip.zipName });
-    }
-
-    for (const item of mapZipFiles) {
-      archive.file(item.filePath, { name: toZipPath("地图", item.zipName) });
-    }
-
-    await Promise.all([
-      archive.finalize(),
-      new Promise<void>((resolve) => output.on("close", resolve)),
-    ]);
-
-    onProgress?.("完成", 100);
-    return { zipPath, zipName: path.basename(zipPath, ".zip") };
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  const zipName = `${stationName}_${mapName}_${timeStr}`;
+  const mapRoot = path.join(projectRoot, projectName, "地图");
+  const src = path.join(mapRoot, mapName);
+  if (!fs.existsSync(src) || !fs.statSync(src).isDirectory()) {
+    throw new Error(`地图不存在：${mapName}`);
   }
+
+  const xlsxBuf = generatePointExcel(pointTableData);
+  const cabinetRegions = collectCabinetRegions(mapRoot, pointTableData.mains);
+  const extendRecords = buildPointExtendRecords(pointTableData.points, pointTableData.mains, cabinetRegions);
+  const extendText = `${JSON.stringify(extendRecords, null, 2)}\n`;
+
+  onProgress?.("准备导出文件...", 1);
+  console.log("[导出点表] extend.json 统计", {
+    points: pointTableData.points.length,
+    databaseCabinets: pointTableData.mains.filter((main) => main.mainDeviceType === MAIN_DEVICE_TYPE_CABINET).length,
+    mappedCabinetRegions: cabinetRegions.length,
+    records: extendRecords.length,
+  });
+
+  // Step 1: 计算最终导出包需要读取的文件大小。
+  onProgress?.("计算文件大小...", 2);
+  const totalSize = getDirSize(src) + xlsxBuf.length + Buffer.byteLength(extendText);
+  const totalMB = totalSize / 1024 / 1024;
+
+  // 自动编号防重名
+  let zipPath = path.join(destDir, `${zipName}.zip`);
+  if (fs.existsSync(zipPath)) {
+    let i = 1;
+    while (fs.existsSync(zipPath)) {
+      zipPath = path.join(destDir, `${zipName}_${i}.zip`);
+      i++;
+    }
+  }
+
+  // Step 2: 流式压缩最终导出包。
+  onProgress?.(`压缩中  (共 ${totalMB.toFixed(0)}MB)...`, 3);
+  const output = fs.createWriteStream(zipPath);
+
+  let outBytes = 0;
+  const progressStream = new Transform({
+    transform(chunk, _encoding, cb) {
+      outBytes += chunk.length;
+      const processedMB = outBytes / 1024 / 1024;
+      const pct = totalSize > 0
+        ? 3 + Math.round((outBytes / totalSize) * 96)
+        : 3;
+      onProgress?.(
+        `压缩中  ${processedMB.toFixed(0)}/${totalMB.toFixed(0)}MB`,
+        Math.min(99, pct),
+      );
+      cb(null, chunk);
+    },
+  });
+
+  // store 模式：点云和压缩收益极低的配置文件仅归档不压缩。
+  const archive = new ZipArchive({ zlib: { level: 0 } });
+  archive.pipe(progressStream).pipe(output);
+
+  appendMapContents(archive, src, mapName, pointTableData);
+  archive.append(xlsxBuf, { name: "point.xlsx" });
+  archive.append(extendText, { name: "extend.json" });
+
+  await Promise.all([
+    archive.finalize(),
+    new Promise<void>((resolve, reject) => {
+      output.on("close", resolve);
+      output.on("error", reject);
+      (archive as any).on("error", reject);
+    }),
+  ]);
+
+  onProgress?.("完成", 100);
+  return { zipPath, zipName: path.basename(zipPath, ".zip") };
 }

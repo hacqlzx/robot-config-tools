@@ -193,6 +193,7 @@ declare global {
         getDataSummary: (name: string) => Promise<ProjectDataCounts>;
         importFile: (projectName: string, sourcePath: string, fileName: string) => Promise<string>;
         importModelZip: (projectName: string, sourcePath: string) => Promise<{ mapName: string; mapDir: string; modelPath: string }>;
+        inspectModelZipImport: (projectName: string, sourcePath: string) => Promise<{ mapCode: string; mapName: string; willReplace: boolean; existingMapName?: string; existingMapDir?: string }>;
         getManifest: (projectName: string) => Promise<ProjectManifest>;
         listTree: (projectName: string, subDir: string) => Promise<TreeNode[]>;
         writeFile: (projectName: string, subPath: string, data: ArrayBuffer) => Promise<string>;
@@ -219,7 +220,7 @@ declare global {
           devices?: { code?: string; name?: string }[];
         },
       ) => Promise<{ deleted: number; ids: number[]; unmatched: { code: string; name: string; reason: string }[]; beforeProjectCount: number; afterProjectCount: number }>;
-      exportZip: (projectName: string, items: { type: string; name: string }[], destDir: string) => Promise<{ zipPath: string; zipName: string; config: any }>;
+      exportZip: (projectName: string, items: { type: string; name: string }[], destDir: string) => Promise<{ zipPath: string; zipName: string }>;
       extractZip: (zipPath: string, destDir: string) => Promise<{ success: boolean; error?: string; actualDir?: string }>;
       importSurveyData: (projectName: string, mapName: string, zipPath: string) => Promise<{ success: boolean; error?: string; surveyDir?: string; deviceDir?: string; importedSpIds?: number[] }>;
       exportSurveyData: (projectName: string, mapName: string, destDir: string) => Promise<{ success: boolean; error?: string; zipPath?: string; zipName?: string }>;

@@ -1,3 +1,57 @@
 body {
   margin: 0;
 }
+
+.ant-message .ant-message-notice,
+.ant-message .ant-message-notice-content {
+  border: 1px solid transparent;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+}
+
+.ant-message .ant-message-notice.ant-message-notice-success,
+.ant-message .ant-message-notice-content:has(.ant-message-success) {
+  background: #f0fdf4 !important;
+  border-color: #bbf7d0 !important;
+  color: #166534 !important;
+}
+
+.ant-message .ant-message-notice.ant-message-notice-info,
+.ant-message .ant-message-notice-content:has(.ant-message-info) {
+  background: #eff6ff !important;
+  border-color: #bfdbfe !important;
+  color: #1e40af !important;
+}
+
+.ant-message .ant-message-notice.ant-message-notice-warning,
+.ant-message .ant-message-notice-content:has(.ant-message-warning) {
+  background: #fffbeb !important;
+  border-color: #fde68a !important;
+  color: #92400e !important;
+}
+
+.ant-message .ant-message-notice.ant-message-notice-error,
+.ant-message .ant-message-notice-content:has(.ant-message-error) {
+  background: #fef2f2 !important;
+  border-color: #fecaca !important;
+  color: #991b1b !important;
+}
+
+.ant-message .ant-message-notice.ant-message-notice-success .ant-message-notice-title,
+.ant-message .ant-message-notice-content:has(.ant-message-success) {
+  color: #166534 !important;
+}
+
+.ant-message .ant-message-notice.ant-message-notice-info .ant-message-notice-title,
+.ant-message .ant-message-notice-content:has(.ant-message-info) {
+  color: #1e40af !important;
+}
+
+.ant-message .ant-message-notice.ant-message-notice-warning .ant-message-notice-title,
+.ant-message .ant-message-notice-content:has(.ant-message-warning) {
+  color: #92400e !important;
+}
+
+.ant-message .ant-message-notice.ant-message-notice-error .ant-message-notice-title,
+.ant-message .ant-message-notice-content:has(.ant-message-error) {
+  color: #991b1b !important;
+}

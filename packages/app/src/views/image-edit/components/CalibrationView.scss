@@ -80,6 +80,39 @@
   background: #fff;
 }
 
+.calibration-canvas-toolbar {
+  position: absolute;
+  z-index: 2;
+  top: 10px;
+  right: 10px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 0 3px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+
+  .ant-btn {
+    width: 26px;
+    min-width: 26px;
+    height: 26px;
+    padding: 0;
+  }
+}
+
+.calibration-canvas-scale {
+  width: 48px;
+  color: #595959;
+  font-size: 12px;
+  line-height: 26px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
 .calibration-point-table {
   flex-shrink: 0;
   background: #fff;

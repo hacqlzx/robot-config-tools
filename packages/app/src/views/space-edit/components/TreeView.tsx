@@ -44,10 +44,6 @@ function displayNodeName(node: SpaceTreeNode): string {
   return node.name;
 }
 
-function parentPath(filePath: string): string {
-  return filePath.replace(/[\\/][^\\/]*$/, "");
-}
-
 function siblingPath(filePath: string, fileName: string): string {
   return filePath.replace(/[^\\/]+$/, fileName);
 }
@@ -176,8 +172,6 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
         const lasNodes: SpaceTreeNode[] = [];
         const drawNodes: SpaceTreeNode[] = [];
         const pathNodes: SpaceTreeNode[] = [];
-        const robotPathDirs = new Set<string>();
-        const stopPointDirs = new Set<string>();
         const collect = (items: SpaceTreeNode[]) => {
           items.forEach((child) => {
             if (!child.isDir && child.name === MAP_INFO_FILE_NAME) {
@@ -191,22 +185,10 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
               drawNodes.push(child);
             } else if (isPath(child.name)) {
               pathNodes.push(child);
-              if (child.name === ROBOT_PATH_FILE_NAME) robotPathDirs.add(parentPath(child.path));
-            } else if (isRobotStopPointFileName(child.name)) {
-              stopPointDirs.add(parentPath(child.path));
             }
           });
         };
         collect(list);
-        const robotRouteDirs = new Set(
-          Array.from(robotPathDirs).filter((dir) => stopPointDirs.has(dir)),
-        );
-        const effectivePathNodes = checked
-          ? pathNodes.filter((child) => child.name !== PATH_FILE_NAME || !robotRouteDirs.has(parentPath(child.path)))
-          : pathNodes;
-        const skippedReferencePathNodes = checked
-          ? pathNodes.filter((child) => child.name === PATH_FILE_NAME && robotRouteDirs.has(parentPath(child.path)))
-          : [];
 
         for (const child of lasNodes) {
           const isLoaded = loadedFiles.has(loadedFileKey(child.path));
@@ -221,11 +203,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
           onToggleDrawing?.(child.path, checked);
         }
 
-        for (const child of skippedReferencePathNodes) {
-          if (pathShown?.has(child.path)) onTogglePath?.(child.path, false);
-        }
-
-        for (const child of effectivePathNodes) {
+        for (const child of pathNodes) {
           onTogglePath?.(child.path, checked);
         }
       };

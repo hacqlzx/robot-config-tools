@@ -1,4 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from "react";
+import { Button, Tooltip } from "antd";
+import { CompressOutlined, ZoomInOutlined, ZoomOutOutlined } from "@ant-design/icons";
 
 export interface ImageItem {
   img?: HTMLImageElement;
@@ -25,7 +27,6 @@ interface Props {
   onImageDoubleClick?: (item: ImageItem) => void | Promise<void>;
   onImageHover?: (item: ImageItem | null) => void;
   calibrationRects?: Map<number, { x: number; y: number; w: number; h: number }[]>;
-  resetViewRef?: React.MutableRefObject<(() => void) | null>;
 }
 
 interface ThumbEntry {
@@ -43,9 +44,12 @@ const COLUMN_HEADER_GAP = 8;
 const CALIBRATION_BOX_COLOR = "#00ff3b";
 const CALIBRATION_BOX_WIDTH = 4;
 const CALIBRATION_BOX_HALO_WIDTH = 7;
+const MIN_SCALE = 0.02;
+const MAX_SCALE = 5;
+const ZOOM_STEP = 1.2;
 
 /** 图片画布：缩放/平移，rAF 驱动渲染，懒加载缩略图缓存，视口裁剪 */
-export default function ImageCanvas({ canvasRef, containerRef, images, visible = true, onImageDoubleClick, onImageHover, calibrationRects, resetViewRef }: Props) {
+export default function ImageCanvas({ canvasRef, containerRef, images, visible = true, onImageDoubleClick, onImageHover, calibrationRects }: Props) {
   const [displayScale, setDisplayScale] = useState(1);
   const [, setCacheVersion] = useState(0);
   const panRef = useRef({ x: 0, y: 0 });
@@ -324,11 +328,6 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
     }
     ctx.restore();
 
-    if (s !== 1) {
-      ctx.fillStyle = "rgba(255,255,255,0.5)";
-      ctx.font = "12px sans-serif";
-      ctx.fillText(`${Math.round(s * 100)}%`, 8, 20);
-    }
   }, [canvasRef, requestThumbnail]);
 
   // 计算内容范围并适配容器
@@ -352,8 +351,11 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
     }
     const contentW = maxX - minX;
     const contentH = maxY - minY;
+    if (contentW <= 0 || contentH <= 0) return;
     const pad = 12;
-    const s = Math.min((cw - pad * 2) / contentW, (ch - pad * 2) / contentH);
+    const availableW = Math.max(1, cw - pad * 2);
+    const availableH = Math.max(1, ch - pad * 2);
+    const s = Math.max(MIN_SCALE, Math.min(MAX_SCALE, availableW / contentW, availableH / contentH));
     scaleRef.current = s;
     panRef.current = {
       x: (cw - contentW * s) / 2 - minX * s,
@@ -363,8 +365,28 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
     scheduleDraw();
   }, [containerRef, scheduleDraw]);
 
-  // 暴露重置视角方法
-  if (resetViewRef) resetViewRef.current = fitToContent;
+  const zoomAt = useCallback((factor: number, mx: number, my: number) => {
+    const oldScale = scaleRef.current;
+    const oldPan = panRef.current;
+    const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, oldScale * factor));
+    if (newScale === oldScale) return;
+
+    const worldX = (mx - oldPan.x) / oldScale;
+    const worldY = (my - oldPan.y) / oldScale;
+    panRef.current = {
+      x: mx - worldX * newScale,
+      y: my - worldY * newScale,
+    };
+    scaleRef.current = newScale;
+    setDisplayScale(newScale);
+    scheduleDraw();
+  }, [scheduleDraw]);
+
+  const zoomAtCenter = useCallback((factor: number) => {
+    const container = containerRef.current;
+    if (!container) return;
+    zoomAt(factor, container.clientWidth / 2, container.clientHeight / 2);
+  }, [containerRef, zoomAt]);
 
   // images 变化时自适应
   useEffect(() => { fitToContent(); }, [images, fitToContent]);
@@ -401,25 +423,11 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
       const rect = canvas.getBoundingClientRect();
       const mx = e.clientX - rect.left;
       const my = e.clientY - rect.top;
-
-      const factor = e.deltaY < 0 ? 1.08 : 0.92;
-      const oldScale = scaleRef.current;
-      const oldPan = panRef.current;
-      const newScale = Math.max(0.1, Math.min(5, oldScale * factor));
-
-      const worldX = (mx - oldPan.x) / oldScale;
-      const worldY = (my - oldPan.y) / oldScale;
-      const newPanX = mx - worldX * newScale;
-      const newPanY = my - worldY * newScale;
-
-      scaleRef.current = newScale;
-      panRef.current = { x: newPanX, y: newPanY };
-      setDisplayScale(newScale);
-      scheduleDraw();
+      zoomAt(e.deltaY < 0 ? 1.08 : 0.92, mx, my);
     };
     canvas.addEventListener("wheel", onWheel, { passive: false });
     return () => canvas.removeEventListener("wheel", onWheel);
-  }, [canvasRef, scheduleDraw]);
+  }, [canvasRef, zoomAt]);
 
   // 双击检测：屏幕坐标转世界坐标，命中图片后回调
   const onDoubleClickRef = useRef(onImageDoubleClick);
@@ -473,6 +481,18 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
 
   return (
     <div ref={containerRef} style={{ display: visible ? "flex" : "none", flex: 1, position: "relative", overflow: "hidden", cursor: dragRef.current ? "grabbing" : "grab" }}>
+      <div className="image-canvas-toolbar" onMouseDown={(event) => event.stopPropagation()}>
+        <Tooltip title="缩小">
+          <Button type="text" size="small" aria-label="缩小" icon={<ZoomOutOutlined />} onClick={() => zoomAtCenter(1 / ZOOM_STEP)} />
+        </Tooltip>
+        <span className="image-canvas-scale">{Math.round(displayScale * 100)}%</span>
+        <Tooltip title="放大">
+          <Button type="text" size="small" aria-label="放大" icon={<ZoomInOutlined />} onClick={() => zoomAtCenter(ZOOM_STEP)} />
+        </Tooltip>
+        <Tooltip title="适应窗口">
+          <Button type="text" size="small" aria-label="适应窗口" icon={<CompressOutlined />} onClick={fitToContent} />
+        </Tooltip>
+      </div>
       <canvas
         ref={canvasRef}
         style={{ width: "100%", height: "100%", display: "block" }}

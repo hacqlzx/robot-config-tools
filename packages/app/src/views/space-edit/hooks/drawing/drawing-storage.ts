@@ -183,9 +183,11 @@ export async function saveCabinetDrawing(params: {
       .map((record) => positiveInt(record.id))
       .filter((id): id is number => id != null),
   ));
-  const nextCodes = new Set(nextRecordsPreview.map((record) => cabinetMainDeviceCode(record)).filter(Boolean));
-  const nextNames = new Set(nextRecordsPreview.map((record) => valueText(record.name)).filter(Boolean));
+  const nextDeviceRecordsPreview = nextRecordsPreview.filter((record) => areaType(record) === AREA_TYPE_CABINET);
+  const nextCodes = new Set(nextDeviceRecordsPreview.map((record) => cabinetMainDeviceCode(record)).filter(Boolean));
+  const nextNames = new Set(nextDeviceRecordsPreview.map((record) => valueText(record.name)).filter(Boolean));
   const staleRecords = replacedRecords.filter((record) => {
+    if (areaType(record) === AREA_TYPE_CABINET_ROW) return true;
     const code = cabinetMainDeviceCode(record);
     if (code) return !nextCodes.has(code);
     const name = valueText(record.name);
@@ -389,7 +391,7 @@ async function deleteCabinetMainDevices(
     .filter(isCabinetRecord)
     .map((record) => ({
       code: cabinetMainDeviceCode(record),
-      name: valueText(record.name),
+      name: areaType(record) === AREA_TYPE_CABINET_ROW ? "" : valueText(record.name),
     }))
     .filter((device) => device.code || device.name);
   const payload = {

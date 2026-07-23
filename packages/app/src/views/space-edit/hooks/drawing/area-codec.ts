@@ -319,7 +319,6 @@ export function makeCabinetRobotAreas(item: CabinetItem, rootId: number, usedIds
     pose: rowPose,
     pose_3d: rowPose,
     type: AREA_TYPE_CABINET_ROW,
-    code: valueText(item.cabinetRow?.code),
     ...aggregateBayRecordFields([rowBay, ...item.cabinets.map((cabinet) => cabinet.bay ?? item.bay)]),
   }];
   const bounds = sortedSplitBounds(item.geometry.splits || []);

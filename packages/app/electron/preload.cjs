@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.invoke("project:import-file", projectName, sourcePath, fileName),
     importModelZip: (projectName, sourcePath) =>
       ipcRenderer.invoke("project:import-model-zip", projectName, sourcePath),
+    inspectModelZipImport: (projectName, sourcePath) =>
+      ipcRenderer.invoke("project:inspect-model-zip-import", projectName, sourcePath),
     getManifest: (projectName) =>
       ipcRenderer.invoke("project:get-manifest", projectName),
     listTree: (projectName, subDir) =>

@@ -11,6 +11,7 @@ const SURVEY_DIR_NAME = "勘察数据";
 const CALIBRATION_FILE_NAME = "勘察数据.json";
 const CALIB_DEVICE_DIR_NAME = "calib_device";
 const CALIB_CABINET_DIR_NAME = "calib_cabinet";
+const POINT_CALIBRATION_FILE_NAME = "calibrationInfo.json";
 const MAP_DIR_NAME = "地图";
 const AREA_FILE_NAME = "description_file.json";
 const AREA_TYPE_DEVICE = "8";
@@ -72,6 +73,12 @@ interface SurveyContext {
 interface ImageLabelRecord {
   fileName: string;
   data: any;
+}
+
+interface PointCalibrationRecord {
+  point_code: string;
+  calibration_id: string;
+  cruise_id: string;
 }
 
 interface CabinetImageSource {
@@ -236,10 +243,11 @@ export function registerArchiveIpc(): void {
 
       const context = readSurveyContext(surveyDir, deviceDir, safeMapName, readMapDeviceAreas(projectDir, safeMapName));
       const calibration = readCalibrationFile(calibrationPath);
-      ensureCalibrationIds(safeProjectName, calibration);
+      ensureCalibrationIds(safeProjectName, calibration, context);
       const points = readProjectPoints(safeProjectName);
       const timeStr = formatMinuteStamp(new Date());
       const records = buildImageLabelRecords(calibration, context, points, timeStr);
+      const pointRecords = buildPointCalibrationRecords(calibration, context, points);
       if (records.length === 0) throw new Error("当前地图暂无可导出的图像标识");
 
       const outputDir = path.resolve(rawDestDir);
@@ -249,7 +257,7 @@ export function registerArchiveIpc(): void {
       const zipBaseName = `${stationName}_${mapFileName}_图像标识_${timeStr}`;
       const zipPath = nextAvailableZipPath(outputDir, zipBaseName);
 
-      await writeImageLabelsZip(zipPath, records);
+      await writeImageLabelsZip(zipPath, records, pointRecords);
       console.log("[export-image-labels] 导出完成:", zipPath, "count:", records.length);
       return { success: true, zipPath, zipName: path.basename(zipPath), exportedCount: records.length };
     } catch (e: any) {
@@ -295,7 +303,7 @@ export function registerArchiveIpc(): void {
       };
       fs.mkdirSync(surveyRoot, { recursive: true });
       fs.writeFileSync(calibrationPath, `${JSON.stringify(finalData, null, 2)}\n`, "utf-8");
-      ensureCalibrationIds(safeProjectName, finalData);
+      ensureCalibrationIds(safeProjectName, finalData, context);
 
       console.log("[import-image-labels] 导入完成:", calibrationPath, "count:", importedCount, "warnings:", warnings.length);
       return { success: true, importedCount, warnings };
@@ -663,10 +671,12 @@ function readProjectPoints(projectName: string): any[] {
   }
 }
 
-function ensureCalibrationIds(projectName: string, calibration: CalibrationFileData): void {
-  const repo = new DevicePointRepo(getDatabase());
+function ensureCalibrationIds(projectName: string, calibration: CalibrationFileData, context: SurveyContext): void {
+  const db = getDatabase();
+  const repo = new DevicePointRepo(db);
   const pointCodes = new Set<string>();
   for (const entry of normalizeCalibrationEntries(calibration)) {
+    if (!isCalibrationEntryForMap(entry, context)) continue;
     for (const rect of entry.rects || []) {
       for (const binding of rect.bindings || []) {
         const pointCode = valueText(binding.pointCode);
@@ -677,6 +687,7 @@ function ensureCalibrationIds(projectName: string, calibration: CalibrationFileD
   for (const pointCode of pointCodes) {
     repo.bindCalibrationId(pointCode, projectName);
   }
+  db.saveToDisk();
 }
 
 function readSurveyContext(surveyDir: string, deviceDir: string, mapName: string, deviceAreas: DeviceAreaInfo[] = []): SurveyContext {
@@ -792,6 +803,10 @@ function readJpegSize(buf: Buffer): { width: number; height: number } | null {
   return null;
 }
 
+function isCalibrationEntryForMap(entry: CalibrationEntry, context: SurveyContext): boolean {
+  return entry.mapCode === context.mapName;
+}
+
 function buildImageLabelRecords(calibration: CalibrationFileData, context: SurveyContext, points: any[], timeStr: string): ImageLabelRecord[] {
   const pointByCode = new Map<string, any>();
   for (const point of points) {
@@ -802,7 +817,7 @@ function buildImageLabelRecords(calibration: CalibrationFileData, context: Surve
   let serial = 1;
 
   for (const entry of normalizeCalibrationEntries(calibration)) {
-    if (entry.mapCode !== context.mapName) continue;
+    if (!isCalibrationEntryForMap(entry, context)) continue;
     const imageMeta = findSurveyImageMeta(context, entry);
     if (!imageMeta || imageMeta.width <= 0 || imageMeta.height <= 0) continue;
 
@@ -821,6 +836,39 @@ function buildImageLabelRecords(calibration: CalibrationFileData, context: Surve
   }
 
   return records;
+}
+
+function buildPointCalibrationRecords(calibration: CalibrationFileData, context: SurveyContext, points: any[]): PointCalibrationRecord[] {
+  const pointByCode = new Map<string, any>();
+  for (const point of points) {
+    const code = valueText(point.pointCode);
+    if (code) pointByCode.set(code, point);
+  }
+
+  const pointCodes: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of normalizeCalibrationEntries(calibration)) {
+    if (!isCalibrationEntryForMap(entry, context)) continue;
+    for (const rect of entry.rects || []) {
+      for (const binding of rect.bindings || []) {
+        const pointCode = valueText(binding.pointCode);
+        if (!pointCode || seen.has(pointCode)) continue;
+        seen.add(pointCode);
+        pointCodes.push(pointCode);
+      }
+    }
+  }
+
+  return pointCodes
+    .map((pointCode) => {
+      const point = pointByCode.get(pointCode);
+      return {
+        point_code: valueText(point?.pointCode) || pointCode,
+        calibration_id: valueText(point?.calibrationId),
+        cruise_id: valueText(point?.cruiseId),
+      };
+    })
+    .filter((record) => record.point_code && record.calibration_id);
 }
 
 function findSurveyImageMeta(context: SurveyContext, entry: CalibrationEntry): SurveyImageMeta | null {
@@ -904,7 +952,7 @@ function identityMatrix4(): number[] {
   ];
 }
 
-async function writeImageLabelsZip(zipPath: string, records: ImageLabelRecord[]): Promise<void> {
+async function writeImageLabelsZip(zipPath: string, records: ImageLabelRecord[], pointRecords: PointCalibrationRecord[]): Promise<void> {
   const output = fs.createWriteStream(zipPath);
   const archive = new ZipArchive({ zlib: { level: 0 } });
   const completed = new Promise<void>((resolve, reject) => {
@@ -915,6 +963,7 @@ async function writeImageLabelsZip(zipPath: string, records: ImageLabelRecord[])
   archive.pipe(output);
   archive.append("", { name: `${CALIB_CABINET_DIR_NAME}/` });
   archive.append("", { name: `${CALIB_DEVICE_DIR_NAME}/` });
+  archive.append(`${JSON.stringify(pointRecords, null, 2)}\n`, { name: POINT_CALIBRATION_FILE_NAME });
 
   for (const record of records) {
     archive.append(`${JSON.stringify(record.data, null, 2)}\n`, {

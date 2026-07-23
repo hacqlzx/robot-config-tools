@@ -81,10 +81,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     projectName: string,
     data: CabinetSaveData,
   ): Promise<void> => {
-    const devices = [
-      ...(data.cabinetRow ? [data.cabinetRow] : []),
-      ...data.rows,
-    ].map((row) => ({
+    const devices = data.rows.map((row) => ({
       ...row,
       code: row.code.trim(),
       name: row.name.trim(),
@@ -111,15 +108,15 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     const cabinetRow = requiresCabinetRow && data.cabinetRow
       ? { ...data.cabinetRow, code: data.cabinetRow.code.trim(), name: data.cabinetRow.name.trim() }
       : null;
-    const devices = cabinetRow ? [cabinetRow, ...rows] : rows;
     if (rows.length === 0) { message.warning("请先完成屏柜分隔"); return; }
     if (requiresCabinetRow && !cabinetRow) { message.warning("请填写柜排信息"); return; }
-    if (devices.some((r) => !r.name)) { message.warning("屏柜/柜排名称不能为空"); return; }
-    if (devices.some((r) => !r.code)) { message.warning("屏柜/柜排编号不能为空"); return; }
-    const duplicateName = devices.find((row, index) => devices.findIndex((item) => item.name === row.name) !== index);
-    if (duplicateName) { message.warning(`屏柜/柜排名称重复：${duplicateName.name}`); return; }
-    const duplicateCode = devices.find((row, index) => devices.findIndex((item) => item.code === row.code) !== index);
-    if (duplicateCode) { message.warning(`屏柜/柜排编号重复：${duplicateCode.code}`); return; }
+    if (requiresCabinetRow && !cabinetRow?.name) { message.warning("柜排名称不能为空"); return; }
+    if (rows.some((r) => !r.name)) { message.warning("屏柜名称不能为空"); return; }
+    if (rows.some((r) => !r.code)) { message.warning("屏柜编码不能为空"); return; }
+    const duplicateName = rows.find((row, index) => rows.findIndex((item) => item.name === row.name) !== index);
+    if (duplicateName) { message.warning(`屏柜名称重复：${duplicateName.name}`); return; }
+    const duplicateCode = rows.find((row, index) => rows.findIndex((item) => item.code === row.code) !== index);
+    if (duplicateCode) { message.warning(`屏柜编码重复：${duplicateCode.code}`); return; }
 
     const item: CabinetItem = {
       id: (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()),

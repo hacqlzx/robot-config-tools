@@ -1,11 +1,14 @@
 import { useRef, useState, useEffect, useCallback } from "react";
-import { Button, Select, Input, Checkbox, Space, App } from "antd";
+import { Button, Select, Input, Checkbox, Space, App, Tooltip } from "antd";
 import {
   ArrowLeftOutlined,
   AimOutlined,
+  CompressOutlined,
   DragOutlined,
   LinkOutlined,
   DisconnectOutlined,
+  ZoomInOutlined,
+  ZoomOutOutlined,
 } from "@ant-design/icons";
 import { useResizable } from "@/components/useResizable";
 import { useSelectedProject } from "@/stores/appContextStore";
@@ -59,6 +62,9 @@ const AUTO_SAVE_INTERVAL = 500;
 
 /** 缩放时右下角手柄半边长 */
 const HANDLE_SIZE = 8;
+const MIN_SCALE = 0.05;
+const MAX_SCALE = 10;
+const ZOOM_STEP = 1.2;
 
 const SURVEY_DIR_NAME = "勘察数据";
 const CALIBRATION_FILE_NAME = "勘察数据.json";
@@ -87,6 +93,11 @@ function isSameMapCode(a?: string | null, b?: string | null): boolean {
   return String(a || "") === String(b || "");
 }
 
+function clampScale(scale: number): number {
+  if (!Number.isFinite(scale)) return 1;
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
+}
+
 export default function CalibrationView({ image, taskDir, mapName, selBayId, onSelBayIdChange, nameFilter, onNameFilterChange, pointFilter, onPointFilterChange, onBack }: Props) {
   const { message } = App.useApp();
   const selectedProject = useSelectedProject();
@@ -97,6 +108,7 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
   const [pendingRect, setPendingRect] = useState<RectData | null>(null);
   const [selectedRectId, setSelectedRectId] = useState<number | null>(null);
   const [saveStatus, setSaveStatus] = useState<"idle" | "pending" | "saving" | "saved" | "error">("idle");
+  const [displayScale, setDisplayScale] = useState(1);
 
   // 缩放/平移
   const scaleRef = useRef(1);
@@ -163,14 +175,18 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
     reverse: true,
   });
 
-  // 拉取间隔列表
+  // 拉取设备区间隔列表
   useEffect(() => {
     if (!selectedProject || !window.electronAPI?.db?.bay) {
       setBayList([]);
       return;
     }
     window.electronAPI.db.bay.list(selectedProject).then((list: any[]) => {
-      setBayList(list.map((b) => ({ id: b.id, bayName: b.bayName })));
+      setBayList(
+        list
+          .filter((b) => String(b.bayType || "").trim() === "设备区")
+          .map((b) => ({ id: b.id, bayName: b.bayName })),
+      );
     }).catch(() => {});
   }, [selectedProject]);
 
@@ -319,27 +335,6 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
     clearTimeout(savedStatusTimerRef.current);
   }, []);
 
-  // 初始自适应：图片适配画布
-  useEffect(() => {
-    const container = containerRef.current;
-    const canvas = canvasRef.current;
-    if (!container || !canvas) return;
-    const cw = container.clientWidth;
-    const ch = container.clientHeight;
-    if (cw <= 0 || ch <= 0) return;
-    canvas.width = cw;
-    canvas.height = ch;
-    const imgW = imgWRef.current;
-    const imgH = imgHRef.current;
-    const s = Math.min(cw / imgW, ch / imgH);
-    scaleRef.current = s;
-    panRef.current = {
-      x: (cw - imgW * s) / 2,
-      y: (ch - imgH * s) / 2,
-    };
-    scheduleDraw();
-  }, [image]);
-
   // 画布尺寸变化
   useEffect(() => {
     const container = containerRef.current;
@@ -468,12 +463,6 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
 
     ctx.restore();
 
-    // 缩放指示 + 选中矩形距离信息（move 模式）
-    if (s !== 1) {
-      ctx.fillStyle = "rgba(255,255,255,0.5)";
-      ctx.font = "12px sans-serif";
-      ctx.fillText(`${Math.round(s * 100)}%`, 8, 20);
-    }
   }, [image]);
 
   const scheduleDraw = useCallback(() => {
@@ -481,6 +470,54 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
       rafRef.current = requestAnimationFrame(draw);
     }
   }, [draw]);
+
+  const fitToView = useCallback(() => {
+    const container = containerRef.current;
+    const canvas = canvasRef.current;
+    if (!container || !canvas) return;
+    const cw = container.clientWidth;
+    const ch = container.clientHeight;
+    if (cw <= 0 || ch <= 0) return;
+    canvas.width = cw;
+    canvas.height = ch;
+    const imgW = imageRef.current.img.naturalWidth || imgWRef.current;
+    const imgH = imageRef.current.img.naturalHeight || imgHRef.current;
+    imgWRef.current = imgW;
+    imgHRef.current = imgH;
+    const s = clampScale(Math.min(cw / imgW, ch / imgH));
+    scaleRef.current = s;
+    panRef.current = {
+      x: (cw - imgW * s) / 2,
+      y: (ch - imgH * s) / 2,
+    };
+    setDisplayScale(s);
+    scheduleDraw();
+  }, [scheduleDraw]);
+
+  const zoomAt = useCallback((factor: number, sx: number, sy: number) => {
+    const oldScale = scaleRef.current;
+    const oldPan = panRef.current;
+    const newScale = clampScale(oldScale * factor);
+    if (newScale === oldScale) return;
+    const worldX = (sx - oldPan.x) / oldScale;
+    const worldY = (sy - oldPan.y) / oldScale;
+    panRef.current = {
+      x: sx - worldX * newScale,
+      y: sy - worldY * newScale,
+    };
+    scaleRef.current = newScale;
+    setDisplayScale(newScale);
+    scheduleDraw();
+  }, [scheduleDraw]);
+
+  const zoomAtCenter = useCallback((factor: number) => {
+    const container = containerRef.current;
+    if (!container) return;
+    zoomAt(factor, container.clientWidth / 2, container.clientHeight / 2);
+  }, [zoomAt]);
+
+  // 初始自适应：图片适配画布
+  useEffect(() => { fitToView(); }, [fitToView, image]);
 
   // 重绘触发
   useEffect(() => { scheduleDraw(); }, [rects, pendingRect, selectedRectId, points, scheduleDraw]);
@@ -495,19 +532,11 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
       const rect = canvas.getBoundingClientRect();
       const mx = e.clientX - rect.left;
       const my = e.clientY - rect.top;
-      const factor = e.deltaY < 0 ? 1.08 : 0.92;
-      const oldScale = scaleRef.current;
-      const oldPan = panRef.current;
-      const newScale = Math.max(0.05, Math.min(10, oldScale * factor));
-      const worldX = (mx - oldPan.x) / oldScale;
-      const worldY = (my - oldPan.y) / oldScale;
-      panRef.current = { x: mx - worldX * newScale, y: my - worldY * newScale };
-      scaleRef.current = newScale;
-      scheduleDraw();
+      zoomAt(e.deltaY < 0 ? 1.08 : 0.92, mx, my);
     };
     canvas.addEventListener("wheel", onWheel, { passive: false });
     return () => canvas.removeEventListener("wheel", onWheel);
-  }, [scheduleDraw]);
+  }, [zoomAt]);
 
   // 屏幕坐标 → 图片坐标
   const screenToImage = useCallback((sx: number, sy: number) => {
@@ -927,6 +956,18 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
       <div className="calibration-body" ref={bodyRef}>
         <div className="calibration-main">
           <div className="calibration-canvas-wrap" ref={containerRef}>
+            <div className="calibration-canvas-toolbar" onMouseDown={(event) => event.stopPropagation()}>
+              <Tooltip title="缩小">
+                <Button type="text" size="small" aria-label="缩小" icon={<ZoomOutOutlined />} onClick={() => zoomAtCenter(1 / ZOOM_STEP)} />
+              </Tooltip>
+              <span className="calibration-canvas-scale">{Math.round(displayScale * 100)}%</span>
+              <Tooltip title="放大">
+                <Button type="text" size="small" aria-label="放大" icon={<ZoomInOutlined />} onClick={() => zoomAtCenter(ZOOM_STEP)} />
+              </Tooltip>
+              <Tooltip title="适应窗口">
+                <Button type="text" size="small" aria-label="适应窗口" icon={<CompressOutlined />} onClick={fitToView} />
+              </Tooltip>
+            </div>
             <canvas
               ref={canvasRef}
               className="calibration-canvas"

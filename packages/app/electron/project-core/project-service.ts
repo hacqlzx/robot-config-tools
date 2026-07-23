@@ -43,6 +43,8 @@ const MAP_MODEL_FILE_NAME = "map.las";
 const MAP_INFO_FILE_NAME = "map_info.json";
 const DESCRIPTION_FILE_NAME = "description_file.json";
 const MAP_DIR_NAME = "地图";
+const SURVEY_DIR_NAME = "勘察数据";
+const CALIBRATION_FILE_NAME = "勘察数据.json";
 const AREA_TYPE_CABINET_ROW = "1";
 const AREA_TYPE_CABINET = "2";
 const MAIN_DEVICE_TYPE_CABINET = 29;
@@ -54,9 +56,30 @@ interface ImportedSpaceModelZipResult {
   modelPath: string;
 }
 
+export interface ImportedSpaceModelZipPlan {
+  mapCode: string;
+  mapName: string;
+  willReplace: boolean;
+  existingMapName?: string;
+  existingMapDir?: string;
+}
+
 interface PreparedMapSource {
   sourceDir: string;
   mapName: string;
+}
+
+interface MapInfoValues {
+  mapCode: string;
+  mapName: string;
+}
+
+interface ResolvedMapImportPlan {
+  mapCode: string;
+  targetDir: string;
+  targetMapName: string;
+  willReplace: boolean;
+  existingMapDir: string | null;
 }
 
 function makeProjectTreeWritable(targetPath: string): void {
@@ -118,6 +141,190 @@ function areaType(record: Record<string, unknown>): string {
   return textValue(record.type);
 }
 
+function readMapInfoValues(mapDir: string): MapInfoValues {
+  const filePath = path.join(mapDir, MAP_INFO_FILE_NAME);
+  if (!fs.existsSync(filePath)) return { mapCode: "", mapName: "" };
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    if (!isRecord(parsed)) return { mapCode: "", mapName: "" };
+    return {
+      mapCode: textValue(parsed.map_code ?? parsed.mapCode ?? parsed.map_id ?? parsed.mapId),
+      mapName: textValue(parsed.map_name ?? parsed.mapName ?? parsed.name),
+    };
+  } catch {
+    return { mapCode: "", mapName: "" };
+  }
+}
+
+function stripExportTimeSuffix(name: string): string {
+  const original = textValue(name);
+  if (!original) return "";
+  return original.replace(/[_-]\d{8}[_-]\d{4,6}(?:_\d+)?$/, "") || original;
+}
+
+function normalizeImportedMapName(...candidates: string[]): string {
+  const raw = candidates.map(stripExportTimeSuffix).find(Boolean);
+  return assertSafePathSegment(raw || "地图", "地图名称");
+}
+
+function findExistingMapDirByCode(projectName: string, mapsSubDir: string, mapCode: string): string | null {
+  const code = textValue(mapCode);
+  if (!code) return null;
+
+  const mapRoot = resolveProjectPath(projectName, mapsSubDir);
+  if (!fs.existsSync(mapRoot)) return null;
+
+  const entries = fs.readdirSync(mapRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith(".") && !entry.name.startsWith("__"))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of entries) {
+    const dirPath = path.join(mapRoot, entry.name);
+    if (readMapInfoValues(dirPath).mapCode === code) return dirPath;
+  }
+  return null;
+}
+
+function uniqueNewMapName(projectName: string, mapsSubDir: string, desiredName: string): string {
+  const safeName = assertSafePathSegment(desiredName, "地图名称");
+  let candidate = safeName;
+  for (let index = 1; fs.existsSync(resolveProjectPath(projectName, mapsSubDir, candidate)); index++) {
+    candidate = assertSafePathSegment(`${safeName}_${index}`, "地图名称");
+  }
+  return candidate;
+}
+
+async function writeNormalizedMapInfo(mapDir: string, mapName: string, fallbackMapCode: string): Promise<void> {
+  const mapInfoPath = path.join(mapDir, MAP_INFO_FILE_NAME);
+  let data: Record<string, unknown> = {};
+
+  if (fs.existsSync(mapInfoPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(mapInfoPath, "utf-8"));
+      if (isRecord(parsed)) data = { ...parsed };
+    } catch {
+      data = {};
+    }
+  }
+
+  const mapCode = textValue(data.map_code ?? data.mapCode ?? data.map_id ?? data.mapId) || textValue(fallbackMapCode);
+  if (mapCode) data.map_code = mapCode;
+  data.map_name = mapName;
+  if (!textValue(data.time)) data.time = formatMapInfoTime();
+
+  await fs.promises.writeFile(mapInfoPath, `${JSON.stringify(data, null, 2)}\n`, "utf-8");
+}
+
+async function resolveModelZipSource(sourcePath: string): Promise<string> {
+  const rawSourcePath = String(sourcePath ?? "").trim();
+  if (!rawSourcePath || !path.isAbsolute(rawSourcePath)) {
+    throw new Error("源压缩包路径无效");
+  }
+
+  const sourceResolved = path.resolve(rawSourcePath);
+  if (path.extname(sourceResolved).toLowerCase() !== ".zip") {
+    throw new Error("仅支持 ZIP 空间模型包");
+  }
+
+  let sourceStat: Awaited<ReturnType<typeof fs.promises.stat>> | null = null;
+  try {
+    sourceStat = await fs.promises.stat(sourceResolved);
+  } catch {
+    sourceStat = null;
+  }
+  if (!sourceStat?.isFile()) {
+    throw new Error("源压缩包不存在");
+  }
+
+  return sourceResolved;
+}
+
+function resolveMapImportPlan(
+  projectName: string,
+  sourceZipPath: string,
+  mapSourceDir: string,
+  mapsSubDir: string,
+): ResolvedMapImportPlan {
+  const mapInfo = readMapInfoValues(mapSourceDir);
+  const existingMapDir = findExistingMapDirByCode(projectName, mapsSubDir, mapInfo.mapCode);
+  const existingMapInfo = existingMapDir ? readMapInfoValues(existingMapDir) : null;
+  const desiredMapName = normalizeImportedMapName(path.basename(sourceZipPath, ".zip"));
+  const targetDir = existingMapDir
+    || resolveProjectPath(projectName, mapsSubDir, uniqueNewMapName(projectName, mapsSubDir, desiredMapName));
+  const targetMapName = existingMapDir
+    ? (existingMapInfo?.mapName || path.basename(existingMapDir))
+    : path.basename(targetDir);
+
+  return {
+    mapCode: mapInfo.mapCode,
+    targetDir,
+    targetMapName,
+    willReplace: !!existingMapDir,
+    existingMapDir,
+  };
+}
+
+function getDirectProjectMapName(projectName: string, projectDir: string, targetPath: string): string | null {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(targetPath);
+  } catch {
+    return null;
+  }
+  if (!stat.isDirectory()) return null;
+
+  const manifest = ensureProjectManifest(projectName);
+  const mapRoot = assertInside(projectDir, path.join(projectDir, manifest.layout.dirs.maps || MAP_DIR_NAME), "识别地图目录");
+  const relative = path.relative(mapRoot, targetPath);
+  if (!relative || relative === "." || relative.startsWith("..") || path.isAbsolute(relative)) return null;
+  if (relative.split(path.sep).length !== 1) return null;
+  return path.basename(targetPath);
+}
+
+function pruneSurveyCalibrationForMap(projectName: string, projectDir: string, surveyRoot: string, mapName: string): boolean {
+  const calibrationPath = assertInside(projectDir, path.join(surveyRoot, CALIBRATION_FILE_NAME), "清理勘察标识");
+  if (!fs.existsSync(calibrationPath)) return false;
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(calibrationPath, "utf-8"));
+    if (!isRecord(parsed)) return false;
+    const fileMapCode = textValue(parsed.mapCode);
+    const data = Array.isArray(parsed.data) ? parsed.data : [];
+    const remaining = data.filter((entry) => {
+      const entryMapCode = isRecord(entry) ? textValue(entry.mapCode) : "";
+      return (entryMapCode || fileMapCode) !== mapName;
+    });
+    const changed = remaining.length !== data.length || fileMapCode === mapName;
+    if (!changed) return false;
+
+    const nextMapCode = textValue(isRecord(remaining[0]) ? remaining[0].mapCode : "") || (fileMapCode === mapName ? "" : fileMapCode);
+    const next = {
+      ...parsed,
+      version: Number(parsed.version) || 2,
+      mapCode: nextMapCode,
+      data: remaining,
+    };
+    fs.writeFileSync(calibrationPath, `${JSON.stringify(next, null, 2)}\n`, "utf-8");
+    updateManifestForWrittenFile(projectName, calibrationPath, fs.statSync(calibrationPath).size);
+    return true;
+  } catch (error) {
+    console.warn("[项目文件删除] 清理勘察标识失败", { projectName, mapName, error });
+    return false;
+  }
+}
+
+function deleteSurveyDataForMap(projectName: string, projectDir: string, mapName: string): void {
+  const manifest = ensureProjectManifest(projectName);
+  const surveyRoot = assertInside(projectDir, path.join(projectDir, manifest.layout.dirs.surveyImages || SURVEY_DIR_NAME), "删除勘察数据");
+  const surveyDir = assertInside(projectDir, path.join(surveyRoot, mapName), "删除勘察数据");
+
+  if (fs.existsSync(surveyDir)) {
+    removeProjectDirectory(surveyDir);
+    removeManifestAssetsUnderPath(projectName, surveyDir);
+  }
+  pruneSurveyCalibrationForMap(projectName, projectDir, surveyRoot, mapName);
+}
+
 function splitTextList(value: unknown): string[] {
   if (Array.isArray(value)) return value.flatMap((item) => splitTextList(item));
   return textValue(value)
@@ -167,21 +374,11 @@ interface CabinetMainImportItem {
 
 function collectCabinetMainImportItems(records: Record<string, unknown>[]): CabinetMainImportItem[] {
   const byId = new Map<string, Record<string, unknown>>();
-  const childrenByParent = new Map<string, Record<string, unknown>[]>();
   for (const record of records) {
     const type = areaType(record);
     if (type !== AREA_TYPE_CABINET_ROW && type !== AREA_TYPE_CABINET) continue;
     const id = textValue(record.id);
     if (id) byId.set(id, record);
-
-    if (type === AREA_TYPE_CABINET) {
-      const parentId = textValue(record.parent_id);
-      if (parentId) {
-        const children = childrenByParent.get(parentId) || [];
-        children.push(record);
-        childrenByParent.set(parentId, children);
-      }
-    }
   }
 
   const items: CabinetMainImportItem[] = [];
@@ -199,13 +396,7 @@ function collectCabinetMainImportItems(records: Record<string, unknown>[]): Cabi
   };
 
   for (const record of records) {
-    const type = areaType(record);
-    if (type === AREA_TYPE_CABINET_ROW) {
-      const childBayCodes = (childrenByParent.get(textValue(record.id)) || [])
-        .flatMap((child) => bayCodesFromAreaRecord(child));
-      const bayCodes = bayCodesFromAreaRecord(record);
-      push(record, bayCodes.length > 0 ? bayCodes : childBayCodes);
-    } else if (type === AREA_TYPE_CABINET) {
+    if (areaType(record) === AREA_TYPE_CABINET) {
       let bayCodes = bayCodesFromAreaRecord(record);
       if (bayCodes.length === 0) {
         const parentCodes = bayCodesFromAreaRecord(byId.get(textValue(record.parent_id)));
@@ -482,27 +673,32 @@ export async function importProjectModel(projectName: string, sourcePath: string
   return targetPath;
 }
 
-export async function importProjectModelZip(projectName: string, sourcePath: string): Promise<ImportedSpaceModelZipResult> {
-  const rawSourcePath = String(sourcePath ?? "").trim();
-  if (!rawSourcePath || !path.isAbsolute(rawSourcePath)) {
-    throw new Error("源压缩包路径无效");
-  }
+export async function inspectProjectModelZipImport(projectName: string, sourcePath: string): Promise<ImportedSpaceModelZipPlan> {
+  const sourceResolved = await resolveModelZipSource(sourcePath);
+  const manifest = ensureProjectManifest(projectName);
+  const mapsSubDir = manifest.layout.dirs.maps || MAP_DIR_NAME;
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "robot-space-import-preview-"));
 
-  const sourceResolved = path.resolve(rawSourcePath);
-  if (path.extname(sourceResolved).toLowerCase() !== ".zip") {
-    throw new Error("仅支持 ZIP 空间模型包");
-  }
-
-  let sourceStat: Awaited<ReturnType<typeof fs.promises.stat>> | null = null;
   try {
-    sourceStat = await fs.promises.stat(sourceResolved);
-  } catch {
-    sourceStat = null;
-  }
-  if (!sourceStat?.isFile()) {
-    throw new Error("源压缩包不存在");
-  }
+    const zip = new AdmZip(sourceResolved);
+    zip.extractAllTo(tempRoot, true);
 
+    const prepared = prepareMapSourceDir(tempRoot, sourceResolved);
+    const plan = resolveMapImportPlan(projectName, sourceResolved, prepared.sourceDir, mapsSubDir);
+    return {
+      mapCode: plan.mapCode,
+      mapName: plan.targetMapName,
+      willReplace: plan.willReplace,
+      existingMapName: plan.willReplace ? plan.targetMapName : undefined,
+      existingMapDir: plan.existingMapDir || undefined,
+    };
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+export async function importProjectModelZip(projectName: string, sourcePath: string): Promise<ImportedSpaceModelZipResult> {
+  const sourceResolved = await resolveModelZipSource(sourcePath);
   const manifest = ensureProjectManifest(projectName);
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "robot-space-import-"));
 
@@ -512,11 +708,13 @@ export async function importProjectModelZip(projectName: string, sourcePath: str
 
     const prepared = prepareMapSourceDir(tempRoot, sourceResolved);
     const mapSourceDir = prepared.sourceDir;
-    const mapName = assertSafePathSegment(prepared.mapName, "地图名称");
-    const targetDir = resolveProjectPath(projectName, manifest.layout.dirs.maps || MAP_DIR_NAME, mapName);
+    const mapsSubDir = manifest.layout.dirs.maps || MAP_DIR_NAME;
+    const plan = resolveMapImportPlan(projectName, sourceResolved, mapSourceDir, mapsSubDir);
+    const targetDir = plan.targetDir;
+    const mapName = plan.targetMapName;
 
     if (fs.existsSync(targetDir)) {
-      fs.rmSync(targetDir, { recursive: true, force: true });
+      removeProjectDirectory(targetDir);
       removeManifestAssetsUnderPath(projectName, targetDir);
     }
     fs.mkdirSync(targetDir, { recursive: true });
@@ -531,13 +729,8 @@ export async function importProjectModelZip(projectName: string, sourcePath: str
     updateManifestForWrittenFile(projectName, modelPath, modelStat.size);
 
     const mapInfoPath = path.join(targetDir, MAP_INFO_FILE_NAME);
-    if (!fs.existsSync(mapInfoPath)) {
-      const mapInfoText = buildMapInfoText(mapName);
-      await fs.promises.writeFile(mapInfoPath, mapInfoText, "utf-8");
-      updateManifestForWrittenFile(projectName, mapInfoPath, Buffer.byteLength(mapInfoText));
-    } else {
-      updateManifestForWrittenFile(projectName, mapInfoPath, fs.statSync(mapInfoPath).size);
-    }
+    await writeNormalizedMapInfo(targetDir, mapName, plan.mapCode);
+    updateManifestForWrittenFile(projectName, mapInfoPath, fs.statSync(mapInfoPath).size);
 
     syncCabinetMainDevicesFromImportedMap(projectName, targetDir);
 
@@ -705,8 +898,17 @@ export async function deleteProjectPath(targetPath: string): Promise<boolean> {
     throw new Error("文件不存在");
   }
 
-  fs.rmSync(resolved, { recursive: true, force: true });
+  const deletedMapName = getDirectProjectMapName(projectName, projectDir, resolved);
+  const stat = fs.statSync(resolved);
+  if (stat.isDirectory()) {
+    removeProjectDirectory(resolved);
+  } else {
+    fs.rmSync(resolved, { force: true });
+  }
   removeManifestAssetsUnderPath(projectName, resolved);
+  if (deletedMapName) {
+    deleteSurveyDataForMap(projectName, projectDir, deletedMapName);
+  }
   return true;
 }
 
@@ -781,10 +983,10 @@ export async function exportProjectZip(
     points: db.prepare("SELECT * FROM device_point WHERE project_name = ? ORDER BY sort_num, id").all(safeProjectName) as any[],
   };
 
-  const includePointTable = items.some((it) => it.type === "点表");
   const mapDirs = items
     .filter((it) => it.type === "地图")
     .map((it) => assertSafePathSegment(it.name, "地图名称"));
+  if (mapDirs.length !== 1) throw new Error("导出模型仅支持当前左侧树已加载的单个模型");
 
-  return exportSpaceZip(safeProjectName, getProjectRoot(), pointTableData, mapDirs, includePointTable, destRoot, onProgress);
+  return exportSpaceZip(safeProjectName, getProjectRoot(), pointTableData, mapDirs, destRoot, onProgress);
 }

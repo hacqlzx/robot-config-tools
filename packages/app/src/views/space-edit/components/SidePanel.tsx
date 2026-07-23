@@ -11,6 +11,7 @@ import { useSelectedProject } from "@/stores/appContextStore";
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 520;
 const DEFAULT_WIDTH = 260;
+const MAIN_DEVICE_TYPE_CABINET = 29;
 
 interface Props {
   panelWidth: number;
@@ -39,6 +40,12 @@ const TABS = [
   { key: "deviceArea", label: "设备区" },
 ];
 
+function isDirectMapDirNode(node: SpaceTreeNode): boolean {
+  if (!node.isDir) return false;
+  const parts = node.path.split(/[\\/]+/).filter(Boolean);
+  return parts.length >= 2 && parts[parts.length - 2] === MAP_DIR_NAME;
+}
+
 /** 屏柜/设备区树：电压 → 指定类型的间隔 */
 function buildBayTypeTree(voltList: any[], bayList: any[], bayType: string): TreeDataNode[] {
   return voltList
@@ -55,6 +62,49 @@ function buildBayTypeTree(voltList: any[], bayList: any[], bayType: string): Tre
         key: `volt/${v.id}`,
         title: v.voltName || "(未命名)",
         children,
+      };
+    })
+    .filter(Boolean) as TreeDataNode[];
+}
+
+/** 屏柜树：电压 → 屏柜区间隔 → 主设备屏柜 */
+function buildCabinetMainDeviceTree(voltList: any[], bayList: any[], mainList: any[]): TreeDataNode[] {
+  const cabinetsByBay = new Map<number, any[]>();
+  mainList
+    .filter((main) => Number(main.mainDeviceType) === MAIN_DEVICE_TYPE_CABINET)
+    .forEach((main) => {
+      const bayId = Number(main.bayId);
+      if (!Number.isFinite(bayId) || bayId <= 0) return;
+      const items = cabinetsByBay.get(bayId) || [];
+      items.push(main);
+      cabinetsByBay.set(bayId, items);
+    });
+
+  return voltList
+    .map((volt) => {
+      const bayNodes = bayList
+        .filter((bay) => Number(bay.voltId) === Number(volt.id) && String(bay.bayType || "").trim() === "屏柜区")
+        .map<TreeDataNode>((bay) => {
+          const mains = (cabinetsByBay.get(Number(bay.id)) || [])
+            .sort((a, b) => Number(a.sortNum || 0) - Number(b.sortNum || 0) || Number(a.id || 0) - Number(b.id || 0));
+          return {
+            key: `bay/${bay.id}`,
+            title: bay.bayName || "(未命名间隔)",
+            isLeaf: mains.length === 0,
+            children: mains.length > 0
+              ? mains.map((main) => ({
+                key: `main/${main.id}`,
+                title: main.mainDeviceName || main.mainDeviceCode || "(未命名主设备)",
+                isLeaf: true,
+              }))
+              : undefined,
+          };
+        });
+      if (bayNodes.length === 0) return null;
+      return {
+        key: `volt/${volt.id}`,
+        title: volt.voltName || "(未命名区域)",
+        children: bayNodes,
       };
     })
     .filter(Boolean) as TreeDataNode[];
@@ -109,6 +159,27 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
     }
   }, [selectedProject]);
 
+  const loadCabinetTree = useCallback(async () => {
+    if (!selectedProject || !window.electronAPI) {
+      setCabinetTreeData([]);
+      return;
+    }
+    setTreeLoading(true);
+    try {
+      const api = window.electronAPI;
+      const [voltList, bayList, mainList] = await Promise.all([
+        api.db.voltage.list(selectedProject),
+        api.db.bay.list(selectedProject),
+        api.db.mainDevice.list(selectedProject),
+      ]);
+      setCabinetTreeData(buildCabinetMainDeviceTree(voltList || [], bayList || [], mainList || []));
+    } catch {
+      setCabinetTreeData([]);
+    } finally {
+      setTreeLoading(false);
+    }
+  }, [selectedProject]);
+
   useEffect(() => {
     if (sideTab === "map") {
       loadMapTree();
@@ -119,9 +190,9 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
 
   useEffect(() => {
     if (sideTab === "cabinet") {
-      loadBayTypeTree("屏柜区", setCabinetTreeData);
+      loadCabinetTree();
     }
-  }, [sideTab, treeKey, loadBayTypeTree]);
+  }, [sideTab, treeKey, loadCabinetTree]);
 
   useEffect(() => {
     if (sideTab === "deviceArea") {
@@ -136,9 +207,12 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
 
   /** 右键-删除：直接删除文件/目录并刷新地图树 */
   const handleRequestDelete = useCallback((node: SpaceTreeNode) => {
+    const isMapDir = isDirectMapDirNode(node);
     Modal.confirm({
       title: "删除确认",
-      content: `确定删除「${node.name}」？`,
+      content: isMapDir
+        ? `确定删除地图「${node.name}」？将同步删除勘察图片数据/${node.name} 及该地图的图像标识记录。`
+        : `确定删除「${node.name}」？`,
       okText: "删除",
       okButtonProps: { danger: true },
       cancelText: "取消",
@@ -163,7 +237,7 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
             }
           }
           await window.electronAPI?.project.deletePath(node.path);
-          message.success("已删除");
+          message.success(isMapDir ? "已删除，并同步清理对应勘察图片数据" : "已删除");
           loadMapTree();
         } catch (e: any) {
           message.error("删除失败: " + (e?.message || e));

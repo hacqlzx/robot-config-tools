@@ -143,18 +143,18 @@ export default function CabinetPanel({ cornerCount, cabinetCount, nameSequence, 
 
   const columns = [
     {
-      title: "编号",
-      dataIndex: "code",
-      render: (_: any, r: CabinetRow, idx: number) => (
-        <Input size="small" value={r.code} onChange={(e) => updateRow(idx, "code", e.target.value)} />
-      ),
-    },
-    {
       title: "屏柜名称",
       dataIndex: "name",
       width: 110,
       render: (_: any, r: CabinetRow, idx: number) => (
         <Input size="small" value={r.name} onChange={(e) => updateRow(idx, "name", e.target.value)} />
+      ),
+    },
+    {
+      title: "屏柜编码",
+      dataIndex: "code",
+      render: (_: any, r: CabinetRow, idx: number) => (
+        <Input size="small" value={r.code} onChange={(e) => updateRow(idx, "code", e.target.value)} />
       ),
     },
   ];
@@ -193,31 +193,26 @@ export default function CabinetPanel({ cornerCount, cabinetCount, nameSequence, 
       message.warning("柜排名称不能为空");
       return;
     }
-    if (nextCabinetRow && !nextCabinetRow.code) {
-      message.warning("柜排编号不能为空");
-      return;
-    }
     if (nextRows.some((r) => !r.name)) {
       message.warning("屏柜名称不能为空");
       return;
     }
     if (nextRows.some((r) => !r.code)) {
-      message.warning("屏柜编号不能为空");
+      message.warning("屏柜编码不能为空");
       return;
     }
-    const devices = nextCabinetRow ? [nextCabinetRow, ...nextRows] : nextRows;
-    const duplicateName = devices.find((row, index) =>
-      devices.findIndex((item) => item.name === row.name) !== index
+    const duplicateName = nextRows.find((row, index) =>
+      nextRows.findIndex((item) => item.name === row.name) !== index
     );
     if (duplicateName) {
-      message.warning(`屏柜/柜排名称重复：${duplicateName.name}`);
+      message.warning(`屏柜名称重复：${duplicateName.name}`);
       return;
     }
-    const duplicateCode = devices.find((row, index) =>
-      devices.findIndex((item) => item.code === row.code) !== index
+    const duplicateCode = nextRows.find((row, index) =>
+      nextRows.findIndex((item) => item.code === row.code) !== index
     );
     if (duplicateCode) {
-      message.warning(`屏柜/柜排编号重复：${duplicateCode.code}`);
+      message.warning(`屏柜编码重复：${duplicateCode.code}`);
       return;
     }
     const v = voltList.find((x) => x.id === areaId);
@@ -305,20 +300,12 @@ export default function CabinetPanel({ cornerCount, cabinetCount, nameSequence, 
         {isSplit && (
           <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "36px 1fr", gap: "8px", alignItems: "center" }}>
             <span style={{ fontSize: 12, color: "#666" }}>柜排</span>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              <Input
-                size="small"
-                placeholder="柜排编号"
-                value={cabinetRow.code}
-                onChange={(e) => updateCabinetRow("code", e.target.value)}
-              />
-              <Input
-                size="small"
-                placeholder="柜排名称"
-                value={cabinetRow.name}
-                onChange={(e) => updateCabinetRow("name", e.target.value)}
-              />
-            </div>
+            <Input
+              size="small"
+              placeholder="柜排名称"
+              value={cabinetRow.name}
+              onChange={(e) => updateCabinetRow("name", e.target.value)}
+            />
           </div>
         )}
 

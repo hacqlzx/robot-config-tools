@@ -20,6 +20,7 @@ export interface PathDrawingOptions {
   selectedColor?: pc.Color;
   lineColor?: pc.Color;
   cpColor?: pc.Color;
+  lineThickness?: number;
   snap?: boolean;
   sphereScale?: number;
   cpScale?: number;
@@ -36,12 +37,13 @@ export interface PathDrawingSnapshot {
 }
 
 const DEFAULTS = {
-  pointColor: new pc.Color(0.3, 0.9, 0.4),
+  pointColor: new pc.Color(0.62, 0.9, 0.58),
   selectedColor: new pc.Color(1, 0.85, 0.1),
-  lineColor: new pc.Color(0.3, 0.9, 0.4),
+  lineColor: new pc.Color(0.62, 0.9, 0.58),
   cpColor: new pc.Color(0.5, 0.6, 1.0),
+  lineThickness: 0.025,
   snap: true,
-  sphereScale: 0.12,
+  sphereScale: 0.08,
   cpScale: 0.08,
 };
 
@@ -49,7 +51,19 @@ const CURVE_SEGMENTS = 16;
 
 const CLICK_THRESHOLD = 3;
 const CLICK_CLAIM_OWNER = "path";
-const POINT_LABEL_COLOR = "#44e95f";
+const POINT_LABEL_COLOR = "#9be58f";
+const ROBOT_PATH_COLOR = new pc.Color(0.08, 0.72, 0.32);
+const ROBOT_POINT_COLOR = new pc.Color(0.18, 0.78, 0.38);
+const ROBOT_LABEL_COLOR = "#34c76b";
+const ROBOT_PATH_THICKNESS = 0.07;
+const ROBOT_POINT_SCALE = 0.11;
+
+interface ReadonlyPathRender {
+  points: pc.Vec3[];
+  spheres: pc.Entity[];
+  lines: pc.Entity[];
+  labels: (HTMLDivElement | null)[];
+}
 
 let _idCounter = 0;
 function genId(): string {
@@ -94,6 +108,7 @@ export class PathDrawing {
   private lines: pc.Entity[] = [];
   private cpSpheres: { cp1: pc.Entity | null; cp2: pc.Entity | null }[] = [];
   private curveSegs: pc.Entity[][] = [];
+  private robotPathRenders = new Map<string, ReadonlyPathRender>();
 
   private enabled = false;
   private active = false;
@@ -263,6 +278,40 @@ export class PathDrawing {
     this.requestRender();
   }
 
+  loadRobotPathData(key: string, data: PathData) {
+    this.clearRobotPathData(key);
+    const render = this.createReadonlyPathRender(data, {
+      lineColor: ROBOT_PATH_COLOR,
+      pointColor: ROBOT_POINT_COLOR,
+      labelColor: ROBOT_LABEL_COLOR,
+      lineThickness: ROBOT_PATH_THICKNESS,
+      pointScale: ROBOT_POINT_SCALE,
+    });
+    this.robotPathRenders.set(key, render);
+    this.requestRender();
+  }
+
+  clearRobotPathData(key: string) {
+    const render = this.robotPathRenders.get(key);
+    if (!render) return;
+    this.destroyReadonlyPathRender(render);
+    this.robotPathRenders.delete(key);
+    this.requestRender();
+  }
+
+  clearRobotPathDataAll() {
+    for (const render of this.robotPathRenders.values()) {
+      this.destroyReadonlyPathRender(render);
+    }
+    this.robotPathRenders.clear();
+    this.requestRender();
+  }
+
+  clearAllPathData() {
+    this.clear();
+    this.clearRobotPathDataAll();
+  }
+
   clear() {
     this.clearEntities();
     this.points.length = 0;
@@ -315,6 +364,7 @@ export class PathDrawing {
     window.removeEventListener("blur", this.cancelDrag);
     if (this.labelRafId) cancelAnimationFrame(this.labelRafId);
     this.clearEntities();
+    this.clearRobotPathDataAll();
     this.labelContainer?.remove();
     this.labelContainer = null;
     this.points.length = 0;
@@ -349,6 +399,63 @@ export class PathDrawing {
     this.curveSegs.length = 0;
   }
 
+  private createReadonlyPathRender(
+    data: PathData,
+    style: {
+      lineColor: pc.Color;
+      pointColor: pc.Color;
+      labelColor: string;
+      lineThickness: number;
+      pointScale: number;
+    },
+  ): ReadonlyPathRender {
+    const points: pc.Vec3[] = [];
+    const spheres: pc.Entity[] = [];
+    const lines: pc.Entity[] = [];
+    const labels: (HTMLDivElement | null)[] = [];
+    const indexMap = new Map<string, number>();
+
+    for (const point of data.points) {
+      const pos = new pc.Vec3(point.x, point.y, point.z);
+      indexMap.set(point.id, points.length);
+      points.push(pos);
+      spheres.push(createSphere(this.app, pos, style.pointColor, style.pointScale));
+      labels.push(point.name ? this.createPointLabel(point.name, style.labelColor) : null);
+    }
+
+    for (const segment of data.paths) {
+      const fromIndex = indexMap.get(segment.from);
+      const toIndex = indexMap.get(segment.to);
+      if (fromIndex === undefined || toIndex === undefined) continue;
+      const from = points[fromIndex];
+      const to = points[toIndex];
+      if (segment.bezier) {
+        let prev = from;
+        const cp1 = new pc.Vec3(segment.bezier.cp1[0], segment.bezier.cp1[1], segment.bezier.cp1[2]);
+        const cp2 = new pc.Vec3(segment.bezier.cp2[0], segment.bezier.cp2[1], segment.bezier.cp2[2]);
+        for (let step = 1; step <= CURVE_SEGMENTS; step++) {
+          const point = PathDrawing.bezierPoint(step / CURVE_SEGMENTS, from, cp1, cp2, to);
+          lines.push(createLine(this.app, prev, point, style.lineColor, style.lineThickness));
+          prev = point;
+        }
+      } else {
+        lines.push(createLine(this.app, from, to, style.lineColor, style.lineThickness));
+      }
+    }
+
+    return { points, spheres, lines, labels };
+  }
+
+  private destroyReadonlyPathRender(render: ReadonlyPathRender) {
+    render.spheres.forEach((entity) => entity.destroy());
+    render.lines.forEach((entity) => entity.destroy());
+    render.labels.forEach((label) => label?.remove());
+    render.points.length = 0;
+    render.spheres.length = 0;
+    render.lines.length = 0;
+    render.labels.length = 0;
+  }
+
   private initLabels() {
     const parent = this.canvas.parentElement;
     if (!parent) return;
@@ -365,36 +472,44 @@ export class PathDrawing {
     this.labelRafId = requestAnimationFrame(loop);
   }
 
-  private createPointLabel(name: string): HTMLDivElement | null {
+  private createPointLabel(name: string, color = POINT_LABEL_COLOR): HTMLDivElement | null {
     if (!this.labelContainer) return null;
     const el = document.createElement("div");
     el.textContent = name;
     el.style.cssText = "position:absolute;transform:translate(-50%,-145%);" +
-      `color:${POINT_LABEL_COLOR};font-size:16px;font-weight:700;white-space:nowrap;` +
+      `color:${color};font-size:16px;font-weight:700;white-space:nowrap;` +
       "text-shadow:0 0 3px #000,0 0 3px #000;pointer-events:none;display:none;";
     this.labelContainer.appendChild(el);
     return el;
   }
 
   private updateLabels() {
-    if (!this.labelContainer || this.pointLabels.length === 0) return;
+    if (!this.labelContainer) return;
     const camComp = this.camera.camera;
     if (!camComp) return;
     const rect = this.canvas.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
     const viewMat = this.camera.getWorldTransform().clone().invert();
     const vpMat = new pc.Mat4().mul2(camComp.projectionMatrix, viewMat);
-    for (let index = 0; index < this.pointLabels.length; index++) {
-      const label = this.pointLabels[index];
-      if (!label || !this.points[index]) continue;
-      const sp = worldToScreen(this.points[index], vpMat, rect.width, rect.height);
+    const updateLabel = (label: HTMLDivElement | null, point: pc.Vec3 | undefined) => {
+      if (!label || !point) return;
+      const sp = worldToScreen(point, vpMat, rect.width, rect.height);
       if (!sp) {
         label.style.display = "none";
-        continue;
+        return;
       }
       label.style.left = `${sp.sx}px`;
       label.style.top = `${sp.sy}px`;
       label.style.display = "block";
+    };
+
+    for (let index = 0; index < this.pointLabels.length; index++) {
+      updateLabel(this.pointLabels[index], this.points[index]);
+    }
+    for (const render of this.robotPathRenders.values()) {
+      for (let index = 0; index < render.labels.length; index++) {
+        updateLabel(render.labels[index], render.points[index]);
+      }
     }
   }
 
@@ -446,7 +561,7 @@ export class PathDrawing {
       const t = s / CURVE_SEGMENTS;
       const pt = PathDrawing.bezierPoint(t, this.points[a], bvs.cp1, bvs.cp2, this.points[b]);
       const color = this.selectedPathIdx === i ? this.opts.selectedColor : this.opts.lineColor;
-      segs.push(createLine(this.app, prev, pt, color));
+      segs.push(createLine(this.app, prev, pt, color, this.opts.lineThickness));
       prev = pt;
     }
     this.curveSegs[i] = segs;

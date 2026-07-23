@@ -129,12 +129,12 @@ function registerCabinetDeviceHandler(): void {
       if (!projectName) throw new Error("项目名称为空，无法保存屏柜设备");
       if (rows.length === 0) throw new Error("请先完成屏柜绘制");
       if (rows.some((row) => !row.name)) throw new Error("屏柜名称不能为空");
-      if (rows.some((row) => !row.code)) throw new Error("屏柜/柜排编号不能为空");
+      if (rows.some((row) => !row.code)) throw new Error("屏柜编码不能为空");
 
       const duplicateName = rows.find((row, index) => rows.findIndex((item) => item.name === row.name) !== index);
-      if (duplicateName) throw new Error(`屏柜/柜排名称重复：${duplicateName.name}`);
+      if (duplicateName) throw new Error(`屏柜名称重复：${duplicateName.name}`);
       const duplicateCode = rows.find((row, index) => rows.findIndex((item) => item.code === row.code) !== index);
-      if (duplicateCode) throw new Error(`屏柜/柜排编号重复：${duplicateCode.code}`);
+      if (duplicateCode) throw new Error(`屏柜编码重复：${duplicateCode.code}`);
 
       const bayRecord = bayRepo.getById(Number(payload?.bay?.id));
       if (!bayRecord) throw new Error("所选间隔不存在，无法保存屏柜设备");
@@ -161,12 +161,12 @@ function registerCabinetDeviceHandler(): void {
           item.mainDeviceType === MAIN_DEVICE_TYPE_CABINET
           && item.mainDeviceName === row.name,
         );
-        if (sameName) throw new Error(`当前间隔下已存在同名屏柜/柜排：${row.name}`);
+        if (sameName) throw new Error(`当前间隔下已存在同名屏柜：${row.name}`);
 
         const sameCode = existingByCode.find((item: any) =>
           item.mainDeviceCode === row.code
         );
-        if (sameCode) throw new Error(`屏柜/柜排编号已存在：${row.code}`);
+        if (sameCode) throw new Error(`屏柜编码已存在：${row.code}`);
       }
 
       let inserted = 0;

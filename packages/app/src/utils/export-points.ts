@@ -205,7 +205,7 @@ export async function exportSpaceZip(
 
   // 点表：直接追加内存 buffer，不写磁盘
   if (xlsxBuf) {
-    archive.append(xlsxBuf, { name: `${stationName}_巡检点位.xlsx` });
+    archive.append(xlsxBuf, { name: "point.xlsx" });
   }
 
   // 地图：直接从源目录读取

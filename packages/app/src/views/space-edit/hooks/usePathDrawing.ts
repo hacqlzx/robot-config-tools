@@ -82,7 +82,7 @@ export function usePathDrawing(
   }, []);
 
   const clearPathDraft = useCallback(() => {
-    drawingRef.current?.clear();
+    drawingRef.current?.clearAllPathData();
   }, []);
 
   useEffect(() => {

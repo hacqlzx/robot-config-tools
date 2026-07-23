@@ -17,6 +17,7 @@ export function up(db: DbWrapper): void {
     WHERE calibration_id IS NOT NULL
       AND calibration_id <> ''
       AND calibration_id NOT GLOB '*[^0-9]*'
+      AND CAST(calibration_id AS INTEGER) BETWEEN 1 AND 999999999
   `).get() as { maxId: number | null };
   const nextId = Math.max(1, Number(row?.maxId || 0) + 1);
   db.prepare("INSERT OR IGNORE INTO calibration_sequence (id, next_id) VALUES (1, ?)").run(nextId);

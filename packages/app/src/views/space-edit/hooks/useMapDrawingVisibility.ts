@@ -5,7 +5,6 @@ import {
   loadCabinetItems,
   loadPathDrawing,
   DRAWING_FILE_NAME,
-  PATH_FILE_NAME,
   ROBOT_PATH_FILE_NAME,
   type CabinetItem,
   type ChargingAreaItem,
@@ -25,17 +24,6 @@ function cabinetKey(item: CabinetItem): number | null {
 
 function fileNameFromPath(filePath: string): string {
   return filePath.split(/[\\/]/).pop() || filePath;
-}
-
-function siblingPath(filePath: string, fileName: string): string {
-  return filePath.replace(/[^\\/]+$/, fileName);
-}
-
-function exclusivePathSibling(filePath: string): string | null {
-  const fileName = fileNameFromPath(filePath);
-  if (fileName === ROBOT_PATH_FILE_NAME) return siblingPath(filePath, PATH_FILE_NAME);
-  if (fileName === PATH_FILE_NAME) return siblingPath(filePath, ROBOT_PATH_FILE_NAME);
-  return null;
 }
 
 interface UseMapDrawingVisibilityParams {
@@ -96,7 +84,7 @@ export function useMapDrawingVisibility({
 
   const clearMapDrawingVisibility = useCallback(() => {
     cabinetViewerRef.current?.clear();
-    pathDrawingRef.current?.clear();
+    pathDrawingRef.current?.clearAllPathData?.();
     chargingDrawingRef.current?.clear();
     deviceAreaDrawingRef.current?.clearAll();
     shownByJsonRef.current.clear();
@@ -140,19 +128,23 @@ export function useMapDrawingVisibility({
   const handleTogglePathFile = useCallback(async (jsonPath: string, checked: boolean) => {
     const api = window.electronAPI;
     if (!api) return;
-    const exclusiveSibling = exclusivePathSibling(jsonPath);
+    const fileName = fileNameFromPath(jsonPath);
+    const isRobotPath = fileName === ROBOT_PATH_FILE_NAME;
     if (checked) {
-      // 路径编辑器本身也承担回显，所以勾选路径文件时直接把保存数据加载进去。
+      // 参考路径作为可编辑路径加载；巡视路径作为只读叠加层加载，两者允许同时显示。
       const data = await loadPathDrawing(api, jsonPath);
-      if (data) pathDrawingRef.current?.loadData(data);
+      if (data) {
+        if (isRobotPath) pathDrawingRef.current?.loadRobotPathData?.(jsonPath, data);
+        else pathDrawingRef.current?.loadData(data);
+      }
       setPathShown((prev) => {
         const next = new Set(prev);
-        if (exclusiveSibling) next.delete(exclusiveSibling);
         next.add(jsonPath);
         return next;
       });
     } else {
-      pathDrawingRef.current?.clear();
+      if (isRobotPath) pathDrawingRef.current?.clearRobotPathData?.(jsonPath);
+      else pathDrawingRef.current?.clear();
       setPathShown((prev) => { const next = new Set(prev); next.delete(jsonPath); return next; });
     }
   }, [pathDrawingRef]);
@@ -208,8 +200,9 @@ export function useMapDrawingVisibility({
     cabinetViewerRef.current?.hide(cabinetId);
     const ids = shownByJsonRef.current.get(jsonPath);
     if (ids) shownByJsonRef.current.set(jsonPath, ids.filter((id) => id !== cabinetId));
+    refreshTree();
     message.success("已删除");
-  }, [cabinetViewerRef, message, selectedProject]);
+  }, [cabinetViewerRef, message, refreshTree, selectedProject]);
 
   useEffect(() => {
     if (deviceAreaMode) return;

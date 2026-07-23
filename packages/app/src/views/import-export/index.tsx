@@ -4,8 +4,6 @@ import type { UploadFile } from "antd";
 import { DownloadOutlined, InboxOutlined, UploadOutlined } from "@ant-design/icons";
 import {
   getAllRobot,
-  getFacInfo,
-  importDevicePoint,
   importSpaceModel,
   importBack,
   importCommunicateExcel,
@@ -16,7 +14,6 @@ import {
   exportDeviceImage,
   exportDeviceCheckImage,
   exportBack,
-  downLoadExcelTemplate,
   downloadCommunicateExcel,
 } from "@/api/config.js";
 import { useAppContext } from "@/stores/appContextStore";
@@ -54,14 +51,6 @@ const cardList: IECard[] = [
     actions: [
       { key: "export", label: "空间模型导出", desc: "导出 .las、路径等" },
       { key: "import", label: "空间模型导入", desc: "导入 .las、路径等" },
-    ],
-  },
-  {
-    key: "patrol-point",
-    title: "巡视点表",
-    templateDownload: true,
-    actions: [
-      { key: "import", label: "点表导入", desc: "导入设备区、屏柜点位" },
     ],
   },
   {
@@ -203,59 +192,6 @@ export default function ImportExport() {
       message.success("已开始下载");
     }
   }, [backendIp, message, selectedProject]);
-
-  /** 点表导入 */
-  const handlePatrolPointImport = useCallback(async (file: File) => {
-    if (!selectedRobot) {
-      message.warning("请先在顶部选择机器人");
-      return;
-    }
-
-    setUploadingLabel("点表导入");
-    try {
-      // 获取机器人列表拿 robotId
-      const robotRes = await getAllRobot();
-      const robotBody = robotRes.data;
-      if (!robotBody.success || !robotBody.data) {
-        message.error("获取机器人列表失败");
-        return;
-      }
-      const robot = robotBody.data.find((r: any) => r.robotName === selectedRobot);
-      if (!robot) {
-        message.error(`未找到机器人「${selectedRobot}」`);
-        return;
-      }
-      const robotId = robot.id;
-      const operationFacName = robot.operationFacName;
-
-      // 获取厂站列表拿 stationId（通过 operationFacName 匹配）
-      const facRes = await getFacInfo();
-      const facBody = facRes.data;
-      if (!facBody.success || !facBody.data) {
-        message.error("获取厂站列表失败");
-        return;
-      }
-      const station = facBody.data.find((s: any) => s.stationName === operationFacName);
-      if (!station) {
-        message.error(`未找到与机器人关联的厂站「${operationFacName}」`);
-        return;
-      }
-      const stationId = station.id;
-
-      // 上传文件
-      const importRes = await importDevicePoint(file, robotId, stationId);
-      const importBody = importRes.data;
-      if (importBody.success) {
-        message.success("点表导入成功");
-      } else {
-        message.error(importBody.message || "点表导入失败");
-      }
-    } catch (e: any) {
-      message.error("点表导入失败: " + (e?.message || e));
-    } finally {
-      setUploadingLabel(null);
-    }
-  }, [message, selectedRobot]);
 
   /** 通信信息导入 */
   const handleCommunicationImport = useCallback(async (file: File) => {
@@ -485,21 +421,6 @@ export default function ImportExport() {
     }
   }, [resolveSelectedRobot, message, downloadFileToDir]);
 
-  /** 点表模板下载 */
-  const handlePatrolPointTemplateDownload = useCallback(async () => {
-    try {
-      const res = await downLoadExcelTemplate();
-      const body = res.data;
-      if (!body.success || !body.data) {
-        message.error(body.message || "获取模板失败");
-        return;
-      }
-      await downloadFileToDir(body.data, "点表模板下载");
-    } catch (e: any) {
-      message.error("下载失败: " + (e?.message || e));
-    }
-  }, [message, downloadFileToDir]);
-
   /** 通信模板下载 */
   const handleCommunicationTemplateDownload = useCallback(async () => {
     try {
@@ -526,17 +447,6 @@ export default function ImportExport() {
         accept: ".zip,.las,.laz",
         acceptHint: ".zip、.las、.laz 格式",
         onImport: handleSpaceModelImport,
-      });
-      return;
-    }
-
-    // 点表导入
-    if (card.key === "patrol-point" && actionKey === "import") {
-      openImportDialog({
-        title: "点表导入",
-        accept: ".xlsx,.xls",
-        acceptHint: ".xlsx、.xls 格式",
-        onImport: handlePatrolPointImport,
       });
       return;
     }
@@ -622,7 +532,6 @@ export default function ImportExport() {
 
   /** 模板下载映射 */
   const templateHandlers: Record<string, () => void> = {
-    "patrol-point": handlePatrolPointTemplateDownload,
     "communication": handleCommunicationTemplateDownload,
   };
 

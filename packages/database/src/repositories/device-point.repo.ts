@@ -2,6 +2,9 @@
 import { toSnake } from "../core/utils";
 import { DevicePoint, CreateDevicePointDTO, UpdateDevicePointDTO } from "../types";
 
+const MAX_CALIBRATION_ID = 999_999_999;
+const CALIBRATION_ID_EPOCH_MS = Date.UTC(2026, 0, 1, 0, 0, 0);
+
 const COLUMNS = [
   "point_name", "point_code", "recognition_type_list",
   "save_type_list", "meter_type", "position_state_type", "appearance_type",
@@ -42,6 +45,39 @@ function toRow(dto: CreateDevicePointDTO, now: string): any[] {
     now, dto.createBy, now, dto.updateBy,
     dto.alarmLevel, dto.mapCode, dto.repairFlag, dto.deviceInfo, dto.remark,
   ];
+}
+
+function textValue(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function isValidCalibrationId(value: string): boolean {
+  return /^[1-9]\d{0,8}$/.test(value) && Number(value) <= MAX_CALIBRATION_ID;
+}
+
+function normalizeNextId(value: unknown): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 1 || numeric > MAX_CALIBRATION_ID) return 1;
+  return Math.floor(numeric);
+}
+
+function hashText(value: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function createTimeBasedCalibrationSeed(pointCode: string, projectName: string): number {
+  const elapsedSeconds = Math.floor((Date.now() - CALIBRATION_ID_EPOCH_MS) / 1000);
+  if (elapsedSeconds > MAX_CALIBRATION_ID) {
+    throw new Error("无法生成 9 位标定 ID：时间种子超出支持范围");
+  }
+  const timeSeed = Math.max(1, elapsedSeconds);
+  const jitter = hashText(`${projectName}|${pointCode}|${Date.now()}|${Math.random()}`) % 1000;
+  return Math.min(MAX_CALIBRATION_ID, timeSeed + jitter);
 }
 
 export class DevicePointRepo {
@@ -101,8 +137,9 @@ export class DevicePointRepo {
       const point = this.findByPointCode(pointCode, projectName);
       if (!point) throw new Error(`未找到点位：${pointCode}`);
 
-      const currentId = String(point.calibrationId ?? "").trim();
-      if (currentId) {
+      const usedIds = this.collectUsedCalibrationIds(point.id);
+      const currentId = textValue(point.calibrationId);
+      if (isValidCalibrationId(currentId) && !usedIds.has(Number(currentId))) {
         assignedId = currentId;
         return;
       }
@@ -110,10 +147,9 @@ export class DevicePointRepo {
       const sequence = this.db.prepare("SELECT next_id FROM calibration_sequence WHERE id = 1").get() as { nextId: number } | undefined;
       if (!sequence) throw new Error("标定 ID 序列表未初始化");
 
-      let nextId = Math.max(1, Number(sequence.nextId) || 1);
-      while (this.findByCalibrationId(String(nextId))) nextId += 1;
-      assignedId = String(nextId);
-      this.db.prepare("UPDATE calibration_sequence SET next_id = ? WHERE id = 1").run(nextId + 1);
+      const startId = Math.max(normalizeNextId(sequence.nextId), createTimeBasedCalibrationSeed(pointCode, projectName));
+      assignedId = String(this.allocateCalibrationId(startId, usedIds));
+      this.db.prepare("UPDATE calibration_sequence SET next_id = ? WHERE id = 1").run(Number(assignedId) + 1);
       this.update(point.id, { calibrationId: assignedId });
     });
     run();
@@ -129,6 +165,39 @@ export class DevicePointRepo {
       }
     });
     run();
+  }
+
+  private collectUsedCalibrationIds(excludePointId?: number): Set<number> {
+    const sql = `
+      SELECT calibration_id AS calibrationId
+      FROM device_point
+      WHERE calibration_id IS NOT NULL
+        AND calibration_id <> ''
+        ${excludePointId === undefined ? "" : "AND id <> ?"}
+    `;
+    const rows = (
+      excludePointId === undefined
+        ? this.db.prepare(sql).all()
+        : this.db.prepare(sql).all(excludePointId)
+    ) as Array<{ calibrationId: string }>;
+    const usedIds = new Set<number>();
+    for (const row of rows) {
+      const value = textValue(row.calibrationId);
+      if (isValidCalibrationId(value)) usedIds.add(Number(value));
+    }
+    return usedIds;
+  }
+
+  private allocateCalibrationId(startId: number, usedIds: Set<number>): number {
+    if (usedIds.size >= MAX_CALIBRATION_ID) {
+      throw new Error("标定 ID 已耗尽");
+    }
+    const start = normalizeNextId(startId);
+    for (let offset = 0; offset <= usedIds.size; offset++) {
+      const candidate = ((start - 1 + offset) % MAX_CALIBRATION_ID) + 1;
+      if (!usedIds.has(candidate)) return candidate;
+    }
+    throw new Error("无法生成唯一标定 ID");
   }
 
   listCruiseIds(): string[] {

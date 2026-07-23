@@ -3,12 +3,9 @@ import { App, Button, Dropdown, Empty, Segmented, Space, Spin, Tree, Tooltip } f
 import type { MenuProps, TreeDataNode, TreeProps } from "antd";
 import {
   AimOutlined,
-  AppstoreOutlined,
   CloudSyncOutlined,
-  DatabaseOutlined,
   DownOutlined,
   FileImageOutlined,
-  HddOutlined,
   PushpinOutlined,
   SyncOutlined,
   UploadOutlined,
@@ -97,13 +94,6 @@ function toTreeNode(node: DeviceVerificationTreeNode): VerificationTreeNode {
     marked: Boolean(node.marked),
     className: node.kind === "point" && node.marked ? "device-verify-tree-node-marked" : undefined,
     children: node.children?.map(toTreeNode),
-    icon: node.kind === "point"
-      ? <FileImageOutlined className={node.hasImage ? "has-image" : "without-image"} />
-      : node.kind === "component"
-        ? <AppstoreOutlined />
-        : node.kind === "mainDevice"
-          ? <HddOutlined />
-          : <DatabaseOutlined />,
   };
 }
 
@@ -443,6 +433,9 @@ export default function DeviceVerify() {
     const isPoint = node.kind === "point";
     return (
       <div className={`device-verify-tree-title${isPoint && node.marked ? " is-marked" : ""}`}>
+        {isPoint && (
+          <FileImageOutlined className={`device-verify-point-icon ${node.hasImage ? "has-image" : "without-image"}`} />
+        )}
         <span className="device-verify-tree-title-text">{node.title}</span>
         {isPoint && (
           <Tooltip title={node.marked ? "取消标记" : "标记遮挡或不在画面中央的点位"}>
@@ -536,8 +529,7 @@ export default function DeviceVerify() {
             ) : filteredTreeData.length > 0 ? (
               <Tree<VerificationTreeNode>
                 blockNode
-                showIcon
-                showLine
+                showLine={{ showLeafIcon: false }}
                 treeData={filteredTreeData}
                 loadData={loadTreeChildren}
                 selectedKeys={selectedKeys}

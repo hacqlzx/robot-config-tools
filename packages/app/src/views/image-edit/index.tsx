@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from "react";
-import { Button, Space, Divider, App, Spin, Radio, Select, Input, Checkbox, Dropdown, Progress } from "antd";
+import { Button, Space, Divider, App, Spin, Radio, Select, Input, Checkbox, Dropdown, Progress, Tooltip } from "antd";
 import {
   UploadOutlined,
   DownloadOutlined,
@@ -172,7 +172,6 @@ export default function ImageEdit() {
   const [calibrationRects, setCalibrationRects] = useState<Map<number, { x: number; y: number; w: number; h: number }[]>>(new Map());
   const [calibratedPointCodes, setCalibratedPointCodes] = useState<Set<string>>(new Set());
   const [calibratedImageCount, setCalibratedImageCount] = useState(0);
-  const resetViewRef = useRef<(() => void) | null>(null);
   const surveyDirRef = useRef<string>("");
   const loadedMapRef = useRef<string | null>(null);
   const loadedModelPathRef = useRef<string>("");
@@ -230,14 +229,18 @@ export default function ImageEdit() {
     }
   }, [loadFullImage, message]);
 
-  // 拉取当前项目下所有间隔
+  // 拉取当前项目下设备区间隔
   useEffect(() => {
     if (!selectedProject || !window.electronAPI?.db?.bay) {
       setBayList([]);
       return;
     }
     window.electronAPI.db.bay.list(selectedProject).then((list) => {
-      setBayList(list.map((b) => ({ id: b.id, bayName: b.bayName })));
+      setBayList(
+        list
+          .filter((b) => String(b.bayType || "").trim() === "设备区")
+          .map((b) => ({ id: b.id, bayName: b.bayName })),
+      );
     }).catch(() => {});
   }, [selectedProject]);
 
@@ -762,10 +765,15 @@ export default function ImageEdit() {
         >
           <div className="image-edit-sider-title" style={{ borderRadius: mapVisible ? "4px 4px 0 0" : 4, justifyContent: mapVisible ? undefined : "center", flex: mapVisible ? undefined : 1 }}>
             <span className="image-edit-title-text" style={{ display: mapVisible ? "" : "none" }}>设备区地图</span>
+            {mapVisible && (
+              <Tooltip title={loadedMap || ""}>
+                <span className={`image-edit-loaded-map-name${loadedMap ? "" : " is-empty"}`}>{loadedMap || ""}</span>
+              </Tooltip>
+            )}
             <span
               className="image-edit-toggle-btn"
               onClick={(e) => { setMapVisible(!mapVisible); if (!mapVisible) e.stopPropagation(); }}
-              style={{ marginLeft: mapVisible ? "auto" : 0 }}
+              style={{ marginLeft: mapVisible ? 8 : 0 }}
             >{mapVisible ? '<' : '>'}</span>
           </div>
           <div className="image-edit-map" ref={viewerContainerRef} style={{ display: mapVisible ? "" : "none" }}>
@@ -805,7 +813,6 @@ export default function ImageEdit() {
               <span className="image-edit-header-info">
                 <b>区域：</b>{selBayId ? bayList.find((b) => b.id === selBayId)?.bayName || "—" : "—"}&emsp;|&emsp;全部 {totalImageCount}张&emsp;已标 {calibratedImageCount}张
               </span>
-              <Button size="small" style={{ marginLeft: "auto" }} onClick={() => resetViewRef.current?.()}>重置视角</Button>
             </div>
             <div className="image-edit-main-body" ref={imageContainerRef} style={{ position: "relative" }}>
               <ImageCanvas
@@ -813,7 +820,6 @@ export default function ImageEdit() {
                 containerRef={imageContainerRef}
                 images={taskImages}
                 calibrationRects={calibrationRects}
-                resetViewRef={resetViewRef}
                 onImageDoubleClick={handleImageDoubleClick}
                 onImageHover={handleTaskImageHover}
               />
