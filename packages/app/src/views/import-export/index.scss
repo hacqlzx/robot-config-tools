@@ -91,40 +91,40 @@
 
   .ant-modal-header {
     margin: 0;
-    padding: 24px 28px;
+    padding: 14px 20px;
     border-bottom: 1px solid #f0f0f0;
   }
 
   .ant-modal-title {
-    font-size: 20px;
+    font-size: 14px;
   }
 
   .ant-modal-body {
-    max-height: calc(100vh - 230px);
-    padding: 28px;
+    max-height: calc(100vh - 200px);
+    padding: 16px 20px;
     overflow-y: auto;
   }
 
   .ant-modal-footer {
     margin: 0;
-    padding: 16px 28px;
+    padding: 10px 20px;
     border-top: 1px solid #f0f0f0;
   }
 
   .ie-import-section + .ie-import-section {
-    margin-top: 28px;
+    margin-top: 16px;
   }
 
   .ie-import-label {
-    margin-bottom: 14px;
+    margin-bottom: 8px;
     color: #262626;
-    font-size: 15px;
+    font-size: 13px;
     font-weight: 500;
   }
 
   .ie-backup-type-group {
     display: grid;
-    gap: 12px;
+    gap: 8px;
     width: 100%;
   }
 
@@ -132,9 +132,9 @@
     display: flex;
     align-items: flex-start;
     width: 100%;
-    min-height: 96px;
+    min-height: 60px;
     margin: 0;
-    padding: 18px 20px;
+    padding: 10px 14px;
     box-sizing: border-box;
     border: 1px solid transparent;
     border-radius: 6px;
@@ -157,40 +157,40 @@
 
   .ie-backup-type-title {
     color: #262626;
-    font-size: 16px;
-    line-height: 22px;
+    font-size: 13px;
+    line-height: 20px;
   }
 
   .ie-backup-type-desc {
-    margin-top: 10px;
+    margin-top: 4px;
     color: #8c8c8c;
-    font-size: 13px;
-    line-height: 20px;
+    font-size: 12px;
+    line-height: 18px;
     white-space: normal;
   }
 
   .ant-upload-wrapper .ant-upload-drag {
-    min-height: 220px;
+    min-height: 130px;
     border-radius: 6px;
     background: #fff;
   }
 
   .ie-import-icon {
-    margin-bottom: 12px;
+    margin-bottom: 8px;
     color: #8c96a5;
-    font-size: 52px;
+    font-size: 36px;
     line-height: 1;
   }
 
   .ie-import-text {
     margin: 0;
     color: #595959;
-    font-size: 16px;
+    font-size: 13px;
   }
 
   .ie-import-hint {
-    margin: 6px 0 0;
+    margin: 4px 0 0;
     color: #a3a9b3;
-    font-size: 13px;
+    font-size: 12px;
   }
 }

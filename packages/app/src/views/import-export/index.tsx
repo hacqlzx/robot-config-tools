@@ -605,7 +605,6 @@ export default function ImportExport() {
         className="ie-import-modal"
         title={importDialog?.title}
         open={Boolean(importDialog)}
-        width={680}
         centered
         okText="确定"
         cancelText="取消"

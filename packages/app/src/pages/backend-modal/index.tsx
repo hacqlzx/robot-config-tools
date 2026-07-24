@@ -1,5 +1,5 @@
-﻿import { useState, useEffect } from "react";
-import { Form, Button, Popconfirm, message } from "antd";
+﻿import { useState, useEffect, useCallback } from "react";
+import { Form, Button, App } from "antd";
 import { DeleteOutlined, LinkOutlined } from "@ant-design/icons";
 import {
   setBackendConnection,
@@ -8,33 +8,53 @@ import {
 } from "@/stores/appContextStore";
 import IpInput from "@/components/ip-input";
 
+/** localStorage 中保存 IP 列表的 key */
 const STORAGE_KEY = "backend_ip_list";
+
+/** IPv4 格式正则，用于前端输入校验 */
 const ipRegex = /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)$/;
 
 interface IpRecord {
   ip: string;
 }
 
+/** 从 localStorage 读取已保存的 IP 列表 */
 function loadIpList(): IpRecord[] {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); } catch { return []; }
 }
+
+/** 将 IP 列表持久化到 localStorage */
 function saveIpList(list: IpRecord[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
 }
 
 interface Props {
+  /** 连接成功后的回调，通常用于关闭设置弹窗 */
   onConnected: () => void;
 }
 
+/**
+ * 后台连接设置面板。
+ *
+ * 功能：
+ * - 输入新 IP 并连接，连接成功后自动去重追加到列表。
+ * - 已保存的 IP 列表支持一键连接和删除。
+ * - 连接失败时弹出确认框，提供"重新连接"和"取消（恢复旧连接）"两个操作。
+ */
 export default function BackendSettingsPanel({ onConnected }: Props) {
   const { backendIp } = useAppContext();
+  // 使用 App.useApp() 获取 message/modal 实例，确保能读取 ConfigProvider 上下文（如 centered）
+  const { message, modal } = App.useApp();
   const [form] = Form.useForm();
   const [ipList, setIpList] = useState<IpRecord[]>(loadIpList);
   const [connecting, setConnecting] = useState(false);
+  // 记录当前正在连接的列表项索引，用于显示对应行的 loading 状态
   const [connectingIndex, setConnectingIndex] = useState<number | null>(null);
 
+  // IP 列表变化时同步持久化
   useEffect(() => { saveIpList(ipList); }, [ipList]);
 
+  // 当前已连接的 IP 变化时，将表单初始值同步为最新 IP
   useEffect(() => {
     form.resetFields();
     if (backendIp) {
@@ -42,51 +62,133 @@ export default function BackendSettingsPanel({ onConnected }: Props) {
     }
   }, [backendIp, form]);
 
-  const connect = async (ip: string) => {
+  /**
+   * 纯探测函数：调用主进程 TCP ping，不修改全局连接状态。
+   * 连接成功/失败的状态更新由调用方负责，便于重试逻辑复用。
+   */
+  const pingIp = async (ip: string): Promise<boolean> => {
     if (!ipRegex.test(ip)) { message.error("请输入正确的 IP 地址"); return false; }
-    setConnecting(true);
     try {
-      const ok = __ELECTRON__ && window.electronAPI?.ping
+      return __ELECTRON__ && window.electronAPI?.ping
         ? await window.electronAPI.ping(ip)
         : false;
-      if (!ok) setConnectionStatus("failed");
-      return ok;
     } catch {
-      setConnectionStatus("failed");
       return false;
-    } finally {
-      setConnecting(false);
     }
   };
 
+  /**
+   * 连接成功后的统一处理：
+   * - 可选将 IP 去重追加到列表（addToList=true 用于新增表单）。
+   * - 更新全局连接状态为 connected。
+   * - 触发成功提示和 onConnected 回调。
+   */
+  const handleSuccess = useCallback((ip: string, addToList?: boolean) => {
+    if (addToList && !ipList.some((r) => r.ip === ip)) {
+      setIpList((prev) => prev.some((r) => r.ip === ip) ? prev : [...prev, { ip }]);
+    }
+    setBackendConnection(ip, "connected");
+    message.success(`${ip} 连接成功`);
+    onConnected();
+  }, [ipList, message, onConnected]);
+
+  /**
+   * 连接失败时弹出确认弹窗。
+   * - 点"重新连接"：执行 onRetry 回调（调用方提供具体重试逻辑）。
+   * - 点"取消"：若存在上一次成功的 prevIp，则恢复该连接；否则置为断开状态。
+   */
+  const showFailModal = useCallback((ip: string, prevIp: string, onRetry: () => Promise<void>) => {
+    modal.confirm({
+      title: "连接失败",
+      content: `无法连接到 ${ip}，请检查网络或 IP 是否正确。`,
+      okText: "重新连接",
+      cancelText: "取消",
+      onOk: onRetry,
+      onCancel: () => {
+        if (prevIp) {
+          // 恢复上次成功的连接
+          setBackendConnection(prevIp, "connected");
+        } else {
+          setConnectionStatus("disconnected");
+        }
+      },
+    });
+  }, [modal]);
+
+  /**
+   * 新增表单提交：连接新 IP。
+   * 失败时弹出确认框，重试失败后恢复旧连接。
+   */
   const handleAdd = async (values: { ip: string }) => {
-    const ok = await connect(values.ip);
+    const prevIp = backendIp; // 记录连接前的旧 IP，供失败回滚使用
+    setConnecting(true);
+    const ok = await pingIp(values.ip);
+    setConnecting(false);
+
     if (ok) {
-      setIpList([...ipList, { ip: values.ip }]);
-      setBackendConnection(values.ip, "connected");
-      message.success(`${values.ip} 连接成功`);
+      handleSuccess(values.ip, true);
       form.resetFields();
-      onConnected();
-    } else {
-      message.error(`${values.ip} 无法连接`);
+      return;
     }
+
+    setConnectionStatus("failed");
+    showFailModal(values.ip, prevIp, async () => {
+      const retryOk = await pingIp(values.ip);
+      if (retryOk) {
+        handleSuccess(values.ip, true);
+        form.resetFields();
+      } else {
+        // 重试仍失败，恢复旧连接状态
+        if (prevIp) setBackendConnection(prevIp, "connected");
+        else setConnectionStatus("disconnected");
+        message.error(`${values.ip} 仍然无法连接`);
+      }
+    });
   };
 
+  /**
+   * 点击列表中某条 IP 的连接按钮。
+   * 逻辑与 handleAdd 相同，但不需要追加到列表（IP 已存在）。
+   */
   const handleListConnect = async (index: number) => {
     const ip = ipList[index].ip;
+    const prevIp = backendIp;
     setConnectingIndex(index);
-    const ok = await connect(ip);
+    const ok = await pingIp(ip);
     setConnectingIndex(null);
+
     if (ok) {
-      setBackendConnection(ip, "connected");
-      message.success(`${ip} 连接成功`);
-      onConnected();
-    } else {
-      message.error(`${ip} 无法连接`);
+      handleSuccess(ip);
+      return;
     }
+
+    setConnectionStatus("failed");
+    showFailModal(ip, prevIp, async () => {
+      const retryOk = await pingIp(ip);
+      if (retryOk) {
+        handleSuccess(ip);
+      } else {
+        if (prevIp) setBackendConnection(prevIp, "connected");
+        else setConnectionStatus("disconnected");
+        message.error(`${ip} 仍然无法连接`);
+      }
+    });
   };
 
-  const deleteIp = (index: number) => setIpList(ipList.filter((_, i) => i !== index));
+  /**
+   * 删除列表中的 IP，弹出 Modal.confirm 二次确认，防止误操作。
+   */
+  const deleteIp = (index: number) => {
+    const ip = ipList[index].ip;
+    modal.confirm({
+      title: "删除 IP 地址",
+      content: `确定删除 ${ip}？`,
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: () => setIpList(ipList.filter((_, i) => i !== index)),
+    });
+  };
 
   return (
     <div>
@@ -111,9 +213,7 @@ export default function BackendSettingsPanel({ onConnected }: Props) {
               <IpInput value={item.ip} onChange={(val) => { if (val) { const u = [...ipList]; u[index] = { ip: val }; setIpList(u); } }} />
               <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                 <Button type="link" size="small" aria-label={`连接 ${item.ip}`} icon={<LinkOutlined />} loading={connectingIndex === index} onClick={() => handleListConnect(index)} />
-                <Popconfirm title="确定删除？" onConfirm={() => deleteIp(index)}>
-                  <Button type="link" size="small" danger icon={<DeleteOutlined />} />
-                </Popconfirm>
+                <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => deleteIp(index)} />
               </div>
             </div>
           ))}

@@ -1,8 +1,6 @@
 ﻿import { useRef } from "react";
 import { UploadOutlined, TableOutlined, SaveOutlined, ScissorOutlined, BorderOutlined, ThunderboltOutlined, AppstoreOutlined, NodeIndexOutlined, ExportOutlined, ArrowLeftOutlined, ArrowRightOutlined } from "@ant-design/icons";
-import { message } from "antd";
-import { MODEL_FILE_ACCEPT, POINT_TABLE_FILE_ACCEPT, isLasOrLazFileName, isZipFileName } from "../utils/space-paths";
-import { useSelectedProject } from "@/stores/appContextStore";
+import { POINT_TABLE_FILE_ACCEPT } from "../utils/space-paths";
 
 interface Props {
   cabinetMode?: boolean;
@@ -18,13 +16,20 @@ interface Props {
   canUndo?: boolean;
   canRedo?: boolean;
   onSaveAll?: () => void;
-  onFileSelect: (file: File) => void;
+  /** 点击"空间模型加载"按钮时的回调，由父级控制弹窗的打开 */
+  onOpenLoadModel?: () => void;
   onClipModel?: () => void;
   onImportPointTable?: (file: File) => void;
   onExportModel?: () => void;
+  /** 点表导入进行中，禁用点表加载按钮防止重复触发 */
   importing?: boolean;
 }
 
+/**
+ * 工具栏按钮配置表。
+ * action 字段与 handleClick 中的 switch 分支一一对应。
+ * 绘制类按钮（cabinet/charging/deviceArea/path）支持激活态高亮。
+ */
 const BUTTONS = [
   { icon: <UploadOutlined style={{ fontSize: 20 }} />, label: "空间模型加载", action: "file" as const },
   { icon: <TableOutlined style={{ fontSize: 20 }} />, label: "点表加载", action: "point" as const },
@@ -39,31 +44,19 @@ const BUTTONS = [
   { icon: <ExportOutlined style={{ fontSize: 20 }} />, label: "导出模型", action: "export" as const },
 ];
 
-export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onToggleCabinet, chargingMode, onToggleCharging, deviceAreaMode, onToggleDeviceArea, pathMode, onTogglePath, onUndo, onRedo, canUndo, canRedo, onSaveAll, onImportPointTable, onExportModel, importing }: Props) {
-  const selectedProject = useSelectedProject();
-  const fileInputRef = useRef<HTMLInputElement>(null);
+/**
+ * 空间编辑页顶部工具栏。
+ *
+ * 设计说明：
+ * - "空间模型加载"改为触发 onOpenLoadModel 回调，由父级弹窗处理文件选择和项目校验，
+ *   不再使用隐藏 input[type=file]，避免在无项目时仍能触发文件选择。
+ * - "点表加载"仍使用隐藏 input，因为点表导入不需要额外的弹窗交互。
+ * - 绘制模式按钮互斥由父级 useDrawingModeToggles 控制，Toolbar 仅根据 mode 显示激活态。
+ */
+export default function Toolbar({ onOpenLoadModel, onClipModel, cabinetMode, onToggleCabinet, chargingMode, onToggleCharging, deviceAreaMode, onToggleDeviceArea, pathMode, onTogglePath, onUndo, onRedo, canUndo, canRedo, onSaveAll, onImportPointTable, onExportModel, importing }: Props) {
   const pointInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!isLasOrLazFileName(file.name) && !isZipFileName(file.name)) {
-      message.warning("仅支持 LAS/LAZ 模型文件或 ZIP 空间模型包");
-      e.target.value = "";
-      return;
-    }
-
-    if (!selectedProject) {
-      message.warning("请先在顶部菜单栏选择一个项目");
-      e.target.value = "";
-      return;
-    }
-
-    onFileSelect(file);
-    e.target.value = "";
-  };
-
+  /** 点表文件选中后立即触发导入，清空 input 值防止同名文件无法重复选择 */
   const handlePointFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -71,10 +64,11 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
     e.target.value = "";
   };
 
+  /** 根据按钮 action 分发到对应的回调 */
   const handleClick = (action?: string) => {
     switch (action) {
-      case "file": fileInputRef.current?.click(); break;
-      case "point": pointInputRef.current?.click(); break;
+      case "file": onOpenLoadModel?.(); break;       // 打开空间模型加载弹窗
+      case "point": pointInputRef.current?.click(); break; // 触发点表文件选择
       case "clip": onClipModel?.(); break;
       case "cabinet": onToggleCabinet?.(); break;
       case "charging": onToggleCharging?.(); break;
@@ -89,6 +83,7 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
 
   return (
     <>
+      {/* 工具栏按钮样式，注入全局 class 避免 styled-components 依赖 */}
       <style>{`
         .space-edit-toolbar-btn {
           display: flex;
@@ -127,9 +122,10 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
         borderBottom: "1px solid #e8e8e8",
         flexShrink: 0,
       }}>
-        <input ref={fileInputRef} type="file" accept={MODEL_FILE_ACCEPT} onChange={handleFile} style={{ display: "none" }} />
+        {/* 点表文件选择器，隐藏在 DOM 中，由按钮点击触发 */}
         <input ref={pointInputRef} type="file" accept={POINT_TABLE_FILE_ACCEPT} onChange={handlePointFile} style={{ display: "none" }} />
         {BUTTONS.map(({ icon, label, action }) => {
+          // 绘制模式按钮激活态判断
           const isActive = (action === "cabinet" && cabinetMode) ||
             (action === "charging" && chargingMode) ||
             (action === "deviceArea" && deviceAreaMode) ||
@@ -139,6 +135,7 @@ export default function Toolbar({ onFileSelect, onClipModel, cabinetMode, onTogg
               key={label}
               className={`space-edit-toolbar-btn${isActive ? " active" : ""}`}
               onClick={() => handleClick(action)}
+              // 点表导入中禁用点表按钮；历史栈为空时禁用撤销/恢复
               disabled={(action === "point" && importing) || (action === "undo" && !canUndo) || (action === "redo" && !canRedo)}
             >
               {icon}

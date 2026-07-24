@@ -8,33 +8,52 @@ import "./styles/title-bar.scss";
 
 declare global { interface Window { __removeSplash?: () => void; } }
 
+/** 顶部导航栏高度（px），供各页面计算内容区高度使用 */
 export const APP_HEADER_HEIGHT = 48;
+/** 全局 message 提示距顶部的偏移，避免被顶部栏遮挡 */
 export const MESSAGE_TOP_OFFSET = APP_HEADER_HEIGHT + 12;
 
 const { Content } = Layout;
+
+// 屏柜验证图和设备验证图按需加载，减少首屏体积
 const ScreenVerify = lazy(() => import("./views/screen-verify"));
 const DeviceVerify = lazy(() => import("./views/device-verify"));
 
+/**
+ * 全局布局组件，负责：
+ * 1. ConfigProvider：统一 Ant Design 主题和弹窗默认行为。
+ * 2. 路由 Outlet：根据当前路由渲染对应业务页面。
+ * 3. 项目切换时通过 key 重建业务页，清理旧项目的地图/绘制/列表状态。
+ * 4. 屏柜/设备验证图页面保持缓存，切换回来时不重新初始化。
+ */
 export default function AppLayout() {
   const selectedProject = useSelectedProject();
   const location = useLocation();
   const isScreenVerify = location.pathname === "/screen-verify";
   const isDeviceVerify = location.pathname === "/device-verify";
+
+  // 以项目名作为页面 key，切换项目时强制重建 Outlet，清理旧状态
   const projectPageKey = selectedProject || "no-project";
+
+  // 屏柜/设备验证图需要缓存 key，离开页面后再切回来时复用同一实例
   const [screenVerifyCacheKey, setScreenVerifyCacheKey] = useState(isScreenVerify ? projectPageKey : "");
   const [deviceVerifyCacheKey, setDeviceVerifyCacheKey] = useState(isDeviceVerify ? projectPageKey : "");
 
   useEffect(() => {
+    // 兼容旧版静态 message API 的 top 偏移配置
     antdMessage.config({ top: MESSAGE_TOP_OFFSET });
+    // 移除 HTML 中的启动占位 splash 元素
     window.__removeSplash?.();
   }, []);
 
+  // 进入屏柜验证图页面时更新缓存 key，使缓存与当前项目对应
   useEffect(() => {
     if (isScreenVerify) {
       setScreenVerifyCacheKey(projectPageKey);
     }
   }, [isScreenVerify, projectPageKey]);
 
+  // 进入设备验证图页面时更新缓存 key
   useEffect(() => {
     if (isDeviceVerify) {
       setDeviceVerifyCacheKey(projectPageKey);
@@ -46,21 +65,29 @@ export default function AppLayout() {
       theme={{
         components: {
           Modal: {
-            titleFontSize: 16,
+            // 全局弹窗标题字号，保持紧凑
+            titleFontSize: 14,
             titleColor: "#1a1a1a",
           },
           Select: {
+            // 提高下拉层级，防止被弹窗遮挡
             zIndexPopup: 2100,
           },
         },
       }}
       modal={{
+        // 所有弹窗默认垂直居中
+        centered: true,
+        // 响应式宽度：最大 400px，窗口小时收窄到 90vw
+        width: "min(400px, 90vw)",
         styles: {
-          header: { marginBottom: 16 },
-          body: { paddingTop: 28 },
+          header: { marginBottom: 8 },
+          // body 限制最大高度并支持滚动，防止内容过多撑破视口
+          body: { paddingTop: 12, maxHeight: "60vh", overflowY: "auto" },
         },
       }}
       message={{
+        // 全局提示距顶部偏移，与顶部栏对齐
         top: MESSAGE_TOP_OFFSET,
       }}
     >
@@ -69,6 +96,10 @@ export default function AppLayout() {
           <AppHeader />
           <Content style={{ height: `calc(100vh - ${APP_HEADER_HEIGHT}px)`, padding: 0, background: "#f5f5f5", overflow: "hidden" }}>
             <div style={{ height: "100%", boxSizing: "border-box" }}>
+              {/*
+                屏柜验证图：通过 display 切换显隐而非卸载，保持 canvas/状态不重置。
+                cacheKey === projectPageKey 时说明缓存是当前项目的，可以保留。
+              */}
               {(isScreenVerify || screenVerifyCacheKey === projectPageKey) && (
                 <div
                   key={`screen-verify:${projectPageKey}`}
@@ -79,6 +110,7 @@ export default function AppLayout() {
                   </Suspense>
                 </div>
               )}
+              {/* 设备验证图：同上，保持缓存 */}
               {(isDeviceVerify || deviceVerifyCacheKey === projectPageKey) && (
                 <div
                   key={`device-verify:${projectPageKey}`}
@@ -89,6 +121,11 @@ export default function AppLayout() {
                   </Suspense>
                 </div>
               )}
+              {/*
+                其他业务页面通过 key 控制重建：
+                切换项目时 projectPageKey 变化，Outlet 会卸载旧实例并挂载新实例，
+                确保地图树、设备树、绘制状态等随项目刷新。
+              */}
               {!isScreenVerify && !isDeviceVerify && <Outlet key={projectPageKey} />}
             </div>
           </Content>

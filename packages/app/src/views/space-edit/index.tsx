@@ -19,8 +19,10 @@ import ViewCube from "./components/ViewCube";
 import SidePanel from "./components/SidePanel";
 import { useResizable } from "@/components/useResizable";
 import ExportModal from "./components/ExportModal";
+import LoadModelModal from "./components/LoadModelModal";
 import SpaceEditLayout from "./components/SpaceEditLayout";
 import SpaceEditScene from "./components/SpaceEditScene";
+import { useSelectedProject } from "@/stores/appContextStore";
 import { loadCabinetNameSequence, type CabinetItem } from "./hooks/drawing/drawing-storage";
 import { getCurrentModelPathFromRefs } from "./utils/model-state";
 import type { ModelCenter, ModelPointStats, SaveStatus, ViewDirection } from "./types";
@@ -41,6 +43,7 @@ function getLoadFraction(pointCount: number): number {
 
 export default function SpaceEdit() {
   const { message } = App.useApp();
+  const selectedProject = useSelectedProject();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(false);
@@ -53,6 +56,7 @@ export default function SpaceEdit() {
   const [clipMode, setClipMode] = useState(false);
   const [clipEntityName, setClipEntityName] = useState("");
   const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [loadModelOpen, setLoadModelOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [cabinetNameSequence, setCabinetNameSequence] = useState({ cabinetRowStart: 1, cabinetStart: 1 });
   const entitiesRef = useRef<Map<string, pc.Entity>>(new Map());
@@ -363,13 +367,14 @@ export default function SpaceEdit() {
   // ==================== JSX ====================
 
   return (
-    <SpaceEditLayout
+    <>
+      <SpaceEditLayout
       containerRef={containerRef}
       resizing={resizing}
       onResizeStart={onResizeStart}
       toolbar={(
         <Toolbar
-          onFileSelect={handleFileSelectWithHistoryReset}
+          onOpenLoadModel={() => setLoadModelOpen(true)}
           onClipModel={handleClipModel}
           cabinetMode={cabinetMode} onToggleCabinet={toggleCabinetWithNameSequence}
           chargingMode={chargingMode} onToggleCharging={toggleChargingExclusive}
@@ -443,5 +448,12 @@ export default function SpaceEdit() {
       importing={importing}
       exportModal={<ExportModal open={exportModalOpen} onClose={() => setExportModalOpen(false)} modelPath={currentModelPath} />}
     />
+    <LoadModelModal
+      open={loadModelOpen}
+      selectedProject={selectedProject}
+      onClose={() => setLoadModelOpen(false)}
+      onConfirm={handleFileSelectWithHistoryReset}
+    />
+    </>
   );
 }
