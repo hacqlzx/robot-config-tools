@@ -7,18 +7,22 @@ export interface CabinetPointRow {
   source?: "ocr" | "single";
   boundRectId?: string;
   boundRectTool?: AnnotationTool;
+  relatedRectId?: string;
+  relatedRectTool?: AnnotationTool;
+  recognitionLabel?: string;
+  recognitionLabelDesc?: string;
 }
 
 export interface CabinetTreeNode {
   key: string;
   title: string;
-  nodeType: "station" | "bay" | "main" | "component";
+  nodeType: "station" | "area" | "bay" | "main" | "component";
+  pointCount?: number;
   children?: CabinetTreeNode[];
   isLeaf?: boolean;
 }
 
 export type AnnotationTool = "standardPart" | "deviceLabel" | "deviceBox" | "appearance";
-export type CabinetOcrScope = "whole" | "deviceLabels" | "selected";
 
 export interface AnnotationSelection {
   tool: AnnotationTool;
@@ -33,11 +37,13 @@ export interface ImageRect {
   h: number;
   text?: string;
   confidence?: number;
-  source?: "manual" | "mock" | "ocr";
+  source?: "manual" | "mock" | "ocr" | "ai" | "inferred";
   saved?: boolean;
   generationStatus?: "pending" | "generated" | "saved";
   groupId?: string;
   generatedFromRectId?: string;
+  recognitionLabel?: string;
+  recognitionLabelDesc?: string;
 }
 
 export interface ComponentAnnotations {
@@ -59,6 +65,8 @@ export interface CabinetSinglePoint {
   componentCode: string;
   pointName: string;
   recognitionType: string;
+  recognitionLabel?: string;
+  recognitionLabelDesc?: string;
   boundRectId: string;
   boundRectTool: AnnotationTool;
   rectSnapshot: ImageRect;
@@ -69,4 +77,6 @@ export interface CabinetSinglePoint {
 export interface SinglePointDraft {
   pointName: string;
   recognitionType: string;
+  recognitionLabel?: string;
+  recognitionLabelDesc?: string;
 }

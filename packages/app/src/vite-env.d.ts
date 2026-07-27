@@ -54,8 +54,12 @@ declare global {
   }
 
   interface CabinetImagePackageRecord {
+    recordKey: string;
+    robotCode: string;
     stationName: string;
     stationCode: string;
+    areaName: string;
+    areaCode: string;
     bayName: string;
     bayCode: string;
     mainDeviceName: string;
@@ -78,14 +82,25 @@ declare global {
     success: boolean;
     error?: string;
     packageName?: string;
+    packageDir?: string;
     records?: CabinetImagePackageRecord[];
     warnings?: string[];
+    annotationsByComponent?: Record<string, any>;
+    ocrRowsByComponent?: Record<string, any[]>;
+    singlePointsByComponent?: Record<string, any[]>;
   }
 
   interface CabinetImageLoadResult {
     success: boolean;
     error?: string;
     dataUrl?: string;
+  }
+
+  interface CabinetImageAnnotationSaveResult {
+    success: boolean;
+    error?: string;
+    saved?: boolean;
+    deleted?: boolean;
   }
 
   interface AppWindowState {
@@ -226,8 +241,20 @@ declare global {
       exportSurveyData: (projectName: string, mapName: string, destDir: string) => Promise<{ success: boolean; error?: string; zipPath?: string; zipName?: string }>;
       exportImageLabels: (projectName: string, mapName: string, destDir: string) => Promise<{ success: boolean; error?: string; zipPath?: string; zipName?: string; exportedCount?: number }>;
       importImageLabels: (projectName: string, mapName: string, zipPath: string) => Promise<{ success: boolean; error?: string; importedCount?: number; warnings?: string[] }>;
-      importCabinetImagePackage: (zipPath: string) => Promise<CabinetImagePackageResult>;
+      importCabinetImagePackage: (projectName: string, zipPath: string) => Promise<CabinetImagePackageResult>;
+      loadLocalCabinetImagePackage: (projectName: string) => Promise<CabinetImagePackageResult>;
       loadCabinetImage: (sourceId: string) => Promise<CabinetImageLoadResult>;
+      saveCabinetImageAnnotations: (
+        projectName: string,
+        payload: {
+          recordKey: string;
+          robotCode: string;
+          componentCode: string;
+          annotations: any;
+          ocrRows: any[];
+          singlePoints: any[];
+        },
+      ) => Promise<CabinetImageAnnotationSaveResult>;
       importDeviceVerificationPackage: (projectName: string, sourcePath: string) => Promise<DeviceVerificationPackageResult>;
       loadLocalDeviceVerificationPackage: (projectName: string) => Promise<DeviceVerificationPackageResult>;
       loadDeviceVerificationChildren: (sessionId: string, parentId: string) => Promise<DeviceVerificationChildrenResult>;

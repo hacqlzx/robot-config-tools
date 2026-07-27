@@ -96,10 +96,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("export-image-labels", projectName, mapName, destDir),
   importImageLabels: (projectName, mapName, zipPath) =>
     ipcRenderer.invoke("import-image-labels", projectName, mapName, zipPath),
-  importCabinetImagePackage: (zipPath) =>
-    ipcRenderer.invoke("import-cabinet-image-package", zipPath),
+  importCabinetImagePackage: (projectName, zipPath) =>
+    ipcRenderer.invoke("import-cabinet-image-package", projectName, zipPath),
+  loadLocalCabinetImagePackage: (projectName) =>
+    ipcRenderer.invoke("load-local-cabinet-image-package", projectName),
   loadCabinetImage: (sourceId) =>
     ipcRenderer.invoke("load-cabinet-image", sourceId),
+  saveCabinetImageAnnotations: (projectName, payload) =>
+    ipcRenderer.invoke("save-cabinet-image-annotations", projectName, payload),
   importDeviceVerificationPackage: (projectName, sourcePath) =>
     ipcRenderer.invoke("device-verify:import-package", projectName, sourcePath),
   loadLocalDeviceVerificationPackage: (projectName) =>

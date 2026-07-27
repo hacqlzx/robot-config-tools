@@ -77,7 +77,7 @@ export function sortGroups(groups: AnnotationGroup[]): AnnotationGroup[] {
 function getGroupStatus(standardPart: ImageRect, labels: ImageRect[], devices: ImageRect[]): AnnotationGroup["status"] {
   const rects = [standardPart, ...labels, ...devices];
   if (rects.length > 1 && rects.every((rect) => rect.saved || rect.generationStatus === "saved")) return "saved";
-  if (devices.length || labels.some((rect) => rect.source === "mock" || rect.source === "ocr")) return "generated";
+  if (devices.length || labels.some((rect) => rect.source === "mock" || rect.source === "ocr" || rect.source === "ai")) return "generated";
   return "pending";
 }
 

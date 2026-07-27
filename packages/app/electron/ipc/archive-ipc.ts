@@ -6,6 +6,7 @@ import * as XLSX from "xlsx";
 import { ZipArchive } from "archiver";
 import { DevicePointRepo, getDatabase } from "@robot/database";
 import { getProjectRoot } from "../project-core/project-root";
+import { resolveProjectDir, resolveProjectPath } from "../project-core/project-paths";
 
 const SURVEY_DIR_NAME = "勘察数据";
 const CALIBRATION_FILE_NAME = "勘察数据.json";
@@ -15,6 +16,10 @@ const POINT_CALIBRATION_FILE_NAME = "calibrationInfo.json";
 const MAP_DIR_NAME = "地图";
 const AREA_FILE_NAME = "description_file.json";
 const AREA_TYPE_DEVICE = "8";
+const OVERVIEW_DIR_NAME = "总览图";
+const CABINET_IMAGE_DIR_NAME = "屏柜图像";
+const CABINET_IMAGE_DATA_FILE_NAME = "cabinet-image-data.json";
+const CABINET_COMPONENT_WORKBOOK_NAME = "屏柜部件表.xlsx";
 
 interface CalibrationBinding {
   pointCode: string;
@@ -95,8 +100,12 @@ interface CabinetImageSourceRef extends CabinetImageSource {
 }
 
 interface CabinetImagePackageRecord {
+  recordKey: string;
+  robotCode: string;
   stationName: string;
   stationCode: string;
+  areaName: string;
+  areaCode: string;
   bayName: string;
   bayCode: string;
   mainDeviceName: string;
@@ -107,6 +116,32 @@ interface CabinetImagePackageRecord {
   imageName: string;
   imageSource?: CabinetImageSource;
   imageDataUrl: string;
+}
+
+interface CabinetImageRobotIndex {
+  robotCode: string;
+  dirName: string;
+  packageName?: string;
+  workbookName?: string;
+  importedAt: string;
+  records: Omit<CabinetImagePackageRecord, "imageSource" | "imageDataUrl">[];
+}
+
+interface CabinetImageAnnotationIndex {
+  recordKey: string;
+  robotCode: string;
+  componentCode: string;
+  updatedAt: string;
+  annotations: any;
+  ocrRows: any[];
+  singlePoints: any[];
+}
+
+interface CabinetImageWorkspaceData {
+  version: number;
+  updatedAt: string;
+  robots: CabinetImageRobotIndex[];
+  annotations: Record<string, CabinetImageAnnotationIndex>;
 }
 
 const cabinetImageSources = new Map<string, CabinetImageSourceRef>();
@@ -313,7 +348,7 @@ export function registerArchiveIpc(): void {
     }
   });
 
-  ipcMain.handle("import-cabinet-image-package", async (_event, packagePath: string) => {
+  ipcMain.handle("import-cabinet-image-package", async (_event, projectName: string, packagePath: string) => {
     try {
       const sourcePath = String(packagePath || "").trim();
       if (!sourcePath || !path.isAbsolute(sourcePath)) throw new Error("压缩包路径无效");
@@ -321,18 +356,30 @@ export function registerArchiveIpc(): void {
 
       const stat = fs.statSync(sourcePath);
       cabinetImageSources.clear();
-      const result = stat.isDirectory()
-        ? readCabinetImagePackageFromDir(sourcePath)
-        : readCabinetImagePackageFromZip(sourcePath);
+      const imported = importCabinetImagePackageToLocal(projectName, sourcePath, stat.isDirectory() ? "directory" : "zip");
+      const result = readCabinetImageWorkspace(projectName);
 
       if (result.records.length === 0) throw new Error("未解析到屏柜部件记录");
       return {
         success: true,
         packageName: path.basename(sourcePath),
+        packageDir: imported.importDir,
+        importedRobotCode: imported.robotCode,
         ...result,
       };
     } catch (e: any) {
       console.error("[import-cabinet-image-package] 导入失败:", e.message);
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle("load-local-cabinet-image-package", async (_event, projectName: string) => {
+    try {
+      cabinetImageSources.clear();
+      const result = readCabinetImageWorkspace(projectName);
+      return { success: true, ...result };
+    } catch (e: any) {
+      console.error("[load-local-cabinet-image-package] 加载失败:", e.message);
       return { success: false, error: e.message };
     }
   });
@@ -348,6 +395,60 @@ export function registerArchiveIpc(): void {
       return { success: false, error: e.message };
     }
   });
+
+  ipcMain.handle("save-cabinet-image-annotations", async (_event, projectName: string, payload: any) => {
+    try {
+      const result = saveCabinetImageAnnotations(projectName, payload);
+      return { success: true, ...result };
+    } catch (e: any) {
+      console.error("[save-cabinet-image-annotations] 保存失败:", e.message);
+      return { success: false, error: e.message };
+    }
+  });
+}
+
+function importCabinetImagePackageToLocal(projectName: string, sourcePath: string, sourceType: "zip" | "directory"): { importDir: string; robotCode: string } {
+  const safeProjectName = String(projectName || "").trim();
+  if (!safeProjectName) throw new Error("请先选择项目");
+
+  const projectDir = resolveProjectDir(safeProjectName);
+  if (!fs.existsSync(projectDir) || !fs.statSync(projectDir).isDirectory()) {
+    throw new Error(`项目 "${safeProjectName}" 不存在`);
+  }
+
+  const cabinetRoot = resolveProjectPath(safeProjectName, OVERVIEW_DIR_NAME, CABINET_IMAGE_DIR_NAME);
+  fs.mkdirSync(cabinetRoot, { recursive: true });
+  if (sourceType === "directory") assertDirectoryDoesNotOverlapForCabinetImages(sourcePath, cabinetRoot);
+
+  const tempDir = path.join(cabinetRoot, `.import-${Date.now()}-${process.pid}`);
+  fs.rmSync(tempDir, { recursive: true, force: true });
+  fs.mkdirSync(tempDir, { recursive: true });
+
+  try {
+    if (sourceType === "zip") {
+      const zip = new AdmZip(sourcePath);
+      zip.extractAllTo(tempDir, true);
+    } else {
+      fs.cpSync(sourcePath, tempDir, { recursive: true, force: true });
+    }
+
+    flattenCabinetImageWrapperDir(tempDir);
+    normalizeCabinetWorkbookFile(tempDir);
+
+    const parsed = readCabinetImagePackageFromDir(tempDir);
+    const robotCode = assertSafePathSegment(resolveCabinetRobotCode(parsed.records), "机器人编码");
+    const targetDir = path.join(cabinetRoot, robotCode);
+    assertInside(cabinetRoot, targetDir, "导入屏柜图像");
+
+    fs.rmSync(targetDir, { recursive: true, force: true });
+    fs.renameSync(tempDir, targetDir);
+
+    replaceCabinetImageRobotIndex(safeProjectName, robotCode, targetDir, path.basename(sourcePath));
+    return { importDir: targetDir, robotCode };
+  } catch (error) {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 function readCabinetImagePackageFromZip(zipPath: string): { records: CabinetImagePackageRecord[]; warnings: string[] } {
@@ -360,7 +461,7 @@ function readCabinetImagePackageFromZip(zipPath: string): { records: CabinetImag
   });
   if (!xlsxEntry) throw new Error("压缩包内未找到屏柜部件表 Excel");
 
-  const rows = parseCabinetComponentRows(xlsxEntry.getData());
+  const rows = normalizeCabinetComponentRows(parseCabinetComponentRows(xlsxEntry.getData()));
   const imageMap = new Map<string, { name: string; source: CabinetImageSource }>();
   for (const entry of entries) {
     const entryName = normalizeZipEntryName(entry.entryName);
@@ -389,11 +490,10 @@ function readCabinetImagePackageFromZip(zipPath: string): { records: CabinetImag
 }
 
 function readCabinetImagePackageFromDir(dirPath: string): { records: CabinetImagePackageRecord[]; warnings: string[] } {
-  const files = fs.readdirSync(dirPath, { withFileTypes: true });
-  const xlsx = files.find((item) => item.isFile() && /\.(xlsx|xls)$/i.test(item.name) && !item.name.startsWith("~$"));
-  if (!xlsx) throw new Error("目录内未找到屏柜部件表 Excel");
+  const workbookPath = findCabinetComponentWorkbookPath(dirPath);
+  if (!workbookPath) throw new Error("目录内未找到屏柜部件表 Excel");
 
-  const rows = parseCabinetComponentRows(fs.readFileSync(path.join(dirPath, xlsx.name)));
+  const rows = normalizeCabinetComponentRows(parseCabinetComponentRows(fs.readFileSync(workbookPath)));
   const imageMap = new Map<string, { name: string; source: CabinetImageSource }>();
   const imgDir = path.join(dirPath, "img");
   const searchDir = fs.existsSync(imgDir) && fs.statSync(imgDir).isDirectory() ? imgDir : dirPath;
@@ -417,23 +517,31 @@ function readCabinetImagePackageFromDir(dirPath: string): { records: CabinetImag
   return attachCabinetImages(rows, imageMap);
 }
 
-function parseCabinetComponentRows(xlsxBuffer: Buffer): Omit<CabinetImagePackageRecord, "imageName" | "imageDataUrl">[] {
+function parseCabinetComponentRows(xlsxBuffer: Buffer): Omit<CabinetImagePackageRecord, "imageName" | "imageSource" | "imageDataUrl">[] {
   const wb = XLSX.read(xlsxBuffer, { type: "buffer" });
   for (const sheetName of wb.SheetNames) {
     const ws = wb.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
     const parsed = rows
-      .map((row) => ({
-        stationName: valueText(row["厂站名称"]),
-        stationCode: valueText(row["厂站编码"]),
-        bayName: valueText(row["间隔名称"]),
-        bayCode: valueText(row["间隔编码"]),
-        mainDeviceName: valueText(row["主设备名称"]),
-        mainDeviceCode: valueText(row["主设备编码"]),
-        componentName: valueText(row["部件名称"]),
-        componentCode: valueText(row["部件编码"]),
-        calibrationId: valueText(row["标定id"]),
-      }))
+      .map((row) => {
+        const robotCode = valueText(row["机器人编码"]);
+        const componentCode = valueText(row["部件编码"]);
+        return {
+          recordKey: buildCabinetRecordKey(robotCode, componentCode),
+          robotCode,
+          stationName: valueText(row["厂站名称"]),
+          stationCode: valueText(row["厂站编码"]),
+          areaName: valueText(row["区域名称"]),
+          areaCode: valueText(row["区域编码"]),
+          bayName: valueText(row["间隔名称"]),
+          bayCode: valueText(row["间隔编码"]),
+          mainDeviceName: valueText(row["主设备名称"]),
+          mainDeviceCode: valueText(row["主设备编码"]),
+          componentName: valueText(row["部件名称"]),
+          componentCode,
+          calibrationId: valueText(row["标定id"]),
+        };
+      })
       .filter((row) => row.componentCode);
     if (parsed.length > 0) return parsed;
   }
@@ -441,7 +549,7 @@ function parseCabinetComponentRows(xlsxBuffer: Buffer): Omit<CabinetImagePackage
 }
 
 function attachCabinetImages(
-  rows: Omit<CabinetImagePackageRecord, "imageName" | "imageDataUrl">[],
+  rows: Omit<CabinetImagePackageRecord, "imageName" | "imageSource" | "imageDataUrl">[],
   imageMap: Map<string, { name: string; source: CabinetImageSource }>,
 ): { records: CabinetImagePackageRecord[]; warnings: string[] } {
   const warnings: string[] = [];
@@ -456,6 +564,238 @@ function attachCabinetImages(
     };
   });
   return { records, warnings };
+}
+
+function readCabinetImageWorkspace(projectName: string): {
+  records: CabinetImagePackageRecord[];
+  warnings: string[];
+  annotationsByComponent: Record<string, any>;
+  ocrRowsByComponent: Record<string, any[]>;
+  singlePointsByComponent: Record<string, any[]>;
+  robots: CabinetImageRobotIndex[];
+} {
+  const safeProjectName = String(projectName || "").trim();
+  if (!safeProjectName) throw new Error("请先选择项目");
+
+  const projectDir = resolveProjectDir(safeProjectName);
+  if (!fs.existsSync(projectDir) || !fs.statSync(projectDir).isDirectory()) {
+    throw new Error(`项目 "${safeProjectName}" 不存在`);
+  }
+
+  const cabinetRoot = resolveProjectPath(safeProjectName, OVERVIEW_DIR_NAME, CABINET_IMAGE_DIR_NAME);
+  if (!fs.existsSync(cabinetRoot)) {
+    return {
+      records: [],
+      warnings: [],
+      annotationsByComponent: {},
+      ocrRowsByComponent: {},
+      singlePointsByComponent: {},
+      robots: [],
+    };
+  }
+
+  const data = readCabinetImageWorkspaceData(cabinetRoot);
+  const records: CabinetImagePackageRecord[] = [];
+  const warnings: string[] = [];
+  const robots: CabinetImageRobotIndex[] = [];
+
+  for (const item of fs.readdirSync(cabinetRoot, { withFileTypes: true })) {
+    if (!item.isDirectory() || item.name.startsWith(".")) continue;
+    const robotDir = path.join(cabinetRoot, item.name);
+    try {
+      normalizeCabinetWorkbookFile(robotDir);
+      const result = readCabinetImagePackageFromDir(robotDir);
+      const robotCode = resolveCabinetRobotCode(result.records, item.name);
+      records.push(...result.records);
+      warnings.push(...result.warnings.map((warning) => `${robotCode}: ${warning}`));
+      const previousRobot = data.robots.find((robot) => robot.robotCode === robotCode);
+      robots.push({
+        robotCode,
+        dirName: item.name,
+        packageName: previousRobot?.packageName,
+        workbookName: path.basename(findCabinetComponentWorkbookPath(robotDir) || CABINET_COMPONENT_WORKBOOK_NAME),
+        importedAt: previousRobot?.importedAt || new Date().toISOString(),
+        records: result.records.map(toCabinetImagePersistedRecord),
+      });
+    } catch (error: any) {
+      warnings.push(`${item.name}: ${error?.message || "屏柜图像目录解析失败"}`);
+    }
+  }
+
+  const recordKeys = new Set(records.map((record) => record.recordKey));
+  const annotationsByComponent: Record<string, any> = {};
+  const ocrRowsByComponent: Record<string, any[]> = {};
+  const singlePointsByComponent: Record<string, any[]> = {};
+  const nextAnnotations: Record<string, CabinetImageAnnotationIndex> = {};
+  for (const [recordKey, entry] of Object.entries(data.annotations || {})) {
+    if (!recordKeys.has(recordKey)) continue;
+    const annotations = normalizeCabinetAnnotationData(entry.annotations);
+    annotationsByComponent[recordKey] = annotations;
+    ocrRowsByComponent[recordKey] = Array.isArray(entry.ocrRows) ? entry.ocrRows : [];
+    singlePointsByComponent[recordKey] = Array.isArray(entry.singlePoints) ? entry.singlePoints : [];
+    nextAnnotations[recordKey] = {
+      ...entry,
+      annotations,
+      ocrRows: ocrRowsByComponent[recordKey],
+      singlePoints: singlePointsByComponent[recordKey],
+    };
+  }
+
+  writeCabinetImageWorkspaceData(cabinetRoot, {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    robots,
+    annotations: nextAnnotations,
+  });
+
+  return { records, warnings, annotationsByComponent, ocrRowsByComponent, singlePointsByComponent, robots };
+}
+
+function replaceCabinetImageRobotIndex(projectName: string, robotCode: string, targetDir: string, packageName: string): void {
+  const cabinetRoot = resolveProjectPath(projectName, OVERVIEW_DIR_NAME, CABINET_IMAGE_DIR_NAME);
+  const data = readCabinetImageWorkspaceData(cabinetRoot);
+  const result = readCabinetImagePackageFromDir(targetDir);
+  const now = new Date().toISOString();
+  const nextRobots = data.robots.filter((robot) => robot.robotCode !== robotCode);
+  const nextAnnotations = Object.fromEntries(
+    Object.entries(data.annotations || {}).filter(([, entry]) => entry.robotCode !== robotCode),
+  );
+
+  nextRobots.push({
+    robotCode,
+    dirName: path.basename(targetDir),
+    packageName,
+    workbookName: path.basename(findCabinetComponentWorkbookPath(targetDir) || CABINET_COMPONENT_WORKBOOK_NAME),
+    importedAt: now,
+    records: result.records.map(toCabinetImagePersistedRecord),
+  });
+
+  writeCabinetImageWorkspaceData(cabinetRoot, {
+    version: 1,
+    updatedAt: now,
+    robots: nextRobots,
+    annotations: nextAnnotations,
+  });
+}
+
+function saveCabinetImageAnnotations(projectName: string, payload: any): { saved: boolean; deleted: boolean } {
+  const safeProjectName = String(projectName || "").trim();
+  if (!safeProjectName) throw new Error("请先选择项目");
+  const cabinetRoot = resolveProjectPath(safeProjectName, OVERVIEW_DIR_NAME, CABINET_IMAGE_DIR_NAME);
+  fs.mkdirSync(cabinetRoot, { recursive: true });
+
+  const recordKey = valueText(payload?.recordKey);
+  const robotCode = valueText(payload?.robotCode);
+  const componentCode = valueText(payload?.componentCode);
+  if (!recordKey) throw new Error("部件标注 key 为空");
+  if (!robotCode) throw new Error("机器人编码为空");
+  if (!componentCode) throw new Error("部件编码为空");
+
+  const data = readCabinetImageWorkspaceData(cabinetRoot);
+  const annotations = normalizeCabinetAnnotationData(payload?.annotations);
+  const ocrRows = Array.isArray(payload?.ocrRows) ? payload.ocrRows : [];
+  const singlePoints = Array.isArray(payload?.singlePoints) ? payload.singlePoints : [];
+  const hasData = hasCabinetAnnotationData(annotations, ocrRows, singlePoints);
+  const now = new Date().toISOString();
+
+  if (hasData) {
+    data.annotations[recordKey] = {
+      recordKey,
+      robotCode,
+      componentCode,
+      updatedAt: now,
+      annotations,
+      ocrRows,
+      singlePoints,
+    };
+  } else {
+    delete data.annotations[recordKey];
+  }
+
+  writeCabinetImageWorkspaceData(cabinetRoot, { ...data, updatedAt: now });
+  return { saved: hasData, deleted: !hasData };
+}
+
+function readCabinetImageWorkspaceData(cabinetRoot: string): CabinetImageWorkspaceData {
+  const filePath = path.join(cabinetRoot, CABINET_IMAGE_DATA_FILE_NAME);
+  if (!fs.existsSync(filePath)) {
+    return { version: 1, updatedAt: "", robots: [], annotations: {} };
+  }
+  try {
+    const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    return {
+      version: Number(data?.version || 1),
+      updatedAt: valueText(data?.updatedAt),
+      robots: Array.isArray(data?.robots) ? data.robots : [],
+      annotations: data?.annotations && typeof data.annotations === "object" ? data.annotations : {},
+    };
+  } catch {
+    return { version: 1, updatedAt: "", robots: [], annotations: {} };
+  }
+}
+
+function writeCabinetImageWorkspaceData(cabinetRoot: string, data: CabinetImageWorkspaceData): void {
+  fs.mkdirSync(cabinetRoot, { recursive: true });
+  fs.writeFileSync(path.join(cabinetRoot, CABINET_IMAGE_DATA_FILE_NAME), `${JSON.stringify(data, null, 2)}\n`, "utf-8");
+}
+
+function toCabinetImagePersistedRecord(record: CabinetImagePackageRecord): Omit<CabinetImagePackageRecord, "imageSource" | "imageDataUrl"> {
+  const { imageSource: _imageSource, imageDataUrl: _imageDataUrl, ...rest } = record;
+  return rest;
+}
+
+function normalizeCabinetComponentRows(
+  rows: Omit<CabinetImagePackageRecord, "imageName" | "imageSource" | "imageDataUrl">[],
+): Omit<CabinetImagePackageRecord, "imageName" | "imageSource" | "imageDataUrl">[] {
+  const robotCode = resolveCabinetRobotCode(rows);
+  return rows.map((row) => ({
+    ...row,
+    robotCode,
+    recordKey: buildCabinetRecordKey(robotCode, row.componentCode),
+  }));
+}
+
+function resolveCabinetRobotCode(
+  rows: Array<Pick<CabinetImagePackageRecord, "robotCode">>,
+  fallback = "",
+): string {
+  const robotCodes = [...new Set(rows.map((row) => valueText(row.robotCode)).filter(Boolean))];
+  if (robotCodes.length > 1) throw new Error(`屏柜部件表存在多个机器人编码：${robotCodes.join(", ")}`);
+  const robotCode = robotCodes[0] || valueText(fallback);
+  if (!robotCode) throw new Error("屏柜部件表缺少机器人编码");
+  return robotCode;
+}
+
+function buildCabinetRecordKey(robotCode: string, componentCode: string): string {
+  return `${valueText(robotCode) || "default"}::${valueText(componentCode)}`;
+}
+
+function normalizeCabinetAnnotationData(annotations: any): any {
+  return {
+    standardPartRects: Array.isArray(annotations?.standardPartRects) ? annotations.standardPartRects : [],
+    deviceLabelRects: Array.isArray(annotations?.deviceLabelRects) ? annotations.deviceLabelRects : [],
+    deviceBoxRects: Array.isArray(annotations?.deviceBoxRects) ? annotations.deviceBoxRects : [],
+    appearanceRects: Array.isArray(annotations?.appearanceRects) ? annotations.appearanceRects : [],
+  };
+}
+
+function hasCabinetAnnotationData(annotations: any, ocrRows: any[], singlePoints: any[]): boolean {
+  return normalizeCabinetAnnotationData(annotations).standardPartRects.length > 0
+    || normalizeCabinetAnnotationData(annotations).deviceLabelRects.length > 0
+    || normalizeCabinetAnnotationData(annotations).deviceBoxRects.length > 0
+    || normalizeCabinetAnnotationData(annotations).appearanceRects.length > 0
+    || ocrRows.length > 0
+    || singlePoints.length > 0;
+}
+
+function normalizeCabinetWorkbookFile(dirPath: string): void {
+  const workbookPath = findCabinetComponentWorkbookPath(dirPath);
+  if (!workbookPath) return;
+  const ext = path.extname(workbookPath).toLowerCase() === ".xls" ? ".xls" : ".xlsx";
+  const targetPath = path.join(dirPath, ext === ".xls" ? "屏柜部件表.xls" : CABINET_COMPONENT_WORKBOOK_NAME);
+  if (isSameFsPath(workbookPath, targetPath)) return;
+  fs.copyFileSync(workbookPath, targetPath);
+  fs.rmSync(workbookPath, { force: true });
 }
 
 function readCabinetImageDataUrl(source: CabinetImageSourceRef): string {
@@ -560,6 +900,22 @@ function assertInside(root: string, target: string, action: string): string {
   throw new Error(`${action}路径越界`);
 }
 
+function isSameFsPath(leftPath: string, rightPath: string): boolean {
+  return path.resolve(leftPath).toLowerCase() === path.resolve(rightPath).toLowerCase();
+}
+
+function assertDirectoryDoesNotOverlapForCabinetImages(sourceDir: string, targetDir: string): void {
+  const source = path.resolve(sourceDir);
+  const target = path.resolve(targetDir);
+  const relTargetFromSource = path.relative(source, target);
+  const relSourceFromTarget = path.relative(target, source);
+  const targetInsideSource = relTargetFromSource === "" || (!relTargetFromSource.startsWith("..") && !path.isAbsolute(relTargetFromSource));
+  const sourceInsideTarget = relSourceFromTarget === "" || (!relSourceFromTarget.startsWith("..") && !path.isAbsolute(relSourceFromTarget));
+  if (targetInsideSource || sourceInsideTarget) {
+    throw new Error("导入目录不能与屏柜图像本地目录互相包含");
+  }
+}
+
 function flattenSingleWrapperDir(targetDir: string): void {
   const items = fs.readdirSync(targetDir, { withFileTypes: true })
     .filter((item) => !item.name.startsWith(".") && !item.name.startsWith("__"));
@@ -586,6 +942,35 @@ function flattenSingleWrapperDir(targetDir: string): void {
   }
   fs.rmSync(wrapper, { recursive: true, force: true });
   console.log("[import-survey-data] 扁平化外层目录:", wrapper);
+}
+
+function flattenCabinetImageWrapperDir(targetDir: string): void {
+  if (findCabinetComponentWorkbookPath(targetDir)) return;
+
+  const items = fs.readdirSync(targetDir, { withFileTypes: true })
+    .filter((item) => !item.name.startsWith(".") && !item.name.startsWith("__"));
+  const wrappers = items
+    .filter((item) => item.isDirectory())
+    .map((item) => path.join(targetDir, item.name))
+    .filter((wrapper) => Boolean(findCabinetComponentWorkbookPath(wrapper)));
+  if (wrappers.length !== 1) return;
+
+  const wrapper = wrappers[0];
+  for (const item of fs.readdirSync(wrapper, { withFileTypes: true })) {
+    const src = path.join(wrapper, item.name);
+    const dst = path.join(targetDir, item.name);
+    if (item.isDirectory() && fs.existsSync(dst)) cpMerge(src, dst);
+    else fs.cpSync(src, dst, { recursive: true, force: true });
+  }
+  fs.rmSync(wrapper, { recursive: true, force: true });
+  console.log("[import-cabinet-image-package] 扁平化外层目录:", wrapper);
+}
+
+function findCabinetComponentWorkbookPath(dirPath: string): string | null {
+  if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) return null;
+  const files = fs.readdirSync(dirPath, { withFileTypes: true });
+  const xlsx = files.find((item) => item.isFile() && /\.(xlsx|xls)$/i.test(item.name) && !item.name.startsWith("~$"));
+  return xlsx ? path.join(dirPath, xlsx.name) : null;
 }
 
 function resolveDeviceDir(surveyDir: string): string | null {

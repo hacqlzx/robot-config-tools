@@ -4,6 +4,12 @@ export interface CabinetOcrResult {
   labels: CabinetOcrDetectedLabel[];
 }
 
+export interface CabinetNameOcrResult {
+  rawText: string;
+  name: string;
+  confidence: number;
+}
+
 export interface CabinetOcrCropRect {
   x: number;
   y: number;
@@ -66,7 +72,44 @@ export const CABINET_LABEL_OCR_PROMPT = [
   "如果某个区域无法识别，labels 输出空数组。",
 ].join("\n");
 
+export const CABINET_FACADE_LABEL_OCR_PROMPT = [
+  "你是屏柜验证图像的外观框标签识别助手。",
+  "外观框场景中，一个外观框只对应一个设备，一个设备只对应一个设备标签。",
+  "请只识别 ROI 内这个外观设备对应的标签名称。",
+  "每个 ROI 最多输出一条 labels 数据，禁止把同一个标签拆成多条。",
+  "如果同一个标签包含编号、名称、多行文字或左右分段文字，必须按阅读顺序合并成一个完整 text。",
+  "如果 ROI 内出现多个相关文字片段，优先选择最像设备标签或设备名称的内容，并合并为一条。",
+  "过滤外观框内的部件状态、表计读数、按钮文字、厂家、日期、水印和无关铭牌。",
+  "如果无法识别，labels 输出空数组。",
+  "confidence 为 0 到 1 的文字识别置信度，无法精确判断时给合理估计。",
+  "只输出严格 JSON，不要输出 Markdown、解释或额外说明。",
+  "JSON 格式：{\"regions\":[{\"regionId\":\"region_1\",\"labels\":[{\"text\":\"外观设备标签\",\"confidence\":0.9}]}]}。",
+].join("\n");
+
+export const CABINET_NAME_OCR_PROMPT = [
+  "你是屏柜验证图像的屏柜名称识别助手。",
+  "请只识别图片 ROI 内最像屏柜、柜体、主设备名称的文字。",
+  "如果同一名称被换行、分段或分隔显示，请合并成一个完整名称。",
+  "过滤编号、日期、厂家、页眉页脚、水印和明显不是屏柜名称的文字。",
+  "如果无法识别，name 输出空字符串。",
+  "confidence 为 0 到 1 的文字识别置信度，无法精确判断时给合理估计。",
+  "只输出严格 JSON，不要输出 Markdown、解释或额外说明。",
+  "JSON 格式：{\"name\":\"屏柜名称\",\"confidence\":0.9}。",
+].join("\n");
+
 export async function recognizeCabinetLabels(sources: CabinetOcrImageSource | CabinetOcrImageSource[]): Promise<CabinetOcrResult> {
+  return recognizeCabinetLabelsWithPrompt(sources, CABINET_LABEL_OCR_PROMPT);
+}
+
+export async function recognizeCabinetFacadeLabels(sources: CabinetOcrImageSource | CabinetOcrImageSource[]): Promise<CabinetOcrResult> {
+  return recognizeCabinetLabelsWithPrompt(sources, CABINET_FACADE_LABEL_OCR_PROMPT, { mergeLabelsPerRegion: true });
+}
+
+async function recognizeCabinetLabelsWithPrompt(
+  sources: CabinetOcrImageSource | CabinetOcrImageSource[],
+  prompt: string,
+  options: { mergeLabelsPerRegion?: boolean } = {},
+): Promise<CabinetOcrResult> {
   const imageSources = Array.isArray(sources) ? sources : [sources];
   if (!imageSources.length) throw new Error("图片为空，无法识别");
   for (const source of imageSources) {
@@ -85,7 +128,7 @@ export async function recognizeCabinetLabels(sources: CabinetOcrImageSource | Ca
       messages: [
         {
           role: "user",
-          content: buildCabinetOcrContent(imageSources),
+          content: buildCabinetOcrContent(imageSources, prompt),
         },
       ],
     }),
@@ -98,7 +141,38 @@ export async function recognizeCabinetLabels(sources: CabinetOcrImageSource | Ca
   }
 
   const rawText = extractCompletionText(payload);
-  return normalizeCabinetOcrResult(rawText, imageSources);
+  return normalizeCabinetOcrResult(rawText, imageSources, options);
+}
+
+export async function recognizeCabinetName(source: CabinetOcrImageSource): Promise<CabinetNameOcrResult> {
+  if (!source.dataUrl.startsWith("data:image/")) throw new Error("仅支持 data URI 图片识别");
+
+  const response = await fetch(`${DASH_SCOPE_BASE_URL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${DASH_SCOPE_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: DASH_SCOPE_MODEL,
+      temperature: 0,
+      messages: [
+        {
+          role: "user",
+          content: buildCabinetNameOcrContent(source),
+        },
+      ],
+    }),
+  });
+
+  const payloadText = await response.text();
+  const payload = parseJsonPayload(payloadText);
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || payloadText || `识别请求失败：${response.status}`);
+  }
+
+  const rawText = extractCompletionText(payload);
+  return normalizeCabinetNameOcrResult(rawText);
 }
 
 export async function cropCabinetOcrImage(imageDataUrl: string, rect: CabinetOcrCropRect, padding = 0): Promise<CabinetOcrCropResult> {
@@ -127,16 +201,16 @@ export async function cropCabinetOcrImage(imageDataUrl: string, rect: CabinetOcr
   };
 }
 
-function buildCabinetOcrContent(sources: CabinetOcrImageSource[]) {
+function buildCabinetOcrContent(sources: CabinetOcrImageSource[], prompt: string) {
   if (shouldUseSingleImageRoiPrompt(sources)) {
-    return buildSingleImageRoiContent(sources);
+    return buildSingleImageRoiContent(sources, prompt);
   }
 
   const content: ({ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } })[] = [
     {
       type: "text",
       text: [
-        CABINET_LABEL_OCR_PROMPT,
+        prompt,
         "",
         "下面按顺序提供待识别区域图片。输出 JSON 中必须使用对应 regionId：",
         ...sources.map((source) => `${source.regionId}: ${source.title}`),
@@ -151,13 +225,30 @@ function buildCabinetOcrContent(sources: CabinetOcrImageSource[]) {
   return content;
 }
 
+function buildCabinetNameOcrContent(source: CabinetOcrImageSource) {
+  return [
+    {
+      type: "text" as const,
+      text: [
+        CABINET_NAME_OCR_PROMPT,
+        "",
+        `regionId=${source.regionId}，title=${source.title}`,
+      ].join("\n"),
+    },
+    {
+      type: "image_url" as const,
+      image_url: { url: source.dataUrl },
+    },
+  ];
+}
+
 function shouldUseSingleImageRoiPrompt(sources: CabinetOcrImageSource[]): boolean {
   if (!sources.length) return false;
   const firstUrl = sources[0].dataUrl;
   return sources.every((source) => source.dataUrl === firstUrl && source.roi);
 }
 
-function buildSingleImageRoiContent(sources: CabinetOcrImageSource[]) {
+function buildSingleImageRoiContent(sources: CabinetOcrImageSource[], prompt: string) {
   const roiList = sources.map((source) => {
     const roi = source.roi!;
     return {
@@ -176,7 +267,7 @@ function buildSingleImageRoiContent(sources: CabinetOcrImageSource[]) {
     {
       type: "text" as const,
       text: [
-        CABINET_LABEL_OCR_PROMPT,
+        prompt,
         "",
         "下面只提供一张原图。请严格只识别 ROI 列表内的标签。",
         "ROI 列表坐标只用于限定识别范围，不要输出坐标。",
@@ -216,13 +307,20 @@ function loadImage(imageDataUrl: string): Promise<HTMLImageElement> {
   });
 }
 
-function normalizeCabinetOcrResult(rawText: string, sources: CabinetOcrImageSource[]): CabinetOcrResult {
+function normalizeCabinetOcrResult(
+  rawText: string,
+  sources: CabinetOcrImageSource[],
+  options: { mergeLabelsPerRegion?: boolean } = {},
+): CabinetOcrResult {
   const parsed = parseJsonPayload(extractJsonText(rawText));
   const regions = normalizeRegions(parsed, sources);
+  const normalizedRegions = options.mergeLabelsPerRegion
+    ? regions.map((region) => ({ ...region, labels: mergeDetectedLabels(region.regionId, region.labels) }))
+    : regions;
   return {
     rawText,
-    regions,
-    labels: regions.flatMap((region) => region.labels),
+    regions: normalizedRegions,
+    labels: normalizedRegions.flatMap((region) => region.labels),
   };
 }
 
@@ -252,6 +350,16 @@ function normalizeRegions(payload: any, sources: CabinetOcrImageSource[]): Cabin
   }));
 }
 
+function normalizeCabinetNameOcrResult(rawText: string): CabinetNameOcrResult {
+  const payload = parseJsonPayload(extractJsonText(rawText));
+  const name = String(payload?.name || payload?.text || payload?.label || "").trim();
+  return {
+    rawText,
+    name,
+    confidence: clampConfidence(payload?.confidence ?? payload?.score ?? payload?.probability),
+  };
+}
+
 function normalizeDetectedLabel(regionId: string, value: any): CabinetOcrDetectedLabel | null {
   const text = typeof value === "string" ? value.trim() : String(value?.text || value?.label || "").trim();
   if (!text) return null;
@@ -260,6 +368,16 @@ function normalizeDetectedLabel(regionId: string, value: any): CabinetOcrDetecte
     text,
     confidence: typeof value === "string" ? 0.5 : clampConfidence(value?.confidence ?? value?.score ?? value?.probability),
   };
+}
+
+function mergeDetectedLabels(regionId: string, labels: CabinetOcrDetectedLabel[]): CabinetOcrDetectedLabel[] {
+  const validLabels = labels.filter((label) => label.text.trim());
+  if (validLabels.length <= 1) return validLabels;
+  return [{
+    regionId,
+    text: validLabels.map((label) => label.text.trim()).join(" "),
+    confidence: validLabels.reduce((sum, label) => sum + label.confidence, 0) / validLabels.length,
+  }];
 }
 
 function clampConfidence(value: any): number {

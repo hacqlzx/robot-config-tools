@@ -517,11 +517,12 @@ function drawAnnotationRects(
 ) {
   ctx.save();
   ctx.lineWidth = draft ? 2 : 1.5;
-  ctx.setLineDash(draft ? [6, 4] : []);
   for (const rect of rects) {
     const selectedRect = "id" in rect && selected?.tool === tool && selected.id === rect.id;
     const color = getAnnotationStrokeColor(tool, rect);
+    const inferred = "source" in rect && rect.source === "inferred";
     ctx.strokeStyle = color;
+    ctx.setLineDash(draft || inferred ? [6, 4] : []);
     const x = view.offsetX + rect.x * view.scale;
     const y = view.offsetY + rect.y * view.scale;
     const w = rect.w * view.scale;
@@ -553,7 +554,8 @@ function getAnnotationStrokeColor(
   tool: AnnotationTool,
   rect: ImageRect | Omit<ImageRect, "id">,
 ): string {
-  const recognized = "source" in rect && (rect.source === "ocr" || rect.source === "mock");
+  const source = "source" in rect ? rect.source : undefined;
+  const recognized = source === "ocr" || source === "mock" || source === "ai";
   if (tool === "standardPart") {
     return recognized ? ANNOTATION_COLORS.standardPartRecognition : ANNOTATION_COLORS.standardPartManual;
   }
@@ -561,6 +563,7 @@ function getAnnotationStrokeColor(
     return recognized ? ANNOTATION_COLORS.deviceLabelRecognition : ANNOTATION_COLORS.deviceLabelManual;
   }
   if (tool === "deviceBox") {
+    if (source === "inferred") return ANNOTATION_COLORS.deviceBoxInferred;
     return recognized ? ANNOTATION_COLORS.deviceBoxRecognition : ANNOTATION_COLORS.deviceBoxManual;
   }
   return ANNOTATION_COLORS.appearance;
