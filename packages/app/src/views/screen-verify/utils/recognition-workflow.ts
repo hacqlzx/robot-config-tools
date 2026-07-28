@@ -2,6 +2,7 @@ import { detectCabinetDevices } from "../services/device-detection-service";
 import type { DeviceDetection } from "../services/device-detection-service";
 import { cropCabinetOcrImage, recognizeCabinetFacadeLabels, recognizeCabinetLabels } from "../services/ocr-service";
 import type { CabinetOcrDetectedLabel } from "../services/ocr-service";
+import { throwIfRecognitionCancelled } from "../services/recognition-request";
 import { validateAnnotationGroups } from "./annotation-group-utils";
 import { cloneAnnotations, findSelectedAnnotation } from "./annotation-utils";
 import { FACADE_TARGET_TYPE, findTargetTypeOption, MIN_ANNOTATION_RECT_SIZE } from "./constants";
@@ -48,10 +49,12 @@ interface RecognizeComponentImageOptions {
   existingRows: CabinetPointRow[];
   existingSinglePoints: CabinetSinglePoint[];
   mode: MultiPointGenerateMode;
+  signal?: AbortSignal;
 }
 
 export async function recognizeComponentImage(options: RecognizeComponentImageOptions): Promise<ComponentRecognitionResult> {
-  const { imageDataUrl, annotations, existingRows, existingSinglePoints, mode } = options;
+  const { imageDataUrl, annotations, existingRows, existingSinglePoints, mode, signal } = options;
+  throwIfRecognitionCancelled(signal);
   const working = mode === "whole" ? retainRecognitionInputAnnotations(annotations) : cloneAnnotations(annotations);
   const targetLabels = getRecognitionTargetRects(working.deviceLabelRects, mode, isWholeRecognitionLabelRect);
   const targetAppearanceRects = getRecognitionTargetRects(working.appearanceRects, mode, isManualInputRect);
@@ -67,6 +70,7 @@ export async function recognizeComponentImage(options: RecognizeComponentImageOp
       existingRows,
       existingSinglePoints,
       mode,
+      signal,
     });
   }
 
@@ -77,10 +81,11 @@ export async function recognizeComponentImage(options: RecognizeComponentImageOp
 
   const preDetectionGroups = validation.groups.map((group) => ({
     ...group,
-    deviceRects: [],
+    deviceRects: [] as ImageRect[],
   }));
-  const response = await detectCabinetDevices(imageDataUrl);
+  const response = await detectCabinetDevices(imageDataUrl, { signal });
   if (response.issues.length) throw new Error(response.issues[0]);
+  throwIfRecognitionCancelled(signal);
 
   const generationKey = Date.now();
   const aiDeviceRects = mapDeviceDetectionsToImageRects(response.detections, preDetectionGroups, generationKey);
@@ -91,11 +96,12 @@ export async function recognizeComponentImage(options: RecognizeComponentImageOp
     for (const label of group.labelRects) groupByInputLabelId.set(label.id, group.id);
   }
   const sources = await buildDeviceLabelOcrSources(imageDataUrl, targetLabels, groupByInputLabelId, gapFilledDeviceRects);
+  throwIfRecognitionCancelled(signal);
   const ocrResult = await recognizeCabinetLabels(sources.map((source) => ({
     regionId: source.regionId,
     title: source.title,
     dataUrl: source.dataUrl,
-  })));
+  })), { signal });
   const recognizedLabelRects = mapOcrLabelsToImageRects(ocrResult.labels, sources);
   const generatedDeviceRects = completeDeviceBoxesByOcrRows(gapFilledDeviceRects, recognizedLabelRects, validation.groups, generationKey);
   console.info("[screen-verify] multi-point label OCR result", {
@@ -112,7 +118,7 @@ export async function recognizeComponentImage(options: RecognizeComponentImageOp
     .map((group) => ({
       ...group,
       labelRects: recognizedLabelRects.filter((rect) => rect.groupId === group.id),
-      deviceRects: [],
+      deviceRects: [] as ImageRect[],
     }))
     .filter((group) => group.labelRects.length > 0);
 
@@ -173,6 +179,7 @@ async function recognizeFacadeComponentImage(options: {
   existingRows: CabinetPointRow[];
   existingSinglePoints: CabinetSinglePoint[];
   mode: MultiPointGenerateMode;
+  signal?: AbortSignal;
 }): Promise<ComponentRecognitionResult> {
   const {
     imageDataUrl,
@@ -182,17 +189,20 @@ async function recognizeFacadeComponentImage(options: {
     existingRows,
     existingSinglePoints,
     mode,
+    signal,
   } = options;
+  throwIfRecognitionCancelled(signal);
   const generationKey = Date.now();
   const groupId = `facade:${generationKey}`;
   const facadeDeviceRects = targetAppearanceRects.map((rect) => createFacadeDeviceRect(rect, groupId));
   const groupByInputLabelId = new Map(targetLabels.map((rect) => [rect.id, groupId]));
   const sources = await buildDeviceLabelOcrSources(imageDataUrl, targetLabels, groupByInputLabelId);
+  throwIfRecognitionCancelled(signal);
   const ocrResult = await recognizeCabinetFacadeLabels(sources.map((source) => ({
     regionId: source.regionId,
     title: source.title,
     dataUrl: source.dataUrl,
-  })));
+  })), { signal });
   const recognizedLabelRects = mapOcrLabelsToImageRects(ocrResult.labels, sources);
   console.info("[screen-verify] facade label OCR result", {
     mode,

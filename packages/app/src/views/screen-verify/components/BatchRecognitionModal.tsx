@@ -16,6 +16,7 @@ interface BatchRecognitionModalProps {
   open: boolean;
   mode: BatchRecognitionMode;
   progress: BatchRecognitionProgress | null;
+  cancelling: boolean;
   onModeChange: (mode: BatchRecognitionMode) => void;
   onStart: () => void;
   onCancel: () => void;
@@ -25,6 +26,7 @@ export function BatchRecognitionModal({
   open,
   mode,
   progress,
+  cancelling,
   onModeChange,
   onStart,
   onCancel,
@@ -36,10 +38,10 @@ export function BatchRecognitionModal({
       centered
       onOk={onStart}
       onCancel={onCancel}
-      okText="开始识别"
-      cancelText="取消"
+      okText={progress ? "识别中" : "开始识别"}
+      cancelText={progress ? "停止识别" : "取消"}
       okButtonProps={{ disabled: Boolean(progress) }}
-      cancelButtonProps={{ disabled: Boolean(progress) }}
+      cancelButtonProps={{ danger: Boolean(progress), loading: cancelling }}
       closable={!progress}
       maskClosable={!progress}
       destroyOnHidden
@@ -62,7 +64,7 @@ export function BatchRecognitionModal({
               status="active"
             />
             <div className="screen-verify-batch-current" title={progress.currentName}>
-              {progress.current}/{progress.total} {progress.currentName}
+              {cancelling ? "正在停止当前识别..." : `${progress.current}/${progress.total} ${progress.currentName}`}
             </div>
             <div className="screen-verify-batch-summary">
               成功 {progress.success}，跳过 {progress.skipped}，失败 {progress.failed}

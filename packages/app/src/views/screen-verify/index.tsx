@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Key } from "react";
+import { useLocation } from "react-router-dom";
 import { DownOutlined } from "@ant-design/icons";
 import { App as AntdApp, Button, Checkbox, Dropdown, Empty, Input, Modal, Select, Space, Spin, Table, Tree } from "antd";
 import type { MenuProps } from "antd";
@@ -13,6 +14,7 @@ import type { BatchRecognitionNodeStatus } from "./components/CabinetTreeTitle";
 import { SinglePointModal } from "./components/SinglePointModal";
 import { TargetTypeModal } from "./components/TargetTypeModal";
 import { cropCabinetOcrImage, recognizeCabinetName } from "./services/ocr-service";
+import { isRecognitionRequestCancelled, throwIfRecognitionCancelled } from "./services/recognition-request";
 import { annotationToolKey, cloneAnnotations, createEmptyAnnotations } from "./utils/annotation-utils";
 import { buildCabinetAnnotationParamsExport } from "./utils/annotation-params-export";
 import { buildCabinetImageCacheKey } from "./utils/cabinet-image-utils";
@@ -74,6 +76,7 @@ function uniqueMainDeviceNameOverridePayloads(records: CabinetImagePackageRecord
 export default function ScreenVerify() {
   const { message, modal } = AntdApp.useApp();
   const selectedProject = useSelectedProject();
+  const location = useLocation();
   const containerRef = useRef<HTMLDivElement>(null);
   const rightTableWrapRef = useRef<HTMLDivElement>(null);
   const [statusFilter, setStatusFilter] = useState<"marked" | "unmarked" | "all">("all");
@@ -113,6 +116,7 @@ export default function ScreenVerify() {
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [batchMode, setBatchMode] = useState<BatchRecognitionMode>("new");
   const [batchProgress, setBatchProgress] = useState<BatchRecognitionProgress | null>(null);
+  const [batchCancelling, setBatchCancelling] = useState(false);
   const [batchNodeStatus, setBatchNodeStatus] = useState<Record<string, BatchRecognitionNodeStatus>>({});
   const imageCacheRef = useRef(new Map<string, string>());
   const annotationsByComponentRef = useRef<Record<string, ComponentAnnotations>>({});
@@ -122,6 +126,19 @@ export default function ScreenVerify() {
   const persistedAnnotationKeysRef = useRef(new Set<string>());
   const treeFilterActiveRef = useRef(false);
   const skipNameEditSubmitRef = useRef(false);
+  const singleRecognitionAbortRef = useRef<AbortController | null>(null);
+  const batchRecognitionAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (location.pathname === "/screen-verify") return;
+    singleRecognitionAbortRef.current?.abort();
+    batchRecognitionAbortRef.current?.abort();
+  }, [location.pathname]);
+
+  useEffect(() => () => {
+    singleRecognitionAbortRef.current?.abort();
+    batchRecognitionAbortRef.current?.abort();
+  }, []);
 
   const { width: leftWidth, resizing: leftResizing, onMouseDown: onLeftResizeStart } = useResizable({
     containerRef,
@@ -411,6 +428,9 @@ export default function ScreenVerify() {
     }
 
     const current = annotationsByComponentRef.current[selectedComponentCode] || createEmptyAnnotations();
+    singleRecognitionAbortRef.current?.abort();
+    const controller = new AbortController();
+    singleRecognitionAbortRef.current = controller;
     setOcrLoading(true);
     try {
       const result = await recognizeComponentImage({
@@ -419,6 +439,7 @@ export default function ScreenVerify() {
         existingRows: ocrRowsByComponentRef.current[selectedComponentCode] || [],
         existingSinglePoints: singlePointsByComponentRef.current[selectedComponentCode] || [],
         mode,
+        signal: controller.signal,
       });
 
       pushAnnotationHistory(selectedComponentCode);
@@ -435,8 +456,10 @@ export default function ScreenVerify() {
         message.success(`已识别 ${result.labelCount} 个标签，生成 ${result.deviceCount} 个部件框和 ${result.rows.length} 条点位`);
       }
     } catch (e: any) {
-      message.error(e?.message || "标签或部件识别失败");
+      if (isRecognitionRequestCancelled(e)) message.info("识别已取消");
+      else message.error(e?.message || "标签或部件识别失败");
     } finally {
+      if (singleRecognitionAbortRef.current === controller) singleRecognitionAbortRef.current = null;
       setOcrLoading(false);
     }
   }, [
@@ -746,9 +769,15 @@ export default function ScreenVerify() {
   }, [batchProgress, components.length, message, ocrLoading, reportRecognitionBusy, selectedProject]);
 
   const handleCancelBatchRecognition = useCallback(() => {
-    if (batchProgress) return;
+    if (batchProgress) {
+      if (!batchCancelling) {
+        setBatchCancelling(true);
+        batchRecognitionAbortRef.current?.abort();
+      }
+      return;
+    }
     setBatchModalOpen(false);
-  }, [batchProgress]);
+  }, [batchCancelling, batchProgress]);
 
   const handleStartBatchRecognition = useCallback(async () => {
     if (ocrLoading || batchProgress) {
@@ -777,13 +806,21 @@ export default function ScreenVerify() {
     clearAnnotationInteraction();
     setBatchModalOpen(true);
     setOcrLoading(true);
+    setBatchCancelling(false);
     setBatchNodeStatus({});
+    const controller = new AbortController();
+    batchRecognitionAbortRef.current = controller;
     let success = 0;
     let failed = 0;
     let skipped = 0;
+    let cancelled = false;
 
     try {
       for (let index = 0; index < targets.length; index += 1) {
+        if (controller.signal.aborted) {
+          cancelled = true;
+          break;
+        }
         const record = targets[index];
         const componentCode = getCabinetRecordKey(record);
         const currentName = getComponentDisplayName(record);
@@ -803,7 +840,9 @@ export default function ScreenVerify() {
         await waitForBrowserPaint();
 
         try {
+          throwIfRecognitionCancelled(controller.signal);
           const imageDataUrl = await loadCabinetImageDataUrl(record);
+          throwIfRecognitionCancelled(controller.signal);
           setSelectedImageDataUrl(imageDataUrl);
           const currentAnnotations = annotationsByComponentRef.current[componentCode] || createEmptyAnnotations();
           const readiness = getRecognitionReadiness(currentAnnotations, "whole");
@@ -819,6 +858,7 @@ export default function ScreenVerify() {
             existingRows: ocrRowsByComponentRef.current[componentCode] || [],
             existingSinglePoints: singlePointsByComponentRef.current[componentCode] || [],
             mode: "whole",
+            signal: controller.signal,
           });
           updateComponentAnnotations(componentCode, () => result.annotations);
           setComponentOcrRows(componentCode, result.rows);
@@ -832,7 +872,15 @@ export default function ScreenVerify() {
             { silent: true },
           );
           success += 1;
+          if (controller.signal.aborted) {
+            cancelled = true;
+            break;
+          }
         } catch (e) {
+          if (isRecognitionRequestCancelled(e) || controller.signal.aborted) {
+            cancelled = true;
+            break;
+          }
           failed += 1;
           console.warn("[screen-verify] batch recognition failed", {
             recordKey: componentCode,
@@ -853,14 +901,18 @@ export default function ScreenVerify() {
         }
       }
     } finally {
+      if (batchRecognitionAbortRef.current === controller) batchRecognitionAbortRef.current = null;
       setOcrLoading(false);
+      setBatchCancelling(false);
       setBatchNodeStatus({});
       setBatchProgress(null);
       setBatchModalOpen(false);
     }
 
-    const summary = `批量识别完成：成功 ${success}，跳过 ${skipped}，失败 ${failed}`;
-    if (failed || (!success && skipped)) {
+    const summary = `${cancelled ? "批量识别已停止" : "批量识别完成"}：成功 ${success}，跳过 ${skipped}，失败 ${failed}`;
+    if (cancelled) {
+      message.info(summary);
+    } else if (failed || (!success && skipped)) {
       message.warning(summary);
     } else {
       message.success(summary);
@@ -884,14 +936,18 @@ export default function ScreenVerify() {
   const runCabinetNameRecognition = useCallback(async (rect: ImageRect) => {
     if (!selectedComponentCode || !selectedImageDataUrl) return;
 
+    singleRecognitionAbortRef.current?.abort();
+    const controller = new AbortController();
+    singleRecognitionAbortRef.current = controller;
     setOcrLoading(true);
     try {
       const crop = await cropCabinetOcrImage(selectedImageDataUrl, rect, 8);
+      throwIfRecognitionCancelled(controller.signal);
       const result = await recognizeCabinetName({
         regionId: "cabinet_name",
         title: "屏柜名称",
         dataUrl: crop.dataUrl,
-      });
+      }, { signal: controller.signal });
       console.info("[screen-verify] cabinet name OCR result", {
         rect,
         rawText: result.rawText,
@@ -906,8 +962,10 @@ export default function ScreenVerify() {
       setCabinetNameConfidence(result.confidence);
       setCabinetNameModalOpen(true);
     } catch (e: any) {
-      message.error(e?.message || "屏柜名称识别失败");
+      if (isRecognitionRequestCancelled(e)) message.info("识别已取消");
+      else message.error(e?.message || "屏柜名称识别失败");
     } finally {
+      if (singleRecognitionAbortRef.current === controller) singleRecognitionAbortRef.current = null;
       setOcrLoading(false);
       setCabinetNameDrawing(false);
       setActiveAnnotationTool(null);
@@ -1310,6 +1368,8 @@ export default function ScreenVerify() {
   }), [handleAddGenerate, handleWholeImageGenerate]);
 
   const resetCabinetWorkspace = useCallback(() => {
+    singleRecognitionAbortRef.current?.abort();
+    batchRecognitionAbortRef.current?.abort();
     imageCacheRef.current.clear();
     setSelectedImageDataUrl("");
     setImageError("");
@@ -1338,6 +1398,7 @@ export default function ScreenVerify() {
     setSelectedComponentCode("");
     setBatchModalOpen(false);
     setBatchProgress(null);
+    setBatchCancelling(false);
     setBatchNodeStatus({});
   }, []);
 
@@ -1766,6 +1827,7 @@ export default function ScreenVerify() {
         open={batchModalOpen}
         mode={batchMode}
         progress={batchProgress}
+        cancelling={batchCancelling}
         onModeChange={setBatchMode}
         onStart={handleStartBatchRecognition}
         onCancel={handleCancelBatchRecognition}

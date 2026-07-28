@@ -1,3 +1,6 @@
+import { requestRecognitionText } from "./recognition-request";
+import type { RecognitionRequestOptions } from "./recognition-request";
+
 const DEVICE_DETECTION_URL = "http://192.168.0.139:52002/api/imageDetection";
 const DEVICE_DETECTION_TASK_IDS = [1];
 
@@ -51,11 +54,14 @@ interface ImageDetectionApiResponse {
   results?: ImageDetectionApiResult[];
 }
 
-export async function detectCabinetDevices(imageDataUrl: string): Promise<DeviceDetectionResponse> {
+export async function detectCabinetDevices(
+  imageDataUrl: string,
+  options: RecognitionRequestOptions = {},
+): Promise<DeviceDetectionResponse> {
   const detections: DeviceDetection[] = [];
   const issues: string[] = [];
 
-  const results = await requestImageDetection(imageDataUrl);
+  const results = await requestImageDetection(imageDataUrl, options);
   for (const result of results) {
     const normalized = normalizeDetectionResult(result);
     if (normalized) detections.push(normalized);
@@ -64,7 +70,10 @@ export async function detectCabinetDevices(imageDataUrl: string): Promise<Device
   return { detections, issues };
 }
 
-async function requestImageDetection(imageDataUrl: string): Promise<ImageDetectionApiResult[]> {
+async function requestImageDetection(
+  imageDataUrl: string,
+  options: RecognitionRequestOptions,
+): Promise<ImageDetectionApiResult[]> {
   const blob = dataUrlToBlob(imageDataUrl);
   const formData = new FormData();
   formData.append("image", blob, `device-detection.${mimeToExt(blob.type)}`);
@@ -72,16 +81,14 @@ async function requestImageDetection(imageDataUrl: string): Promise<ImageDetecti
     formData.append("taskid", String(taskId));
   }
 
-  let response: Response;
-  try {
-    response = await fetch(DEVICE_DETECTION_URL, {
+  const { response, text: payloadText } = await requestRecognitionText(
+    DEVICE_DETECTION_URL,
+    {
       method: "POST",
       body: formData,
-    });
-  } catch {
-    throw new Error("网络异常");
-  }
-  const payloadText = await response.text();
+    },
+    options,
+  );
   const payload = parseJsonPayload(payloadText);
   if (!response.ok) {
     throw new Error(payload?.message || payloadText || `部件识别请求失败：${response.status}`);

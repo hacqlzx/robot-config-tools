@@ -1,3 +1,6 @@
+import { requestRecognitionText } from "./recognition-request";
+import type { RecognitionRequestOptions } from "./recognition-request";
+
 export interface CabinetOcrResult {
   rawText: string;
   regions: CabinetOcrRegionResult[];
@@ -54,6 +57,19 @@ interface ChatCompletionResponse {
   };
 }
 
+interface CabinetOcrJsonPayload {
+  regions?: {
+    regionId?: unknown;
+    labels?: unknown[];
+  }[];
+  name?: unknown;
+  text?: unknown;
+  label?: unknown;
+  confidence?: unknown;
+  score?: unknown;
+  probability?: unknown;
+}
+
 const DASH_SCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
 const DASH_SCOPE_MODEL = "qwen3-vl-plus";
 const DASH_SCOPE_API_KEY = import.meta.env.VITE_DASHSCOPE_API_KEY || "sk-84dbc87f36d84977b4164e165a73687b";
@@ -97,18 +113,30 @@ export const CABINET_NAME_OCR_PROMPT = [
   "JSON 格式：{\"name\":\"屏柜名称\",\"confidence\":0.9}。",
 ].join("\n");
 
-export async function recognizeCabinetLabels(sources: CabinetOcrImageSource | CabinetOcrImageSource[]): Promise<CabinetOcrResult> {
-  return recognizeCabinetLabelsWithPrompt(sources, CABINET_LABEL_OCR_PROMPT);
+export async function recognizeCabinetLabels(
+  sources: CabinetOcrImageSource | CabinetOcrImageSource[],
+  requestOptions: RecognitionRequestOptions = {},
+): Promise<CabinetOcrResult> {
+  return recognizeCabinetLabelsWithPrompt(sources, CABINET_LABEL_OCR_PROMPT, {}, requestOptions);
 }
 
-export async function recognizeCabinetFacadeLabels(sources: CabinetOcrImageSource | CabinetOcrImageSource[]): Promise<CabinetOcrResult> {
-  return recognizeCabinetLabelsWithPrompt(sources, CABINET_FACADE_LABEL_OCR_PROMPT, { mergeLabelsPerRegion: true });
+export async function recognizeCabinetFacadeLabels(
+  sources: CabinetOcrImageSource | CabinetOcrImageSource[],
+  requestOptions: RecognitionRequestOptions = {},
+): Promise<CabinetOcrResult> {
+  return recognizeCabinetLabelsWithPrompt(
+    sources,
+    CABINET_FACADE_LABEL_OCR_PROMPT,
+    { mergeLabelsPerRegion: true },
+    requestOptions,
+  );
 }
 
 async function recognizeCabinetLabelsWithPrompt(
   sources: CabinetOcrImageSource | CabinetOcrImageSource[],
   prompt: string,
   options: { mergeLabelsPerRegion?: boolean } = {},
+  requestOptions: RecognitionRequestOptions = {},
 ): Promise<CabinetOcrResult> {
   const imageSources = Array.isArray(sources) ? sources : [sources];
   if (!imageSources.length) throw new Error("图片为空，无法识别");
@@ -116,9 +144,9 @@ async function recognizeCabinetLabelsWithPrompt(
     if (!source.dataUrl.startsWith("data:image/")) throw new Error("仅支持 data URI 图片识别");
   }
 
-  let response: Response;
-  try {
-    response = await fetch(`${DASH_SCOPE_BASE_URL}/chat/completions`, {
+  const { response, text: payloadText } = await requestRecognitionText(
+    `${DASH_SCOPE_BASE_URL}/chat/completions`,
+    {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${DASH_SCOPE_API_KEY}`,
@@ -134,13 +162,10 @@ async function recognizeCabinetLabelsWithPrompt(
           },
         ],
       }),
-    });
-  } catch {
-    throw new Error("网络异常");
-  }
-
-  const payloadText = await response.text();
-  const payload = parseJsonPayload(payloadText);
+    },
+    requestOptions,
+  );
+  const payload = parseJsonPayload<ChatCompletionResponse>(payloadText);
   if (!response.ok) {
     throw new Error(payload?.error?.message || payloadText || `识别请求失败：${response.status}`);
   }
@@ -149,12 +174,15 @@ async function recognizeCabinetLabelsWithPrompt(
   return normalizeCabinetOcrResult(rawText, imageSources, options);
 }
 
-export async function recognizeCabinetName(source: CabinetOcrImageSource): Promise<CabinetNameOcrResult> {
+export async function recognizeCabinetName(
+  source: CabinetOcrImageSource,
+  requestOptions: RecognitionRequestOptions = {},
+): Promise<CabinetNameOcrResult> {
   if (!source.dataUrl.startsWith("data:image/")) throw new Error("仅支持 data URI 图片识别");
 
-  let response: Response;
-  try {
-    response = await fetch(`${DASH_SCOPE_BASE_URL}/chat/completions`, {
+  const { response, text: payloadText } = await requestRecognitionText(
+    `${DASH_SCOPE_BASE_URL}/chat/completions`,
+    {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${DASH_SCOPE_API_KEY}`,
@@ -170,13 +198,10 @@ export async function recognizeCabinetName(source: CabinetOcrImageSource): Promi
           },
         ],
       }),
-    });
-  } catch {
-    throw new Error("网络异常");
-  }
-
-  const payloadText = await response.text();
-  const payload = parseJsonPayload(payloadText);
+    },
+    requestOptions,
+  );
+  const payload = parseJsonPayload<ChatCompletionResponse>(payloadText);
   if (!response.ok) {
     throw new Error(payload?.error?.message || payloadText || `识别请求失败：${response.status}`);
   }
@@ -291,9 +316,9 @@ function buildSingleImageRoiContent(sources: CabinetOcrImageSource[], prompt: st
   ];
 }
 
-function parseJsonPayload(text: string): ChatCompletionResponse | null {
+function parseJsonPayload<T = CabinetOcrJsonPayload>(text: string): T | null {
   try {
-    return JSON.parse(text) as ChatCompletionResponse;
+    return JSON.parse(text) as T;
   } catch {
     return null;
   }
@@ -342,7 +367,7 @@ function extractJsonText(rawText: string): string {
   return trimmed;
 }
 
-function normalizeRegions(payload: any, sources: CabinetOcrImageSource[]): CabinetOcrRegionResult[] {
+function normalizeRegions(payload: CabinetOcrJsonPayload | null, sources: CabinetOcrImageSource[]): CabinetOcrRegionResult[] {
   const sourceIds = new Set(sources.map((source) => source.regionId));
   const rawRegions = Array.isArray(payload?.regions) ? payload.regions : [];
   const byRegion = new Map<string, CabinetOcrDetectedLabel[]>();
@@ -351,7 +376,7 @@ function normalizeRegions(payload: any, sources: CabinetOcrImageSource[]): Cabin
     const regionId = String(region?.regionId || "").trim();
     if (!sourceIds.has(regionId)) continue;
     const labels = Array.isArray(region?.labels) ? region.labels : [];
-    byRegion.set(regionId, labels.map((label) => normalizeDetectedLabel(regionId, label)).filter(Boolean) as CabinetOcrDetectedLabel[]);
+    byRegion.set(regionId, labels.map((label: unknown) => normalizeDetectedLabel(regionId, label)).filter(Boolean) as CabinetOcrDetectedLabel[]);
   }
 
   return sources.map((source) => ({
@@ -361,7 +386,7 @@ function normalizeRegions(payload: any, sources: CabinetOcrImageSource[]): Cabin
 }
 
 function normalizeCabinetNameOcrResult(rawText: string): CabinetNameOcrResult {
-  const payload = parseJsonPayload(extractJsonText(rawText));
+  const payload = parseJsonPayload<CabinetOcrJsonPayload>(extractJsonText(rawText));
   const name = String(payload?.name || payload?.text || payload?.label || "").trim();
   return {
     rawText,
