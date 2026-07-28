@@ -195,6 +195,14 @@ declare global {
     rect?: DeviceCorrectionRect | null;
   }
 
+  interface DeviceCorrectionExportResult {
+    success: boolean;
+    error?: string;
+    filePath?: string;
+    fileName?: string;
+    exportedCount?: number;
+  }
+
   interface DevicePointMarkRecord {
     pointCode: string;
     pointName: string;
@@ -306,6 +314,7 @@ declare global {
       loadDeviceCorrection: (projectName: string, pointCode: string) => Promise<DeviceCorrectionResult>;
       saveDeviceCorrection: (projectName: string, record: DeviceCorrectionRecord) => Promise<DeviceCorrectionResult>;
       deleteDeviceCorrection: (projectName: string, pointCode: string) => Promise<{ success: boolean; error?: string }>;
+      exportDeviceCorrectionData: (projectName: string, destDir: string) => Promise<DeviceCorrectionExportResult>;
       setDevicePointMark: (projectName: string, record: DevicePointMarkRecord) => Promise<DevicePointMarkResult>;
       exportMarkedDevicePoints: (projectName: string, destDir: string) => Promise<DeviceMarkedPointExportResult>;
       getProjectRoot: () => Promise<string>;

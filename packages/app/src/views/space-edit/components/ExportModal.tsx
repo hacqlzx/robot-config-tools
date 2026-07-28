@@ -76,13 +76,25 @@ export default function ExportModal({ open, onClose, modelPath }: Props) {
       centered
       width={520}
       destroyOnHidden
+      styles={{ body: { overflowX: "hidden" } }}
     >
       <div style={{ marginBottom: 16 }}>
         <div style={{ fontSize: 13, color: "#666", marginBottom: 4 }}>
           <FolderOutlined style={{ color: "#faad14", marginRight: 6, fontSize: 20 }} />
           当前项目
         </div>
-        <div style={{ fontSize: 14, fontWeight: 500 }}>{projectName}</div>
+        <div
+          title={projectName}
+          style={{
+            fontSize: 14,
+            fontWeight: 500,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {projectName}
+        </div>
       </div>
       <Divider style={{ margin: "12px 0" }} />
       <div>
@@ -100,6 +112,7 @@ export default function ExportModal({ open, onClose, modelPath }: Props) {
             borderRadius: 6,
             overflow: "hidden",
             width: "100%",
+            boxSizing: "border-box",
           }}>
             <div
               style={{
@@ -108,13 +121,24 @@ export default function ExportModal({ open, onClose, modelPath }: Props) {
                 padding: "8px 12px",
                 background: "#fafafa",
                 width: "100%",
+                boxSizing: "border-box",
                 gap: 8,
               }}
             >
-              <FolderOutlined style={{ color: "#faad14", fontSize: 20 }} />
-              <div>
-                <div style={{ fontSize: 13 }}>{mapName}</div>
-                <div style={{ fontSize: 11, color: "#999", marginTop: 1 }}>
+              <FolderOutlined style={{ color: "#faad14", fontSize: 20, flexShrink: 0 }} />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div
+                  title={mapName}
+                  style={{
+                    fontSize: 13,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {mapName}
+                </div>
+                <div style={{ fontSize: 11, color: "#999", marginTop: 1, lineHeight: 1.5, whiteSpace: "normal" }}>
                   导出当前左侧树已加载模型、地图区域/路径文件，以及点表 Excel 和 extend.json
                 </div>
               </div>

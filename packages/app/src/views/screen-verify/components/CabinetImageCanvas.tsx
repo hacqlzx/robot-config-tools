@@ -11,6 +11,16 @@ import type { AnnotationSelection, AnnotationTool, ComponentAnnotations, ImageRe
 
 type RectHandle = "nw" | "ne" | "se" | "sw";
 type RectDragMode = "move" | "resize";
+type ViewDragState = {
+  x: number;
+  y: number;
+  offsetX: number;
+  offsetY: number;
+  moved: boolean;
+  pendingSelection?: AnnotationSelection;
+};
+
+const VIEW_DRAG_CLICK_TOLERANCE = 3;
 
 interface RectDragState {
   tool: AnnotationTool;
@@ -58,7 +68,7 @@ export function CabinetImageCanvas({
   const annotationsRef = useRef(annotations);
   const selectedAnnotationRef = useRef(selectedAnnotation);
   const viewRef = useRef({ scale: 1, offsetX: 0, offsetY: 0 });
-  const dragRef = useRef<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null);
+  const dragRef = useRef<ViewDragState | null>(null);
   const rectDragRef = useRef<RectDragState | null>(null);
   const drawingRef = useRef<{ tool: AnnotationTool; startX: number; startY: number; currentX: number; currentY: number } | null>(null);
   const pendingFitRef = useRef(false);
@@ -291,15 +301,72 @@ export function CabinetImageCanvas({
     event.currentTarget.focus();
     const canvasPoint = getCanvasPoint(event);
     if (activeTool) {
-      const point = getImagePoint(event);
+      const point = getImagePoint(event, false);
       if (!point) return;
+
+      const selectedHit = selectedAnnotationRef.current?.tool === activeTool && canvasPoint
+        ? findSelectedAnnotation(annotationsRef.current, selectedAnnotationRef.current)
+        : null;
+      const selectedHandle = selectedHit && canvasPoint
+        ? findRectHandleAtCanvasPoint(selectedHit, viewRef.current, canvasPoint.x, canvasPoint.y)
+        : null;
+      if (selectedHit && selectedHandle) {
+        rectDragRef.current = {
+          ...selectedAnnotationRef.current!,
+          mode: "resize",
+          handle: selectedHandle,
+          startX: point.x,
+          startY: point.y,
+          startRect: selectedHit,
+          currentRect: selectedHit,
+        };
+        dragRef.current = null;
+        setCanvasCursor(getRectHandleCursor(selectedHandle));
+        draw();
+        return;
+      }
+
+      const hit = findAnnotationAtPoint(annotationsRef.current, point.x, point.y, activeTool);
+      if (hit) {
+        const selection: AnnotationSelection = { tool: hit.tool, id: hit.rect.id };
+        if (isSameSelection(selection, selectedAnnotationRef.current)) {
+          rectDragRef.current = {
+            ...selection,
+            mode: "move",
+            startX: point.x,
+            startY: point.y,
+            startRect: hit.rect,
+            currentRect: hit.rect,
+          };
+          dragRef.current = null;
+          setCanvasCursor("move");
+          draw();
+          return;
+        }
+
+        const current = viewRef.current;
+        dragRef.current = {
+          x: event.clientX,
+          y: event.clientY,
+          offsetX: current.offsetX,
+          offsetY: current.offsetY,
+          moved: false,
+          pendingSelection: selection,
+        };
+        setCanvasCursor(null);
+        return;
+      }
+
+      const drawPoint = getImagePoint(event);
+      if (!drawPoint) return;
+      selectedAnnotationRef.current = null;
       onSelectRect(null);
       drawingRef.current = {
         tool: activeTool,
-        startX: point.x,
-        startY: point.y,
-        currentX: point.x,
-        currentY: point.y,
+        startX: drawPoint.x,
+        startY: drawPoint.y,
+        currentX: drawPoint.x,
+        currentY: drawPoint.y,
       };
       draw();
       return;
@@ -331,20 +398,31 @@ export function CabinetImageCanvas({
     if (point) {
       const hit = findAnnotationAtPoint(annotationsRef.current, point.x, point.y);
       if (hit) {
-        const selection = { tool: hit.tool, id: hit.rect.id };
-        selectedAnnotationRef.current = selection;
-        onSelectRect(selection);
-        rectDragRef.current = {
-          ...selection,
-          mode: "move",
-          startX: point.x,
-          startY: point.y,
-          startRect: hit.rect,
-          currentRect: hit.rect,
+        const selection: AnnotationSelection = { tool: hit.tool, id: hit.rect.id };
+        if (isSameSelection(selection, selectedAnnotationRef.current)) {
+          rectDragRef.current = {
+            ...selection,
+            mode: "move",
+            startX: point.x,
+            startY: point.y,
+            startRect: hit.rect,
+            currentRect: hit.rect,
+          };
+          dragRef.current = null;
+          setCanvasCursor("move");
+          draw();
+          return;
+        }
+        const current = viewRef.current;
+        dragRef.current = {
+          x: event.clientX,
+          y: event.clientY,
+          offsetX: current.offsetX,
+          offsetY: current.offsetY,
+          moved: false,
+          pendingSelection: selection,
         };
-        dragRef.current = null;
-        setCanvasCursor("move");
-        draw();
+        setCanvasCursor(null);
         return;
       }
     }
@@ -357,6 +435,7 @@ export function CabinetImageCanvas({
       y: event.clientY,
       offsetX: current.offsetX,
       offsetY: current.offsetY,
+      moved: false,
     };
   };
 
@@ -405,13 +484,11 @@ export function CabinetImageCanvas({
 
     const drag = dragRef.current;
     if (!drag) {
-      if (activeTool) {
-        setCanvasCursor(null);
-        return;
-      }
       const canvasPoint = getCanvasPoint(event);
       const imagePoint = getImagePoint(event, false);
-      const selectedHit = selectedAnnotationRef.current && canvasPoint
+      const selectedHit = selectedAnnotationRef.current
+        && (!activeTool || selectedAnnotationRef.current.tool === activeTool)
+        && canvasPoint
         ? findSelectedAnnotation(annotationsRef.current, selectedAnnotationRef.current)
         : null;
       const selectedHandle = selectedHit && canvasPoint
@@ -421,15 +498,24 @@ export function CabinetImageCanvas({
         setCanvasCursor(getRectHandleCursor(selectedHandle));
         return;
       }
-      const hit = imagePoint ? findAnnotationAtPoint(annotationsRef.current, imagePoint.x, imagePoint.y) : null;
-      setCanvasCursor(hit ? "move" : null);
+      const hit = imagePoint ? findAnnotationAtPoint(annotationsRef.current, imagePoint.x, imagePoint.y, activeTool || undefined) : null;
+      const hitSelection: AnnotationSelection | null = hit ? { tool: hit.tool, id: hit.rect.id } : null;
+      setCanvasCursor(hitSelection && isSameSelection(hitSelection, selectedAnnotationRef.current) ? "move" : null);
+      return;
+    }
+    const dx = event.clientX - drag.x;
+    const dy = event.clientY - drag.y;
+    if (!drag.moved && Math.hypot(dx, dy) > VIEW_DRAG_CLICK_TOLERANCE) {
+      drag.moved = true;
+    }
+    if (drag.pendingSelection && !drag.moved) {
       return;
     }
     setCanvasCursor("grabbing");
     viewRef.current = {
       ...viewRef.current,
-      offsetX: drag.offsetX + event.clientX - drag.x,
-      offsetY: drag.offsetY + event.clientY - drag.y,
+      offsetX: drag.offsetX + dx,
+      offsetY: drag.offsetY + dy,
     };
     draw();
   };
@@ -474,7 +560,13 @@ export function CabinetImageCanvas({
       setCanvasCursor(null);
       return;
     }
+    const drag = dragRef.current;
     dragRef.current = null;
+    if (drag?.pendingSelection && !drag.moved) {
+      selectedAnnotationRef.current = drag.pendingSelection;
+      onSelectRect(drag.pendingSelection);
+      draw();
+    }
     setCanvasCursor(null);
   };
 
@@ -593,18 +685,23 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function findAnnotationAtPoint(annotations: ComponentAnnotations, x: number, y: number): { tool: AnnotationTool; rect: ImageRect } | null {
+function findAnnotationAtPoint(
+  annotations: ComponentAnnotations,
+  x: number,
+  y: number,
+  targetTool?: AnnotationTool,
+): { tool: AnnotationTool; rect: ImageRect } | null {
   const hits: { tool: AnnotationTool; rect: ImageRect; area: number }[] = [];
-  for (const rect of annotations.standardPartRects || []) {
+  if (!targetTool || targetTool === "standardPart") for (const rect of annotations.standardPartRects || []) {
     if (pointInRect(x, y, rect)) hits.push({ tool: "standardPart", rect, area: rect.w * rect.h });
   }
-  for (const rect of annotations.deviceLabelRects || []) {
+  if (!targetTool || targetTool === "deviceLabel") for (const rect of annotations.deviceLabelRects || []) {
     if (pointInRect(x, y, rect)) hits.push({ tool: "deviceLabel", rect, area: rect.w * rect.h });
   }
-  for (const rect of annotations.deviceBoxRects || []) {
+  if (!targetTool || targetTool === "deviceBox") for (const rect of annotations.deviceBoxRects || []) {
     if (pointInRect(x, y, rect)) hits.push({ tool: "deviceBox", rect, area: rect.w * rect.h });
   }
-  for (const rect of annotations.appearanceRects || []) {
+  if (!targetTool || targetTool === "appearance") for (const rect of annotations.appearanceRects || []) {
     if (pointInRect(x, y, rect)) hits.push({ tool: "appearance", rect, area: rect.w * rect.h });
   }
   hits.sort((a, b) => a.area - b.area);
@@ -731,6 +828,10 @@ function clampRectToImage(rect: ImageRect, imageWidth: number, imageHeight: numb
 
 function sameRect(a: ImageRect, b: ImageRect): boolean {
   return a.id === b.id && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+}
+
+function isSameSelection(a: AnnotationSelection | null, b: AnnotationSelection | null): boolean {
+  return Boolean(a && b && a.tool === b.tool && a.id === b.id);
 }
 
 function isEditableEventTarget(target: EventTarget | null): boolean {

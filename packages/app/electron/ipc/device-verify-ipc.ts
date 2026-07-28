@@ -3,9 +3,8 @@ import fs from "fs";
 import path from "path";
 import { ipcMain } from "electron";
 import AdmZip from "adm-zip";
-import * as XLSX from "xlsx";
+import * as XLSX from "xlsx-js-style";
 import { isPathInside, resolveProjectDir, resolveProjectPath } from "../project-core/project-paths";
-import { generatePointExcelFromRows, type PointExcelExportRow } from "../export-points";
 
 type DeviceVerificationNodeKind = "region" | "bay" | "mainDevice" | "component" | "point";
 type DeviceVerificationSourceType = "zip" | "directory";
@@ -71,6 +70,12 @@ interface DeviceMarkedPointFile {
   version: number;
   updatedAt: string;
   records: Record<string, DeviceMarkedPointRecord>;
+}
+
+interface MarkedPointExcelExportRow {
+  pointName: string;
+  mainDeviceName: string;
+  bayName: string;
 }
 
 const OVERVIEW_DIR_NAME = "总览图";
@@ -216,6 +221,15 @@ export function registerDeviceVerifyIpc(): void {
     }
   });
 
+  ipcMain.handle("device-verify:export-correction-data", async (_event, projectName: string, destDir: string) => {
+    try {
+      return exportDeviceVerificationCorrectionData(projectName, destDir);
+    } catch (error: any) {
+      console.error("[device-verify] 导出纠偏数据失败:", error?.message || error);
+      return { success: false, error: error?.message || "导出纠偏数据失败" };
+    }
+  });
+
   ipcMain.handle("device-verify:set-point-mark", async (_event, projectName: string, record: { pointCode?: string; pointName?: string; marked?: boolean }) => {
     try {
       const pointCode = valueText(record?.pointCode);
@@ -309,13 +323,65 @@ function exportMarkedDeviceVerificationPoints(projectName: string, destDir: stri
 
   const fileName = uniqueFileName(outputDir, `${safeProjectName}_标记点位_${formatExportTime(new Date())}.xlsx`);
   const filePath = path.join(outputDir, fileName);
-  fs.writeFileSync(filePath, generatePointExcelFromRows(exportRows));
+  fs.writeFileSync(filePath, generateMarkedPointExcel(exportRows));
 
   return {
     success: true,
     filePath,
     fileName,
     exportedCount: exportRows.length,
+  };
+}
+
+function exportDeviceVerificationCorrectionData(projectName: string, destDir: string) {
+  const safeProjectName = String(projectName || "").trim();
+  if (!safeProjectName) throw new Error("请先选择项目");
+
+  const outputDir = path.resolve(String(destDir || "").trim());
+  if (!path.isAbsolute(outputDir) || !fs.existsSync(outputDir) || !fs.statSync(outputDir).isDirectory()) {
+    throw new Error("导出目录无效");
+  }
+
+  const localDir = getDeviceVerificationDir(safeProjectName);
+  if (!fs.existsSync(localDir) || !fs.statSync(localDir).isDirectory()) {
+    throw new Error("请先加载设备验证图");
+  }
+
+  const correctionFile = readDeviceCorrectionFile(getDeviceCorrectionFilePath(safeProjectName));
+  const correctionRecords = Object.values(correctionFile.records)
+    .filter((record) => record.pointCode && record.rect);
+  if (correctionRecords.length === 0) throw new Error("暂无纠偏数据");
+
+  const files = collectFiles(localDir);
+  const cruiseIdByPointCode = readCruiseIdMapFromExtendJson(files, localDir);
+  const zip = new AdmZip();
+  const usedEntryNames = new Set<string>();
+  let exportedCount = 0;
+
+  for (const record of correctionRecords) {
+    const rect = normalizeCorrectionRect(record.rect);
+    const cruiseId = cruiseIdByPointCode.get(record.pointCode.toLowerCase());
+    if (!cruiseId) throw new Error(`extend.json 中未找到点位 ${record.pointCode} 的 cruise_id`);
+
+    const payload = [{
+      cp_id: cruiseId,
+      target_point: correctionRectToTargetPoint(rect),
+      target_rect: correctionRectToTargetRect(rect),
+    }];
+    const entryName = uniqueZipEntryName(usedEntryNames, `${cruiseId}.json`);
+    zip.addFile(entryName, Buffer.from(`${JSON.stringify(payload, null, 2)}\n`, "utf-8"));
+    exportedCount++;
+  }
+
+  const fileName = uniqueFileName(outputDir, `${safeProjectName}_纠偏数据_${formatExportTime(new Date())}.zip`);
+  const filePath = path.join(outputDir, fileName);
+  zip.writeZip(filePath);
+
+  return {
+    success: true,
+    filePath,
+    fileName,
+    exportedCount,
   };
 }
 
@@ -353,19 +419,7 @@ function readDeviceVerificationDirectory(sourceDir: string, packageName: string)
   const workbookPath = findPointWorkbookPath(files);
   if (!workbookPath) throw new Error("未找到点表.xlsx");
 
-  const imageByPointCode = new Map<string, ImageEntryInfo>();
-  for (const filePath of files) {
-    const relativePath = path.relative(sourceDir, filePath).replace(/\\/g, "/");
-    const segments = relativePath.split("/").filter(Boolean);
-    if (!segments.slice(0, -1).some((segment) => segment.toLowerCase() === "img")) continue;
-
-    const ext = path.extname(filePath).toLowerCase();
-    const mime = imageMimeType(ext);
-    if (!mime) continue;
-    const pointCode = path.basename(filePath, ext).trim();
-    if (!pointCode) continue;
-    imageByPointCode.set(pointCode.toLowerCase(), { filePath, mime });
-  }
+  const imageByPointCode = collectPointImages(files, sourceDir);
 
   const markedPointCodes = readMarkedPointCodes(path.join(sourceDir, DEVICE_MARKED_POINT_FILE_NAME));
   const { nodes, rootIds } = buildVerificationTree(fs.readFileSync(workbookPath), imageByPointCode, markedPointCodes);
@@ -380,7 +434,7 @@ function readDeviceVerificationDirectory(sourceDir: string, packageName: string)
   };
 }
 
-function readMarkedPointExportRows(workbookBuffer: Buffer, markedPointCodes: Set<string>): PointExcelExportRow[] {
+function readMarkedPointExportRows(workbookBuffer: Buffer, markedPointCodes: Set<string>): MarkedPointExcelExportRow[] {
   const workbook = XLSX.read(workbookBuffer, { type: "buffer" });
   const sheetName = workbook.SheetNames.find((name) => name.toLowerCase() === "sheet1") || workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
@@ -395,14 +449,50 @@ function readMarkedPointExportRows(workbookBuffer: Buffer, markedPointCodes: Set
   if (headerIndex < 0) throw new Error("点表.xlsx 中未找到点位表头");
 
   const headers = grid[headerIndex].map(valueText);
-  const rows: PointExcelExportRow[] = [];
+  const rows: MarkedPointExcelExportRow[] = [];
   for (let rowIndex = headerIndex + 1; rowIndex < grid.length; rowIndex++) {
     const row = mapRow(headers, grid[rowIndex]);
     const pointCode = firstValue(row, ["点位编码"]);
     if (!pointCode || !markedPointCodes.has(pointCode.toLowerCase())) continue;
-    rows.push(row);
+    rows.push({
+      pointName: firstValue(row, ["点位名称", "*点位名称"]),
+      mainDeviceName: firstValue(row, ["主设备名称", "*主设备名称"]),
+      bayName: firstValue(row, ["间隔名称", "*间隔名称"]),
+    });
   }
   return rows;
+}
+
+function generateMarkedPointExcel(rows: MarkedPointExcelExportRow[]): Buffer {
+  const headerRow = ["序号", "点位名称", "主设备名称", "间隔名称"];
+  const dataRows = rows.map((row, index) => [
+    index + 1,
+    row.pointName,
+    row.mainDeviceName,
+    row.bayName,
+  ]);
+  const ws = XLSX.utils.aoa_to_sheet([headerRow, ...dataRows]);
+  const headerStyle = {
+    alignment: { horizontal: "center", vertical: "center" },
+    fill: { patternType: "solid", fgColor: { rgb: "E7E6E6" } },
+    font: { name: "等线", sz: 11 },
+  };
+  for (let c = 0; c < headerRow.length; c++) {
+    const cellRef = XLSX.utils.encode_cell({ r: 0, c });
+    if (!ws[cellRef]) ws[cellRef] = { t: "s", v: headerRow[c] };
+    ws[cellRef].s = headerStyle;
+  }
+  ws["!rows"] = [{ hpt: 24 }];
+  ws["!cols"] = [
+    { wch: 8 },
+    { wch: 36.89 },
+    { wch: 38.89 },
+    { wch: 45.22 },
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+  return Buffer.from(XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer);
 }
 
 function buildVerificationTree(
@@ -480,6 +570,56 @@ function buildVerificationTree(
   }
 
   return { nodes, rootIds };
+}
+
+function collectPointImages(files: string[], sourceDir: string): Map<string, ImageEntryInfo> {
+  const imageByPointCode = new Map<string, ImageEntryInfo>();
+  for (const filePath of files) {
+    const relativePath = path.relative(sourceDir, filePath).replace(/\\/g, "/");
+    const segments = relativePath.split("/").filter(Boolean);
+    if (!segments.slice(0, -1).some((segment) => segment.toLowerCase() === "img")) continue;
+
+    const ext = path.extname(filePath).toLowerCase();
+    const mime = imageMimeType(ext);
+    if (!mime) continue;
+    const pointCode = path.basename(filePath, ext).trim();
+    if (!pointCode) continue;
+    imageByPointCode.set(pointCode.toLowerCase(), { filePath, mime });
+  }
+  return imageByPointCode;
+}
+
+function readCruiseIdMapFromExtendJson(files: string[], sourceDir: string): Map<string, string> {
+  const extendPath = findExtendJsonPath(files, sourceDir);
+  if (!extendPath) throw new Error("未找到 extend.json");
+
+  const parsed = JSON.parse(fs.readFileSync(extendPath, "utf-8"));
+  const rows = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.records)
+      ? parsed.records
+      : [];
+  if (rows.length === 0) throw new Error("extend.json 中未找到点位映射");
+
+  const cruiseIdByPointCode = new Map<string, string>();
+  for (const row of rows) {
+    const pointCode = valueText(row?.point_code ?? row?.pointCode);
+    const cruiseId = valueText(row?.cruise_id ?? row?.cruiseId);
+    if (!pointCode || !cruiseId) continue;
+    cruiseIdByPointCode.set(pointCode.toLowerCase(), cruiseId);
+  }
+
+  if (cruiseIdByPointCode.size === 0) throw new Error("extend.json 中未找到有效 cruise_id");
+  return cruiseIdByPointCode;
+}
+
+function findExtendJsonPath(files: string[], sourceDir: string): string | undefined {
+  const candidates = files.filter((filePath) => path.basename(filePath).toLowerCase() === "extend.json");
+  return candidates.sort((left, right) => {
+    const leftDepth = path.relative(sourceDir, left).split(path.sep).length;
+    const rightDepth = path.relative(sourceDir, right).split(path.sep).length;
+    return leftDepth - rightDepth;
+  })[0];
 }
 
 function findPointWorkbookPath(files: string[]): string | undefined {
@@ -755,6 +895,49 @@ function normalizeCorrectionRect(value: any): DeviceCorrectionRect {
     imageWidth,
     imageHeight,
   };
+}
+
+function correctionRectToTargetPoint(rect: DeviceCorrectionRect): number[] {
+  return [
+    clamp01((rect.x + rect.size / 2) / rect.imageWidth),
+    clamp01((rect.y + rect.size / 2) / rect.imageHeight),
+  ];
+}
+
+function correctionRectToTargetRect(rect: DeviceCorrectionRect): number[][] {
+  const x1 = clamp01(rect.x / rect.imageWidth);
+  const y1 = clamp01(rect.y / rect.imageHeight);
+  const x2 = clamp01((rect.x + rect.size) / rect.imageWidth);
+  const y2 = clamp01((rect.y + rect.size) / rect.imageHeight);
+  return [
+    [x1, y1],
+    [x2, y1],
+    [x2, y2],
+    [x1, y2],
+  ];
+}
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
+
+function sanitizeZipBaseName(value: string): string {
+  const text = valueText(value).replace(/[<>:"/\\|?*\x00-\x1F]/g, "_");
+  return text || "correction";
+}
+
+function uniqueZipEntryName(usedNames: Set<string>, preferredName: string): string {
+  const ext = path.extname(preferredName);
+  const base = path.basename(preferredName, ext);
+  let name = `${sanitizeZipBaseName(base)}${ext || ".json"}`;
+  let index = 1;
+  while (usedNames.has(name.toLowerCase())) {
+    name = `${sanitizeZipBaseName(base)}_${index}${ext || ".json"}`;
+    index++;
+  }
+  usedNames.add(name.toLowerCase());
+  return name;
 }
 
 function normalizeArchiveEntryName(entryName: string): string {

@@ -72,10 +72,15 @@ async function requestImageDetection(imageDataUrl: string): Promise<ImageDetecti
     formData.append("taskid", String(taskId));
   }
 
-  const response = await fetch(DEVICE_DETECTION_URL, {
-    method: "POST",
-    body: formData,
-  });
+  let response: Response;
+  try {
+    response = await fetch(DEVICE_DETECTION_URL, {
+      method: "POST",
+      body: formData,
+    });
+  } catch {
+    throw new Error("网络异常");
+  }
   const payloadText = await response.text();
   const payload = parseJsonPayload(payloadText);
   if (!response.ok) {

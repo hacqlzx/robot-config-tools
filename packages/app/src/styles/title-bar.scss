@@ -48,6 +48,25 @@
   }
 }
 
+.app-header__brand {
+  width: 52px;
+  height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 52px;
+  -webkit-app-region: drag;
+
+  img {
+    width: 28px;
+    height: 28px;
+    object-fit: contain;
+    display: block;
+    user-select: none;
+    pointer-events: none;
+  }
+}
+
 .app-header__toolbar {
   display: flex;
   align-items: center;

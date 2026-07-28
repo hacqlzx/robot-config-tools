@@ -100,7 +100,7 @@ export default function BackendSettingsPanel({ onConnected }: Props) {
   const showFailModal = useCallback((ip: string, prevIp: string, onRetry: () => Promise<void>) => {
     modal.confirm({
       title: "连接失败",
-      content: `无法连接到 ${ip}，请检查网络或 IP 是否正确。`,
+      content: "后台连接失败",
       okText: "重新连接",
       cancelText: "取消",
       onOk: onRetry,

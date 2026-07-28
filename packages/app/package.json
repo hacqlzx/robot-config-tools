@@ -46,7 +46,7 @@
     },
     "build": {
         "appId": "com.robot.config-tools",
-        "productName": "RobotConfigTools",
+        "productName": "七宝智图",
         "directories": {
             "output": "release"
         },
@@ -56,9 +56,15 @@
             "!node_modules/**/*",
             "node_modules/sql.js/**/*"
         ],
+        "extraResources": [
+            {
+                "from": "src/assets/img/icon.png",
+                "to": "icon.png"
+            }
+        ],
         "win": {
             "target": "nsis",
-            "icon": null
+            "icon": "src/assets/img/icon.ico"
         },
         "nsis": {
             "oneClick": false,
@@ -72,7 +78,7 @@
         "asar": false
     },
     "version": "1.0.0",
-    "description": "Robot Config Tools",
+    "description": "七宝智图",
     "author": "robot",
     "packageManager": "pnpm@9"
 }

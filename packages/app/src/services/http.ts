@@ -21,22 +21,22 @@ function getBackendHttpErrorMessage(error: any): string {
   }
 
   if (typeof navigator !== "undefined" && navigator.onLine === false) {
-    return "当前设备无网络连接，请检查网络设置";
+    return "网络异常";
   }
 
   if (error?.code === "ECONNABORTED" || error?.code === "ETIMEDOUT") {
-    return "后台请求超时，请检查网络或后台服务状态";
+    return "请求超时";
   }
 
   if (error?.code === "ERR_NETWORK" || !error?.response) {
-    return "无法连接后台，请检查网络、后台地址或服务状态";
+    return "后台连接失败";
   }
 
   const status = error.response.status;
-  if (status === 401 || status === 403) return "后台拒绝访问，请检查访问权限";
-  if (status === 404) return "后台接口不存在或当前后台版本不支持此功能";
-  if (status >= 500) return "后台服务异常，请稍后重试";
-  return `后台请求失败（HTTP ${status}）`;
+  if (status === 401 || status === 403) return "访问受限";
+  if (status === 404) return "接口不存在";
+  if (status >= 500) return "后台异常";
+  return `请求失败（${status}）`;
 }
 
 /** 供页面在保留业务兜底文案的同时展示统一的请求错误。 */
@@ -52,14 +52,14 @@ instance.interceptors.request.use((config) => {
   }
 
   const ip = getBackendIp();
-  if (!ip) throw new BackendRequestError("请先在设置中连接后台");
+  if (!ip) throw new BackendRequestError("请先连接后台");
 
   const connectionStatus = getConnectionStatus();
   if (connectionStatus === "failed") {
-    throw new BackendRequestError("后台未连接，请检查网络或在设置中重新连接");
+    throw new BackendRequestError("后台未连接");
   }
   if (connectionStatus !== "connected") {
-    throw new BackendRequestError("后台连接尚未建立，请稍后重试或在设置中连接后台");
+    throw new BackendRequestError("后台未连接");
   }
 
   config.baseURL = `https://${ip}`;

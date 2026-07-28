@@ -4,6 +4,7 @@ import { MinusOutlined, BorderOutlined, CloseOutlined, SettingOutlined, ProjectO
 import type { MenuProps } from "antd";
 import { useNavigate, useLocation } from "react-router-dom";
 import { menuConfig } from "@/config/menu";
+import toolIcon from "@/assets/img/icon.png";
 import SettingsModal from "@/pages/settings-modal";
 import {
   getSelectedProject,
@@ -329,6 +330,9 @@ export default function AppHeader() {
   return (
     <div className="app-header" style={{ background: "#fff", borderBottom: "1px solid #f0f0f0" }}>
       {contextHolder}
+      <div className="app-header__brand" aria-label="七宝智图">
+        <img src={toolIcon} alt="" draggable={false} />
+      </div>
       <Menu mode="horizontal" selectedKeys={[location.hash.slice(1) || location.pathname]} items={menuItems} className="app-header__menu" style={{ width: "auto" }} onClick={({ key }) => navigate(key)} />
       <div className="app-header__toolbar">
         <Dropdown menu={{ items: projectMenu }} trigger={["hover"]}>

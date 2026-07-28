@@ -4,6 +4,15 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const WINDOW_ICON_RESOURCE_NAME = "icon.png";
+
+function resolveWindowIconPath(): string | undefined {
+  const candidates = [
+    path.join(process.resourcesPath, WINDOW_ICON_RESOURCE_NAME),
+    path.join(__dirname, "../src/assets/img/icon.png"),
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate));
+}
 
 /**
  * 创建应用主窗口并注册窗口相关 IPC。
@@ -17,9 +26,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export function createWindow(): BrowserWindow {
   const preloadPath = path.join(__dirname, "preload.js");
   console.log("preload path:", preloadPath, "exists:", fs.existsSync(preloadPath));
+  const iconPath = resolveWindowIconPath();
 
   const win = new BrowserWindow({
     show: false,
+    ...(iconPath ? { icon: iconPath } : {}),
     // 限制窗口最小尺寸，确保弹窗、表单等 UI 有足够展示空间
     minWidth: 900,
     minHeight: 600,

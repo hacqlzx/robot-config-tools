@@ -129,6 +129,7 @@ export default function DeviceVerify() {
   const [imageError, setImageError] = useState("");
   const [loadingPackage, setLoadingPackage] = useState(false);
   const [loadingImage, setLoadingImage] = useState(false);
+  const [exportingCorrectionData, setExportingCorrectionData] = useState(false);
   const [exportingMarkedPoints, setExportingMarkedPoints] = useState(false);
   const [markFilter, setMarkFilter] = useState<PointMarkFilter>("all");
   const [correctionMode, setCorrectionMode] = useState(false);
@@ -144,6 +145,34 @@ export default function DeviceVerify() {
 
   const placeholder = (label: string) => {
     message.info(`${label}（功能待接入）`);
+  };
+
+  const handleExportCorrectionData = async () => {
+    const api = window.electronAPI;
+    if (!selectedProject) {
+      message.warning("请先选择项目");
+      return;
+    }
+    if (!api?.exportDeviceCorrectionData || !api.selectDir) {
+      message.warning("仅 Electron 环境支持导出纠偏数据");
+      return;
+    }
+
+    const destDir = await api.selectDir("选择纠偏数据导出目录");
+    if (!destDir) return;
+
+    setExportingCorrectionData(true);
+    try {
+      const result = await api.exportDeviceCorrectionData(selectedProject, destDir);
+      if (!result.success) throw new Error(result.error || "导出纠偏数据失败");
+      message.success(`已导出 ${result.exportedCount || 0} 个纠偏数据：${result.fileName || ""}`);
+    } catch (error: any) {
+      const text = error?.message || "导出纠偏数据失败";
+      if (text.includes("暂无纠偏数据")) message.warning(text);
+      else message.error(text);
+    } finally {
+      setExportingCorrectionData(false);
+    }
   };
 
   const handleExportMarkedPoints = async () => {
@@ -498,7 +527,7 @@ export default function DeviceVerify() {
               <Button icon={<DownOutlined />} disabled={loadingPackage} />
             </Dropdown>
           </Space.Compact>
-          <Button icon={<SyncOutlined />} onClick={() => placeholder("导出纠偏数据")}>导出纠偏数据</Button>
+          <Button icon={<SyncOutlined />} loading={exportingCorrectionData} onClick={handleExportCorrectionData}>导出纠偏数据</Button>
           <Button icon={<PushpinOutlined />} loading={exportingMarkedPoints} onClick={handleExportMarkedPoints}>导出标记点位</Button>
           <Button icon={<CloudSyncOutlined />} onClick={() => placeholder("同步分析主机")}>同步分析主机</Button>
         </Space>

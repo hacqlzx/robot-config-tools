@@ -122,6 +122,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("device-verify:save-correction", projectName, record),
   deleteDeviceCorrection: (projectName, pointCode) =>
     ipcRenderer.invoke("device-verify:delete-correction", projectName, pointCode),
+  exportDeviceCorrectionData: (projectName, destDir) =>
+    ipcRenderer.invoke("device-verify:export-correction-data", projectName, destDir),
   setDevicePointMark: (projectName, record) =>
     ipcRenderer.invoke("device-verify:set-point-mark", projectName, record),
   exportMarkedDevicePoints: (projectName, destDir) =>

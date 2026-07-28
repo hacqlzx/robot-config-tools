@@ -116,23 +116,28 @@ async function recognizeCabinetLabelsWithPrompt(
     if (!source.dataUrl.startsWith("data:image/")) throw new Error("仅支持 data URI 图片识别");
   }
 
-  const response = await fetch(`${DASH_SCOPE_BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${DASH_SCOPE_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: DASH_SCOPE_MODEL,
-      temperature: 0,
-      messages: [
-        {
-          role: "user",
-          content: buildCabinetOcrContent(imageSources, prompt),
-        },
-      ],
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${DASH_SCOPE_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${DASH_SCOPE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: DASH_SCOPE_MODEL,
+        temperature: 0,
+        messages: [
+          {
+            role: "user",
+            content: buildCabinetOcrContent(imageSources, prompt),
+          },
+        ],
+      }),
+    });
+  } catch {
+    throw new Error("网络异常");
+  }
 
   const payloadText = await response.text();
   const payload = parseJsonPayload(payloadText);
@@ -147,23 +152,28 @@ async function recognizeCabinetLabelsWithPrompt(
 export async function recognizeCabinetName(source: CabinetOcrImageSource): Promise<CabinetNameOcrResult> {
   if (!source.dataUrl.startsWith("data:image/")) throw new Error("仅支持 data URI 图片识别");
 
-  const response = await fetch(`${DASH_SCOPE_BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${DASH_SCOPE_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: DASH_SCOPE_MODEL,
-      temperature: 0,
-      messages: [
-        {
-          role: "user",
-          content: buildCabinetNameOcrContent(source),
-        },
-      ],
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${DASH_SCOPE_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${DASH_SCOPE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: DASH_SCOPE_MODEL,
+        temperature: 0,
+        messages: [
+          {
+            role: "user",
+            content: buildCabinetNameOcrContent(source),
+          },
+        ],
+      }),
+    });
+  } catch {
+    throw new Error("网络异常");
+  }
 
   const payloadText = await response.text();
   const payload = parseJsonPayload(payloadText);
