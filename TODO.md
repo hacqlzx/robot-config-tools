@@ -1,632 +1,543 @@
-# robotConfigTools 客户端优化 TODO
+# robotConfigTools 稳定化与优化 TODO
 
-生成时间：2026-07-06
+生成时间：2026-07-28
 
-最近复核：2026-07-13
+复核范围：`packages/app/src`、`packages/app/electron`、`packages/database/src`，以及浏览器模式下的空间编辑、勘察标注、屏柜标注、设备验证、导入导出、运维配置和后台设置页面。
 
-状态说明：`✅` 已完成，`🟡` 部分完成，`⬜` 未完成。状态按当前源码核对，不代表已做完整 Electron 端到端回归。
+状态说明：`🚨` 发布阻断，`🟡` 已有基础但未闭环，`⬜` 未开始，`✅` 已完成并需要保留回归，`⏸` 当前不做。
 
-## 2026-07-13 复核摘要
+## 结论
 
-- ✅ Electron 主进程已拆为 `app/*`、`ipc/*`、`project-core/*`，项目文件读写已有项目根越界保护。
-- 🟡 `project.manifest.json` 已落地，地图和点表会维护清单；勘察任务登记、旧项目资产扫描和健康面板未完成。
-- ✅ 空间编辑已拆出布局、场景、绘制模式、保存、裁切完成、撤销/恢复等组件和 hooks，并复用公共 `ThreeDEngine`/`PointCloudLoader`。
-- ✅ 空间区域和路径已切换到机器人协议：`description_file.json`、`reference_path.txt`，兼容读取 `path.json` 和停靠点文件。
-- ✅ 勘察数据按地图导入/导出、图像标识导入/导出、标定串行保存队列和视口缩略图加载已接入。
-- ✅ 项目、机器人、后台 IP 和连接状态已收敛到 `appContextStore`，业务页面不再直接读写对应 localStorage key，也不再回退到默认项目。
-- ✅ 项目重命名/删除已同步目录、清单和数据库六张项目关联表，删除前会展示数据库影响数量。
-- 🟡 源码模块化复核已完成，空间绘制 schema、区域 codec、路径 codec 两阶段拆分已落地；下一步继续拆分文件 repository 和屏柜设备同步。
-- ⬜ Electron 网络/证书安全、LAZ worker/取消、LOD、typecheck/lint/回归脚本仍未完成。
+项目已经从“补主体功能”进入“稳定化和可交付”阶段。空间编辑、项目管理、点表、勘察标定、屏柜/设备验证、本地归档和大部分后台导入导出都有实际实现；后续不应再以大范围页面重写或按文件行数拆分为主线。
 
-## 原则
+当前不能直接视为生产稳定版，原因集中在五类问题：
 
-- 先优化客户端操作链路、工程数据模型、目录管理和大文件处理；三维换引擎放到最后做验证。
-- `project/` 和 `data/` 是运行时目录，不作为源码任务处理。
-- `doc/*.java` 和 `doc/导入逻辑总结.md` 保留，后续点表导入逻辑还会参考。
-- 优先保证 Electron 客户端闭环，浏览器模式只作为 UI/前端逻辑调试入口。
+1. 屏柜 OCR 在渲染进程内包含默认云端 API 密钥，并直接向公网发送现场图片。
+2. 多个导入、替换和删除流程先删除旧数据，失败时可能留下空目录、半成品或文件/数据库不一致。
+3. Electron 生产窗口关闭 Web 安全、放行所有证书错误，部分通用文件 IPC 缺少路径和大小边界。
+4. Vite/Electron 构建可以通过，但完整 TypeScript 检查仍有 37 条诊断，当前没有固定质量门槛。
+5. 点云、勘察图片和屏柜图片仍存在多份大对象同时驻留、无内存预算、无真正取消的问题。
 
-## 当前重点：代码结构与组件化专项
+优化顺序固定为：凭据和数据安全 -> 数据原子性 -> 类型/回归门槛 -> 操作状态闭环 -> 大文件性能 -> 结构整理。除非实测证明现有 PlayCanvas 无法满足目标，否则不更换三维引擎。
 
-复核时间：2026-07-13。
+## 2026-07-28 基线
 
-拆分原则：
-- 不以行数作为唯一标准；优先处理同时承担 UI、状态、协议转换、文件 IO 或 IPC 注册的文件。
-- 协议转换、坐标转换、点表导入等高风险逻辑先补样例/回归，再做文件移动，避免“拆完能编译但数据格式变了”。
-- 页面组件只负责布局和交互编排；可复用业务流程进入 hooks/controllers，Electron/数据库访问进入 service/repository。
-- 不为了“通用化”引入复杂 schema 引擎、全局状态框架或多层基类；相似行为稳定出现两到三处后再抽象。
+- 源码规模：约 189 个 TS/TSX/JS/CJS 文件、4.1 万行代码；复杂度主要集中在归档 IPC、屏柜识别工作流、标定、点云裁切和项目服务。
+- `pnpm build`：通过，但只证明 Vite 能转译和打包，不代表类型正确。
+- `pnpm build:electron`：通过；有 WASM URL、浏览器 external、空 MQTT chunk 和大 chunk 警告。
+- `pnpm --filter app exec tsc -p tsconfig.json --noEmit`：失败，共 37 条诊断。错误覆盖 Electron、Ant Design 6、标定数据、OCR 类型和未完成的 `playcanvas-core` 历史模块。
+- `tsconfig.json` 同时配置 `strict: true` 和 `strictNullChecks: false`，空值风险尚未真正纳入严格检查。
+- 前端构建主要大包：PlayCanvas 约 1.9 MB、Ant Design 约 1.0 MB、SPZ 约 0.9 MB、主业务包约 0.7 MB；应用 PNG 图标约 1.5 MB。
+- 浏览器模式适合检查布局和纯前端状态；项目文件、数据库、导入导出和大文件流程仍必须在 Electron 中回归。
 
-### 1. 🟡 拆分空间绘制协议与持久化模块（最高优先级）
+## 已完成基线
 
-现状：`views/space-edit/hooks/drawing/drawing-storage.ts` 原约 1256 行，同时包含类型、机器人区域协议、坐标转换、屏柜分段、路径格式转换、Electron 文件 IO 和数据库清理。
+以下能力不再作为开发主项，但后续改动必须保持回归：
 
-第一阶段已完成：
-- 新增 `drawing-schema.ts`，集中绘制对象、路径数据、机器人区域协议类型和文件/区域类型常量。
-- 路径纯数据类型从 `PathDrawing.ts` 移入 schema，`PathDrawing.ts` 继续重新导出以兼容现有调用。
-- 新增 `drawing-coordinate-transform.ts`，抽离顶点和路径的 LAS/scene 双向转换。
-- 新增 `drawing-codec-utils.ts` 和 `area-codec.ts`，抽离 pose/8 顶点转换、屏柜分段、旧格式兼容及机器人区域协议双向转换。
-- `drawing-storage.ts` 保留兼容门面，现有业务调用方无需一次性迁移。
-- 已验证顶点及含贝塞尔控制点路径的坐标 round-trip；区域 smoke test 覆盖柜排/子屏柜、独立屏柜、充电区、设备区和旧 `{items}` 格式。
+- ✅ 项目、机器人、后台 IP 和连接状态已收敛到 `appContextStore`。
+- ✅ 项目切换会重建普通业务页；屏柜/设备验证页由 `App.tsx` 按项目缓存实例。
+- ✅ 项目重命名会同步目录、manifest 和六张数据库表，并包含补偿逻辑。
+- ✅ `ping` 已改为 IPv4 校验加 TCP 443 探测，不再拼接 shell 命令。
+- ✅ 项目常规读写、删除、重命名和导出已具备项目根越界校验。
+- ✅ 空间区域、路径、坐标转换已经拆出纯 codec，可继续作为回归测试入口。
+- ✅ 空间模型导出、勘察数据/图像标识导入导出、设备验证数据和屏柜标注已有领域实现。
+- ✅ 标定保存已有串行队列，勘察缩略图已有视口加载、并发队列和数量 LRU 的基础。
 
-第二阶段已完成：
-- 新增 `path-codec.ts`，抽离 `reference_path.txt`、`path.json` 和停靠点文件的纯解析/生成逻辑。
-- 路径 codec 统一负责机器人路线拓扑重建、连续单路线校验、充电区域起点判断和稳定坐标文本生成，不访问 Electron 或文件系统。
-- `drawing-storage.ts` 仅保留路径候选文件查找、停靠点文件读取、LAS/scene 坐标转换和 Electron 写入编排，文件降至约 530 行。
-- 路径 smoke test 覆盖停靠点包装格式、waypoint 首尾去重、机器人路线重建、参考文本往返、分支拒绝和充电区边界判定。
+## P0：发布阻断
 
-建议边界：
-- ✅ `drawing-schema.ts`：`CabinetItem`、`DeviceAreaItem`、`ChargingAreaItem`、`RobotAreaRecord`、路径类型等类型和协议常量。
-- ✅ `area-codec.ts`：`description_file.json` 与前端绘制对象的双向转换、兼容旧格式。
-- ✅ `path-codec.ts`：`reference_path.txt`、`path.json`、停靠点文件的解析和生成。
-- ✅ `drawing-coordinate-transform.ts`：LAS/scene 顶点和路径转换，不包含文件访问。
-- `drawing-repository.ts`：读写、删除和项目相对路径处理，仅通过 `electronAPI.project` 访问文件。
-- `cabinet-device-sync.ts`：屏柜删除时的数据库设备同步，不放在 JSON codec 中。
+### 1. 🚨 移除前端密钥，明确图像外发边界
 
-已完成验证：
-- 区域协议 round-trip 样例覆盖柜排/子屏柜、充电区、设备区和旧格式兼容。
-- 路径样例覆盖参考路径、机器人路径、停靠点、连续性校验和坐标变换。
+现状证据：
+
+- `views/screen-verify/services/ocr-service.ts` 为 `VITE_DASHSCOPE_API_KEY` 提供了硬编码默认密钥。Vite 环境变量也会被打进渲染包，不能用于保存秘密。
+- OCR 直接从渲染进程请求 `dashscope.aliyuncs.com`，会发送现场屏柜图片或裁剪区域。
+- `device-detection-service.ts` 固定请求 `http://192.168.0.139:52002`，没有环境、项目或设置级配置。
+- 两条识别链路都没有统一超时、`AbortSignal`、请求审计和数据发送说明。
+
+任务：
+
+- 立即吊销并轮换已进入源码的云端密钥，同时检查 Git 历史和已发布安装包；不要只删除当前文件中的字符串。
+- 渲染进程不得持有供应商密钥。优先通过受控后台代理；离线部署需要本地服务时，由 Electron 主进程读取系统凭据或受保护配置，并只暴露最小识别 IPC。
+- 将 OCR 模型、识别服务地址、超时、是否允许公网外发纳入管理员配置；生产默认不允许静默外发。
+- 第一次启用外部识别时明确显示目标服务和数据范围，并记录不包含图片内容的审计信息。
+- 请求日志不得输出 base64、原图、完整模型响应或认证头。
+- 为单张和批量识别接入超时、真正取消、失败分类和有限重试；取消后不得继续保存晚到结果。
 
 验收：
-- codec 可以在没有 React、PlayCanvas 和 Electron 的环境中独立测试。
-- 文件 IO 层不再包含几何计算，协议层不再直接调用 `window.electronAPI`。
-- 现有项目 JSON/TXT 重新加载后位置、ID、设备绑定和导出内容不变。
 
-### 2. ⬜ 拆分勘察标定视图和共享协议
+- 构建产物和仓库历史扫描不再发现有效密钥；旧密钥已失效。
+- 断开识别服务、请求超时、用户取消和页面切换都有确定状态，不会无限等待或写入过期结果。
+- 管理员可以确认每条识别链路是本机、局域网还是公网，并能禁用公网链路。
 
-现状：`CalibrationView.tsx` 约 992 行，混合图片读取、标定文件合并、自动保存队列、Canvas 绘制、缩放拖拽、矩形编辑、点位绑定和右侧表单；`image-edit/index.tsx` 约 513 行，继续承担任务加载、三维联动、筛选和多个弹窗状态。
+### 2. 🚨 把覆盖式导入和项目删除改成可回滚事务
 
-建议边界：
-- `calibration-types.ts`：标定文件、矩形和点位绑定类型。
-- `calibration-codec.ts`：跨地图 `勘察数据.json` 的 normalize/merge，不依赖 React。
-- `useCalibrationPersistence.ts`：加载、防抖、串行保存、失败重试和离开页面 flush。
-- `useCalibrationCanvas.ts`：viewport、缩放、拖拽、框选、命中测试和绘制调度。
-- `CalibrationToolbar.tsx`、`CalibrationCanvas.tsx`、`PointBindingPanel.tsx`：拆分可见 UI。
-- `useSurveyWorkspace.ts`：从 `image-edit/index.tsx` 接管地图、任务、图像索引和三维选中联动。
-- 增加 renderer/Electron 共用的 survey protocol 模块，统一 `勘察数据`、`勘察数据.json`、mapCode 和标定 normalize 规则。
+现状证据：
 
-验收：
-- `CalibrationView` 只负责组合 hooks 和子组件，不再直接拼项目路径或合并共享文件。
-- 自动保存、快速连续编辑、跨地图合并和导入导出使用同一套协议函数。
-- Canvas 交互拆分后缩放、框选、拖拽和快捷键行为不回退。
+- 勘察 ZIP 导入在校验内容前删除原地图勘察目录。
+- 设备验证包导入在新包完成解析前删除目标目录。
+- 同名空间模型在目标替换阶段仍可能先移除旧地图，后续复制或同步失败会丢失旧版本。
+- 空间编辑点表导入先替换项目 Excel，再执行数据库导入；数据库校验失败时文件和数据库可能不一致，且存在错误行时仍可能显示成功。
+- 项目删除先删数据库记录，再删项目目录；Windows 文件占用或权限失败时会留下“目录存在但数据库已空”的状态。
 
-### 3. ⬜ 拆分 Electron 归档 IPC 和格式转换
+统一实现：
 
-现状：`electron/ipc/archive-ipc.ts` 约 882 行，既注册 ZIP/勘察/图像标识 IPC，又负责路径扫描、标定格式转换、图片匹配、坐标归一化和文件命名。
-
-建议边界：
-- `ipc/archive-ipc.ts`：只保留 channel 注册、参数校验和结果返回。
-- `services/survey-archive.service.ts`：勘察数据导入导出和 ZIP 目录结构。
-- `services/image-label.service.ts`：图像标识导入导出流程。
-- `services/image-label-converter.ts`：客户端标定与机器人 label 的纯数据转换。
-- `services/survey-context.ts`：任务图片索引、设备区和点位上下文加载。
-- `types/survey-protocol.ts`：与 renderer 共享的数据类型和常量。
-
-验收：
-- 每个 IPC handler 只做编排，不出现大段转换循环。
-- 图像标识转换可以用固定 JSON fixture 独立回归，不需要启动 Electron。
-- 路径越界保护仍集中走 `project-paths.ts`，拆分后不能分散复制校验。
-
-### 4. ⬜ 拆分顶部栏和项目管理工作流
-
-现状：`pages/app-header/index.tsx` 约 510 行，包含导航、项目 CRUD、删除影响统计、机器人列表缓存、后台自动连接、设置弹窗和窗口控制。设置弹窗已开始独立，但项目管理仍集中在头部组件。
-
-建议边界：
-- `useProjectManagement.ts`：项目列表、项目根、创建、切换、重命名、删除和影响统计。
-- `useRobotOptions.ts`：机器人缓存、后台切换刷新和无效选项清理。
-- `HeaderProjectControls.tsx`、`HeaderRobotSelect.tsx`、`WindowControls.tsx`：顶部可见控件。
-- `ProjectCreateModal.tsx`、`ProjectManagerModal.tsx`、`ProjectDeleteModal.tsx`：项目弹窗。
-- `settings-modal/menu.ts`：设置菜单登记；新增设置项时不再修改 `AppHeader`。
-
-验收：
-- `AppHeader` 只保留导航和子组件编排，不直接执行项目文件/数据库操作。
-- 项目删除弹窗、项目编辑弹窗可以独立渲染和测试。
-- 新增设置页只新增菜单项和面板组件，不改顶部栏代码。
-
-### 5. ⬜ 拆分项目服务和数据库 IPC
-
-现状：`electron/project-core/project-service.ts` 约 546 行，混合项目生命周期、地图文件/ZIP 导入、树操作、项目文件操作和导出；`electron/db-ipc.ts` 约 343 行，混合通用 Repository IPC、批处理、点表导入和屏柜设备领域逻辑。
-
-建议边界：
-- `project-lifecycle.service.ts`：项目列举、创建、重命名、删除及数据库同步编排。
-- `map-import.service.ts`：LAS/LAZ/ZIP 校验、解压、目录归一化和 manifest 更新。
-- `project-file.service.ts`：树、写入、删除、重命名和打开目录。
-- `project-export.service.ts`：单文件与项目 ZIP 导出。
-- `ipc/db-repository-ipc.ts`：通用 CRUD handler 注册。
-- `ipc/point-import-ipc.ts`、`ipc/cabinet-device-ipc.ts`：领域 IPC；实际事务逻辑继续下沉 database service。
-
-验收：
-- 项目生命周期不依赖地图 ZIP/导出实现。
-- IPC 文件只做参数适配，数据库事务和业务校验在 service 中可独立测试。
-- preload、IPC channel 和 renderer 类型保持一一对应。
-
-### 6. ⬜ 组件化导入导出和后台配置页
-
-现状：`import-export/index.tsx` 约 504 行，包含卡片配置、文件选择、本地临时文件、后台调用和所有导入导出 handler；`config/platform/index.tsx` 约 388 行，三个独立配置表单集中在一个文件。厂站、机器人、地图配置页重复加载状态、后台切换刷新、表格 CRUD 和弹窗状态。
-
-建议边界：
-- `ImportExportCard.tsx`：纯展示卡片；操作状态由父级传入。
-- `useLocalProjectTransfer.ts`、`useBackendTransfer.ts`：明确区分本地项目与后台机器人流程。
-- 按领域拆 `point-table-actions.ts`、`survey-actions.ts`、`communication-actions.ts`、`model-actions.ts`。
-- 将 platform 拆为 `BackendPlatformForm`、`AnalysisServiceForm`、`UpstreamHostForm`。
-- 抽取轻量 `useBackendRefresh` 和列表页加载/错误处理约定；不要做能够动态生成所有配置页的复杂 schema 引擎。
-- 统一 `ApiResponse<T>` 和配置 DTO，移除每个页面重复声明及主要 handler 中的 `any`。
-
-验收：
-- `import-export/index.tsx` 只保留操作注册和网格布局。
-- 后台切换刷新、loading、错误提示在配置页行为一致。
-- 表单字段仍由领域组件明确声明，便于排查后台字段差异。
-
-### 7. ⬜ 收敛 Electron API 类型和访问入口
-
-现状：preload、IPC handler、`vite-env.d.ts` 和各页面分别维护调用签名；业务代码中仍有 `(window as any).electronAPI`、非空断言和大量 `any`，接口变更容易只改一侧。
+1. 把来源复制到项目根内的临时目录/文件。
+2. 在临时位置完成 ZIP 路径、文件数量、总解压大小、协议版本、必需文件和业务数据校验。
+3. 对数据库执行 dry-run，返回新增、更新、删除、冲突和错误摘要，不改正式数据。
+4. 用户确认覆盖范围后，用数据库事务加文件原子替换提交；原目标先改名为同盘备份，不直接递归删除。
+5. manifest 只在文件和数据库都成功后更新。
+6. 任一步失败自动恢复旧目录、旧文件和数据库；恢复失败必须生成可见的恢复指引和诊断日志。
 
 具体任务：
-- 将 `ElectronAPI`、Project API、数据库 Repo API、归档 DTO 拆到 `types/electron-api/*.ts`，`vite-env.d.ts` 只做 Window 全局挂载。
-- 提供 renderer 侧 `getElectronAPI()`/能力检测 helper，统一 Electron-only 错误提示。
-- 为 IPC channel 建立共享常量和请求/响应类型，逐步减少字符串散落。
-- 新增接口时要求同时更新 handler、preload、共享类型和最小调用回归。
+
+- 抽出共享 `stage -> validate -> commit -> rollback -> cleanup` 工具，供地图、勘察、屏柜图、设备验证和点表导入复用。
+- ZIP 导入增加 Zip Slip、绝对路径、符号链接、条目数、单文件大小、总解压大小和压缩比限制。
+- 点表导入按整批成功/整批失败处理；若确实需要容错导入，必须由用户明确选择，并导出错误报告。
+- 项目删除先改名到项目根内隔离目录，再删除数据库；数据库失败则改名恢复，提交成功后再清理隔离目录。
+- 所有临时目录带操作 ID，应用启动时扫描并提示恢复/清理，不静默删除未知残留。
 
 验收：
-- 业务代码不再通过 `window as any` 访问 Electron API。
-- IPC 参数或返回值变更能在构建/typecheck 阶段发现不一致。
 
-### 8. 🟡 整理三维绘制类，避免过早重写底层引擎
+- 对每类导入在复制、解压、校验、数据库提交、manifest 写入和最终替换阶段分别注入失败，原项目均可继续打开。
+- 导入结果只出现三种确定状态：未修改、完整成功、已恢复；不能留下混合状态。
+- 覆盖前 UI 显示实际影响数量、目标目录和是否保留人工标定结果。
 
-现状：`PathDrawing.ts`、`CabinetDrawing.ts`、`DeviceAreaDrawing.ts`、`ChargingAreaDrawing.ts` 各约 500-800 行，重复处理 pointer 生命周期、drag 标记、点击抢占、标签和销毁；`DrawingRenderer.ts` 约 594 行，同时渲染区域、路径、标签和选中态。
+### 3. 🚨 数据库事务、约束和落盘必须真实有效
 
-具体任务：
-- 先抽 `DrawingInteractionSession`/工具函数，统一 pointer 注册、drag 状态、click claim 和 dispose；不要立即改成深继承基类。
-- 将 `DrawingRenderer` 拆为 area/path/label renderer，共享材质和实体生命周期 helper。
-- 为每类绘制补最小交互回归后，再评估是否存在稳定的 controller 接口。
-- `PointCloudLoader.ts` 和 `playcanvas-core` 的 camera/scene/splat 等算法文件暂不因行数强拆，先完成 P2 性能埋点、任务取消和缓存边界。
+现状证据：
 
-验收：
-- 绘制模式切换和销毁不再依赖多处手工设置 `window.__drawingDragging`。
-- 区域/路径 renderer 可以独立启停，点击高亮和标签行为保持一致。
+- `db:startBatch`/`db:endBatch` 只切换 `_batchMode`，该变量没有参与 Repository 写入，批处理名义上存在但实际仍会触发保存调度。
+- `importPointExcel()` 按行捕获错误，设备层级可能已经写入而点位失败，形成半导入数据。
+- 点位编码和标定 ID 主要靠业务代码查询校验，数据库没有相应唯一约束兜底。
+- `DbWrapper.saveToDisk()` 在 Electron 主线程同步导出并直接覆盖整个数据库文件；进程中断可能损坏文件，大库会阻塞主线程。
 
-### 9. ⬜ 建立拆分保护网和完成标准
+任务：
 
-具体任务：
-- 为 drawing codec、survey calibration、image label converter、项目生命周期和点表导入增加 fixture 测试。
-- 增加组件级检查：项目删除弹窗、设置弹窗、标定保存失败/重试、导入导出禁用状态。
-- 增加模块依赖约束：纯协议模块不得导入 React、Ant Design、PlayCanvas、Electron。
-- 每次拆分保持同一提交只处理一个领域，避免文件移动与行为改动混在一起。
+- 删除无效批处理 IPC，或让所有写入统一进入 `DbWrapper.batchMode()`；不得保留看似生效的接口。
+- 点表导入、标定 ID 批量绑定、项目生命周期和屏柜设备同步都使用明确事务边界。
+- 在迁移前先生成重复诊断；清理后增加 `(project_name, point_code)` 唯一索引，以及非空 `calibration_id` 的唯一部分索引。
+- 数据库持久化写入同目录临时文件，`fsync` 后原子替换，并保留最近一个可恢复备份。
+- 评估把导出/写盘移出 UI 敏感路径；至少记录导出大小、耗时和主线程长任务。
 
 验收：
-- 拆分前后的 fixture 输出一致。
-- `pnpm typecheck`、相关回归和 Electron 构建成为组件化任务的固定门槛。
-- 新文件边界有明确所有者，不产生只转发一层、没有实际职责的空抽象。
 
-## P0：客户端工作上下文和稳定性
+- 任意一行验证失败时，默认导入不产生任何设备层级、点位或 Excel 变更。
+- 并发绑定不能得到相同标定 ID；数据库约束能阻止绕过业务层的重复写入。
+- 强制终止落盘过程后，下一次启动能打开旧库或恢复库，不出现零字节/半写文件。
 
-### 1. ✅ 建立统一 AppContext
+### 4. 🚨 收紧 Electron 窗口、导航和 IPC 权限
 
-目标：项目、机器人、后台 IP、连接状态不要再由页面散读 `localStorage`。
+现状证据：
 
-涉及文件：
-- `packages/app/src/pages/app-header/index.tsx`
-- `packages/app/src/stores/appContextStore.ts`
-- `packages/app/src/components/DeviceTree.tsx`
-- `packages/app/src/views/space-edit/**`
-- `packages/app/src/views/image-edit/**`
-- `packages/app/src/views/import-export/index.tsx`
+- 窗口当前为 `sandbox: false`、`webviewTag: true`、`webSecurity: false`。
+- 生产环境 `certificate-error` 对任何地址、任何证书错误都执行 `callback(true)`。
+- 没有看到 `will-navigate`、`setWindowOpenHandler` 和来源校验，用于阻止渲染进程导航到不受信任页面。
+- `read-file-chunk`、`read-large-file` 接受任意绝对路径；后者可分配多 GB Buffer 并通过 IPC 克隆。
+- 通用 `extract-zip(zipPath, destDir)` 暴露任意源和目标路径，且当前没有明确业务调用方。
 
-已完成：
-- `selectedProject`、`selectedRobot`、`backendIp`、`connectionStatus` 收敛到一个外部 store，通过 `useSyncExternalStore` 提供 React hooks。
-- store 兼容原有 localStorage key，并统一负责持久化；业务页面已移除对应 key 的直接读写。
-- 项目切换通过 `App.tsx` 的 Outlet key 重建当前业务页，地图树、设备树、点表和勘察状态随项目刷新。
-- 后台连接成功时原子更新 IP、状态和版本；IP 改变会清空旧机器人选择，配置页只订阅后台相关变化。
-- 未选择项目时，空间模型、点表、勘察任务和 Electron 下载明确阻断，不再写入 `"默认项目"` 或 `"default"`。
+任务：
 
-验收：
-- 顶部切换项目后，不刷新应用也能看到设备树和地图树同步变化。
-- 清空项目选择后，各页面不再使用 `"默认项目"` 或 `"default"` 静默写文件。
-
-### 2. ✅ 项目重命名/删除同步数据库
-
-目标：项目目录生命周期与数据库中的项目关联数据保持一致。
-
-涉及文件：
-- `packages/app/electron/project-core/project-service.ts`
-- `packages/app/electron/ipc/project-ipc.ts`
-- `packages/app/electron/preload.cjs`
-- `packages/app/src/pages/app-header/index.tsx`
-- `packages/database/src/services/project-lifecycle.service.ts`
-
-已完成：
-- 数据库侧集中提供项目数据统计、重命名和删除服务，同步处理：
-  - `project_station.project_name`
-  - `device_voltage.project_name`
-  - `device_bay.project_name`
-  - `device_main.project_name`
-  - `device_component.project_name`
-  - `device_point.project_name`
-- 重命名同步更新目录、项目清单和数据库；目标名称存在数据库残留时阻断，失败时尝试回滚目录、清单和数据库。
-- 删除确认后直接清理数据库关联数据并递归删除原项目目录，不创建临时隔离目录；遇到 Windows 只读文件会清除只读属性后立即重试，仍失败时明确报错。
-- 删除策略固定为同时删除目录和数据库关联数据；顶部项目管理二次确认弹窗会明确影响范围并显示六类记录数量。
+- 先确认没有 `<webview>` 真实使用，再关闭 `webviewTag`；逐步启用 sandbox 和 webSecurity。
+- 自签名证书使用固定后台主机白名单加证书指纹/企业 CA；只有匹配的主机和错误类型才可放行。
+- 拦截新窗口和跨域导航；生产只允许本地应用入口、明确的下载流程和受控后台 API。
+- 增加 CSP，开发和生产使用不同策略；禁止渲染页面任意内联执行和加载未知脚本。
+- 文件 IPC 改为能力句柄或项目相对路径。限制 offset、length、并发数、文件类型和单次返回大小。
+- 删除未使用的 `extract-zip`；若仍需保留，改成领域 IPC，并限定选择器返回的源文件和项目内 staging 目标。
+- 所有 IPC handler 校验参数类型、调用来源和窗口生命周期；preload 只暴露业务需要的最小方法。
 
 验收：
-- 项目重命名后，点表、设备树、勘察标定仍可查询。
-- 删除项目后，数据库中该项目相关记录不残留，或明确标记为保留。
 
-### 3. 🟡 统一模型文件格式和命名协议
+- 生产环境无法导航到外站后继续调用 preload API。
+- 非项目文件、超限读取、负 offset/length、恶意 ZIP 和未授权证书都被拒绝并记录原因。
+- 开启 webSecurity 后，后台请求和本地资源仍通过受控方案工作。
 
-现状：客户端导入入口只支持 LAS/LAZ/ZIP；项目内模型统一命名为 `map.las`。加载器根据 LAS header 压缩位识别 LAZ，因此能够解压，但清单 `ext` 和导出文件名会把源 LAZ 表现为 LAS。PLY 只保留在 demo/历史加载代码，不属于当前业务导入协议。
+### 5. 🚨 建立真正的 typecheck 和回归门槛
 
-涉及文件：
-- `packages/app/electron/project-core/project-service.ts`
-- `packages/app/electron/project-core/project-manifest.ts`
-- `packages/app/src/views/space-edit/hooks/useFileOperations.ts`
-- `packages/app/src/views/space-edit/components/TreeView.tsx`
+当前 typecheck 主要问题：
 
-具体任务：
-- 明确选择“项目内永远规范为未压缩 `map.las`”或“保留 `map.laz`”，并让内容、扩展名、manifest `ext` 一致。
-- 同名地图导入时提示覆盖/重命名/取消，避免静默覆盖。
-- 空间模型 ZIP 当前会直接覆盖同名地图，也需要一致的冲突策略。
+- `device-verify-ipc.ts` 递归返回类型缺失，`project-service.ts` 使用了不匹配的目录删除类型。
+- Ant Design 6 的 `ModalConfig`、`MessageConfig` 和部分属性仍按旧类型使用。
+- 标定存在 `Uint8Array`/`ArrayBuffer` 边界错误，勘察导入存在 `unknown` 运算。
+- OCR 响应类型不足、事件参数隐式 `any`。
+- `playcanvas-core` 存在缺失模块和 API 漂移；需要判断是仍在业务依赖，还是未清理的上游/demo 源码。
 
-验收：
-- 导入 `.las`、`.laz` 后，项目文件内容、扩展名和 manifest 元数据一致。
-- 从地图树再次加载时，走对应加载逻辑。
+任务：
 
-### 4. 🟡 加强 Electron 文件和网络边界
-
-涉及文件：
-- `packages/app/electron/app/app-lifecycle.ts`
-- `packages/app/electron/app/create-window.ts`
-- `packages/app/electron/ipc/system-ipc.ts`
-- `packages/app/electron/project-core/project-paths.ts`
-- `packages/app/electron/preload.cjs`
-- `packages/app/src/vite-env.d.ts`
-
-具体任务：
-- ✅ `project:write-file`、`project:export-file`、删除、重命名和打开目录已统一走项目根校验。
-- `ping` 不再拼 shell 字符串；至少先限制 IP 格式，再执行。
-- 生产环境不要无条件放行证书错误；自签名证书需要可配置策略。
-- 评估 `webSecurity: false` 是否必须，能收则收。
+- 根目录增加 `typecheck`、`test`、`check` 脚本；`check` 至少串行执行 typecheck、fixture 回归和 Electron build。
+- 先让当前 `strictNullChecks: false` 基线零错误，再分目录启用严格空值检查，不用新增 `any`/`@ts-ignore` 掩盖问题。
+- 清理或隔离未进入业务的 `playcanvas-core` 历史模块；业务模块必须纳入类型检查。
+- 引入轻量测试框架，优先覆盖 codec、迁移、导入、归档转换和项目生命周期，不先追求 UI 行覆盖率。
+- CI 和发布脚本必须调用 `pnpm check`，不能只调用 `vite build`。
 
 验收：
-- 任何 `../` 或绝对路径写入都不能越过项目根。
-- 后台 IP 输入非法字符时不会传入 shell。
 
-### 5. ⬜ 清理调试输出
+- 全新安装依赖后，一条命令能稳定复现质量检查。
+- 类型检查零错误；故意改变任一 IPC 参数或返回类型时，检查能够失败。
+- P0 数据流程的故障注入测试进入固定回归。
 
-涉及文件：
-- `packages/app/src/pages/app-header/index.tsx`
-- `packages/app/src/components/image-canvas/ImageCanvas.tsx`
-- `packages/app/electron/main.ts`
-- `packages/app/src/views/image-edit/hooks/useTaskLoader.ts`
-- `packages/app/src/views/space-edit/hooks/useClipSave.ts`
+## P1：客户端操作闭环
 
-具体任务：
-- 高频渲染日志必须删除或挂到开发调试开关下。
-- Electron 主进程日志保留关键错误和导入/导出进度，不打印过多内部状态。
+### 1. 🟡 建立统一“工作区就绪状态”
 
-验收：
-- 正常操作 5 分钟，控制台不会被重复绘制日志刷屏。
+当前多数按钮在前置条件不足时仍可点击，用户只能通过 toast 得知缺少项目、后台、机器人、地图、图片或选中项。不同页面也各自重复判断，规则容易漂移。
 
-## P1：项目目录和 Manifest
+任务：
 
-### 1. 🟡 完善项目 manifest
-
-目标：不要只靠中文目录名和文件扫描推断项目状态。
-
-新增文件格式：
-- `project/{项目}/project.manifest.json`
-
-当前结构（精简示例）：
-
-```json
-{
-  "schemaVersion": 1,
-  "project": {
-    "id": "uuid",
-    "name": "项目名",
-    "createdAt": "2026-07-13T00:00:00.000Z",
-    "updatedAt": "2026-07-13T00:00:00.000Z"
-  },
-  "layout": {
-    "version": 1,
-    "dirs": {
-      "maps": "地图",
-      "pointTables": "点表",
-      "surveyImages": "勘察数据"
-    }
-  },
-  "assets": {
-    "maps": [],
-    "pointTables": [],
-    "surveyTasks": []
-  }
-}
-```
-
-已完成：
-- 项目创建/列举时生成或修复 manifest。
-- 导入地图、写入点表、删除/重命名项目资产时更新 manifest。
-- 项目重命名时更新 `project.name`。
-
-剩余任务：
-- 导入/删除勘察数据时维护 `assets.surveyTasks`。
-- 对旧项目扫描 `地图/`、`点表/`、`勘察数据/` 并回填资产；当前缺少清单时只会生成空资产列表。
-- 评估厂站绑定、地图缓存状态等是否进入 manifest，避免同时维护不一致的数据源。
+- 定义共享能力状态：Electron 可用、项目已选、项目健康、后台已连接、机器人已选、地图已载入、点表存在、任务/图片已载入、当前对象已选择、正在保存/导入/识别。
+- 按页面生成 action readiness，不把所有业务状态塞进一个布尔值。
+- 前置条件不足时禁用动作，并用短 tooltip 给出唯一下一步；主流程空状态直接提供可执行入口。
+- 顶部项目/机器人切换前检查未保存状态和运行任务，不能只靠组件重建丢弃状态。
+- 长任务期间只锁定冲突操作，不冻结整个应用；明确哪些页面可以继续浏览。
 
 验收：
-- 启动后项目列表可以显示：是否有地图、是否有点表、是否有勘察任务、厂站绑定状态。
 
-### 2. ⬜ 项目健康状态面板
+- 空项目首次进入时，用户不需要试错就能看出第一步。
+- 每个按钮的 enabled/disabled 规则可单测；同一条件在不同页面使用一致文案。
 
-涉及文件：
-- `packages/app/src/pages/app-header/index.tsx`
-- 新增 `packages/app/src/components/ProjectHealthPanel.tsx`
+### 2. ⬜ 统一加载、空、失败和离线状态
 
-具体任务：
-- 顶部项目选择旁增加状态入口。
-- 展示：
-  - 当前项目路径
-  - 厂站绑定
-  - 点表数量和最近导入时间
-  - 地图数量和缓存状态
-  - 勘察任务数量
-  - 是否存在未保存绘制
+任务：
+
+- 配置列表区分“后台未连接”“请求失败”“确实无数据”，替换裸 `No data` 和无限 Spin。
+- 每个失败状态提供对应动作：连接后台、重试、选择项目、重新导入或打开日志。
+- 后台连接状态不只用一次 ping 推断。请求成功可恢复连接状态；单个业务 4xx/5xx 不应一律把全局后台标成离线。
+- 统一使用中文加载文案和错误层级；业务校验用 warning，数据可能损坏或操作失败用 error。
+- 导入结果显示成功数、更新数、跳过数、失败数，并允许导出错误明细。
 
 验收：
-- 新用户打开项目后，能明确知道下一步应该导入点表还是导入地图。
 
-## P2：点云大文件加载优化
+- 断网、证书失败、401、500、空数组和慢请求在 UI 上可明确区分。
+- 用户可以从错误状态直接恢复，不必刷新整个客户端。
 
-### 1. ⬜ 加性能埋点
+### 3. ⬜ 建立统一 dirty/save/task 状态协议
 
-涉及文件：
-- `packages/app/src/components/three-d-engine/PointCloudLoader.ts`
-- `packages/app/src/views/space-edit/hooks/useLasLoader.ts`
-- `packages/app/electron/main.ts`
+现状：空间编辑各绘制工具、标定、屏柜标注和设备纠偏分别管理保存状态，只有设备区局部实现离开确认。项目切换、路由切换或窗口关闭时可能丢失未保存修改；标定组件卸载时会清空待保存队列而不 flush。
 
-具体任务：
-- 记录并输出结构化性能数据：
-  - 文件大小
-  - LAS 版本和点格式
-  - 总点数/加载点数
-  - 读取头耗时
-  - 读取点数据耗时
-  - LAZ 解压耗时
-  - GPU buffer 创建耗时
-  - 首帧耗时
-  - 错误原因
-- 先写入开发日志，后续可落到 `userData/logs/pointcloud-load.jsonl`。
+任务：
+
+- 统一页面级状态：`clean | dirty | saving | saved | failed`，再单独维护长任务 `idle | running | cancelling | cancelled | failed | done`。
+- 顶部常驻显示当前保存状态和最近成功时间；失败状态提供重试和诊断入口。
+- 路由、项目切换和窗口关闭统一汇总 dirty source，再决定保存、放弃或取消。
+- 自动保存只在数据真正持久化后标记 saved；序列化成功但文件写失败不能显示成功。
+- 长任务使用 operation ID、进度、取消令牌和 generation guard；晚到回调不得覆盖新项目/新图片状态。
 
 验收：
-- 任意加载一个地图后，可以得到完整耗时分段，不再靠主观感觉判断慢在哪里。
 
-### 2. ⬜ 导入阶段生成点云缓存
+- 快速连续编辑后立刻切换页面、项目或关闭窗口，能保存或明确阻止离开。
+- 保存失败后保留内存修改，用户可以重试，不会被下一次加载静默覆盖。
 
-现状：每次打开都重新解析原始 LAS/LAZ。
+### 4. 🟡 收敛导入导出页面的产品语义
 
-建议目录：
+现状：本地项目操作和后台机器人操作混在同一网格；未接入的日志按钮与可用按钮外观一致；多数动作直到点击后才检查后台、项目或机器人。后台文件下载还会把完整响应先读入内存，再写项目临时文件后导出。
 
-```text
-地图/{地图名}/
-  原始文件.las
-  cache/
-    metadata.json
-    preview.bin
-    lod-0.bin
-    lod-1.bin
-```
+任务：
 
-具体任务：
-- 导入地图时先复制原始文件，再生成低精预览缓存。
-- 打开地图时先加载 `preview.bin`，再按需加载更高精度。
-- 缓存 metadata 记录原始 bbox、坐标变换、点数、颜色格式。
-- 首版可以只做一个 preview 缓存，不必一次实现完整 LOD。
+- 分成“当前本地项目”和“后台机器人”两个清晰区域，固定显示当前目标名称。
+- 未实现能力隐藏或明确标为不可用，不使用点击后提示“功能待接入”的正常主按钮。
+- 卡片 action 使用唯一 action ID，不再依赖相同的 `import` key 加中文 label 分支。
+- 列表初始化时解析并缓存选中机器人/厂站 ID，避免每次动作重新获取全量列表并按名称匹配。
+- 下载改为主进程流式写入用户选择目录，支持进度、取消、校验和同名冲突策略，不经过项目 `_temp` 和 renderer `arrayBuffer()`。
+- 导入对扩展名、MIME、内容签名和大小都做校验；完成后提供目标位置和下一步入口。
 
 验收：
-- 第二次打开同一地图不再完整扫描原始 LAS。
-- 超大文件先快速出现低精预览。
 
-### 3. ⬜ LAZ 解压改成后台任务
+- 用户在执行前能确认操作对象是本地项目还是后台机器人。
+- 多 GB 导出不会在渲染进程形成完整内存副本。
 
-涉及文件：
-- `packages/app/src/components/three-d-engine/PointCloudLoader.ts`
-- 新增 worker 或 Electron 主进程任务模块
+### 5. 🟡 补齐页面级操作细节
 
-具体任务：
-- 避免 `readLargeFile` 把 LAZ 整文件塞进渲染进程。
-- 解压和抽样放到 Worker/主进程，渲染进程只接收可渲染块。
-- 增加任务取消：用户切换地图、关闭页面、重新导入时能取消旧任务。
+空间编辑：
 
-验收：
-- 加载 LAZ 大文件时 UI 仍可操作，取消后不继续占内存。
+- 同名地图导入提供覆盖、重命名、取消；明确项目内保存 `.las` 还是保留 `.laz`，内容、扩展名和 manifest 必须一致。
+- `useLasLoader` 不再吞掉错误；树节点显示加载失败、重试和已加载状态。
+- 自动保存显示倒计时/最近保存时间；手动保存和自动保存共享同一状态源。
+- 裁切在文件成功落盘后再替换场景；失败时保持原模型和原选区。
 
-### 4. ⬜ 分块/LOD 渲染
+勘察标定：
 
-具体任务：
-- 按空间块生成点云块，而不是一个地图一个巨大 VertexBuffer。
-- 先按距离或固定层级选择块，后续再做视锥裁剪。
-- 保留当前 floating-origin 策略，避免坐标精度问题。
+- 损坏的项目级标定 JSON 必须阻止覆盖并提供备份/修复选择，不能当成“文件不存在”。
+- 标定保存失败重试，离开前 flush；绑定 ID 和 JSON 保存由同一主进程服务原子提交。
+- 大任务加载显示扫描/索引/缩略图阶段和取消入口。
 
-验收：
-- 3000 万点以上地图不再一次性创建单个巨大 GPU buffer。
+屏柜标注：
 
-## P3：空间编辑代码整理
+- 批量识别运行时当前弹窗禁止取消，实际也没有 `AbortController`；增加“停止本轮”，保留已成功并明确未处理项。
+- 批量失败摘要可以展开到具体图片和错误原因，不只写 console。
+- 图片、标注和点位变更接入统一 dirty 状态；批量处理中禁止切项目或给出安全取消流程。
 
-### 1. 🟡 继续拆分页面控制器
+设备验证：
 
-现状：已拆出 `SpaceEditLayout`、`SpaceEditScene`、`SceneViewport`、`DrawingEditPanels`、`useDrawingModeToggles`、`useMapDrawingVisibility`、`useClipCompletion`、`useDrawingHistory` 等；`index.tsx` 仍约 400 行，并承担大量状态编排。
+- “同步分析主机”完成后再展示为可用动作；当前占位不应进入交付版主流程。
+- 无包、无点位、无图片、无纠偏数据时分别禁用加载后动作。
 
-建议拆分：
-- `useSpaceProjectContext`
-- `useMapSceneController`
-- `useDrawingModeController`
-- `useDrawingPersistence`
-- `useClipController`
+布局和导航：
 
-验收：
-- `index.tsx` 主要保留 UI 编排，业务流程进入 hook/controller。
+- 最小宽度附近顶部菜单折叠后仍显示当前页面名称，并保证项目、机器人和窗口控制不互相挤压。
+- 修复 Ant Design 6 运行时废弃用法，如旧 `Dropdown.Button`、`maskClosable` 和 `destroyOnClose`。
 
-### 2. 🟡 完善保存状态
+## P1：大文件、图片和长任务性能
 
-已完成：手动保存状态徽标、保存全部和 30 秒轻量 JSON 自动保存已接入。设备区内部有 dirty 标记。
+### 1. 🚨 给点云链路加任务生命周期和内存预算
 
-剩余任务：
-- 建立屏柜、设备区、充电区、路径统一 dirty 状态，只保存变化项。
-- 自动保存改为可配置，并避免并发保存重入。
-- 离开页面、切换项目/地图前提示未保存。
+现状证据：
 
-验收：
-- 用户知道当前是否已保存。
-- 切换地图不会静默丢绘制。
+- 单个点云最高可创建约 3000 万点的单 GPU buffer，按当前 16 bytes/point 约 480 MB，尚未包含原文件、解压和临时数组。
+- LAZ 可能同时存在主进程 Buffer、IPC 克隆、renderer ArrayBuffer、WASM 内存和 GPU buffer。
+- 加载无真正取消；页面销毁或切换模型时，旧任务仍可能继续解压和上传。
+- WASM 解码和资源创建失败路径缺少统一 `try/finally` 释放。
 
-### 3. ⬜ 裁切任务后台化
+任务：
 
-涉及文件：
-- `packages/app/src/views/space-edit/hooks/useClipSave.ts`
-- `packages/app/src/views/space-edit/components/ClipController.tsx`
-
-具体任务：
-- 裁切计数和写出从 UI 线程移走。
-- 进度包含：扫描、写出、保存、重新加载。
-- 支持取消。
-- 保持当前 header bbox 中心策略，不要改回裁切紧包围盒。
+- 建立 `PointCloudTask`：operation ID、阶段、字节进度、取消、内存估算、generation guard 和统一 dispose。
+- LAS 使用限长分块读取；LAZ 解压移到 worker/utility process，避免阻塞渲染和 Electron 主线程。
+- 避免通过 IPC 返回整文件；主进程只提供受控流/共享块协议。
+- 设定 CPU/WASM/GPU 分别的预算，加载前预估，超限时提示降采样或选择区域。
+- 所有 WASM 指针、临时 typed array、VertexBuffer、Mesh、Material 和事件监听在成功、失败、取消时都能释放。
+- 先记录现场样例的峰值 working set、GPU 估算、首帧时间和取消时间，再确定硬阈值。
 
 验收：
-- 裁切大文件时 UI 不冻结。
-- 裁切后重新加载仍与原模型对齐。
 
-## P4：勘察图像优化
+- 连续切换 10 个模型后内存回到稳定平台，不随次数线性增长。
+- 加载中切项目/关闭页面后 1 秒内进入 cancelling，并且旧任务不能更新新页面。
+- 超预算文件不会让 renderer 或主进程无响应退出。
 
-### 1. 🟡 完善图片任务懒加载
+### 2. ⬜ 重写裁切数据通路，而不是继续堆数组
 
-现状：`useTaskLoader` 一次性读取任务配置并建立图像索引，只探测首张图片尺寸；`ImageCanvas` 已按视口加载并缓存缩略图，双击时再读取全图。
+现状：LAZ 裁切会完整读取/解压两次，同时构建完整输出 LAS 和同规模 GPU buffer，再通过一次 IPC 写出；场景替换发生在磁盘写成功之前，且 LAS header 年份硬编码为 2025。
 
-涉及文件：
-- `packages/app/src/views/image-edit/hooks/useTaskLoader.ts`
-- `packages/app/src/components/image-canvas/ImageCanvas.tsx`
+任务：
 
-具体任务：
-- ✅ 先读取 `json_list.json` 和各 SP JSON，生成图片索引。
-- ✅ 只加载当前可视区域附近图片。
-- ✅ 缩略图使用最多 180 项的内存 LRU 和 3 路并发加载队列。
-- ✅ 图片解码后及时释放对象 URL。
-- 为任务配置索引增加取消/代次保护，评估超大任务的磁盘缓存。
+- 后台单次扫描完成筛选，分块写临时 LAS；保留原 floating-origin/header bbox 语义。
+- 输出 header 从源文件和当前日期生成，完成点数和 bbox 后回填，不硬编码年份。
+- 保存成功后再由普通加载任务加载新文件；裁切流程不直接维护第二套 GPU 上传逻辑。
+- 支持取消、磁盘空间预检、进度、输出校验和临时文件恢复/清理。
 
 验收：
-- 大任务打开速度不随图片总数线性变慢。
-- 左右云台切换不重新读取全部文件。
 
-### 2. 🟡 标定保存队列
+- 峰值内存与 chunk 大小相关，不与输出总点数线性叠加两份。
+- 取消、磁盘写满和输出校验失败时原模型仍可见，项目树不登记坏文件。
 
-涉及文件：
-- `packages/app/src/views/image-edit/components/CalibrationView.tsx`
+### 3. 🟡 图片缓存改为字节预算并减少全图解码
 
-已完成：500ms 防抖后进入单飞串行保存队列，连续编辑会排队重跑；页面显示待保存、保存中、已保存、失败状态，并按地图合并项目级 `勘察数据.json`。
+现状证据：
 
-剩余任务：增加显式重试按钮，并把路径/合并逻辑从 `CalibrationView.tsx` 继续抽离。
+- 勘察 `ImageCanvas` 的 180 项缓存按数量限制，canvas 最大可到缩略尺寸的 4 倍；高分辨率场景理论上可接近 1 GB。
+- 每个缩略图仍读取和解码完整源图，绘制和命中测试会遍历全部图片。
+- 屏柜和设备验证页的 `imageCacheRef` 保存完整 base64 data URL，没有 LRU 或字节上限。
 
-验收：
-- 快速框选/绑定/解绑时不会丢数据。
-- 保存失败有提示，并能重试。
+任务：
 
-### 3. ⬜ 屏柜图像标注补框和一键排序验证
-
-涉及文件：
-- `packages/app/src/views/screen-verify/index.tsx`
-- `packages/app/src/views/screen-verify/components/CabinetImageCanvas.tsx`
-- `packages/app/src/views/screen-verify/utils/constants.ts`
-
-当前补框逻辑需要实图验证：AI 设备框按行拆分后，基于列间距补中间漏框；补出的框使用虚线标识。后续要确认补框的默认类型继承同一行已有设备框类型，整行类型不一致时给人工确认入口。
-
-后续任务：
-- 用真实屏柜图片验证自动补框是否能处理中间漏识别、左右数量不一致和上下共享标签场景。
-- 自动补框仍不满足时，支持人工补框：人工选择/框选设备框后，点击“一键排序”重新建立名称和设备框对应关系。
-- 一键排序需要尽量按上下位置和列中心对齐，把每个设备名称与设备框配对，生成右侧表格点位关系。
-- 对无法可靠配对的名称或设备框保留空值并提示人工补充，不静默生成错误关系。
+- 统一图片资源管理器，按解码像素/估算字节而非条目数淘汰；淘汰 canvas 时把宽高置零释放 backing store。
+- 主进程生成并缓存真实缩略图，列表只读缩略图；双击/编辑当前项再读原图。
+- 屏柜/设备验证使用对象 URL 或受控二进制句柄，避免 base64 额外膨胀和字符串复制。
+- 对勘察画布建立可视区空间索引，只绘制/命中候选图片。
+- 图片加载增加并发上限、优先级、取消和 generation guard。
 
 验收：
-- 自动补框、人工补框和一键排序后的右侧表格数量与名称/设备框对应关系可解释、可检查。
-- 虚线补框、AI 实框、人工框视觉区分清晰。
-- 保存前能提示仍未配对或名称为空的点位。
 
-## P5：导入导出和后台配置
+- 用现场最大任务滚动 10 分钟，renderer 内存保持在设定预算附近。
+- 快速切换图片不会闪回旧图，对象 URL、canvas 和缓存项在淘汰后可释放。
 
-### 1. 🟡 导入导出分清本地和后台
+### 4. ⬜ 修复勘察任务索引正确性和复杂度
 
-现状：`import-export` 同时走后台下载和本地项目临时文件，状态容易混。
+任务：
 
-涉及文件：
-- `packages/app/src/views/import-export/index.tsx`
-- `packages/app/src/api/config.js`
-- `packages/app/src/services/http.ts`
-
-具体任务：
-- UI 区分：
-  - 本地项目导入/导出
-  - 后台机器人导入/导出
-- 下载文件不要先写入项目 `_temp` 再导出；应提供主进程下载到目标目录接口，或直接浏览器下载。
-- 后台未连接时禁用后台导入导出按钮。
+- `useTaskLoader` 使用 `try/finally`、取消和 generation guard，任何异常都能退出 loading。
+- `fileExists` 改成主进程 stat API，不为判断存在性读取整个文件。
+- 替换 `col + row*100 + spId*10000 + right*5000` 图片 ID 公式，使用稳定复合 key，消除行列/停靠点碰撞。
+- 每张图读取自身尺寸或可信元数据，不复用首图尺寸填充其他图。
+- 配置索引分批/增量建立，超大任务允许先显示可用部分。
 
 验收：
-- 用户能明确知道导入导出对象是当前项目还是后台机器人。
 
-### 2. ⬜ 后台连接状态标准化
+- 人工构造的高行列号、左右云台和多个停靠点不会产生重复 ID。
+- 缺图、坏图和中途取消不会让页面永久 loading，也不会污染下一次任务。
 
-具体任务：
-- HTTP 请求失败时更新连接状态。
-- 顶部连接状态显示 IP、连接时间、最后错误。
-- IP 切换后清理旧机器人缓存或标记缓存来源。
+## P2：数据查询、后台和工程性能
 
-验收：
-- 后台断开后配置页不会只显示泛化的“获取失败”。
+### 1. ⬜ 降低数据库全表扫描和 IPC 往返
 
-## P6：工程质量
+任务：
 
-### 1. ⬜ 增加基础质量命令
-
-涉及文件：
-- `package.json`
-- `packages/app/package.json`
-- `packages/database/package.json`
-
-具体任务：
-- 增加 `typecheck`。
-- 增加最小 lint 配置。
-- 增加关键脚本：
-  - `pnpm typecheck`
-  - `pnpm build`
-  - `pnpm build:electron`
+- 为项目设备树提供一次领域查询或主进程缓存，按项目/version 失效，避免多个页面重复拉取全部六张表。
+- 标定图片加载使用批量 pointCode -> calibrationId 查询，不再对所有绑定逐点 IPC。
+- 标定 ID 批量分配在单事务内完成，不为每个点重新扫描全部已用 ID。
+- 为常用项目、父级、code 查询补 `EXPLAIN QUERY PLAN` 基线和索引；不凭感觉增加重复索引。
+- Repository 列表接口支持必要的投影、分页和条件查询，避免把大字段发到 renderer。
 
 验收：
-- 每次改动至少能跑类型检查和相关构建。
 
-### 2. ⬜ 增加低成本回归脚本
+- 记录 1k、10k、100k 点位数据下的设备树加载、筛选、标定绑定和导出耗时。
+- 单次打开标定图片的 IPC 数量从 O(点位数) 降到常数或小批量。
 
-具体任务：
-- 点表导入样例校验。
-- 项目重命名后数据库查询校验。
-- 地图导入扩展名校验。
-- 导出 zip 内容结构校验。
+### 2. 🟡 完善 manifest、健康检查和恢复入口
+
+任务：
+
+- 项目创建、地图/点表/勘察/屏柜/设备验证资产变更都通过同一 manifest service 更新。
+- 旧项目缺 manifest 时扫描已知资产并生成；不要只写空清单。
+- 增加项目健康检查：缺文件、孤立目录、manifest 漂移、临时事务、数据库绑定、模型格式、标定 JSON 可解析性。
+- 健康检查默认只读，修复前展示变更预览并生成备份。
+- 启动时不做无界全盘深扫描；按项目懒检查并缓存结果。
 
 验收：
-- 客户端核心链路有脚本可快速验证。
 
-## 暂不做
+- 手工删除/改名地图、留下 staging 目录或破坏 JSON 后，健康面板能定位且不会自动覆盖现场数据。
 
-- 暂不直接替换 PlayCanvas。
-- 暂不重写整个 `space-edit`。
-- 暂不引入复杂状态管理框架，先用轻量 store 收敛上下文。
-- 暂不删除 `project/`、`data/`、`doc/联调/` 运行或联调数据。
+### 3. 🟡 标准化后台请求生命周期
 
-## 三维引擎替换评估条件
+现状：共享 axios 超时为 300 秒，取消和进度没有统一约定；导出下载和识别直接 `fetch()` 绕过共享错误/连接状态；一次网络失败会把全局连接标记为 failed，而成功请求不会统一恢复。
 
-只有完成 P2 前三项后，再做引擎 A/B 验证。
+任务：
 
-候选方向：
-- 继续 PlayCanvas：成本最低，适合保留现有绘制和裁切。
-- Potree/PotreeConverter：适合超大点云浏览，需评估编辑、裁切、离线打包改造成本。
-- Three.js：生态强，但仍需要自研或接入分块 LOD。
-- Cesium/3D Tiles：适合地理空间大范围场景，当前厂站局部编辑场景可能偏重。
+- 按操作类型设置超时：配置查询、普通提交、上传、后台任务轮询和下载不能共用 300 秒。
+- 为请求传递 `AbortSignal`，页面卸载、项目/后台切换时取消旧请求。
+- 上传/下载走统一 service，支持进度、取消、文件名解析、校验和错误分类。
+- 区分网络不可达、TLS、认证、权限、业务错误和用户取消；只有连接级错误改变全局状态。
+- 后台切换时清理 endpoint fallback、请求缓存和旧机器人/厂站映射。
+- 为 JS API 增加 `ApiResponse<T>`、机器人/厂站 DTO，逐步去掉 handler 中的 `any`。
 
-评估指标：
-- 首帧时间
-- 大文件内存峰值
-- 交互帧率
-- 裁切/拾取/绘制实现成本
-- 离线部署和打包复杂度
+验收：
+
+- 慢请求不阻塞切换后台；旧后台响应不能覆盖新后台状态。
+- 每类错误有稳定可测试的用户文案和重试策略。
+
+### 4. ⬜ 优化打包、首屏和资源边界
+
+任务：
+
+- 用 bundle analyzer 确认 PlayCanvas、Ant Design、SPZ、XLSX 和 MQTT 的实际入口；删除未用 MQTT 空 chunk 和不进入业务的 demo/历史模块。
+- 空间编辑保持独立重包；普通配置和导入导出首屏不应预加载点云处理依赖。
+- 检查 Ant Design/图标导入是否可 tree-shake，避免人为维护易碎的超细 manualChunks。
+- 压缩 1.5 MB 应用 PNG，窗口图标按平台提供合适尺寸。
+- 修复 `webp.wasm` 构建时 URL 警告，并对 Electron 打包后的 LAS/LAZ/WebP 实际加载做 smoke test。
+- 评估 `asar: false` 的必要性；若只有 WASM/sql.js 需要外置，改为 `asarUnpack` 精确列出资源。
+- 加入包体积基线，依赖升级时记录 chunk 和安装包变化。
+
+验收：
+
+- 冷启动、首个可交互时间、页面切换和安装包大小都有可重复基线。
+- 打包应用离线环境能加载 sql.js、laz-perf 和 WebP，不依赖源码目录或开发服务器。
+
+## P3：结构和可维护性
+
+结构整理只在能降低上述风险、补测试或减少重复协议时执行，不再把“文件变短”当成完成标准。
+
+### 1. ⬜ 共享 Electron 契约和能力入口
+
+- 把 IPC channel、请求/响应 DTO、错误码和版本放到 renderer/main 共用模块。
+- preload 从共享契约生成或实现，`vite-env.d.ts` 只声明 Window 挂载。
+- renderer 使用 `getElectronAPI()` 和领域 service，不散落 `(window as any).electronAPI`。
+- 能力检测返回结构化状态，浏览器模式明确哪些功能不可用。
+
+### 2. ⬜ 按领域拆 Electron 服务
+
+优先拆分：
+
+- `archive-ipc.ts`：IPC 注册、survey archive、image label converter、cabinet package、export service。
+- `project-service.ts`：项目生命周期、地图 staged import、项目文件、manifest。
+- `db-ipc.ts`：通用 Repository、点表导入、屏柜设备同步、标定批量服务。
+
+要求：IPC 文件只做参数校验和调用编排；协议转换可用 fixture 独立测试；路径校验只能走共享 helper，不能在拆分后复制多套实现。
+
+### 3. ⬜ 拆分高风险前端工作流
+
+优先拆分：
+
+- `CalibrationView`：codec/persistence/canvas/binding panel。
+- `screen-verify/index.tsx` 与 `recognition-workflow.ts`：workspace、recognition task、persistence、canvas、point editor。
+- `image-edit/index.tsx`：survey workspace、task dispatch、viewer linkage。
+- `import-export/index.tsx`：action registry、本地 transfer、后台 transfer、流式下载。
+- `AppHeader`：项目生命周期、机器人选项、窗口控制。
+
+要求：先固定行为测试，再移动代码；页面只组合状态和布局；不要引入动态 schema 页面生成器、深继承绘制基类或新的全局状态框架。
+
+### 4. ⬜ 统一日志和诊断包
+
+- 使用分级 logger，生产默认关闭高频点云、图片和识别调试日志。
+- 每次导入、保存、识别和长任务生成 operation ID；日志记录阶段、耗时、数量和错误，不记录凭据与图片内容。
+- 日志轮转并限制磁盘占用。
+- 提供“导出诊断包”：版本、配置摘要、GPU 信息、最近日志和项目健康摘要；默认排除数据库、现场原图和密钥。
+
+## 固定回归矩阵
+
+### 纯逻辑 fixture
+
+- 区域/路径/坐标 round-trip，旧格式兼容和未知字段保留。
+- 点表解析、重复编码、层级空行、枚举、全量回滚和导出一致性。
+- 勘察标定 normalize/merge、机器人图像标识转换和损坏 JSON。
+- 屏柜/设备验证协议、识别结果 normalize 和标注参数导出。
+- manifest 扫描、项目重命名/删除补偿和 ZIP 路径校验。
+
+### Electron 集成
+
+- 新建、切换、重命名、删除、恢复项目。
+- LAS、LAZ、空间模型 ZIP、点表、勘察、屏柜图和设备验证包导入。
+- 数据库重启持久化、迁移、事务回滚和断电式落盘恢复。
+- 证书白名单、导航拦截、IPC 越界和超限读取。
+- 打包产物中的 preload、sql.js、WASM 和资源路径。
+
+### 客户端操作
+
+- 无项目、无后台、无机器人、无地图、空数据和断网状态。
+- 项目/后台/页面快速切换时的取消、dirty 提示和晚到响应。
+- 自动保存失败重试、批量识别取消、导入覆盖确认和错误报告。
+- 900x600 最小窗口、1366x768 常用窗口和高 DPI；文字、表格、弹窗和导航不重叠。
+- 键盘撤销/恢复、画布拖拽/缩放、模式互斥和窗口失焦。
+
+### 性能场景
+
+- 现场小/中/最大 LAS 与 LAZ：首帧、总加载、峰值 CPU/WASM/GPU 内存、取消和释放。
+- 1k/10k/100k 点位：导入、树加载、查询、标定绑定和导出。
+- 100/1k/10k 勘察图片：索引、首次缩略图、快速滚动和 10 分钟内存平台。
+- 大屏柜包批量识别：单图耗时、取消延迟、失败恢复和图片缓存上限。
+
+先记录真实现场基线，再把 p50/p95、峰值内存和包体积阈值写进自动检查；没有测量数据前不填写拍脑袋的毫秒目标。
+
+## 执行顺序
+
+### 阶段 A：停止扩大风险
+
+1. 轮换硬编码密钥并收口识别请求。
+2. 修复覆盖式导入、项目删除和数据库落盘原子性。
+3. 收紧证书、导航、文件 IPC 和 ZIP 边界。
+4. 清零 typecheck，建立 `pnpm check`。
+
+### 阶段 B：让工具行为可预期
+
+1. 工作区 readiness 和统一空/错/离线状态。
+2. dirty/save/task 协议及离开保护。
+3. 导入导出分域、覆盖预览、错误报告和流式下载。
+4. 补齐设备验证占位动作及页面细节。
+
+### 阶段 C：控制大数据性能
+
+1. 点云任务取消、资源释放和内存埋点。
+2. 后台 LAZ/裁切流式处理。
+3. 图片字节 LRU、真实缩略图和空间索引。
+4. 数据库批量查询、缓存和索引验证。
+
+### 阶段 D：在保护网内整理代码
+
+1. 共享 IPC 契约和领域服务。
+2. 拆归档、标定、识别和项目工作流。
+3. 包体和日志优化。
+
+## 单项完成定义
+
+每个 TODO 只有同时满足以下条件才可标记 `✅`：
+
+- 写清用户可见行为和失败行为，不只描述内部重构。
+- 有自动回归或可重复的 Electron 手工步骤。
+- 导入/保存类变更验证失败和回滚路径。
+- 长任务验证取消、页面切换和资源释放。
+- `pnpm check` 与 `pnpm build:electron` 通过。
+- 更新相关协议、manifest、preload 类型和本文件状态。
+
+## 当前不做
+
+- ⏸ 更换 PlayCanvas 或重写三维编辑器。
+- ⏸ 为了统一形式引入新的大型全局状态框架。
+- ⏸ 把所有配置页改成动态 schema 渲染器。
+- ⏸ 在没有任务取消和内存基线前直接投入复杂 LOD/八叉树重写。
+- ⏸ 只为减少行数进行无行为收益的文件搬移。

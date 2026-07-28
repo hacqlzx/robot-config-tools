@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } from "react";
+import { Button, Tooltip } from "antd";
+import { CompressOutlined, ZoomInOutlined, ZoomOutOutlined } from "@ant-design/icons";
 import {
   ANNOTATION_COLORS,
   ANNOTATION_HANDLE_HIT_RADIUS,
@@ -21,6 +23,9 @@ type ViewDragState = {
 };
 
 const VIEW_DRAG_CLICK_TOLERANCE = 3;
+const MIN_VIEW_SCALE = 0.05;
+const MAX_VIEW_SCALE = 8;
+const ZOOM_STEP = 1.2;
 
 interface RectDragState {
   tool: AnnotationTool;
@@ -72,6 +77,7 @@ export function CabinetImageCanvas({
   const rectDragRef = useRef<RectDragState | null>(null);
   const drawingRef = useRef<{ tool: AnnotationTool; startX: number; startY: number; currentX: number; currentY: number } | null>(null);
   const pendingFitRef = useRef(false);
+  const [zoomPercent, setZoomPercent] = useState(100);
 
   annotationsRef.current = annotations;
   selectedAnnotationRef.current = selectedAnnotation;
@@ -142,6 +148,12 @@ export function CabinetImageCanvas({
     }
   }, [resizeCanvas]);
 
+  const applyView = useCallback((nextView: { scale: number; offsetX: number; offsetY: number }) => {
+    viewRef.current = nextView;
+    setZoomPercent(Math.round(nextView.scale * 100));
+    draw();
+  }, [draw]);
+
   const fitToView = useCallback(() => {
     const image = imageRef.current;
     const container = containerRef.current;
@@ -155,15 +167,32 @@ export function CabinetImageCanvas({
     }
 
     const scale = Math.min(width / image.naturalWidth, height / image.naturalHeight);
-    const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+    const safeScale = clampViewScale(scale);
     pendingFitRef.current = false;
-    viewRef.current = {
+    applyView({
       scale: safeScale,
       offsetX: (width - image.naturalWidth * safeScale) / 2,
       offsetY: (height - image.naturalHeight * safeScale) / 2,
-    };
-    draw();
-  }, [draw]);
+    });
+  }, [applyView]);
+
+  const zoomAt = useCallback((factor: number, centerX: number, centerY: number) => {
+    const current = viewRef.current;
+    const nextScale = clampViewScale(current.scale * factor);
+    if (nextScale === current.scale) return;
+    const ratio = nextScale / current.scale;
+    applyView({
+      scale: nextScale,
+      offsetX: centerX - (centerX - current.offsetX) * ratio,
+      offsetY: centerY - (centerY - current.offsetY) * ratio,
+    });
+  }, [applyView]);
+
+  const zoomAtCenter = useCallback((factor: number) => {
+    const container = containerRef.current;
+    if (!container || !imageRef.current) return;
+    zoomAt(factor, container.clientWidth / 2, container.clientHeight / 2);
+  }, [zoomAt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -246,17 +275,7 @@ export function CabinetImageCanvas({
     const rect = canvas.getBoundingClientRect();
     const pointerX = event.clientX - rect.left;
     const pointerY = event.clientY - rect.top;
-    const current = viewRef.current;
-    const zoomFactor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
-    const nextScale = Math.min(8, Math.max(0.05, current.scale * zoomFactor));
-    const ratio = nextScale / current.scale;
-
-    viewRef.current = {
-      scale: nextScale,
-      offsetX: pointerX - (pointerX - current.offsetX) * ratio,
-      offsetY: pointerY - (pointerY - current.offsetY) * ratio,
-    };
-    draw();
+    zoomAt(event.deltaY < 0 ? 1.12 : 1 / 1.12, pointerX, pointerY);
   };
 
   const getImagePoint = useCallback((event: ReactMouseEvent<HTMLCanvasElement>, clampToImage = true) => {
@@ -572,6 +591,18 @@ export function CabinetImageCanvas({
 
   return (
     <div ref={containerRef} className="screen-verify-image-canvas-wrap">
+      <div className="screen-verify-canvas-toolbar">
+        <Tooltip title="缩小">
+          <Button type="text" size="small" aria-label="缩小" icon={<ZoomOutOutlined />} onClick={() => zoomAtCenter(1 / ZOOM_STEP)} />
+        </Tooltip>
+        <span className="screen-verify-canvas-scale">{zoomPercent}%</span>
+        <Tooltip title="放大">
+          <Button type="text" size="small" aria-label="放大" icon={<ZoomInOutlined />} onClick={() => zoomAtCenter(ZOOM_STEP)} />
+        </Tooltip>
+        <Tooltip title="适应窗口">
+          <Button type="text" size="small" aria-label="适应窗口" icon={<CompressOutlined />} onClick={fitToView} />
+        </Tooltip>
+      </div>
       <canvas
         ref={canvasRef}
         className={`screen-verify-image-canvas${activeTool ? " is-drawing" : ""}`}
@@ -586,6 +617,11 @@ export function CabinetImageCanvas({
       />
     </div>
   );
+}
+
+function clampViewScale(scale: number): number {
+  if (!Number.isFinite(scale)) return 1;
+  return Math.min(MAX_VIEW_SCALE, Math.max(MIN_VIEW_SCALE, scale));
 }
 
 function normalizeRect(x1: number, y1: number, x2: number, y2: number): Omit<ImageRect, "id"> {
