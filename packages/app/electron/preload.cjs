@@ -104,6 +104,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("load-cabinet-image", sourceId),
   saveCabinetImageAnnotations: (projectName, payload) =>
     ipcRenderer.invoke("save-cabinet-image-annotations", projectName, payload),
+  saveCabinetMainDeviceNameOverride: (projectName, payload) =>
+    ipcRenderer.invoke("save-cabinet-main-device-name-override", projectName, payload),
+  exportCabinetAnnotationParams: (projectName, destDir, data) =>
+    ipcRenderer.invoke("export-cabinet-annotation-params", projectName, destDir, data),
   importDeviceVerificationPackage: (projectName, sourcePath) =>
     ipcRenderer.invoke("device-verify:import-package", projectName, sourcePath),
   loadLocalDeviceVerificationPackage: (projectName) =>
@@ -122,6 +126,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("device-verify:set-point-mark", projectName, record),
   exportMarkedDevicePoints: (projectName, destDir) =>
     ipcRenderer.invoke("device-verify:export-marked-points", projectName, destDir),
+  exportCabinetPointTable: (projectName, destDir) =>
+    ipcRenderer.invoke("export-cabinet-point-table", projectName, destDir),
   getProjectRoot: () => ipcRenderer.invoke("get-project-root"),
   setDataPath: (newPath) => ipcRenderer.invoke("set-data-path", newPath),
   startBatch: () => ipcRenderer.invoke("db:startBatch"),

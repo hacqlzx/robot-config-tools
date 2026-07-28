@@ -66,6 +66,11 @@ const IMPORT_TIPS = `1、加*号的必填；
 
 export type PointExcelExportRow = Record<string, unknown>;
 
+export interface GeneratePointExcelOptions {
+  extraColumns?: string[];
+  sheetName?: string;
+}
+
 export interface PointTableExportData {
   points: DevicePoint[];
   components: DeviceComponent[];
@@ -171,9 +176,10 @@ function getStationName(data: PointTableExportData): string {
     || "未知厂站";
 }
 
-export function generatePointExcelFromRows(rows: PointExcelExportRow[]): Buffer {
+export function generatePointExcelFromRows(rows: PointExcelExportRow[], options: GeneratePointExcelOptions = {}): Buffer {
   // 构建数据：第1行=提示, 第2行=表头, 后续=数据
-  const headerRow = EXPORT_COLS;
+  const extraColumns = (options.extraColumns || []).filter((col) => col && !EXPORT_COLS.includes(col));
+  const headerRow = [...EXPORT_COLS, ...extraColumns];
   const dataRows = rows.map((r) => headerRow.map((c) => r[c] ?? ""));
   const allData: any[][] = [
     [IMPORT_TIPS],
@@ -206,9 +212,9 @@ export function generatePointExcelFromRows(rows: PointExcelExportRow[]): Buffer 
     { hpx: 36 },   // 表头行
   ];
 
-  ws["!cols"] = EXPORT_COLS.map(() => ({ wch: 18 }));
+  ws["!cols"] = headerRow.map(() => ({ wch: 18 }));
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+  XLSX.utils.book_append_sheet(wb, ws, options.sheetName || "Sheet1");
   return Buffer.from(XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer);
 }
 

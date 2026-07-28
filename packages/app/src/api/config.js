@@ -189,6 +189,13 @@ export function importCorrection(file, robotId) {
   return http.post("/robot/tool/file/importCorrection", formData);
 }
 
+/** 屏柜标注参数导入（文件上传） */
+export function importScreenVerifyAnnotationParams(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  return http.post("/robot/tool/file/syncModelJSON", formData);
+}
+
 // ========== 任务下发 ==========
 
 /**

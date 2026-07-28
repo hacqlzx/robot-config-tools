@@ -5,6 +5,7 @@ import path from "path";
 import * as XLSX from "xlsx";
 import { ZipArchive } from "archiver";
 import { DevicePointRepo, getDatabase } from "@robot/database";
+import { generatePointExcelFromRows, type PointExcelExportRow } from "../export-points";
 import { getProjectRoot } from "../project-core/project-root";
 import { resolveProjectDir, resolveProjectPath } from "../project-core/project-paths";
 
@@ -20,6 +21,8 @@ const OVERVIEW_DIR_NAME = "总览图";
 const CABINET_IMAGE_DIR_NAME = "屏柜图像";
 const CABINET_IMAGE_DATA_FILE_NAME = "cabinet-image-data.json";
 const CABINET_COMPONENT_WORKBOOK_NAME = "屏柜部件表.xlsx";
+const CABINET_POINT_TABLE_ROBOT_COL = "机器人编码";
+const CABINET_POINT_CODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
 interface CalibrationBinding {
   pointCode: string;
@@ -137,11 +140,19 @@ interface CabinetImageAnnotationIndex {
   singlePoints: any[];
 }
 
+interface CabinetMainDeviceNameOverride {
+  key: string;
+  robotCode: string;
+  name: string;
+  updatedAt: string;
+}
+
 interface CabinetImageWorkspaceData {
   version: number;
   updatedAt: string;
   robots: CabinetImageRobotIndex[];
   annotations: Record<string, CabinetImageAnnotationIndex>;
+  mainDeviceNameOverrides: Record<string, CabinetMainDeviceNameOverride>;
 }
 
 const cabinetImageSources = new Map<string, CabinetImageSourceRef>();
@@ -405,6 +416,36 @@ export function registerArchiveIpc(): void {
       return { success: false, error: e.message };
     }
   });
+
+  ipcMain.handle("save-cabinet-main-device-name-override", async (_event, projectName: string, payload: any) => {
+    try {
+      const result = saveCabinetMainDeviceNameOverride(projectName, payload);
+      return { success: true, ...result };
+    } catch (e: any) {
+      console.error("[save-cabinet-main-device-name-override] 保存失败:", e.message);
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle("export-cabinet-annotation-params", async (_event, projectName: string, destDir: string, data: any) => {
+    try {
+      const result = exportCabinetAnnotationParams(projectName, destDir, data);
+      return { success: true, ...result };
+    } catch (e: any) {
+      console.error("[export-cabinet-annotation-params] 导出失败:", e.message);
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle("export-cabinet-point-table", async (_event, projectName: string, destDir: string) => {
+    try {
+      const result = exportCabinetPointTable(projectName, destDir);
+      return { success: true, ...result };
+    } catch (e: any) {
+      console.error("[export-cabinet-point-table] 导出失败:", e.message);
+      return { success: false, error: e.message };
+    }
+  });
 }
 
 function importCabinetImagePackageToLocal(projectName: string, sourcePath: string, sourceType: "zip" | "directory"): { importDir: string; robotCode: string } {
@@ -606,7 +647,7 @@ function readCabinetImageWorkspace(projectName: string): {
       normalizeCabinetWorkbookFile(robotDir);
       const result = readCabinetImagePackageFromDir(robotDir);
       const robotCode = resolveCabinetRobotCode(result.records, item.name);
-      records.push(...result.records);
+      records.push(...applyCabinetMainDeviceNameOverrides(result.records, data.mainDeviceNameOverrides));
       warnings.push(...result.warnings.map((warning) => `${robotCode}: ${warning}`));
       const previousRobot = data.robots.find((robot) => robot.robotCode === robotCode);
       robots.push({
@@ -646,6 +687,7 @@ function readCabinetImageWorkspace(projectName: string): {
     updatedAt: new Date().toISOString(),
     robots,
     annotations: nextAnnotations,
+    mainDeviceNameOverrides: data.mainDeviceNameOverrides || {},
   });
 
   return { records, warnings, annotationsByComponent, ocrRowsByComponent, singlePointsByComponent, robots };
@@ -659,6 +701,9 @@ function replaceCabinetImageRobotIndex(projectName: string, robotCode: string, t
   const nextRobots = data.robots.filter((robot) => robot.robotCode !== robotCode);
   const nextAnnotations = Object.fromEntries(
     Object.entries(data.annotations || {}).filter(([, entry]) => entry.robotCode !== robotCode),
+  );
+  const nextMainDeviceNameOverrides = Object.fromEntries(
+    Object.entries(data.mainDeviceNameOverrides || {}).filter(([, entry]) => entry.robotCode !== robotCode),
   );
 
   nextRobots.push({
@@ -675,6 +720,7 @@ function replaceCabinetImageRobotIndex(projectName: string, robotCode: string, t
     updatedAt: now,
     robots: nextRobots,
     annotations: nextAnnotations,
+    mainDeviceNameOverrides: nextMainDeviceNameOverrides,
   });
 }
 
@@ -716,10 +762,308 @@ function saveCabinetImageAnnotations(projectName: string, payload: any): { saved
   return { saved: hasData, deleted: !hasData };
 }
 
+function saveCabinetMainDeviceNameOverride(projectName: string, payload: any): { saved: boolean; key: string; name: string } {
+  const safeProjectName = String(projectName || "").trim();
+  if (!safeProjectName) throw new Error("请先选择项目");
+  const cabinetRoot = resolveProjectPath(safeProjectName, OVERVIEW_DIR_NAME, CABINET_IMAGE_DIR_NAME);
+  fs.mkdirSync(cabinetRoot, { recursive: true });
+
+  const key = valueText(payload?.key);
+  const robotCode = valueText(payload?.robotCode);
+  const name = valueText(payload?.name);
+  if (!key) throw new Error("主设备名称覆盖 key 为空");
+  if (!robotCode) throw new Error("机器人编码为空");
+  if (!name) throw new Error("屏柜名称不能为空");
+
+  const data = readCabinetImageWorkspaceData(cabinetRoot);
+  const now = new Date().toISOString();
+  data.mainDeviceNameOverrides[key] = {
+    key,
+    robotCode,
+    name,
+    updatedAt: now,
+  };
+  writeCabinetImageWorkspaceData(cabinetRoot, { ...data, updatedAt: now });
+  return { saved: true, key, name };
+}
+
+function exportCabinetAnnotationParams(projectName: string, destDir: string, data: any): { filePath: string; fileName: string; pointCount: number; matchCount: number } {
+  const safeProjectName = String(projectName || "").trim();
+  if (!safeProjectName) throw new Error("请先选择项目");
+  const targetDir = String(destDir || "").trim();
+  if (!targetDir) throw new Error("请选择导出目录");
+  if (!fs.existsSync(targetDir) || !fs.statSync(targetDir).isDirectory()) {
+    throw new Error("导出目录不存在");
+  }
+  if (!data || typeof data !== "object") throw new Error("标注参数数据为空");
+
+  const fileName = "detector.json";
+  const filePath = path.join(targetDir, fileName);
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 4), "utf-8");
+  return {
+    filePath,
+    fileName,
+    pointCount: Array.isArray(data.detTypeInfo) ? data.detTypeInfo.length : 0,
+    matchCount: Array.isArray(data.matchInfo) ? data.matchInfo.length : 0,
+  };
+}
+
+function exportCabinetPointTable(projectName: string, destDir: string): { filePath: string; fileName: string; rowCount: number; pointCount: number; componentCount: number } {
+  const safeProjectName = String(projectName || "").trim();
+  if (!safeProjectName) throw new Error("请先选择项目");
+  const targetDir = String(destDir || "").trim();
+  if (!targetDir) throw new Error("请选择导出目录");
+  if (!fs.existsSync(targetDir) || !fs.statSync(targetDir).isDirectory()) {
+    throw new Error("导出目录不存在");
+  }
+
+  const workspace = readCabinetImageWorkspace(safeProjectName);
+  if (!workspace.records.length) throw new Error("请先导入屏柜图像");
+
+  const usedPointCodes = collectExistingPointCodes(safeProjectName, workspace);
+  const exportData = buildCabinetPointTableRows(workspace, usedPointCodes);
+  if (!exportData.rows.length) throw new Error("暂无可导出的屏柜点表数据");
+
+  const fileName = uniqueCabinetExportFileName(
+    targetDir,
+    `${sanitizeFileName(safeProjectName)}_屏柜点表_${formatCabinetExportTime(new Date())}.xlsx`,
+  );
+  const filePath = path.join(targetDir, fileName);
+  fs.writeFileSync(filePath, generatePointExcelFromRows(exportData.rows, {
+    extraColumns: [CABINET_POINT_TABLE_ROBOT_COL],
+    sheetName: "屏柜点表",
+  }));
+
+  return {
+    filePath,
+    fileName,
+    rowCount: exportData.rows.length,
+    pointCount: exportData.pointCount,
+    componentCount: exportData.componentCount,
+  };
+}
+
+function collectExistingPointCodes(projectName: string, workspace: ReturnType<typeof readCabinetImageWorkspace>): Set<string> {
+  const codes = new Set<string>();
+  try {
+    const db = getDatabase();
+    const rows = db.prepare("SELECT point_code FROM device_point WHERE project_name = ?").all(projectName) as Array<{ point_code?: unknown; pointCode?: unknown }>;
+    for (const row of rows) {
+      const code = valueText(row.point_code ?? row.pointCode);
+      if (code) codes.add(code);
+    }
+  } catch (error) {
+    console.warn("[export-cabinet-point-table] 读取已有点位编码失败:", error);
+  }
+
+  for (const rows of Object.values(workspace.ocrRowsByComponent || {})) {
+    for (const row of rows || []) {
+      const code = valueText(row?.pointCode);
+      if (code) codes.add(code);
+    }
+  }
+  for (const points of Object.values(workspace.singlePointsByComponent || {})) {
+    for (const point of points || []) {
+      const code = valueText(point?.pointCode);
+      if (code) codes.add(code);
+    }
+  }
+  return codes;
+}
+
+function buildCabinetPointTableRows(
+  workspace: ReturnType<typeof readCabinetImageWorkspace>,
+  usedPointCodes: Set<string>,
+): { rows: PointExcelExportRow[]; pointCount: number; componentCount: number } {
+  const rows: PointExcelExportRow[] = [];
+  let pointCount = 0;
+  let componentCount = 0;
+
+  for (const record of workspace.records) {
+    const recordKey = valueText(record.recordKey) || buildCabinetRecordKey(record.robotCode, record.componentCode);
+    const baseRow = cabinetComponentExportRow(record);
+    const generatedRows = cabinetGeneratedPointRows(
+      record,
+      workspace.ocrRowsByComponent[recordKey] || [],
+      workspace.singlePointsByComponent[recordKey] || [],
+      usedPointCodes,
+    );
+
+    if (generatedRows.length > 0) {
+      rows.push(...generatedRows);
+      pointCount += generatedRows.length;
+    } else {
+      rows.push(baseRow);
+      componentCount += 1;
+    }
+  }
+
+  return { rows, pointCount, componentCount };
+}
+
+function cabinetComponentExportRow(record: CabinetImagePackageRecord): PointExcelExportRow {
+  return {
+    [CABINET_POINT_TABLE_ROBOT_COL]: valueText(record.robotCode),
+    "*部件名称": valueText(record.componentName) || valueText(record.componentCode),
+    "部件编码": valueText(record.componentCode),
+    "*主设备名称": valueText(record.mainDeviceName) || valueText(record.mainDeviceCode),
+    "主设备编码": valueText(record.mainDeviceCode),
+    "*主设备类型": "二次屏柜",
+    "*相位": "主体",
+    "*间隔名称": valueText(record.bayName) || valueText(record.bayCode),
+    "间隔编码": valueText(record.bayCode),
+    "间隔类型": "屏柜区",
+    "*区域": valueText(record.areaName) || valueText(record.areaCode),
+    "区域编码": valueText(record.areaCode),
+  };
+}
+
+function cabinetGeneratedPointRows(
+  record: CabinetImagePackageRecord,
+  ocrRows: any[],
+  singlePoints: any[],
+  usedPointCodes: Set<string>,
+): PointExcelExportRow[] {
+  const baseRow = cabinetComponentExportRow(record);
+  const rows: PointExcelExportRow[] = [];
+
+  for (const row of ocrRows || []) {
+    rows.push(cabinetPointExportRow(baseRow, {
+      name: valueText(row?.name),
+      pointCode: valueText(row?.pointCode),
+      label: valueText(row?.recognitionLabel),
+      labelDesc: valueText(row?.recognitionLabelDesc) || valueText(row?.type),
+    }, usedPointCodes));
+  }
+
+  for (const point of singlePoints || []) {
+    rows.push(cabinetPointExportRow(baseRow, {
+      name: valueText(point?.pointName),
+      pointCode: valueText(point?.pointCode),
+      label: valueText(point?.recognitionLabel),
+      labelDesc: valueText(point?.recognitionLabelDesc) || valueText(point?.recognitionType),
+    }, usedPointCodes));
+  }
+
+  return rows;
+}
+
+function cabinetPointExportRow(
+  baseRow: PointExcelExportRow,
+  point: { name: string; pointCode: string; label: string; labelDesc: string },
+  usedPointCodes: Set<string>,
+): PointExcelExportRow {
+  const recognition = resolveCabinetPointRecognitionColumns(point.label, point.labelDesc);
+  const pointCode = reserveCabinetPointCode(point.pointCode, usedPointCodes);
+  return {
+    ...baseRow,
+    "*点位名称": point.name,
+    "点位编码": pointCode,
+    ...recognition,
+  };
+}
+
+function resolveCabinetPointRecognitionColumns(label: string, labelDesc: string): PointExcelExportRow {
+  const normalizedLabel = valueText(label);
+  const normalizedDesc = valueText(labelDesc);
+  const columns: PointExcelExportRow = {
+    "采集类型": "可见光照",
+  };
+
+  if (normalizedLabel === "infrared" || normalizedDesc.includes("红外")) {
+    return {
+      ...columns,
+      "*识别类型1": "红外测温",
+      "采集类型": "红外图谱",
+    };
+  }
+
+  if (isCabinetMeterLabel(normalizedLabel, normalizedDesc)) {
+    return {
+      ...columns,
+      "*识别类型1": "表计读取",
+      "表计类型": cabinetMeterType(normalizedLabel, normalizedDesc),
+    };
+  }
+
+  if (isCabinetAppearanceLabel(normalizedLabel, normalizedDesc)) {
+    return {
+      ...columns,
+      "*识别类型1": "设备外观查看",
+    };
+  }
+
+  if (normalizedLabel || normalizedDesc) {
+    return {
+      ...columns,
+      "*识别类型1": "位置状态识别",
+    };
+  }
+
+  return columns;
+}
+
+function isCabinetMeterLabel(label: string, desc: string): boolean {
+  return ["meter_sf6", "zzb", "num_led"].includes(label)
+    || desc.includes("表")
+    || desc.includes("仪表");
+}
+
+function cabinetMeterType(label: string, desc: string): string {
+  if (label === "meter_sf6" || desc.includes("SF6")) return "SF6压力表";
+  return "";
+}
+
+function isCabinetAppearanceLabel(label: string, desc: string): boolean {
+  return ["facade", "little_light", "show_off", "show_on", "ybzz"].includes(label)
+    || desc.includes("外观")
+    || desc.includes("显示屏")
+    || desc.includes("小灯")
+    || desc.includes("仪表装置");
+}
+
+function reserveCabinetPointCode(pointCode: string, usedPointCodes: Set<string>): string {
+  const normalized = valueText(pointCode);
+  if (normalized && !usedPointCodes.has(normalized)) {
+    usedPointCodes.add(normalized);
+    return normalized;
+  }
+  return generateCabinetPointCode(usedPointCodes);
+}
+
+function generateCabinetPointCode(usedPointCodes: Set<string>): string {
+  while (true) {
+    let code = "P";
+    for (let index = 0; index < 31; index += 1) {
+      code += CABINET_POINT_CODE_CHARS[Math.floor(Math.random() * CABINET_POINT_CODE_CHARS.length)];
+    }
+    if (!usedPointCodes.has(code)) {
+      usedPointCodes.add(code);
+      return code;
+    }
+  }
+}
+
+function uniqueCabinetExportFileName(dir: string, preferredName: string): string {
+  const parsed = path.parse(preferredName);
+  let candidate = preferredName;
+  let index = 1;
+  while (fs.existsSync(path.join(dir, candidate))) {
+    candidate = `${parsed.name}_${index}${parsed.ext}`;
+    index += 1;
+  }
+  return candidate;
+}
+
+function formatCabinetExportTime(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
 function readCabinetImageWorkspaceData(cabinetRoot: string): CabinetImageWorkspaceData {
   const filePath = path.join(cabinetRoot, CABINET_IMAGE_DATA_FILE_NAME);
   if (!fs.existsSync(filePath)) {
-    return { version: 1, updatedAt: "", robots: [], annotations: {} };
+    return { version: 1, updatedAt: "", robots: [], annotations: {}, mainDeviceNameOverrides: {} };
   }
   try {
     const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
@@ -728,9 +1072,12 @@ function readCabinetImageWorkspaceData(cabinetRoot: string): CabinetImageWorkspa
       updatedAt: valueText(data?.updatedAt),
       robots: Array.isArray(data?.robots) ? data.robots : [],
       annotations: data?.annotations && typeof data.annotations === "object" ? data.annotations : {},
+      mainDeviceNameOverrides: data?.mainDeviceNameOverrides && typeof data.mainDeviceNameOverrides === "object"
+        ? data.mainDeviceNameOverrides
+        : {},
     };
   } catch {
-    return { version: 1, updatedAt: "", robots: [], annotations: {} };
+    return { version: 1, updatedAt: "", robots: [], annotations: {}, mainDeviceNameOverrides: {} };
   }
 }
 
@@ -742,6 +1089,27 @@ function writeCabinetImageWorkspaceData(cabinetRoot: string, data: CabinetImageW
 function toCabinetImagePersistedRecord(record: CabinetImagePackageRecord): Omit<CabinetImagePackageRecord, "imageSource" | "imageDataUrl"> {
   const { imageSource: _imageSource, imageDataUrl: _imageDataUrl, ...rest } = record;
   return rest;
+}
+
+function applyCabinetMainDeviceNameOverrides(
+  records: CabinetImagePackageRecord[],
+  overrides: Record<string, CabinetMainDeviceNameOverride> = {},
+): CabinetImagePackageRecord[] {
+  return records.map((record) => {
+    const override = overrides[buildCabinetMainDeviceOverrideKey(record)];
+    if (!override?.name) return record;
+    return { ...record, mainDeviceName: override.name };
+  });
+}
+
+function buildCabinetMainDeviceOverrideKey(record: CabinetImagePackageRecord): string {
+  return [
+    valueText(record.robotCode) || "default",
+    valueText(record.stationCode) || valueText(record.stationName) || "default",
+    valueText(record.areaCode) || valueText(record.areaName) || "default",
+    valueText(record.bayCode) || valueText(record.bayName) || "default",
+    valueText(record.mainDeviceCode) || valueText(record.componentCode) || valueText(record.mainDeviceName) || "default",
+  ].join("::");
 }
 
 function normalizeCabinetComponentRows(

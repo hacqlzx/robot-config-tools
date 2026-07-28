@@ -5,25 +5,26 @@ export function buildCabinetTree(
   records: CabinetImagePackageRecord[],
   filterText: string,
   pointCounts: Record<string, number> = {},
+  markedComponents: Record<string, boolean> = {},
+  statusFilter: "marked" | "unmarked" | "all" = "all",
 ): { treeData: CabinetTreeNode[]; allExpandableKeys: Key[] } {
   const filter = filterText.trim();
-  const stationMap = new Map<string, CabinetTreeNode>();
+  const compactTree = Boolean(filter) || statusFilter !== "all";
+  const rootMap = new Map<string, CabinetTreeNode>();
   const allExpandableKeys: Key[] = [];
 
   for (const record of records) {
-    if (filter && ![
-      record.robotCode,
-      record.stationName,
-      record.areaName,
-      record.bayName,
-      record.mainDeviceName,
-      record.componentName,
-      record.componentCode,
-    ].some((value) => value.includes(filter))) {
+    const recordKey = getCabinetRecordKey(record);
+    const marked = Boolean(markedComponents[recordKey] || pointCounts[recordKey]);
+    if (statusFilter === "marked" && !marked) continue;
+    if (statusFilter === "unmarked" && marked) continue;
+
+    const mainTitle = record.mainDeviceName || record.mainDeviceCode || "未命名屏柜";
+    const componentTitle = record.componentName || record.componentCode || record.imageName || "未命名主设备";
+    if (filter && !record.mainDeviceName.includes(filter)) {
       continue;
     }
 
-    const recordKey = getCabinetRecordKey(record);
     const stationKey = buildStationKey(record);
     const areaKey = buildAreaKey(record);
     const bayKey = buildBayKey(record);
@@ -31,10 +32,24 @@ export function buildCabinetTree(
     const componentKey = `component:${recordKey}`;
     const pointCount = pointCounts[recordKey] || 0;
 
-    const stationNode = ensureNode(stationMap, stationKey, record.stationName || record.stationCode || "未命名厂站", "station");
-    const areaNode = ensureChildNode(stationNode, areaKey, record.areaName || record.areaCode || "未命名区域", "area");
-    const bayNode = ensureChildNode(areaNode, bayKey, record.bayName || record.bayCode || "未命名间隔", "bay");
-    const mainNode = ensureChildNode(bayNode, mainKey, record.mainDeviceName || record.mainDeviceCode || "未命名主设备", "main");
+    const mainNode = compactTree
+      ? ensureNode(rootMap, mainKey, mainTitle, "main")
+      : ensureChildNode(
+        ensureChildNode(
+          ensureChildNode(
+            ensureNode(rootMap, stationKey, record.stationName || record.stationCode || "未命名厂站", "station"),
+            areaKey,
+            record.areaName || record.areaCode || "未命名区域",
+            "area",
+          ),
+          bayKey,
+          record.bayName || record.bayCode || "未命名间隔",
+          "bay",
+        ),
+        mainKey,
+        mainTitle,
+        "main",
+      );
     const existingComponent = mainNode.children?.find((item) => item.key === componentKey);
     if (existingComponent) {
       existingComponent.pointCount = pointCount;
@@ -42,7 +57,7 @@ export function buildCabinetTree(
       mainNode.children = mainNode.children || [];
       mainNode.children.push({
         key: componentKey,
-        title: record.componentName || record.componentCode,
+        title: componentTitle,
         nodeType: "component",
         pointCount,
         isLeaf: true,
@@ -50,7 +65,7 @@ export function buildCabinetTree(
     }
   }
 
-  const treeData = [...stationMap.values()];
+  const treeData = [...rootMap.values()];
   fillTreePointCounts(treeData);
   collectExpandableKeys(treeData, allExpandableKeys);
   return { treeData, allExpandableKeys };
@@ -58,6 +73,16 @@ export function buildCabinetTree(
 
 export function buildMainDeviceKey(record: CabinetImagePackageRecord): string {
   return `${buildBayKey(record)}/main:${record.mainDeviceCode || record.mainDeviceName || "default"}`;
+}
+
+export function buildMainDeviceOverrideKey(record: CabinetImagePackageRecord): string {
+  return [
+    record.robotCode || "default",
+    record.stationCode || record.stationName || "default",
+    record.areaCode || record.areaName || "default",
+    record.bayCode || record.bayName || "default",
+    record.mainDeviceCode || record.componentCode || record.mainDeviceName || "default",
+  ].join("::");
 }
 
 export function buildInitialExpandedKeys(records: CabinetImagePackageRecord[]): Key[] {

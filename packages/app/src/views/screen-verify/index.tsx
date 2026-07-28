@@ -14,6 +14,7 @@ import { SinglePointModal } from "./components/SinglePointModal";
 import { TargetTypeModal } from "./components/TargetTypeModal";
 import { cropCabinetOcrImage, recognizeCabinetName } from "./services/ocr-service";
 import { annotationToolKey, cloneAnnotations, createEmptyAnnotations } from "./utils/annotation-utils";
+import { buildCabinetAnnotationParamsExport } from "./utils/annotation-params-export";
 import { buildCabinetImageCacheKey } from "./utils/cabinet-image-utils";
 import { createCabinetPointColumns, generateModeLabels, statusOptions } from "./utils/constants";
 import type { TargetTypeOption } from "./utils/constants";
@@ -36,7 +37,7 @@ import {
   waitForBrowserPaint,
 } from "./utils/recognition-workflow";
 import type { MultiPointGenerateMode } from "./utils/recognition-workflow";
-import { buildCabinetTree, buildInitialExpandedKeys, buildMainDeviceKey, getCabinetRecordKey } from "./utils/tree-utils";
+import { buildCabinetTree, buildInitialExpandedKeys, buildMainDeviceKey, buildMainDeviceOverrideKey, getCabinetRecordKey } from "./utils/tree-utils";
 import type {
   AnnotationHistoryEntry,
   AnnotationSelection,
@@ -57,12 +58,25 @@ const EMPTY_SINGLE_POINT_DRAFT: SinglePointDraft = {
   recognitionLabelDesc: "",
 };
 
+function uniqueMainDeviceNameOverridePayloads(records: CabinetImagePackageRecord[], name: string) {
+  const payloads = new Map<string, { key: string; robotCode: string; name: string }>();
+  for (const record of records) {
+    const key = buildMainDeviceOverrideKey(record);
+    payloads.set(key, {
+      key,
+      robotCode: record.robotCode,
+      name,
+    });
+  }
+  return [...payloads.values()];
+}
+
 export default function ScreenVerify() {
   const { message, modal } = AntdApp.useApp();
   const selectedProject = useSelectedProject();
   const containerRef = useRef<HTMLDivElement>(null);
   const rightTableWrapRef = useRef<HTMLDivElement>(null);
-  const [statusFilter, setStatusFilter] = useState("marked");
+  const [statusFilter, setStatusFilter] = useState<"marked" | "unmarked" | "all">("all");
   const [nameFilter, setNameFilter] = useState("");
   const [loadingPackage, setLoadingPackage] = useState(false);
   const [loadingImage, setLoadingImage] = useState(false);
@@ -94,6 +108,8 @@ export default function ScreenVerify() {
   const [editingNameRow, setEditingNameRow] = useState<CabinetPointRow | null>(null);
   const [editingNameValue, setEditingNameValue] = useState("");
   const [rightTableScrollY, setRightTableScrollY] = useState(240);
+  const [exportingPointTable, setExportingPointTable] = useState(false);
+  const [exportingAnnotationParams, setExportingAnnotationParams] = useState(false);
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [batchMode, setBatchMode] = useState<BatchRecognitionMode>("new");
   const [batchProgress, setBatchProgress] = useState<BatchRecognitionProgress | null>(null);
@@ -104,6 +120,7 @@ export default function ScreenVerify() {
   const singlePointsByComponentRef = useRef<Record<string, CabinetSinglePoint[]>>({});
   const annotationHistoryRef = useRef<AnnotationHistoryEntry[]>([]);
   const persistedAnnotationKeysRef = useRef(new Set<string>());
+  const treeFilterActiveRef = useRef(false);
   const skipNameEditSubmitRef = useRef(false);
 
   const { width: leftWidth, resizing: leftResizing, onMouseDown: onLeftResizeStart } = useResizable({
@@ -171,14 +188,34 @@ export default function ScreenVerify() {
     [components, ocrRowsByComponent, singlePointsByComponent],
   );
 
+  const componentMarkedStates = useMemo(() => {
+    const states: Record<string, boolean> = {};
+    for (const component of components) {
+      const recordKey = getCabinetRecordKey(component);
+      const annotations = annotationsByComponent[recordKey];
+      states[recordKey] = Boolean(
+        (annotations && getAnnotationCount(annotations) > 0)
+        || hasComponentPointData(recordKey, ocrRowsByComponent, singlePointsByComponent),
+      );
+    }
+    return states;
+  }, [annotationsByComponent, components, ocrRowsByComponent, singlePointsByComponent]);
+
+  const treeFilterActive = Boolean(nameFilter.trim()) || statusFilter !== "all";
+
   const { treeData, allExpandableKeys } = useMemo(
-    () => buildCabinetTree(components, nameFilter, componentPointCounts),
-    [componentPointCounts, components, nameFilter],
+    () => buildCabinetTree(components, nameFilter, componentPointCounts, componentMarkedStates, statusFilter),
+    [componentMarkedStates, componentPointCounts, components, nameFilter, statusFilter],
   );
 
   useEffect(() => {
-    if (nameFilter.trim()) setExpandedKeys(allExpandableKeys);
-  }, [allExpandableKeys, nameFilter]);
+    if (treeFilterActive) {
+      setExpandedKeys(allExpandableKeys);
+    } else if (treeFilterActiveRef.current) {
+      setExpandedKeys(buildInitialExpandedKeys(components));
+    }
+    treeFilterActiveRef.current = treeFilterActive;
+  }, [allExpandableKeys, components, treeFilterActive]);
 
   useEffect(() => {
     annotationsByComponentRef.current = annotationsByComponent;
@@ -255,7 +292,7 @@ export default function ScreenVerify() {
     setRenameMainName("");
   }, []);
 
-  const renameMainDeviceByKey = useCallback((mainKey: string, nextName: string): boolean => {
+  const renameMainDeviceByKey = useCallback(async (mainKey: string, nextName: string): Promise<boolean> => {
     if (!nextName) {
       message.warning("屏柜名称不能为空");
       return false;
@@ -275,15 +312,32 @@ export default function ScreenVerify() {
     if (changed && nextMainKey !== mainKey) {
       setExpandedKeys((keys) => keys.map((key) => (key === mainKey ? nextMainKey : key)));
     }
+    if (changed) {
+      if (!selectedProject || !window.electronAPI?.saveCabinetMainDeviceNameOverride) {
+        message.warning("屏柜名称已更新，当前环境未保存覆盖映射");
+        return true;
+      }
+      try {
+        const payloads = uniqueMainDeviceNameOverridePayloads(matchedRecords, nextName);
+        for (const payload of payloads) {
+          const result = await window.electronAPI.saveCabinetMainDeviceNameOverride(selectedProject, payload);
+          if (!result.success) throw new Error(result.error || "保存屏柜名称覆盖失败");
+        }
+      } catch (e: any) {
+        message.error(e?.message || "保存屏柜名称覆盖失败");
+      }
+    }
     return true;
-  }, [components, message]);
+  }, [components, message, selectedProject]);
 
   const commitRenameMainDevice = useCallback(() => {
     const mainKey = renameMainKey;
     const nextName = renameMainName.trim();
-    if (!renameMainDeviceByKey(mainKey, nextName)) return;
-    setRenameMainKey("");
-    setRenameMainName("");
+    renameMainDeviceByKey(mainKey, nextName).then((success) => {
+      if (!success) return;
+      setRenameMainKey("");
+      setRenameMainName("");
+    });
   }, [renameMainDeviceByKey, renameMainKey, renameMainName]);
 
   const pushAnnotationHistory = useCallback((componentCode: string) => {
@@ -897,7 +951,7 @@ export default function ScreenVerify() {
     setCabinetNameConfidence(null);
   }, []);
 
-  const handleSubmitCabinetNameConfirm = useCallback(() => {
+  const handleSubmitCabinetNameConfirm = useCallback(async () => {
     const nextName = cabinetNameDraft.trim();
     if (!nextName) {
       message.warning("屏柜名称不能为空");
@@ -908,7 +962,7 @@ export default function ScreenVerify() {
       return;
     }
     const mainKey = buildMainDeviceKey(selectedComponent);
-    if (!renameMainDeviceByKey(mainKey, nextName)) return;
+    if (!(await renameMainDeviceByKey(mainKey, nextName))) return;
     setCabinetNameModalOpen(false);
     setCabinetNameDraft("");
     setCabinetNameRecognizedText("");
@@ -1461,13 +1515,97 @@ export default function ScreenVerify() {
     }
   };
 
+  const handleExportCabinetPointTable = useCallback(async () => {
+    if (!selectedProject) {
+      message.warning("请先选择项目");
+      return;
+    }
+    if (!components.length) {
+      message.warning("请先导入屏柜图像");
+      return;
+    }
+    if (!window.electronAPI?.selectDir || !window.electronAPI?.exportCabinetPointTable) {
+      message.warning("仅 Electron 环境支持导出屏柜点表");
+      return;
+    }
+
+    const destDir = await window.electronAPI.selectDir("选择屏柜点表导出目录");
+    if (!destDir) return;
+
+    setExportingPointTable(true);
+    try {
+      const result = await window.electronAPI.exportCabinetPointTable(selectedProject, destDir);
+      if (!result.success) throw new Error(result.error || "导出屏柜点表失败");
+      message.success(`已导出 ${result.fileName || "屏柜点表.xlsx"}，点位 ${result.pointCount || 0} 条，部件 ${result.componentCount || 0} 条`);
+    } catch (e: any) {
+      message.error(e?.message || "导出屏柜点表失败");
+    } finally {
+      setExportingPointTable(false);
+    }
+  }, [components.length, message, selectedProject]);
+
+  const handleExportAnnotationParams = useCallback(async () => {
+    if (!selectedProject) {
+      message.warning("请先选择项目");
+      return;
+    }
+    if (!components.length) {
+      message.warning("请先导入屏柜图像");
+      return;
+    }
+    if (!window.electronAPI?.selectDir || !window.electronAPI?.exportCabinetAnnotationParams) {
+      message.warning("仅 Electron 环境支持导出标注参数");
+      return;
+    }
+
+    const exportResult = buildCabinetAnnotationParamsExport({
+      projectName: selectedProject,
+      records: components,
+      annotationsByComponent: annotationsByComponentRef.current,
+      ocrRowsByComponent: ocrRowsByComponentRef.current,
+      singlePointsByComponent: singlePointsByComponentRef.current,
+    });
+
+    if (exportResult.errors.length) {
+      modal.error({
+        title: "导出标注参数失败",
+        width: 620,
+        content: (
+          <div className="screen-verify-export-errors">
+            {exportResult.errors.slice(0, 12).map((error) => (
+              <div key={error}>{error}</div>
+            ))}
+            {exportResult.errors.length > 12 ? (
+              <div>还有 {exportResult.errors.length - 12} 条问题，请继续检查标注数据。</div>
+            ) : null}
+          </div>
+        ),
+      });
+      return;
+    }
+
+    const destDir = await window.electronAPI.selectDir("选择标注参数导出目录");
+    if (!destDir) return;
+
+    setExportingAnnotationParams(true);
+    try {
+      const result = await window.electronAPI.exportCabinetAnnotationParams(selectedProject, destDir, exportResult.data);
+      if (!result.success) throw new Error(result.error || "导出标注参数失败");
+      message.success(`已导出 detector.json，点位 ${exportResult.pointCount} 个，对位组 ${exportResult.matchCount} 个`);
+    } catch (e: any) {
+      message.error(e?.message || "导出标注参数失败");
+    } finally {
+      setExportingAnnotationParams(false);
+    }
+  }, [components, message, modal, selectedProject]);
+
   return (
     <div className={`screen-verify-page${leftResizing || rightResizing ? " is-resizing" : ""}`}>
       <div className="screen-verify-toolbar">
         <Space size={12} wrap>
           <Button loading={loadingPackage} onClick={handleImportCabinetImages}>导入屏柜图像</Button>
-          <Button>导出屏柜点表</Button>
-          <Button>导出标注参数</Button>
+          <Button loading={exportingPointTable} onClick={handleExportCabinetPointTable}>导出屏柜点表</Button>
+          <Button loading={exportingAnnotationParams} onClick={handleExportAnnotationParams}>导出标注参数</Button>
           <Button onClick={handleOpenBatchRecognition}>批量识别</Button>
         </Space>
       </div>
@@ -1485,7 +1623,7 @@ export default function ScreenVerify() {
             <Input
               className="screen-verify-search"
               size="middle"
-              placeholder="请输入屏柜名称"
+              placeholder="筛选屏柜名称"
               allowClear
               value={nameFilter}
               onChange={(event) => setNameFilter(event.target.value)}
@@ -1522,7 +1660,10 @@ export default function ScreenVerify() {
               />
             ) : (
               <div className="screen-verify-tree-empty">
-                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="请导入屏柜图像" />
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description={components.length ? "未找到匹配的屏柜" : "请导入屏柜图像"}
+                />
               </div>
             )}
           </div>

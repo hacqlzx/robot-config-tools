@@ -103,6 +103,33 @@ declare global {
     deleted?: boolean;
   }
 
+  interface CabinetMainDeviceNameOverrideSaveResult {
+    success: boolean;
+    error?: string;
+    saved?: boolean;
+    key?: string;
+    name?: string;
+  }
+
+  interface CabinetAnnotationParamsExportResult {
+    success: boolean;
+    error?: string;
+    filePath?: string;
+    fileName?: string;
+    pointCount?: number;
+    matchCount?: number;
+  }
+
+  interface CabinetPointTableExportResult {
+    success: boolean;
+    error?: string;
+    filePath?: string;
+    fileName?: string;
+    rowCount?: number;
+    pointCount?: number;
+    componentCount?: number;
+  }
+
   interface AppWindowState {
     isMaximized: boolean;
     isFullScreen: boolean;
@@ -255,6 +282,23 @@ declare global {
           singlePoints: any[];
         },
       ) => Promise<CabinetImageAnnotationSaveResult>;
+      saveCabinetMainDeviceNameOverride: (
+        projectName: string,
+        payload: {
+          key: string;
+          robotCode: string;
+          name: string;
+        },
+      ) => Promise<CabinetMainDeviceNameOverrideSaveResult>;
+      exportCabinetAnnotationParams: (
+        projectName: string,
+        destDir: string,
+        data: any,
+      ) => Promise<CabinetAnnotationParamsExportResult>;
+      exportCabinetPointTable: (
+        projectName: string,
+        destDir: string,
+      ) => Promise<CabinetPointTableExportResult>;
       importDeviceVerificationPackage: (projectName: string, sourcePath: string) => Promise<DeviceVerificationPackageResult>;
       loadLocalDeviceVerificationPackage: (projectName: string) => Promise<DeviceVerificationPackageResult>;
       loadDeviceVerificationChildren: (sessionId: string, parentId: string) => Promise<DeviceVerificationChildrenResult>;

@@ -4,11 +4,14 @@ import type { UploadFile } from "antd";
 import { DownloadOutlined, InboxOutlined, UploadOutlined } from "@ant-design/icons";
 import {
   getAllRobot,
+  getFacInfo,
+  importDevicePoint,
   importSpaceModel,
   importBack,
   importCommunicateExcel,
   importProspectCalibration,
   importCorrection,
+  importScreenVerifyAnnotationParams,
   exportSpaceModel,
   exportProspectImage,
   exportDeviceImage,
@@ -74,6 +77,8 @@ const cardList: IECard[] = [
     title: "屏柜验证图",
     actions: [
       { key: "export", label: "屏柜验证图导出", desc: "导出屏柜验证图" },
+      { key: "import", label: "点表导入", desc: "导入屏柜验证图点表" },
+      { key: "import", label: "标注参数导入", desc: "导入屏柜标注参数" },
     ],
   },
   {
@@ -232,6 +237,46 @@ export default function ImportExport() {
     return robot;
   }, [message, selectedRobot]);
 
+  /** 读取当前默认厂站 */
+  const resolveCurrentStation = useCallback(async () => {
+    const stationRes = await getFacInfo();
+    const stationBody = stationRes.data;
+    if (!stationBody.success || !stationBody.data) {
+      message.error(stationBody.message || "获取厂站列表失败");
+      return null;
+    }
+    const stations = Array.isArray(stationBody.data) ? stationBody.data : [];
+    const station = stations.find((item: any) => Number(item.currentFac) === 0) || stations[0];
+    if (!station) {
+      message.error("未找到可用厂站");
+      return null;
+    }
+    return station;
+  }, [message]);
+
+  /** 屏柜点表导入 */
+  const handleScreenVerifyPointTableImport = useCallback(async (file: File) => {
+    setUploadingLabel("点表导入");
+    try {
+      const robot = await resolveSelectedRobot();
+      if (!robot) return;
+      const station = await resolveCurrentStation();
+      if (!station) return;
+
+      const res = await importDevicePoint(file, robot.id, station.id);
+      const body = res.data;
+      if (body.success) {
+        message.success("屏柜点表导入成功");
+      } else {
+        message.error(body.message || "屏柜点表导入失败");
+      }
+    } catch (e: any) {
+      message.error("屏柜点表导入失败: " + (e?.message || e));
+    } finally {
+      setUploadingLabel(null);
+    }
+  }, [message, resolveCurrentStation, resolveSelectedRobot]);
+
   /** 空间模型导入 */
   const handleSpaceModelImport = useCallback(async (file: File) => {
     setUploadingLabel("空间模型导入");
@@ -336,6 +381,24 @@ export default function ImportExport() {
       setUploadingLabel(null);
     }
   }, [resolveSelectedRobot, message]);
+
+  /** 屏柜标注参数导入 */
+  const handleScreenVerifyAnnotationParamsImport = useCallback(async (file: File) => {
+    setUploadingLabel("标注参数导入");
+    try {
+      const res = await importScreenVerifyAnnotationParams(file);
+      const body = res.data;
+      if (body.success) {
+        message.success("屏柜标注参数导入成功");
+      } else {
+        message.error(body.message || "屏柜标注参数导入失败");
+      }
+    } catch (e: any) {
+      message.error("屏柜标注参数导入失败: " + (e?.message || e));
+    } finally {
+      setUploadingLabel(null);
+    }
+  }, [message]);
 
   /** 空间模型导出 */
   const handleSpaceModelExport = useCallback(async () => {
@@ -491,6 +554,28 @@ export default function ImportExport() {
       return;
     }
 
+    // 屏柜点表导入
+    if (card.key === "screen-verify" && actionKey === "import" && label === "点表导入") {
+      openImportDialog({
+        title: "点表导入",
+        accept: ".xlsx,.xls",
+        acceptHint: ".xlsx、.xls 格式",
+        onImport: handleScreenVerifyPointTableImport,
+      });
+      return;
+    }
+
+    // 屏柜标注参数导入
+    if (card.key === "screen-verify" && actionKey === "import" && label === "标注参数导入") {
+      openImportDialog({
+        title: "标注参数导入",
+        accept: ".json",
+        acceptHint: ".json 格式",
+        onImport: handleScreenVerifyAnnotationParamsImport,
+      });
+      return;
+    }
+
     // 设备验证图导出
     if (card.key === "device-verify" && actionKey === "export") {
       handleDeviceCheckImageExport();
@@ -558,7 +643,7 @@ export default function ImportExport() {
       { key: "export", label: "导出" },
     ];
     return actions.map((act) => (
-      <div className="ie-card-action" key={act.key}>
+      <div className="ie-card-action" key={`${act.key}:${act.label}`}>
         <Button
           type="primary"
           disabled={act.disabled}

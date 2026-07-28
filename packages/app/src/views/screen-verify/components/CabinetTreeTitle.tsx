@@ -15,7 +15,7 @@ export function CabinetTreeTitle({
   batchStatus,
   onRenameMainDevice,
 }: CabinetTreeTitleProps) {
-  const title = node.pointCount ? `${node.title}（${node.pointCount}）` : node.title;
+  const title = node.title;
 
   if (node.nodeType === "component") {
     return (

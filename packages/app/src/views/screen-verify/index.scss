@@ -539,6 +539,14 @@
   line-height: 22px;
 }
 
+.screen-verify-export-errors {
+  max-height: 360px;
+  overflow: auto;
+  color: #595959;
+  line-height: 24px;
+  word-break: break-all;
+}
+
 .screen-verify-target-type-modal {
   max-width: calc(100vw - 64px);
 
