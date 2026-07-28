@@ -4,6 +4,11 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import { app } from "electron";
 
+const DATABASE_LONG_TASK_MS = 50;
+
+function roundDuration(value: number): number {
+  return Math.round(value * 100) / 100;
+}
 
 function toCamel(obj: any): any {
   if (obj === null || obj === undefined) return obj;
@@ -25,7 +30,8 @@ interface Statement {
 
 export class DbWrapper {
   private dirty = false;
-  private autoSave = true;
+  private batchDepth = 0;
+  private batchSaveReason: string | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
@@ -106,30 +112,78 @@ export class DbWrapper {
     this.scheduleSave();
   }
 
-  batchMode<T>(fn: () => T): T {
-    this.autoSave = false;
+  batchMode<T>(fn: () => T, saveReason = "batch"): T {
+    if (this.batchDepth === 0) this.batchSaveReason = saveReason;
+    this.batchDepth += 1;
     try {
       return fn();
     } finally {
-      this.autoSave = true;
-      this.saveToDisk();
+      this.batchDepth -= 1;
+      if (this.batchDepth === 0) {
+        const outerSaveReason = this.batchSaveReason ?? saveReason;
+        this.batchSaveReason = null;
+        this.saveToDisk(outerSaveReason);
+      }
     }
   }
 
-  saveToDisk(): void {
+  saveToDisk(reason = "explicit"): void {
     if (!this.dirty) return;
     if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
-    const dir = path.dirname(this.filePath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    const data = this.db.export();
-    fs.writeFileSync(this.filePath, Buffer.from(data));
-    this.dirty = false;
+    const totalStartedAt = performance.now();
+    let stage = "prepare-directory";
+    let bytes = 0;
+    let exportDurationMs = 0;
+    let writeDurationMs = 0;
+
+    try {
+      const dir = path.dirname(this.filePath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+      stage = "export";
+      const exportStartedAt = performance.now();
+      const data = this.db.export();
+      exportDurationMs = performance.now() - exportStartedAt;
+      bytes = data.byteLength;
+
+      stage = "write";
+      const writeStartedAt = performance.now();
+      fs.writeFileSync(this.filePath, Buffer.from(data));
+      writeDurationMs = performance.now() - writeStartedAt;
+      this.dirty = false;
+
+      const totalDurationMs = performance.now() - totalStartedAt;
+      const metrics = {
+        reason,
+        bytes,
+        exportDurationMs: roundDuration(exportDurationMs),
+        writeDurationMs: roundDuration(writeDurationMs),
+        totalDurationMs: roundDuration(totalDurationMs),
+        longTask: totalDurationMs >= DATABASE_LONG_TASK_MS,
+      };
+      if (metrics.longTask) {
+        console.warn("[DB] 整库同步写盘形成主线程长任务", metrics);
+      } else {
+        console.info("[DB] 整库同步写盘完成", metrics);
+      }
+    } catch (error) {
+      console.error("[DB] 整库同步写盘失败", {
+        reason,
+        stage,
+        bytes,
+        exportDurationMs: roundDuration(exportDurationMs),
+        writeDurationMs: roundDuration(writeDurationMs),
+        totalDurationMs: roundDuration(performance.now() - totalStartedAt),
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   }
 
   private scheduleSave(): void {
-    if (!this.autoSave) return;
+    if (this.batchDepth > 0) return;
     if (this.saveTimer) clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => this.saveToDisk(), 5000);
+    this.saveTimer = setTimeout(() => this.saveToDisk("scheduled"), 5000);
   }
 
   transaction(fn: () => void): () => void {
@@ -144,7 +198,7 @@ export class DbWrapper {
 
   close(): void {
     if (this.saveTimer) clearTimeout(this.saveTimer);
-    this.saveToDisk();
+    this.saveToDisk("close");
     this.db.close();
   }
 }

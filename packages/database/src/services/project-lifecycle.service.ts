@@ -55,7 +55,7 @@ export function renameProjectData(db: DbWrapper, oldName: string, newName: strin
       db.prepare(`UPDATE ${table} SET project_name = ? WHERE project_name = ?`).run(newName, oldName);
     }
   })();
-  db.saveToDisk();
+  db.saveToDisk("project-rename");
   return sourceCounts;
 }
 
@@ -66,6 +66,6 @@ export function deleteProjectData(db: DbWrapper, projectName: string): ProjectDa
       db.prepare(`DELETE FROM ${table} WHERE project_name = ?`).run(projectName);
     }
   })();
-  db.saveToDisk();
+  db.saveToDisk("project-delete");
   return counts;
 }

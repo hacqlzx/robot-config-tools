@@ -5,6 +5,11 @@ import { DevicePoint, CreateDevicePointDTO, UpdateDevicePointDTO } from "../type
 const MAX_CALIBRATION_ID = 999_999_999;
 const CALIBRATION_ID_EPOCH_MS = Date.UTC(2026, 0, 1, 0, 0, 0);
 
+export interface CalibrationIdBinding {
+  pointCode: string;
+  calibrationId: string;
+}
+
 const COLUMNS = [
   "point_name", "point_code", "recognition_type_list",
   "save_type_list", "meter_type", "position_state_type", "appearance_type",
@@ -132,39 +137,89 @@ export class DevicePointRepo {
   }
 
   bindCalibrationId(pointCode: string, projectName: string): string {
-    let assignedId = "";
-    const run = this.db.transaction(() => {
-      const point = this.findByPointCode(pointCode, projectName);
-      if (!point) throw new Error(`未找到点位：${pointCode}`);
+    const normalizedPointCode = textValue(pointCode);
+    if (!normalizedPointCode) throw new Error("点位编码不能为空");
+    return this.bindCalibrationIds([normalizedPointCode], projectName)[0].calibrationId;
+  }
 
-      const usedIds = this.collectUsedCalibrationIds(point.id);
-      const currentId = textValue(point.calibrationId);
-      if (isValidCalibrationId(currentId) && !usedIds.has(Number(currentId))) {
-        assignedId = currentId;
-        return;
-      }
+  bindCalibrationIds(pointCodes: string[], projectName: string): CalibrationIdBinding[] {
+    const normalizedProjectName = textValue(projectName);
+    const uniquePointCodes = Array.from(new Set(pointCodes.map(textValue).filter(Boolean)));
+    if (!normalizedProjectName) throw new Error("项目名称不能为空");
+    if (uniquePointCodes.length === 0) return [];
 
-      const sequence = this.db.prepare("SELECT next_id FROM calibration_sequence WHERE id = 1").get() as { nextId: number } | undefined;
-      if (!sequence) throw new Error("标定 ID 序列表未初始化");
+    const assignedByPointCode = new Map<string, string>();
+    this.db.batchMode(() => {
+      const run = this.db.transaction(() => {
+        const points = uniquePointCodes.map((pointCode) => {
+          const point = this.findByPointCode(pointCode, normalizedProjectName);
+          if (!point) throw new Error(`未找到点位：${pointCode}`);
+          return point;
+        });
+        const usedIds = this.collectUsedCalibrationIds();
+        const pendingPoints: DevicePoint[] = [];
 
-      const startId = Math.max(normalizeNextId(sequence.nextId), createTimeBasedCalibrationSeed(pointCode, projectName));
-      assignedId = String(this.allocateCalibrationId(startId, usedIds));
-      this.db.prepare("UPDATE calibration_sequence SET next_id = ? WHERE id = 1").run(Number(assignedId) + 1);
-      this.update(point.id, { calibrationId: assignedId });
-    });
-    run();
-    return assignedId;
+        for (const point of points) {
+          const currentId = textValue(point.calibrationId);
+          if (isValidCalibrationId(currentId)) {
+            assignedByPointCode.set(point.pointCode, currentId);
+          } else {
+            pendingPoints.push(point);
+          }
+        }
+
+        if (pendingPoints.length === 0) return;
+        const sequence = this.db.prepare("SELECT next_id FROM calibration_sequence WHERE id = 1").get() as { nextId: number } | undefined;
+        if (!sequence) throw new Error("标定 ID 序列表未初始化");
+
+        let nextId = normalizeNextId(sequence.nextId);
+        for (const point of pendingPoints) {
+          const startId = Math.max(nextId, createTimeBasedCalibrationSeed(point.pointCode, normalizedProjectName));
+          const assignedId = this.allocateCalibrationId(startId, usedIds);
+          usedIds.add(assignedId);
+          nextId = assignedId + 1;
+          const calibrationId = String(assignedId);
+          this.update(point.id, { calibrationId });
+          assignedByPointCode.set(point.pointCode, calibrationId);
+        }
+        this.db.prepare("UPDATE calibration_sequence SET next_id = ? WHERE id = 1").run(nextId);
+      });
+      run();
+    }, "calibration-id-bind");
+
+    return uniquePointCodes.map((pointCode) => ({
+      pointCode,
+      calibrationId: assignedByPointCode.get(pointCode) ?? "",
+    }));
   }
 
   clearCalibrationId(pointCode: string, projectName: string): void {
-    const run = this.db.transaction(() => {
-      const point = this.findByPointCode(pointCode, projectName);
-      if (!point) throw new Error(`未找到点位：${pointCode}`);
-      if (String(point.calibrationId ?? "").trim()) {
-        this.update(point.id, { calibrationId: "" });
-      }
-    });
-    run();
+    const normalizedPointCode = textValue(pointCode);
+    if (!normalizedPointCode) throw new Error("点位编码不能为空");
+    this.clearCalibrationIds([normalizedPointCode], projectName);
+  }
+
+  clearCalibrationIds(pointCodes: string[], projectName: string): number {
+    const normalizedProjectName = textValue(projectName);
+    const uniquePointCodes = Array.from(new Set(pointCodes.map(textValue).filter(Boolean)));
+    if (!normalizedProjectName) throw new Error("项目名称不能为空");
+    if (uniquePointCodes.length === 0) return 0;
+
+    let cleared = 0;
+    this.db.batchMode(() => {
+      const run = this.db.transaction(() => {
+        for (const pointCode of uniquePointCodes) {
+          const point = this.findByPointCode(pointCode, normalizedProjectName);
+          if (!point) throw new Error(`未找到点位：${pointCode}`);
+          if (textValue(point.calibrationId)) {
+            this.update(point.id, { calibrationId: "" });
+            cleared += 1;
+          }
+        }
+      });
+      run();
+    }, "calibration-id-clear");
+    return cleared;
   }
 
   private collectUsedCalibrationIds(excludePointId?: number): Set<number> {

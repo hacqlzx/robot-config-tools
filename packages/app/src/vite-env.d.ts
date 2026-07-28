@@ -319,8 +319,6 @@ declare global {
       exportMarkedDevicePoints: (projectName: string, destDir: string) => Promise<DeviceMarkedPointExportResult>;
       getProjectRoot: () => Promise<string>;
       setDataPath: (newPath: string) => Promise<boolean>;
-      startBatch: () => Promise<void>;
-      endBatch: () => Promise<void>;
       db: {
         voltage: {
           list: (projectName?: string) => Promise<import('@robot/database').DeviceVoltage[]>;
@@ -366,7 +364,9 @@ declare global {
           findByPointCode: (pointCode: string, projectName?: string) => Promise<import('@robot/database').DevicePoint | null>;
           findByCalibrationId: (calibrationId: string, projectName?: string) => Promise<import('@robot/database').DevicePoint | null>;
           bindCalibrationId: (pointCode: string, projectName: string) => Promise<string>;
+          bindCalibrationIds: (pointCodes: string[], projectName: string) => Promise<import('@robot/database').CalibrationIdBinding[]>;
           clearCalibrationId: (pointCode: string, projectName: string) => Promise<void>;
+          clearCalibrationIds: (pointCodes: string[], projectName: string) => Promise<number>;
           findByStationId: (stationId: number, projectName?: string) => Promise<import('@robot/database').DevicePoint[]>;
           findByComponentId: (componentId: number, projectName?: string) => Promise<import('@robot/database').DevicePoint[]>;
           paginate: (page: number, pageSize: number, stationId?: number, projectName?: string) => Promise<{ data: import('@robot/database').DevicePoint[]; total: number }>;

@@ -18,6 +18,7 @@ export { version as migration002Version, name as migration002Name, up as migrati
 export { version as migration003Version, name as migration003Name, up as migration003Up, down as migration003Down } from "./migrations/003_project_name";
 export { version as migration004Version, name as migration004Name, up as migration004Up, down as migration004Down } from "./migrations/004_point_code_index";
 export { version as migration005Version, name as migration005Name, up as migration005Up, down as migration005Down } from "./migrations/005_calibration_sequence";
+export { version as migration006Version, name as migration006Name, up as migration006Up, down as migration006Down } from "./migrations/006_point_unique_constraints";
 
 // Repository
 export { DeviceVoltageRepo } from "./repositories/device-voltage.repo";
@@ -25,6 +26,7 @@ export { DeviceBayRepo } from "./repositories/device-bay.repo";
 export { DeviceMainRepo } from "./repositories/device-main.repo";
 export { DeviceComponentRepo } from "./repositories/device-component.repo";
 export { DevicePointRepo } from "./repositories/device-point.repo";
+export type { CalibrationIdBinding } from "./repositories/device-point.repo";
 export { ProjectStationRepo } from "./repositories/project-station.repo";
 
 // 服务
@@ -32,3 +34,9 @@ export { importPointExcel } from "./services/import.service";
 export type { PointExcelRow, ImportResult } from "./services/import.service";
 export { deleteProjectData, getProjectDataCounts, renameProjectData } from "./services/project-lifecycle.service";
 export type { ProjectDataCounts } from "./services/project-lifecycle.service";
+export { diagnosePointUniqueness } from "./services/data-integrity.service";
+export type {
+  CalibrationIdConflict,
+  PointCodeConflict,
+  PointUniquenessDiagnostics,
+} from "./services/data-integrity.service";

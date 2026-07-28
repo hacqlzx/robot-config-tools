@@ -29,6 +29,11 @@ import {
   migration005Name,
   migration005Up,
   migration005Down,
+  migration006Version,
+  migration006Name,
+  migration006Up,
+  migration006Down,
+  diagnosePointUniqueness,
 } from "@robot/database";
 import type { PointExcelRow, ImportResult } from "@robot/database";
 
@@ -48,37 +53,7 @@ function registerRepoHandlers(def: { name: string; repo: any; methods: string[] 
   }
 }
 
-// ---- batch / import helpers ----
-
-let _batchMode = false;
-
-function registerBatchHandlers(): void {
-  ipcMain.handle("db:startBatch", async () => {
-    try {
-      _batchMode = true;
-      return { ok: true };
-    } catch (e: any) {
-      return { ok: false, error: e.message };
-    }
-  });
-  ipcMain.handle("db:endBatch", async () => {
-    try {
-      _batchMode = false;
-      getDatabase().saveToDisk();
-      return { ok: true };
-    } catch (e: any) {
-      return { ok: false, error: e.message };
-    }
-  });
-  ipcMain.handle("db:saveToDisk", async () => {
-    try {
-      getDatabase().saveToDisk();
-      return { ok: true };
-    } catch (e: any) {
-      return { ok: false, error: e.message };
-    }
-  });
-}
+// ---- import helpers ----
 
 function registerImportHandler(): void {
   ipcMain.handle(
@@ -87,7 +62,9 @@ function registerImportHandler(): void {
       try {
         const { importPointExcel } = await import("@robot/database");
         const db = getDatabase();
-        const result: ImportResult = importPointExcel(db, rows, stationName, stationCode, projectName);
+        const result: ImportResult = db.batchMode(() => (
+          importPointExcel(db, rows, stationName, stationCode, projectName)
+        ), "point-import");
         return { ok: true, data: result };
       } catch (e: any) {
         return { ok: false, error: e.message };
@@ -227,7 +204,7 @@ function registerCabinetDeviceHandler(): void {
         }
       })();
 
-      db.saveToDisk();
+      db.saveToDisk("cabinet-main-save");
       const afterMains = mainRepo.list(projectName);
       const afterProjectCount = afterMains.length;
       const afterBayCount = afterMains.filter((item: any) => item.bayId === bayRecord.id).length;
@@ -317,7 +294,7 @@ function registerCabinetDeviceHandler(): void {
           mainRepo.deleteCascade(id, projectName);
         }
       })();
-      db.saveToDisk();
+      db.saveToDisk("cabinet-main-delete");
 
       const afterMains = mainRepo.list(projectName);
       const afterProjectCount = afterMains.length;
@@ -360,20 +337,27 @@ export async function initDbIpc(): Promise<void> {
     { version: migration003Version, name: migration003Name, up: migration003Up, down: migration003Down },
     { version: migration004Version, name: migration004Name, up: migration004Up, down: migration004Down },
     { version: migration005Version, name: migration005Name, up: migration005Up, down: migration005Down },
+    { version: migration006Version, name: migration006Name, up: migration006Up, down: migration006Down },
   ]);
+
+  const uniquenessDiagnostics = diagnosePointUniqueness(db);
+  if (uniquenessDiagnostics.hasConflicts) {
+    console.error("[DB] 点位唯一性诊断发现冲突，增加唯一索引前必须人工确认并清理", uniquenessDiagnostics);
+  } else {
+    console.log("[DB] 点位唯一性诊断通过");
+  }
 
   const repos = [
     { name: "voltage", repo: new DeviceVoltageRepo(db), methods: ["list", "getById", "findByStationId", "create", "update", "delete"] },
     { name: "bay", repo: new DeviceBayRepo(db), methods: ["list", "getById", "findByVoltId", "findByStationId", "create", "update", "delete"] },
     { name: "mainDevice", repo: new DeviceMainRepo(db), methods: ["list", "getById", "findByBayId", "findByStationId", "findByMainDeviceNameAndBayId", "findByMainDeviceCode", "create", "update", "delete", "deleteCascade"] },
     { name: "component", repo: new DeviceComponentRepo(db), methods: ["list", "getById", "findByMainDeviceId", "findByStationId", "create", "update", "delete"] },
-    { name: "point", repo: new DevicePointRepo(db), methods: ["list", "getById", "findByPointCode", "findByCalibrationId", "bindCalibrationId", "clearCalibrationId", "findByStationId", "findByComponentId", "paginate", "create", "update", "delete"] },
+    { name: "point", repo: new DevicePointRepo(db), methods: ["list", "getById", "findByPointCode", "findByCalibrationId", "bindCalibrationId", "bindCalibrationIds", "clearCalibrationId", "clearCalibrationIds", "findByStationId", "findByComponentId", "paginate", "create", "update", "delete"] },
   ];
 
   for (const def of repos) {
     registerRepoHandlers(def);
   }
-  registerBatchHandlers();
   registerImportHandler();
   registerCabinetDeviceHandler();
 

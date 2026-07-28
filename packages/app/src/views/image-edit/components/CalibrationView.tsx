@@ -223,10 +223,10 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
             .map((binding) => binding.pointCode)
             .filter(Boolean),
         );
-        if (selectedProject && window.electronAPI?.db?.point?.bindCalibrationId) {
-          void Promise.all(
-            [...boundPointCodes].map((pointCode) => window.electronAPI!.db.point.bindCalibrationId(pointCode, selectedProject)),
-          ).catch((error) => console.error("[Calibration] 补齐标定 ID 失败:", error));
+        if (selectedProject && window.electronAPI?.db?.point?.bindCalibrationIds) {
+          void window.electronAPI.db.point
+            .bindCalibrationIds([...boundPointCodes], selectedProject)
+            .catch((error) => console.error("[Calibration] 补齐标定 ID 失败:", error));
         }
         const entry = json.data?.find(
           (d) => d.imageId === image.id && isSameMapCode(getEntryMapCode(d, json.mapCode), currentMapCode)
@@ -797,10 +797,10 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
       void (async () => {
         try {
           if (pointCodes.length > 0) {
-            if (!selectedProject || !window.electronAPI?.db?.point?.clearCalibrationId) {
+            if (!selectedProject || !window.electronAPI?.db?.point?.clearCalibrationIds) {
               throw new Error("当前环境无法清除标定 ID");
             }
-            await Promise.all(pointCodes.map((pointCode) => window.electronAPI!.db.point.clearCalibrationId(pointCode, selectedProject)));
+            await window.electronAPI.db.point.clearCalibrationIds(pointCodes, selectedProject);
           }
           setRects((prev) => prev.filter((r) => r.id !== rid));
           setPendingRect((prev) => (prev?.id === rid ? null : prev));

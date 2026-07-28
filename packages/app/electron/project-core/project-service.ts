@@ -504,7 +504,7 @@ function syncCabinetMainDevicesFromImportedMap(projectName: string, mapDir: stri
       inserted += 1;
     }
   })();
-  db.saveToDisk();
+  db.saveToDisk("model-import-cabinet-sync");
 
   console.log("[空间模型导入][屏柜主设备] 同步完成", {
     projectName,

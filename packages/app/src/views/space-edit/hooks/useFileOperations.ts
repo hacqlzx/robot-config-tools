@@ -149,9 +149,7 @@ export function useFileOperations(params: UseFileOperationsParams) {
 
       // 数据库导入需要厂站编码；当前客户端未接正式编码源，先按名称+时间尾号生成
       const stationCode = stationName.substring(0, 10) + Date.now().toString().slice(-4);
-      await api.startBatch();
       const result = await api.importPoints(rows, stationName, stationCode, project);
-      await api.endBatch();
 
       message.success(`导入成功: ${result.inserted} 新增, ${result.updated} 更新, 文件已保存至 ${savedSubPath}`);
       if (result.errors.length > 0) message.warning("错误: " + result.errors.slice(0, 3).join("; "));

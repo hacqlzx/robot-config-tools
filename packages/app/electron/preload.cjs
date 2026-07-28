@@ -132,9 +132,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("export-cabinet-point-table", projectName, destDir),
   getProjectRoot: () => ipcRenderer.invoke("get-project-root"),
   setDataPath: (newPath) => ipcRenderer.invoke("set-data-path", newPath),
-  startBatch: () => ipcRenderer.invoke("db:startBatch"),
-  endBatch: () => ipcRenderer.invoke("db:endBatch"),
-
   db: {
     voltage: {
       list: dbInvoke("voltage", "list"),
@@ -180,7 +177,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
       findByPointCode: dbInvoke("point", "findByPointCode"),
       findByCalibrationId: dbInvoke("point", "findByCalibrationId"),
       bindCalibrationId: dbInvoke("point", "bindCalibrationId"),
+      bindCalibrationIds: dbInvoke("point", "bindCalibrationIds"),
       clearCalibrationId: dbInvoke("point", "clearCalibrationId"),
+      clearCalibrationIds: dbInvoke("point", "clearCalibrationIds"),
       findByStationId: dbInvoke("point", "findByStationId"),
       findByComponentId: dbInvoke("point", "findByComponentId"),
       paginate: dbInvoke("point", "paginate"),

@@ -1437,10 +1437,7 @@ function ensureCalibrationIds(projectName: string, calibration: CalibrationFileD
       }
     }
   }
-  for (const pointCode of pointCodes) {
-    repo.bindCalibrationId(pointCode, projectName);
-  }
-  db.saveToDisk();
+  repo.bindCalibrationIds(Array.from(pointCodes), projectName);
 }
 
 function readSurveyContext(surveyDir: string, deviceDir: string, mapName: string, deviceAreas: DeviceAreaInfo[] = []): SurveyContext {

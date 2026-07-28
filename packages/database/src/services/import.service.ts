@@ -261,11 +261,11 @@ export function importPointExcel(
   }
 
   for (const [index, row] of rows.entries()) {
-    try {
+    const importRow = () => {
       const hierarchy = getHierarchyDepth(row);
       if (hierarchy.error) {
         result.errors.push(`第 ${index + 1} 行: ${hierarchy.error}`);
-        continue;
+        return;
       }
 
       // ====== 编码自动填充 + 逐层 upsert（对齐 Java insertOrUpdate* 模式） ======
@@ -295,7 +295,7 @@ export function importPointExcel(
       if (hierarchy.depth === 1) {
         if (existingVoltage) result.updated++;
         else result.inserted++;
-        continue;
+        return;
       }
 
       // 2. 间隔编码
@@ -330,7 +330,7 @@ export function importPointExcel(
       if (hierarchy.depth === 2) {
         if (existingBay) result.updated++;
         else result.inserted++;
-        continue;
+        return;
       }
 
       // 3. 主设备编码
@@ -381,7 +381,7 @@ export function importPointExcel(
       if (hierarchy.depth === 3) {
         if (existingMain) result.updated++;
         else result.inserted++;
-        continue;
+        return;
       }
 
       // 4. 部件编码
@@ -425,7 +425,7 @@ export function importPointExcel(
       if (hierarchy.depth === 4) {
         if (existingComp) result.updated++;
         else result.inserted++;
-        continue;
+        return;
       }
 
       // 5. 点位：有编码按编码匹配；无编码按完整树路径匹配，避免重复导入生成新点位。
@@ -549,6 +549,9 @@ export function importPointExcel(
         });
         result.inserted++;
       }
+    };
+    try {
+      db.transaction(importRow)();
     } catch (e: any) {
       result.errors.push(`第 ${index + 1} 行 "${describeRow(row)}": ${e.message}`);
     }
