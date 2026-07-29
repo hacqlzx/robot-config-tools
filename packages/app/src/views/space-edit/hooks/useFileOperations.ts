@@ -26,6 +26,10 @@ interface UseFileOperationsParams {
   /** 关闭所有绘制模式（屏柜/充电区/设备区/路径） */
   closeAllDrawingModes: () => void;
   setImporting: React.Dispatch<React.SetStateAction<boolean>>;
+  setLoading: React.Dispatch<React.SetStateAction<boolean>>;
+  setLoadingFile: React.Dispatch<React.SetStateAction<string>>;
+  setLoadingText: React.Dispatch<React.SetStateAction<string>>;
+  setLoadingProgress: React.Dispatch<React.SetStateAction<number>>;
   setLoadedFiles: React.Dispatch<React.SetStateAction<Set<string>>>;
   /** 变更树 key 强制刷新地图/文件树 */
   setTreeKey: React.Dispatch<React.SetStateAction<number>>;
@@ -69,7 +73,8 @@ function confirmReplaceModel(plan: { mapCode: string; mapName: string; existingM
 export function useFileOperations(params: UseFileOperationsParams) {
   const { entitiesRef, lasHeadersRef, filePathRef, pointStatsRef, modelGroundYRef, hasAutoFocusedRef,
     loadLasFromPath, requestRender, closeAllDrawingModes,
-    setImporting, setLoadedFiles, setTreeKey, setClipEntityName, setClipMode, message } = params;
+    setImporting, setLoading, setLoadingFile, setLoadingText, setLoadingProgress,
+    setLoadedFiles, setTreeKey, setClipEntityName, setClipMode, message } = params;
 
   /**
    * 路径标准化：将 Windows 反斜杠统一为正斜杠并转小写，
@@ -189,6 +194,11 @@ export function useFileOperations(params: UseFileOperationsParams) {
       return;
     }
 
+    setLoading(true);
+    setLoadingFile(file.name);
+    setLoadingProgress(0);
+    setLoadingText(isZip ? "正在检查空间模型包..." : "正在准备导入模型...");
+
     try {
       const sourcePath = window.electronAPI.getFilePath(file);
       if (!sourcePath) throw new Error("无法读取源文件路径");
@@ -198,14 +208,25 @@ export function useFileOperations(params: UseFileOperationsParams) {
         // 检查是否会覆盖同编码的已有地图
         const plan = await window.electronAPI.project.inspectModelZipImport(project, sourcePath);
         if (plan.willReplace) {
+          setLoading(false);
+          setLoadingText("");
           const confirmed = await confirmReplaceModel(plan);
-          if (!confirmed) return;
+          if (!confirmed) {
+            setLoadingFile("");
+            setLoadingProgress(0);
+            return;
+          }
+          setLoading(true);
+          setLoadingFile(file.name);
+          setLoadingProgress(0);
           replaced = true;
         }
+        setLoadingText(replaced ? "正在替换并解压空间模型包..." : "正在解压导入空间模型包...");
         const result = await window.electronAPI.project.importModelZip(project, sourcePath);
         targetPath = result.modelPath;
       } else {
         const baseName = stripModelExtension(file.name);
+        setLoadingText("正在导入模型文件...");
         targetPath = await window.electronAPI.project.importFile(project, sourcePath, baseName);
       }
 
@@ -217,8 +238,23 @@ export function useFileOperations(params: UseFileOperationsParams) {
       message.success(isZip ? (replaced ? "空间模型包替换成功" : "空间模型包导入成功") : "模型导入成功");
     } catch (err: any) {
       message.error("模型导入失败: " + (err?.message || err));
+    } finally {
+      setLoading(false);
+      setLoadingFile("");
+      setLoadingText("");
+      setLoadingProgress(0);
     }
-  }, [clearLoadedModels, closeAllDrawingModes, loadLasFromPath, setTreeKey, message]);
+  }, [
+    clearLoadedModels,
+    closeAllDrawingModes,
+    loadLasFromPath,
+    message,
+    setLoading,
+    setLoadingFile,
+    setLoadingProgress,
+    setLoadingText,
+    setTreeKey,
+  ]);
 
   /**
    * 仅卸载指定路径对应的 GPU 实体，不触发重新加载。

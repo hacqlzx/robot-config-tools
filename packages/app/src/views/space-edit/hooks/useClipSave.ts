@@ -16,7 +16,7 @@ interface ClipSaveParams {
   origFilePath: string;
   bounds: Bounds;
   entityName: string;
-  originalMeshRef: { current: { mi: pc.MeshInstance; vb: pc.VertexBuffer } | null };
+  originalMeshRef: { current: unknown | null };
   onProgress?: (pct: number) => void;
   setProgress: (p: number) => void;
   setSaving: (s: boolean) => void;

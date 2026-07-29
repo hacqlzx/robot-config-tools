@@ -4,7 +4,22 @@ import { CheckOutlined, CloseOutlined } from "@ant-design/icons";
 import * as pc from "playcanvas";
 import { performClipSave } from "../hooks/useClipSave";
 
-interface LasHeaderInfo { pointFormatId: number; versionMinor: number; scaleX: number; scaleY: number; scaleZ: number; offsetX: number; offsetY: number; offsetZ: number; }
+interface LasHeaderInfo {
+  pointFormatId: number;
+  versionMinor: number;
+  scaleX: number;
+  scaleY: number;
+  scaleZ: number;
+  offsetX: number;
+  offsetY: number;
+  offsetZ: number;
+  minX?: number;
+  maxX?: number;
+  minY?: number;
+  maxY?: number;
+  minZ?: number;
+  maxZ?: number;
+}
 
 interface Props {
   app: pc.Application | null;
@@ -24,36 +39,62 @@ const FACE_NORMALS = [
   new pc.Vec3(0, -1, 0), new pc.Vec3(0, 1, 0),
   new pc.Vec3(0, 0, -1), new pc.Vec3(0, 0, 1),
 ];
+const CLIP_PREVIEW_MAX_POINTS = 2_000_000;
+interface ClipPreviewResources {
+  mi: pc.MeshInstance;
+  mat: pc.ShaderMaterial;
+  sourcePointCount: number;
+  previewPointCount: number;
+}
 
-export default function ClipController({ app, entityName, lasHeader, origFilePath, onClose, onComplete, onProgress }: Props) {
-  const { message } = App.useApp();
-  const entity = (app?.root?.findByName(entityName) as pc.Entity) || null;
-  const [bounds, setBounds] = useState<Bounds>({ minX: 0, maxX: 10, minY: 0, maxY: 10, minZ: 0, maxZ: 10 });
-  const [saving, setSaving] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const boxRootRef = useRef<pc.Entity | null>(null);
-  const originCenterRef = useRef<{ cx: number; cy: number; cz: number }>({ cx: 0, cy: 0, cz: 0 });
-  const dragRef = useRef<{ face: FaceIndex; startBounds: Bounds; sx: number; sy: number } | null>(null);
-  const hoverRef = useRef<FaceIndex | null>(null);
-  const originalMeshRef = useRef<{ mi: pc.MeshInstance; vb: pc.VertexBuffer } | null>(null);
-  const clipMatRef = useRef<pc.ShaderMaterial | null>(null);
-  const getWorldPos = () => entity?.getPosition() || new pc.Vec3();
+interface OriginalPointMesh {
+  mesh: pc.Mesh;
+  material: pc.Material;
+  vb: pc.VertexBuffer;
+  cull: boolean;
+}
 
-  // Init: save original mesh + create GPU clip material
-  useEffect(() => {
-    if (!entity || !app) return;
-    const render = entity.render;
-    const mi = render?.meshInstances?.[0];
-    const mesh = mi?.mesh;
-    if (!mesh) return;
-    const vb = mesh.vertexBuffer;
-    if (!vb) return;
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
 
-    if (!originalMeshRef.current) {
-      originalMeshRef.current = { mi, vb };
-    }
+function formatPointCount(count: number): string {
+  if (count >= 10_000) return `${Math.round(count / 10_000)}万`;
+  return String(count);
+}
 
-    const data = vb.lock() as ArrayBuffer;
+function getHeaderLocalBounds(header: LasHeaderInfo | null): Bounds | null {
+  if (!header ||
+    !isFiniteNumber(header.minX) || !isFiniteNumber(header.maxX) ||
+    !isFiniteNumber(header.minY) || !isFiniteNumber(header.maxY) ||
+    !isFiniteNumber(header.minZ) || !isFiniteNumber(header.maxZ)) {
+    return null;
+  }
+
+  const cx = (header.minX + header.maxX) / 2;
+  const cy = (header.minY + header.maxY) / 2;
+  const cz = (header.minZ + header.maxZ) / 2;
+  return {
+    minX: header.minX - cx,
+    maxX: header.maxX - cx,
+    minY: header.minZ - cz,
+    maxY: header.maxZ - cz,
+    minZ: -(header.maxY - cy),
+    maxZ: -(header.minY - cy),
+  };
+}
+
+function getBoundsCenter(bounds: Bounds) {
+  return {
+    cx: (bounds.minX + bounds.maxX) / 2,
+    cy: (bounds.minY + bounds.maxY) / 2,
+    cz: (bounds.minZ + bounds.maxZ) / 2,
+  };
+}
+
+function scanVertexBounds(vb: pc.VertexBuffer): Bounds | null {
+  const data = vb.lock() as ArrayBuffer;
+  try {
     const f32 = new Float32Array(data);
     const count = vb.getNumVertices();
     let mnX = Infinity, mxX = -Infinity, mnY = Infinity, mxY = -Infinity, mnZ = Infinity, mxZ = -Infinity;
@@ -64,14 +105,139 @@ export default function ClipController({ app, entityName, lasHeader, origFilePat
       if (y < mnY) mnY = y; if (y > mxY) mxY = y;
       if (z < mnZ) mnZ = z; if (z > mxZ) mxZ = z;
     }
+    if (!isFinite(mnX)) return null;
+    return { minX: mnX, maxX: mxX, minY: mnY, maxY: mxY, minZ: mnZ, maxZ: mxZ };
+  } finally {
     vb.unlock();
-    if (!isFinite(mnX)) return;
+  }
+}
 
-    setBounds({ minX: mnX, maxX: mxX, minY: mnY, maxY: mxY, minZ: mnZ, maxZ: mxZ });
-    originCenterRef.current = { cx: (mnX + mxX) / 2, cy: (mnY + mxY) / 2, cz: (mnZ + mxZ) / 2 };
+export default function ClipController({ app, entityName, lasHeader, origFilePath, onClose, onComplete, onProgress }: Props) {
+  const { message } = App.useApp();
+  const entity = (app?.root?.findByName(entityName) as pc.Entity) || null;
+  const [bounds, setBounds] = useState<Bounds>({ minX: 0, maxX: 10, minY: 0, maxY: 10, minZ: 0, maxZ: 10 });
+  const [saving, setSaving] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [previewInfo, setPreviewInfo] = useState("");
+  const boxRootRef = useRef<pc.Entity | null>(null);
+  const originCenterRef = useRef<{ cx: number; cy: number; cz: number }>({ cx: 0, cy: 0, cz: 0 });
+  const boundsRef = useRef(bounds);
+  const pendingBoundsFrameRef = useRef<number | null>(null);
+  const dragRef = useRef<{ face: FaceIndex; startBounds: Bounds; sx: number; sy: number } | null>(null);
+  const hoverRef = useRef<FaceIndex | null>(null);
+  const originalMeshRef = useRef<OriginalPointMesh | null>(null);
+  const previewResourcesRef = useRef<ClipPreviewResources | null>(null);
+  const clipMatRef = useRef<pc.ShaderMaterial | null>(null);
+  const getWorldPos = () => entity?.getPosition() || new pc.Vec3();
 
-    const extent = Math.max(mxX - mnX, mxY - mnY, mxZ - mnZ);
-    const pSize = extent > 0 ? extent / Math.cbrt(count) * 0.8 : 1;
+  const requestClipRender = () => {
+    try {
+      app?.render();
+    } catch {
+      // Route switches can destroy the PlayCanvas app before React finishes unmounting this panel.
+    }
+  };
+
+  useEffect(() => {
+    boundsRef.current = bounds;
+  }, [bounds]);
+
+  const setViewportCursor = (cursor: "" | "grab" | "grabbing") => {
+    try {
+      const canvas = app?.graphicsDevice?.canvas;
+      if (canvas) canvas.style.cursor = cursor;
+    } catch {
+      // The graphics device may already be gone while the page is unmounting.
+    }
+    if (!cursor && (document.body.style.cursor === "grab" || document.body.style.cursor === "grabbing")) {
+      document.body.style.cursor = "";
+    }
+  };
+
+  const resetInteractionState = () => {
+    dragRef.current = null;
+    hoverRef.current = null;
+    (window as any).__clipDragging = false;
+    setViewportCursor("");
+  };
+
+  const cancelPendingBoundsFrame = () => {
+    if (pendingBoundsFrameRef.current === null) return;
+    window.cancelAnimationFrame(pendingBoundsFrameRef.current);
+    pendingBoundsFrameRef.current = null;
+  };
+
+  const scheduleBoundsUpdate = (nextBounds: Bounds) => {
+    boundsRef.current = nextBounds;
+    if (pendingBoundsFrameRef.current !== null) return;
+    pendingBoundsFrameRef.current = window.requestAnimationFrame(() => {
+      pendingBoundsFrameRef.current = null;
+      setBounds(boundsRef.current);
+    });
+  };
+
+  const cleanupClipPreview = (restoreOriginal: boolean) => {
+    cancelPendingBoundsFrame();
+    const original = originalMeshRef.current;
+    if (restoreOriginal && original && entity?.render) {
+      try {
+        const restoredMi = new pc.MeshInstance(original.mesh, original.material, null);
+        restoredMi.cull = original.cull;
+        entity.render.meshInstances = [restoredMi];
+      } catch {
+        // If the route is leaving, PlayCanvas may have already destroyed render internals.
+      }
+    }
+    const resources = previewResourcesRef.current;
+    if (resources) {
+      try { resources.mat.destroy(); } catch { /* ignore destroyed device cleanup */ }
+    }
+    previewResourcesRef.current = null;
+    clipMatRef.current = null;
+    if (restoreOriginal) originalMeshRef.current = null;
+    resetInteractionState();
+  };
+
+  // Init: save original mesh + create GPU clip material
+  useEffect(() => {
+    if (!entity || !app) return;
+    const render = entity.render;
+    const mi = render?.meshInstances?.[0];
+    const mesh = mi?.mesh;
+    if (!mesh) return;
+    if (!mi.material) return;
+    const vb = mesh.vertexBuffer;
+    if (!vb) return;
+
+    if (!originalMeshRef.current) {
+      originalMeshRef.current = { mesh, material: mi.material, vb, cull: mi.cull };
+    }
+
+    const sourceMesh = originalMeshRef.current.mesh;
+    const sourceVb = originalMeshRef.current.vb;
+    const sourcePointCount = sourceVb.getNumVertices();
+    const initialBounds = getHeaderLocalBounds(lasHeader) || scanVertexBounds(sourceVb);
+    if (!initialBounds) return;
+
+    boundsRef.current = initialBounds;
+    setBounds(initialBounds);
+    originCenterRef.current = getBoundsCenter(initialBounds);
+
+    const extent = Math.max(
+      initialBounds.maxX - initialBounds.minX,
+      initialBounds.maxY - initialBounds.minY,
+      initialBounds.maxZ - initialBounds.minZ,
+    );
+    const previewRatio = Math.min(1, CLIP_PREVIEW_MAX_POINTS / Math.max(sourcePointCount, 1));
+    const previewPointCount = Math.ceil(sourcePointCount * previewRatio);
+
+    if (previewRatio < 1) {
+      setPreviewInfo(`预览 ${formatPointCount(previewPointCount)} / ${formatPointCount(sourcePointCount)} 点`);
+    } else {
+      setPreviewInfo("");
+    }
+
+    const pSize = Math.max(2.0, extent > 0 ? extent / Math.cbrt(previewPointCount) * 0.8 : 1);
 
     const clipVert = `
       attribute vec3 vertex_position;
@@ -79,16 +245,19 @@ export default function ClipController({ app, entityName, lasHeader, origFilePat
       uniform mat4 matrix_model;
       uniform mat4 matrix_viewProjection;
       uniform float uPointSize;
+      uniform float uDisplayRatio;
       uniform vec3 uClipMin;
       uniform vec3 uClipMax;
       varying vec4 vColor;
       void main(void) {
         vec3 pos = vertex_position;
         bool inside = all(greaterThanEqual(pos, uClipMin)) && all(lessThanEqual(pos, uClipMax));
-        if (!inside) { pos = vec3(0.0, -999999.0, 0.0); }
+        float rnd = fract(sin(dot(vertex_position, vec3(12.9898, 78.233, 45.5432))) * 43758.5453);
+        bool visible = inside && rnd < uDisplayRatio;
+        if (!visible) { pos = vec3(0.0, -999999.0, 0.0); }
         gl_Position = matrix_viewProjection * matrix_model * vec4(pos, 1.0);
-        gl_PointSize = inside ? uPointSize : 0.0;
-        vColor = inside ? vertex_texCoord0 : vec4(0.0);
+        gl_PointSize = visible ? uPointSize : 0.0;
+        vColor = visible ? vertex_texCoord0 : vec4(0.0);
       }`;
     const clipFrag = `
       precision mediump float;
@@ -102,15 +271,25 @@ export default function ClipController({ app, entityName, lasHeader, origFilePat
     const mat = new pc.ShaderMaterial({ uniqueName: `clip-${Date.now()}`, vertexGLSL: clipVert, fragmentGLSL: clipFrag });
     mat.blendType = pc.BLEND_NORMAL; mat.depthWrite = true; mat.depthTest = true; mat.cull = pc.CULLFACE_NONE;
     mat.setParameter("uPointSize", pSize);
-    mat.setParameter("uClipMin", [mnX, mnY, mnZ]);
-    mat.setParameter("uClipMax", [mxX, mxY, mxZ]);
+    mat.setParameter("uDisplayRatio", previewRatio);
+    mat.setParameter("uClipMin", [initialBounds.minX, initialBounds.minY, initialBounds.minZ]);
+    mat.setParameter("uClipMax", [initialBounds.maxX, initialBounds.maxY, initialBounds.maxZ]);
     mat.update();
 
-    const newMi = new pc.MeshInstance(mesh, mat, null);
+    const newMi = new pc.MeshInstance(sourceMesh, mat, null);
     newMi.cull = false;
     if (render) render.meshInstances = [newMi];
+    previewResourcesRef.current = {
+      mi: newMi,
+      mat,
+      sourcePointCount,
+      previewPointCount,
+    };
     clipMatRef.current = mat;
-  }, [entity, app]);
+    requestClipRender();
+
+    return () => cleanupClipPreview(true);
+  }, [entity, app, lasHeader]);
 
   // bounds changed → update clip uniforms
   useEffect(() => {
@@ -125,7 +304,7 @@ export default function ClipController({ app, entityName, lasHeader, origFilePat
   useEffect(() => {
     if (!app) return;
     rebuildBox();
-    app.render();
+    requestClipRender();
     return () => { boxRootRef.current?.destroy(); boxRootRef.current = null; };
   }, [bounds, app]);
 
@@ -136,17 +315,27 @@ export default function ClipController({ app, entityName, lasHeader, origFilePat
     const md = (e: MouseEvent) => onMouseDown(e);
     const mm = (e: MouseEvent) => onMouseMove(e);
     const mu = () => onMouseUp();
+    const leave = () => {
+      if (!dragRef.current) {
+        hoverRef.current = null;
+        setViewportCursor("");
+      }
+    };
     canvas.addEventListener("mousedown", md, true);
+    canvas.addEventListener("mouseleave", leave, true);
     window.addEventListener("mousemove", mm, true);
     window.addEventListener("mouseup", mu, true);
+    window.addEventListener("blur", resetInteractionState);
     return () => {
       canvas.removeEventListener("mousedown", md, true);
+      canvas.removeEventListener("mouseleave", leave, true);
       window.removeEventListener("mousemove", mm, true);
       window.removeEventListener("mouseup", mu, true);
+      window.removeEventListener("blur", resetInteractionState);
       boxRootRef.current?.destroy(); boxRootRef.current = null;
-      (window as any).__clipDragging = false;
+      resetInteractionState();
     };
-  }, [app, bounds]);
+  }, [app]);
 
   const rebuildBox = () => {
     if (!app) return;
@@ -240,7 +429,7 @@ export default function ClipController({ app, entityName, lasHeader, origFilePat
   const raycastHandle = (sx: number, sy: number): FaceIndex | null => {
     const ray = getScreenRay(sx, sy);
     if (!ray) return null;
-    const b = bounds, wp = getWorldPos();
+    const b = boundsRef.current, wp = getWorldPos();
     const cx = wp.x + (b.minX + b.maxX) / 2, cy = wp.y + (b.minY + b.maxY) / 2, cz = wp.z + (b.minZ + b.maxZ) / 2;
     const hLen = Math.max(b.maxX - b.minX, b.maxY - b.minY, b.maxZ - b.minZ) * 0.15;
     const r = hLen * 0.5;
@@ -266,15 +455,16 @@ export default function ClipController({ app, entityName, lasHeader, origFilePat
     const face = raycastHandle(e.clientX, e.clientY);
     if (face !== null) {
       e.stopImmediatePropagation(); e.preventDefault();
-      dragRef.current = { face, startBounds: { ...bounds }, sx: e.clientX, sy: e.clientY };
+      dragRef.current = { face, startBounds: { ...boundsRef.current }, sx: e.clientX, sy: e.clientY };
       (window as any).__clipDragging = true;
+      setViewportCursor("grabbing");
     }
   };
 
   const onMouseMove = (e: MouseEvent) => {
     if (!dragRef.current) {
       const hf = raycastHandle(e.clientX, e.clientY);
-      if (hf !== hoverRef.current) { hoverRef.current = hf; document.body.style.cursor = hf !== null ? "grab" : ""; }
+      if (hf !== hoverRef.current) { hoverRef.current = hf; setViewportCursor(hf !== null ? "grab" : ""); }
       return;
     }
     if (!app) return;
@@ -298,11 +488,12 @@ export default function ClipController({ app, entityName, lasHeader, origFilePat
       case 4: nb.minZ = Math.min(sb.minZ + delta, sb.maxZ - 0.01); break;
       case 5: nb.maxZ = Math.max(sb.maxZ + delta, sb.minZ + 0.01); break;
     }
-    setBounds(nb);
-    document.body.style.cursor = "grabbing";
+    scheduleBoundsUpdate(nb);
+    (window as any).__clipDragging = true;
+    setViewportCursor("grabbing");
   };
 
-  const onMouseUp = () => { dragRef.current = null; (window as any).__clipDragging = false; document.body.style.cursor = ""; };
+  const onMouseUp = () => { resetInteractionState(); };
 
   const handleConfirm = useCallback(async () => {
     if (!entity || !app || !origFilePath) {
@@ -310,18 +501,15 @@ export default function ClipController({ app, entityName, lasHeader, origFilePat
       return;
     }
     await performClipSave({
-      entity, app, origFilePath, bounds, entityName,
+      entity, app, origFilePath, bounds: boundsRef.current, entityName,
       originalMeshRef, onProgress, setProgress, setSaving,
       onClose, onComplete, message,
     });
-  }, [entity, app, bounds, origFilePath, entityName, onClose, onComplete, onProgress]);
+  }, [entity, app, origFilePath, entityName, onClose, onComplete, onProgress]);
 
 
   const handleCancel = useCallback(() => {
-    if (originalMeshRef.current && entity?.render) {
-      entity.render.meshInstances = [originalMeshRef.current.mi];
-    }
-    originalMeshRef.current = null;
+    cleanupClipPreview(true);
     onClose();
   }, [entity, onClose]);
 
@@ -329,6 +517,7 @@ export default function ClipController({ app, entityName, lasHeader, origFilePat
   return (
     <div style={{ position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)", display: "flex", alignItems: "center", gap: 12, background: "#fff", borderRadius: 8, padding: "8px 16px", boxShadow: "0 2px 12px rgba(0,0,0,0.15)", zIndex: 20, fontSize: 12 }}>
       <span style={{ color: "#666" }}>X: {b.minX.toFixed(1)}~{b.maxX.toFixed(1)} Y: {b.minY.toFixed(1)}~{b.maxY.toFixed(1)} Z: {b.minZ.toFixed(1)}~{b.maxZ.toFixed(1)}</span>
+      {previewInfo && <span style={{ color: "#999" }}>{previewInfo}</span>}
       {saving ? <Spin size="small" /> : (
         <>
           <Button size="small" icon={<CheckOutlined />} type="primary" onClick={handleConfirm}>确认</Button>

@@ -262,7 +262,8 @@ export default function SpaceEdit() {
   const { handleLoadLasFromPath, handleImportPointTable, handleFileSelect, handleToggleVisible, handleUnloadModelFromPath, handleClipModel } = useFileOperations({
     entitiesRef, lasHeadersRef, filePathRef, pointStatsRef, modelGroundYRef, hasAutoFocusedRef,
     loadLasFromPath, requestRender, closeAllDrawingModes,
-    setImporting, setLoadedFiles, setTreeKey, setClipEntityName, setClipMode, message,
+    setImporting, setLoading, setLoadingFile, setLoadingText, setLoadingProgress,
+    setLoadedFiles, setTreeKey, setClipEntityName, setClipMode, message,
   });
   const handleLoadLasFromPathWithHistoryReset = useCallback(async (filePath: string) => {
     drawingHistory.clear();
