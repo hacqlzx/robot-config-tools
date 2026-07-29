@@ -6,7 +6,7 @@ import RobotFormModal from "./RobotFormModal";
 import CameraTableModal, { type CameraVO } from "./CameraTableModal";
 import { getAllRobot, addRobot, updateRobot, deleteRobot, getFacInfo } from "@/api/config.js";
 import { getRequestErrorMessage } from "@/services/http";
-import { getConnectionStatus, subscribeBackendContext } from "@/stores/appContextStore";
+import { getConnectionStatus, setRobotOptions, subscribeBackendContext } from "@/stores/appContextStore";
 
 export interface RobotRecord {
   id: number;
@@ -79,9 +79,9 @@ export default function RobotConfig() {
       const res = await getAllRobot();
       const body = res.data as ApiResponse<RobotRecord[]>;
       if (body.success) {
-        if (body.data) {
-          setData(body.data);
-        }
+        const robots = Array.isArray(body.data) ? body.data : [];
+        setData(robots);
+        setRobotOptions(robots.map((robot) => ({ label: robot.robotName, value: robot.robotName })));
       } else {
         message.error(body.message || "获取机器人列表失败");
       }
@@ -149,7 +149,7 @@ export default function RobotConfig() {
           const body = res.data as ApiResponse<null>;
           if (body.success) {
             message.success("删除成功");
-            fetchRobots();
+            await fetchRobots();
           } else {
             message.error(body.message || "删除失败");
           }
@@ -180,7 +180,7 @@ export default function RobotConfig() {
       if (body.success) {
         message.success(editRecord ? "编辑成功" : "新增成功");
         setModalOpen(false);
-        fetchRobots();
+        await fetchRobots();
       } else {
         message.error(body.message || (editRecord ? "编辑失败" : "新增失败"));
       }

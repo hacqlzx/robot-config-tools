@@ -7,12 +7,14 @@ import { menuConfig } from "@/config/menu";
 import toolIcon from "@/assets/img/icon.png";
 import SettingsModal from "@/pages/settings-modal";
 import {
+  clearRobotOptions,
   getSelectedProject,
-  getSelectedRobot,
   setConnectionStatus,
   setSelectedProject,
+  setRobotOptions,
   setSelectedRobot,
   useAppContext,
+  useRobotOptions,
 } from "@/stores/appContextStore";
 import { getAllRobot } from "@/api/config.js";
 import { MESSAGE_TOP_OFFSET } from "@/App";
@@ -24,25 +26,6 @@ function joinProjectPath(root: string, projectName: string): string {
   const trimmedRoot = root.replace(/[\\/]+$/, "");
   const separator = root.includes("\\") ? "\\" : "/";
   return `${trimmedRoot}${separator}${projectName}`;
-}
-
-const CACHED_ROBOT_LIST_KEY = "cachedRobotList";
-
-function getCachedRobotList(): { label: string; value: string }[] | null {
-  try {
-    const raw = localStorage.getItem(CACHED_ROBOT_LIST_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-function setCachedRobotList(list: { label: string; value: string }[]) {
-  try {
-    localStorage.setItem(CACHED_ROBOT_LIST_KEY, JSON.stringify(list));
-  } catch {
-    // ignore
-  }
 }
 
 export default function AppHeader() {
@@ -68,7 +51,7 @@ export default function AppHeader() {
   const [deleteSummaryLoading, setDeleteSummaryLoading] = useState(false);
   const [deleteSummaryError, setDeleteSummaryError] = useState("");
   const [deleteLoading, setDeleteLoading] = useState(false);
-  const [robotOptions, setRobotOptions] = useState<{ label: string; value: string }[]>([]);
+  const robotOptions = useRobotOptions();
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const [messageApi, contextHolder] = message.useMessage({ top: MESSAGE_TOP_OFFSET });
 
@@ -76,14 +59,10 @@ export default function AppHeader() {
     try {
       const res = await getAllRobot();
       const body = res.data;
-      if (body.success && body.data) {
-        const list = body.data.map((r: any) => ({ label: r.robotName, value: r.robotName }));
+      if (body.success) {
+        const robots = Array.isArray(body.data) ? body.data : [];
+        const list = robots.map((r: any) => ({ label: r.robotName, value: r.robotName }));
         setRobotOptions(list);
-        setCachedRobotList(list);
-        const currentRobot = getSelectedRobot();
-        if (currentRobot && !list.some((item: { value: string }) => item.value === currentRobot)) {
-          setSelectedRobot(null);
-        }
       }
     } catch {
       // ignore
@@ -92,17 +71,9 @@ export default function AppHeader() {
 
   // 连接成功后刷新机器人列表。
   useEffect(() => {
-    if (backendIpVersion > 0) setRobotOptions([]);
+    if (backendIpVersion > 0) clearRobotOptions();
     if (connStatus === "connected") loadRobotList();
   }, [backendIpVersion, connStatus, loadRobotList]);
-
-  // 初始化先显示缓存；自动连接成功后再拉取当前后台的列表。
-  useEffect(() => {
-    const cached = getCachedRobotList();
-    if (cached) {
-      setRobotOptions(cached);
-    }
-  }, []);
   // 启动时自动检查已保存后台。
   useEffect(() => {
     if (!backendIp || !window.electronAPI?.ping) return;

@@ -8,6 +8,7 @@ import { Transform } from "stream";
 const MAP_MODEL_FILE_NAME = "map.las";
 const MAP_INFO_FILE_NAME = "map_info.json";
 const DESCRIPTION_FILE_NAME = "description_file.json";
+const CABINET_FILE_NAME = "cabinet.json";
 const REFERENCE_PATH_FILE_NAME = "reference_path.txt";
 const LEGACY_REFERENCE_PATH_FILE_NAME = "可行驶路径.json";
 const MAP_MODEL_EXT_RE = /\.(las|laz)$/i;
@@ -21,7 +22,7 @@ const RECOGNITION_REV: Record<string, string> = {
   "appearance": "设备外观查看", "sound": "声音检测",
   "ir_temp": "红外测温", "visible": "可见光查看",
 };
-const SAVE_REV: Record<number, string> = { 1: "可见光照", 2: "红外图谱", 3: "音频", 4: "可见光+红外" };
+const SAVE_REV: Record<number, string> = { 1: "红外图谱", 2: "可见光图片", 3: "音频", 4: "视频", 5: "取油" };
 const METER_REV: Record<number, string> = { 1: "油位表", 2: "避雷器动作次数表", 3: "泄漏电流表", 4: "SF6压力表", 5: "液压表", 6: "油温表", 7: "档位表" };
 const POS_REV: Record<number, string> = { 1: "断路器状态", 2: "接地刀闸状态", 3: "隔离刀闸状态" };
 const LEVEL_REV: Record<number, string> = { 1: "Ⅰ类", 2: "Ⅱ类", 3: "Ⅲ类" };
@@ -409,10 +410,7 @@ interface CabinetRegionRef {
   regionId: string;
 }
 
-interface PointExtendRecord {
-  point_code: string;
-  calibration_id: string;
-  cruise_id: string;
+interface CabinetExportRecord {
   main_device_code: string;
   region_id: string;
 }
@@ -453,63 +451,40 @@ function collectCabinetRegions(mapRoot: string, mains: DeviceMain[]): CabinetReg
   return result;
 }
 
-function buildPointExtendRecords(
-  points: DevicePoint[],
+function buildCabinetRecords(
   mains: DeviceMain[],
   cabinetRegions: CabinetRegionRef[],
-): PointExtendRecord[] {
-  const regionIndexesByMainCode = new Map<string, number[]>();
-  cabinetRegions.forEach((region, index) => {
-    if (!region.mainDeviceCode) return;
-    const indexes = regionIndexesByMainCode.get(region.mainDeviceCode) || [];
-    indexes.push(index);
-    regionIndexesByMainCode.set(region.mainDeviceCode, indexes);
-  });
+): CabinetExportRecord[] {
+  const regionByMainCode = new Map<string, CabinetRegionRef>();
+  for (const region of cabinetRegions) {
+    if (region.mainDeviceCode && !regionByMainCode.has(region.mainDeviceCode)) {
+      regionByMainCode.set(region.mainDeviceCode, region);
+    }
+  }
 
-  const usedRegionIndexes = new Set<number>();
-  const pointMainCodes = new Set<string>();
-  const records: PointExtendRecord[] = points.map((point) => {
-    const mainDeviceCode = textValue(point.mainDeviceCode);
-    if (mainDeviceCode) pointMainCodes.add(mainDeviceCode);
-    const regionIndex = mainDeviceCode ? regionIndexesByMainCode.get(mainDeviceCode)?.[0] : undefined;
-    if (regionIndex !== undefined) usedRegionIndexes.add(regionIndex);
-    return {
-      point_code: textValue(point.pointCode),
-      calibration_id: textValue(point.calibrationId),
-      cruise_id: textValue(point.cruiseId),
-      main_device_code: mainDeviceCode,
-      region_id: regionIndex === undefined ? "" : cabinetRegions[regionIndex].regionId,
-    };
-  });
-
-  const addedCabinetCodes = new Set<string>();
+  const records: CabinetExportRecord[] = [];
+  const addedMainDeviceCodes = new Set<string>();
   for (const main of mains) {
     if (main.mainDeviceType !== MAIN_DEVICE_TYPE_CABINET) continue;
     const mainDeviceCode = textValue(main.mainDeviceCode);
-    if (mainDeviceCode && (pointMainCodes.has(mainDeviceCode) || addedCabinetCodes.has(mainDeviceCode))) continue;
-    if (mainDeviceCode) addedCabinetCodes.add(mainDeviceCode);
+    if (!mainDeviceCode || addedMainDeviceCodes.has(mainDeviceCode)) continue;
+    addedMainDeviceCodes.add(mainDeviceCode);
 
-    const regionIndex = mainDeviceCode ? regionIndexesByMainCode.get(mainDeviceCode)?.[0] : undefined;
-    if (regionIndex !== undefined) usedRegionIndexes.add(regionIndex);
+    const region = regionByMainCode.get(mainDeviceCode);
     records.push({
-      point_code: "",
-      calibration_id: "",
-      cruise_id: "",
       main_device_code: mainDeviceCode,
-      region_id: regionIndex === undefined ? "" : cabinetRegions[regionIndex].regionId,
+      region_id: region?.regionId || "",
     });
   }
 
-  cabinetRegions.forEach((region, index) => {
-    if (usedRegionIndexes.has(index)) return;
+  for (const region of cabinetRegions) {
+    if (region.mainDeviceCode && addedMainDeviceCodes.has(region.mainDeviceCode)) continue;
     records.push({
-      point_code: "",
-      calibration_id: "",
-      cruise_id: "",
       main_device_code: region.mainDeviceCode,
       region_id: region.regionId,
     });
-  });
+    if (region.mainDeviceCode) addedMainDeviceCodes.add(region.mainDeviceCode);
+  }
 
   return records;
 }
@@ -594,20 +569,19 @@ export async function exportSpaceZip(
 
   const xlsxBuf = generatePointExcel(pointTableData);
   const cabinetRegions = collectCabinetRegions(mapRoot, pointTableData.mains);
-  const extendRecords = buildPointExtendRecords(pointTableData.points, pointTableData.mains, cabinetRegions);
-  const extendText = `${JSON.stringify(extendRecords, null, 2)}\n`;
+  const cabinetRecords = buildCabinetRecords(pointTableData.mains, cabinetRegions);
+  const cabinetText = `${JSON.stringify(cabinetRecords, null, 2)}\n`;
 
   onProgress?.("准备导出文件...", 1);
-  console.log("[导出点表] extend.json 统计", {
-    points: pointTableData.points.length,
+  console.log("[导出点表] cabinet.json 统计", {
     databaseCabinets: pointTableData.mains.filter((main) => main.mainDeviceType === MAIN_DEVICE_TYPE_CABINET).length,
     mappedCabinetRegions: cabinetRegions.length,
-    records: extendRecords.length,
+    records: cabinetRecords.length,
   });
 
   // Step 1: 计算最终导出包需要读取的文件大小。
   onProgress?.("计算文件大小...", 2);
-  const totalSize = getDirSize(src) + xlsxBuf.length + Buffer.byteLength(extendText);
+  const totalSize = getDirSize(src) + xlsxBuf.length + Buffer.byteLength(cabinetText);
   const totalMB = totalSize / 1024 / 1024;
 
   // 自动编号防重名
@@ -646,7 +620,7 @@ export async function exportSpaceZip(
 
   appendMapContents(archive, src, mapName, pointTableData);
   archive.append(xlsxBuf, { name: "point.xlsx" });
-  archive.append(extendText, { name: "extend.json" });
+  archive.append(cabinetText, { name: CABINET_FILE_NAME });
 
   await Promise.all([
     archive.finalize(),

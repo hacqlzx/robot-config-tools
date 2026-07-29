@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 const SELECTED_PROJECT_KEY = "selectedProject";
 const SELECTED_ROBOT_KEY = "selectedRobot";
 const BACKEND_IP_KEY = "backend_current_ip";
+const CACHED_ROBOT_LIST_KEY = "cachedRobotList";
 
 export type ConnectionStatus = "disconnected" | "connected" | "failed";
 
@@ -15,6 +16,11 @@ export interface AppContextState {
 }
 
 type Listener = () => void;
+
+export interface RobotOption {
+  label: string;
+  value: string;
+}
 
 function readStorage(key: string): string | null {
   try {
@@ -33,6 +39,18 @@ function writeStorage(key: string, value: string | null): void {
   }
 }
 
+function readRobotOptions(): RobotOption[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CACHED_ROBOT_LIST_KEY) || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is RobotOption =>
+      typeof item?.label === "string" && typeof item?.value === "string",
+    );
+  } catch {
+    return [];
+  }
+}
+
 let state: AppContextState = {
   selectedProject: readStorage(SELECTED_PROJECT_KEY),
   selectedRobot: readStorage(SELECTED_ROBOT_KEY),
@@ -42,6 +60,8 @@ let state: AppContextState = {
 };
 
 const listeners = new Set<Listener>();
+const robotOptionListeners = new Set<Listener>();
+let robotOptions = readRobotOptions();
 
 function updateState(patch: Partial<AppContextState>): void {
   const next = { ...state, ...patch };
@@ -60,6 +80,50 @@ export function getAppContextSnapshot(): AppContextState {
 export function subscribeAppContext(listener: Listener): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+export function getRobotOptions(): RobotOption[] {
+  return robotOptions;
+}
+
+export function subscribeRobotOptions(listener: Listener): () => void {
+  robotOptionListeners.add(listener);
+  return () => robotOptionListeners.delete(listener);
+}
+
+function updateRobotOptions(options: RobotOption[], validateSelection: boolean): void {
+  const seen = new Set<string>();
+  const next = options.reduce<RobotOption[]>((result, option) => {
+    const value = option.value?.trim();
+    if (!value || seen.has(value)) return result;
+    seen.add(value);
+    result.push({ label: option.label?.trim() || value, value });
+    return result;
+  }, []);
+  const changed = next.length !== robotOptions.length
+    || next.some((option, index) => option.label !== robotOptions[index]?.label
+      || option.value !== robotOptions[index]?.value);
+  if (validateSelection) {
+    const currentRobot = getSelectedRobot();
+    if (currentRobot && !next.some((option) => option.value === currentRobot)) {
+      setSelectedRobot(null);
+    }
+  }
+  if (!changed) return;
+
+  robotOptions = next;
+  writeStorage(CACHED_ROBOT_LIST_KEY, JSON.stringify(next));
+  robotOptionListeners.forEach((listener) => listener());
+}
+
+/** 发布后台最新机器人列表，供运维页和顶部工具栏共享。 */
+export function setRobotOptions(options: RobotOption[]): void {
+  updateRobotOptions(options, true);
+}
+
+/** 后台切换期间暂时清空旧列表，等待新后台返回后再校验当前选择。 */
+export function clearRobotOptions(): void {
+  updateRobotOptions([], false);
 }
 
 /** 仅在后台连接状态或后台 IP 版本变化时通知配置页。 */
@@ -141,4 +205,8 @@ export function useSelectedProject(): string | null {
 
 export function useSelectedRobot(): string | null {
   return useSyncExternalStore(subscribeAppContext, getSelectedRobot, getSelectedRobot);
+}
+
+export function useRobotOptions(): RobotOption[] {
+  return useSyncExternalStore(subscribeRobotOptions, getRobotOptions, getRobotOptions);
 }

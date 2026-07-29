@@ -11,7 +11,7 @@ const RECOGNITION_REV: Record<string, string> = {
   "appearance": "设备外观查看", "sound": "声音检测",
   "ir_temp": "红外测温", "visible": "可见光查看",
 };
-const SAVE_REV: Record<number, string> = { 1: "可见光照", 2: "红外图谱", 3: "音频", 4: "可见光+红外" };
+const SAVE_REV: Record<number, string> = { 1: "红外图谱", 2: "可见光图片", 3: "音频", 4: "视频", 5: "取油" };
 const METER_REV: Record<number, string> = { 1: "油位表", 2: "避雷器动作次数表", 3: "泄漏电流表", 4: "SF6压力表", 5: "液压表", 6: "油温表", 7: "档位表" };
 const POS_REV: Record<number, string> = { 1: "断路器状态", 2: "接地刀闸状态", 3: "隔离刀闸状态" };
 const LEVEL_REV: Record<number, string> = { 1: "Ⅰ类", 2: "Ⅱ类", 3: "Ⅲ类" };

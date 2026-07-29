@@ -967,7 +967,7 @@ function resolveCabinetPointRecognitionColumns(label: string, labelDesc: string)
   const normalizedLabel = valueText(label);
   const normalizedDesc = valueText(labelDesc);
   const columns: PointExcelExportRow = {
-    "采集类型": "可见光照",
+    "采集类型": "可见光图片",
   };
 
   if (normalizedLabel === "infrared" || normalizedDesc.includes("红外")) {

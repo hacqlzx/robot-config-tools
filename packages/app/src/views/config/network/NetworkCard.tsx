@@ -45,7 +45,7 @@ export function NetworkCard({ record }: NetworkCardProps) {
           <Form.Item label="子网掩码" name="subnetMask" rules={[{ required: true, message: "请输入子网掩码" }]}>
             <IpInput />
           </Form.Item>
-          <Form.Item label="网关" name="gateway" rules={[{ required: true, message: "请输入网关" }]}>
+          <Form.Item label="网关" name="gateway">
             <IpInput />
           </Form.Item>
           <Form.Item>

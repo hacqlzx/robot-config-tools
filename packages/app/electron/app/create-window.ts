@@ -96,6 +96,18 @@ export function createWindow(): BrowserWindow {
     console.error("Render process gone:", details.reason, details.exitCode);
   });
 
+  // 安装版不显示应用菜单，通过快捷键长期保留开发者工具入口。
+  win.webContents.on("before-input-event", (event, input) => {
+    const shouldToggleDevTools = input.type === "keyDown"
+      && input.control
+      && input.shift
+      && input.key.toLowerCase() === "i";
+    if (!shouldToggleDevTools) return;
+
+    event.preventDefault();
+    win.webContents.toggleDevTools();
+  });
+
   // 开发模式加载 Vite dev server，生产模式加载构建产物
   if (process.env.VITE_DEV_SERVER_URL) {
     win.loadURL(process.env.VITE_DEV_SERVER_URL);

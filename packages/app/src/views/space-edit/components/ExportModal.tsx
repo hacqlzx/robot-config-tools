@@ -139,7 +139,7 @@ export default function ExportModal({ open, onClose, modelPath }: Props) {
                   {mapName}
                 </div>
                 <div style={{ fontSize: 11, color: "#999", marginTop: 1, lineHeight: 1.5, whiteSpace: "normal" }}>
-                  导出当前左侧树已加载模型、地图区域/路径文件，以及点表 Excel 和 extend.json
+                  导出当前左侧树已加载模型、地图区域/路径文件，以及点表 Excel 和 cabinet.json
                 </div>
               </div>
             </div>

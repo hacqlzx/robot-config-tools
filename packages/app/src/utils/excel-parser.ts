@@ -9,8 +9,7 @@ const RECOGNITION_TYPE: Record<string, string> = {
   "红外测温": "ir_temp", "可见光查看": "visible",
 };
 const SAVE_TYPE: Record<string, number> = {
-  "可见光照": 1, "可见光图片": 1, "红外图谱": 2,
-  "音频": 3, "可见光+红外": 4,
+  "红外图谱": 1, "可见光图片": 2, "音频": 3, "视频": 4, "取油": 5,
 };
 const METER_TYPE: Record<string, number> = {
   "油位表": 1, "避雷器动作次数表": 2, "泄漏电流表": 3,
@@ -167,7 +166,17 @@ export function parsePointExcel(file: File): Promise<{ rows: PointExcelRow[]; st
               row.recognitionTypeList += "," + RECOGNITION_TYPE[row.recognitionType2];
             }
           }
-          if (row.saveTypeList && SAVE_TYPE[row.saveTypeList] !== undefined) row.saveTypeList = SAVE_TYPE[row.saveTypeList];
+          if (row.saveTypeList !== undefined && row.saveTypeList !== null && row.saveTypeList !== "") {
+            const numericSaveType = Number(row.saveTypeList);
+            const saveType = Number.isInteger(numericSaveType) && numericSaveType >= 1 && numericSaveType <= 5
+              ? numericSaveType
+              : SAVE_TYPE[String(row.saveTypeList)];
+            if (saveType === undefined) {
+              errors.push(`第 ${r + 1} 行: 采集类型“${row.saveTypeList}”无效`);
+              continue;
+            }
+            row.saveTypeList = saveType;
+          }
           if (row.meterType && METER_TYPE[row.meterType] !== undefined) row.meterType = METER_TYPE[row.meterType];
           if (row.positionStateType && POSITION_STATE[row.positionStateType] !== undefined) row.positionStateType = POSITION_STATE[row.positionStateType];
           if (row.importantLevel && IMPORTANT_LEVEL[row.importantLevel] !== undefined) row.importantLevel = IMPORTANT_LEVEL[row.importantLevel];

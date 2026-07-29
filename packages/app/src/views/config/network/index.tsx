@@ -1,7 +1,6 @@
 ﻿import { useState, useRef, useEffect } from "react";
-import { Alert, Card, Form, Button, message } from "antd";
-import IpInput from "@/components/ip-input";
-import { getNetworkList, editNetwork } from "@/api/config.js";
+import { Alert, message } from "antd";
+import { getNetworkList } from "@/api/config.js";
 import { NetworkCard } from "./NetworkCard";
 import { getRequestErrorMessage } from "@/services/http";
 import { getConnectionStatus, subscribeBackendContext } from "@/stores/appContextStore";
@@ -24,35 +23,16 @@ interface ApiResponse<T> {
 }
 
 export default function NetworkConfig() {
-  const [lanForm] = Form.useForm();
-  const [intranetForm] = Form.useForm();
   const [robotList, setRobotList] = useState<NetworkRecord[]>([]);
-  const [lanSaving, setLanSaving] = useState(false);
-  const [intranetSaving, setIntranetSaving] = useState(false);
   const fetchedRef = useRef(false);
-  const lanRef = useRef<NetworkRecord | null>(null);
-  const intranetRef = useRef<NetworkRecord | null>(null);
 
   const fetchNetworks = async () => {
     try {
       const res = await getNetworkList();
       const body = res.data as ApiResponse<NetworkRecord[]>;
       if (body.success) {
-        if (body.data) {
-          const robots: NetworkRecord[] = [];
-          body.data.forEach((item) => {
-            if (item.type === 0) {
-              lanRef.current = item;
-              lanForm.setFieldsValue(item);
-            } else if (item.type === 1) {
-              intranetRef.current = item;
-              intranetForm.setFieldsValue(item);
-            } else {
-              robots.push(item);
-            }
-          });
-          setRobotList(robots);
-        }
+        const networks = Array.isArray(body.data) ? body.data : [];
+        setRobotList(networks.filter((item) => item.type !== 0 && item.type !== 1));
       } else {
         message.error(body.message || "获取网络列表失败");
       }
@@ -78,46 +58,6 @@ export default function NetworkConfig() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleLanSave = async () => {
-    const values = await lanForm.validateFields();
-    if (!lanRef.current) return;
-    setLanSaving(true);
-    try {
-      const res = await editNetwork({ ...lanRef.current, ...values });
-      const body = res.data as ApiResponse<null>;
-      if (body.success) {
-        message.success("保存成功");
-      } else {
-        message.error(body.message || "保存失败");
-      }
-    } catch (err) {
-      console.error("保存失败:", err);
-      message.error(getRequestErrorMessage(err, "保存失败"));
-    } finally {
-      setLanSaving(false);
-    }
-  };
-
-  const handleIntranetSave = async () => {
-    const values = await intranetForm.validateFields();
-    if (!intranetRef.current) return;
-    setIntranetSaving(true);
-    try {
-      const res = await editNetwork({ ...intranetRef.current, ...values });
-      const body = res.data as ApiResponse<null>;
-      if (body.success) {
-        message.success("保存成功");
-      } else {
-        message.error(body.message || "保存失败");
-      }
-    } catch (err) {
-      console.error("保存失败:", err);
-      message.error(getRequestErrorMessage(err, "保存失败"));
-    } finally {
-      setIntranetSaving(false);
-    }
-  };
-
   return (
     <div>
       <Alert
@@ -127,42 +67,6 @@ export default function NetworkConfig() {
         style={{ marginBottom: 16 }}
       />
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <Card size="small" title="后台局域网IP">
-          <Form form={lanForm} layout="vertical">
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: "0 24px", alignItems: "end" }}>
-              <Form.Item label="IP地址" name="ip" rules={[{ required: true, message: "请输入IP地址" }]}>
-                <IpInput />
-              </Form.Item>
-              <Form.Item label="子网掩码" name="subnetMask" rules={[{ required: true, message: "请输入子网掩码" }]}>
-                <IpInput />
-              </Form.Item>
-              <Form.Item label="网关" name="gateway" rules={[{ required: true, message: "请输入网关" }]}>
-                <IpInput />
-              </Form.Item>
-              <Form.Item>
-                <Button type="link" loading={lanSaving} onClick={handleLanSave}>确定</Button>
-              </Form.Item>
-            </div>
-          </Form>
-        </Card>
-        <Card size="small" title="后台内网IP">
-          <Form form={intranetForm} layout="vertical">
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: "0 24px", alignItems: "end" }}>
-              <Form.Item label="IP地址" name="ip" rules={[{ required: true, message: "请输入IP地址" }]}>
-                <IpInput />
-              </Form.Item>
-              <Form.Item label="子网掩码" name="subnetMask" rules={[{ required: true, message: "请输入子网掩码" }]}>
-                <IpInput />
-              </Form.Item>
-              <Form.Item label="网关" name="gateway" rules={[{ required: true, message: "请输入网关" }]}>
-                <IpInput />
-              </Form.Item>
-              <Form.Item>
-                <Button type="link" loading={intranetSaving} onClick={handleIntranetSave}>确定</Button>
-              </Form.Item>
-            </div>
-          </Form>
-        </Card>
         {robotList.map((robot) => (
           <NetworkCard key={robot.id} record={robot} />
         ))}
