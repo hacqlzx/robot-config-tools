@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type Key } from "react";
-import { App, Button, Empty, Form, Input, Modal, Progress, Spin, Table } from "antd";
+import { App, Button, Empty, Form, Input, Modal, Progress, Select, Spin, Table } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
-  robotAreasToDrawingItemsData,
   type DrawingRenderItem,
   type RobotAreaRecord,
 } from "@/components/three-d-engine/drawing-data";
@@ -33,6 +32,7 @@ export interface SurveyRunningState {
 export interface SurveyPhotoDeviceArea {
   bayId: number;
   bayName: string;
+  regionId?: string;
 }
 
 export interface SurveyPhotoDispatchItem extends SurveyPhotoDeviceArea {
@@ -155,8 +155,30 @@ function collectDeviceAreas(items: DrawingRenderItem[]): SurveyPhotoDeviceArea[]
   return Array.from(nextAreas.values()).sort((a, b) => a.bayId - b.bayId);
 }
 
+function collectDeviceAreasFromRecords(records: RobotAreaRecord[]): SurveyPhotoDeviceArea[] {
+  const nextAreas = new Map<string, SurveyPhotoDeviceArea>();
+  for (const record of records) {
+    if (valueText(record.type) !== "8") continue;
+    const regionId = valueText(record.id);
+    if (!regionId || nextAreas.has(regionId)) continue;
+    const regionName = valueText(record.name) || `设备区${regionId}`;
+    nextAreas.set(regionId, {
+      bayId: positiveInt(regionId) || 0,
+      bayName: regionName,
+      regionId,
+    });
+  }
+  return Array.from(nextAreas.values()).sort((a, b) => {
+    const aid = Number(a.regionId);
+    const bid = Number(b.regionId);
+    if (Number.isFinite(aid) && Number.isFinite(bid) && aid !== bid) return aid - bid;
+    return String(a.regionId || "").localeCompare(String(b.regionId || ""));
+  });
+}
+
 function rowKey(row: SurveyPhotoDispatchItem): string {
-  return row.stopPointId ? `stop-${row.stopPointId}-region-${row.regionId || "none"}` : `bay-${row.bayId}`;
+  if (row.stopPointId) return `stop-${row.stopPointId}-region-${row.regionId || "none"}`;
+  return row.regionId ? `area-${row.regionId}` : `bay-${row.bayId}`;
 }
 
 function findFilePath(nodes: TreeNode[], names: readonly string[]): string {
@@ -191,9 +213,10 @@ function splitRegionIds(value: unknown): string[] {
 }
 
 function buildSupplementRows(stopPoints: StopPointRecord[], regions: DeviceRegion[]): SupplementSurveyPhotoRow[] {
-  const type5 = stopPoints.filter((point) => valueText(point.type) === "5");
-  const gen0 = type5.filter((point) => valueText(point.gen_type) === "0");
-  const source = gen0.length > 0 ? gen0 : type5;
+  const source = stopPoints.filter((point) => {
+    const type = valueText(point.type);
+    return (type === "4" || type === "5") && valueText(point.gen_type) === "0";
+  });
   const firstRegion = regions[0] || { regionId: "", regionName: "未绑定设备区" };
   const regionMap = new Map(regions.map((region) => [region.regionId, region]));
   const rows: SupplementSurveyPhotoRow[] = [];
@@ -245,15 +268,18 @@ export default function SurveyPhotoModal({
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [mapOptions, setMapOptions] = useState<{ label: string; value: string }[]>([]);
   const [areas, setAreas] = useState<SurveyPhotoDeviceArea[]>([]);
   const [supplementRows, setSupplementRows] = useState<SupplementSurveyPhotoRow[]>([]);
   const [selectedKeys, setSelectedKeys] = useState<Key[]>([]);
+  const selectedMapName = Form.useWatch("mapName", form) as string | undefined;
   const deviceAreaKeyword = Form.useWatch("deviceAreaName", form) || "";
   const [supplementFilters, setSupplementFilters] = useState({ deviceAreaName: "", stopPointKeyword: "" });
 
   const resetModalState = useCallback(() => {
     form.resetFields();
     setLoading(false);
+    setMapOptions([]);
     setAreas([]);
     setSupplementRows([]);
     setSelectedKeys([]);
@@ -273,18 +299,51 @@ export default function SurveyPhotoModal({
       return;
     }
 
-    if (!projectName || !mapName || !window.electronAPI?.project || !window.electronAPI?.readLargeFile) {
+    form.setFieldValue("mapName", valueText(mapName) || undefined);
+  }, [form, mapName, open, resetModalState]);
+
+  useEffect(() => {
+    if (!open) return;
+    const api = window.electronAPI?.project;
+    if (!projectName || !api) {
+      setMapOptions([]);
+      return;
+    }
+
+    let ignore = false;
+    (async () => {
+      try {
+        const tree = await api.listTree(projectName, MAP_DIR_NAME);
+        if (!ignore) setMapOptions(tree.filter((node) => node.isDir).map((node) => ({ label: node.name, value: node.name })));
+      } catch {
+        if (!ignore) setMapOptions([]);
+      }
+    })();
+
+    return () => {
+      ignore = true;
+    };
+  }, [open, projectName]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    if (!projectName || !selectedMapName || !window.electronAPI?.project || !window.electronAPI?.readLargeFile) {
       setLoading(false);
       setAreas([]);
       setSupplementRows([]);
+      setSelectedKeys([]);
       return;
     }
 
     let ignore = false;
     setLoading(true);
+    setAreas([]);
+    setSupplementRows([]);
+    setSelectedKeys([]);
     (async () => {
       try {
-        const tree = await window.electronAPI!.project.listTree(projectName, `${MAP_DIR_NAME}/${mapName}`);
+        const tree = await window.electronAPI!.project.listTree(projectName, `${MAP_DIR_NAME}/${selectedMapName}`);
         const areaFilePath = findFilePath(tree as TreeNode[], [AREA_FILE_NAME]);
 
         if (!areaFilePath) {
@@ -308,8 +367,7 @@ export default function SurveyPhotoModal({
             setAreas([]);
             setSupplementRows(buildSupplementRows(stopPointRecords, buildRegionIndex(records || [])));
           } else {
-            const drawingItems = records ? robotAreasToDrawingItemsData(records).items : getDrawingItems(parsed);
-            setAreas(collectDeviceAreas(drawingItems));
+            setAreas(records ? collectDeviceAreasFromRecords(records) : collectDeviceAreas(getDrawingItems(parsed)));
             setSupplementRows([]);
           }
           setSelectedKeys([]);
@@ -328,7 +386,7 @@ export default function SurveyPhotoModal({
     return () => {
       ignore = true;
     };
-  }, [form, mapName, message, mode, open, projectName, resetModalState]);
+  }, [message, mode, open, projectName, selectedMapName]);
 
   const filteredAreas = useMemo(() => {
     const normalized = normalizeKeyword(deviceAreaKeyword);
@@ -410,7 +468,7 @@ export default function SurveyPhotoModal({
       onCancel={handleClose}
       destroyOnHidden
       centered
-      width={mode === "supplement" ? 640 : undefined}
+      width={mode === "supplement" ? 880 : 760}
       footer={
         <div className="survey-photo-modal-footer">
           <Button onClick={handleClose} disabled={submitting}>取消</Button>
@@ -441,6 +499,9 @@ export default function SurveyPhotoModal({
 
       {mode === "supplement" ? (
         <Form form={form} layout="inline" className="survey-photo-filter-form survey-photo-supplement-filter">
+          <Form.Item label="地图" name="mapName">
+            <Select allowClear showSearch placeholder="请选择地图" options={mapOptions} optionFilterProp="label" />
+          </Form.Item>
           <Form.Item label="设备区" name="deviceAreaName">
             <Input allowClear placeholder="请输入设备区" />
           </Form.Item>
@@ -450,7 +511,10 @@ export default function SurveyPhotoModal({
           <Button type="primary" onClick={handleSupplementSearch}>查询</Button>
         </Form>
       ) : (
-        <Form form={form} layout="vertical" className="survey-photo-filter-form">
+        <Form form={form} layout="inline" className="survey-photo-filter-form survey-photo-normal-filter">
+          <Form.Item label="地图" name="mapName">
+            <Select allowClear showSearch placeholder="请选择地图" options={mapOptions} optionFilterProp="label" />
+          </Form.Item>
           <Form.Item label="设备区" name="deviceAreaName">
             <Input allowClear placeholder="请输入设备区名称" />
           </Form.Item>
@@ -464,13 +528,13 @@ export default function SurveyPhotoModal({
 
       <Spin spinning={loading}>
         <Table<SurveyPhotoDispatchItem>
-          className="survey-photo-table"
+          className={`survey-photo-table${mode === "supplement" ? " is-supplement" : ""}`}
           rowKey={rowKey}
           columns={columns}
           dataSource={tableRows}
           pagination={false}
           size="small"
-          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={mode === "supplement" ? "暂无停靠点" : "暂无设备区"} /> }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={!selectedMapName ? "请先选择地图" : mode === "supplement" ? "暂无停靠点" : "暂无设备区"} /> }}
           scroll={{ y: mode === "supplement" ? 260 : 220 }}
           rowSelection={{
             selectedRowKeys: selectedKeys,

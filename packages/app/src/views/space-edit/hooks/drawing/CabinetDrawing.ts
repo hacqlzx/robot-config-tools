@@ -1,5 +1,12 @@
 import * as pc from "playcanvas";
-import { screenPickLas, createSphere, createLine, updateLineEntity, setSphereColor } from "./drawing-utils";
+import {
+  screenPickLas,
+  createSphere,
+  createLine,
+  updateLineEntity,
+  setSphereColor,
+  buildOrthogonalCabinetVertsFromPosePoints,
+} from "./drawing-utils";
 
 /** 屏柜绘制配置项 */
 export interface CabinetDrawingOptions {
@@ -318,30 +325,25 @@ export class CabinetDrawing {
       this.clickLines.push(createLine(this.app, prev, pos, this.opts.clickColor, this.opts.lineThickness));
     }
     this.corners.push(pos.clone());
-    if (this.corners.length === 4) this.buildCube();
+    if (this.corners.length === 4 && !this.buildCube()) {
+      this.cornerSpheres.pop()?.destroy();
+      this.corners.pop();
+      this.clickLines.pop()?.destroy();
+    }
     this.emitChange();
     this.recordHistory("绘制屏柜角点", before);
   }
 
   // ============ 内部：立方体阶段 ============
 
-  private buildCube() {
+  private buildCube(): boolean {
     const [p1, p2, p3, p4] = this.corners;
-    const up = new pc.Vec3().sub2(p3, p2);
-    const depth = new pc.Vec3().sub2(p4, p3);
-
-    const verts = [
-      p1.clone(),                                            // 0 前左下
-      p2.clone(),                                            // 1 前右下
-      p3.clone(),                                            // 2 前右上
-      new pc.Vec3().add2(p1, up),                            // 3 前左上
-      new pc.Vec3().add2(p1, depth),                         // 4 后左下
-      new pc.Vec3().add2(p2, depth),                         // 5 后右下
-      p4.clone(),                                            // 6 后右上
-      new pc.Vec3().add2(new pc.Vec3().add2(p1, up), depth), // 7 后左上
-    ];
+    const verts = buildOrthogonalCabinetVertsFromPosePoints(p1, p2, p3, p4);
+    if (!verts) return false;
+    this.corners = [verts[0].clone(), verts[1].clone(), verts[2].clone(), verts[6].clone()];
 
     this.buildCubeFromVerts(verts);
+    return true;
   }
 
   private buildCubeFromVerts(vertsInput: pc.Vec3[]) {
@@ -480,12 +482,9 @@ export class CabinetDrawing {
   private rebuildDerivedVerts() {
     if (!this.cube) return;
     const v = this.cube.verts;
-    const up = new pc.Vec3().sub2(v[2], v[1]);
-    const depth = new pc.Vec3().sub2(v[6], v[2]);
-    v[3] = new pc.Vec3().add2(v[0], up);
-    v[4] = new pc.Vec3().add2(v[0], depth);
-    v[5] = new pc.Vec3().add2(v[1], depth);
-    v[7] = new pc.Vec3().add2(v[3], depth);
+    const corrected = buildOrthogonalCabinetVertsFromPosePoints(v[0], v[1], v[2], v[6]);
+    if (!corrected) return;
+    corrected.forEach((point, index) => { v[index] = point; });
   }
 
   // ============ 内部：分隔 ============

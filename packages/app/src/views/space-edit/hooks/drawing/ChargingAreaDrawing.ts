@@ -8,6 +8,7 @@ import {
   pointToSegmentDistSq,
   claimSpaceEditClick,
   isSpaceEditClickClaimedByOther,
+  buildOrthogonalBoxVertsFromThreePoints,
 } from "./drawing-utils";
 
 /** 充电区域绘制配置项 */
@@ -308,41 +309,30 @@ export class ChargingAreaDrawing {
     }
     this.points.push(pos.clone());
     // 三点足够确定一个水平矩形：p1/p2 给出一条边，p3 决定另一侧宽度。
-    if (this.points.length === 3) this.buildBox();
+    if (this.points.length === 3 && !this.buildBox()) {
+      this.pointSpheres.pop()?.destroy();
+      this.points.pop();
+      this.clickLines.pop()?.destroy();
+    }
     this.emitChange();
     this.recordHistory("绘制充电区点", before);
   }
 
   /** 3 点 → 平面矩形（忽略高度）→ 拉伸成立体矩形 */
-  private buildBox() {
+  private buildBox(): boolean {
     // 底面高度优先使用点云估算地面 Y，保证充电区贴地；没有地面估算时回退到三点最低值。
     const baseY = this.groundY !== -Infinity
       ? this.groundY
       : Math.min(this.points[0].y, this.points[1].y, this.points[2].y);
-    const p1 = new pc.Vec3(this.points[0].x, baseY, this.points[0].z);
-    const p2 = new pc.Vec3(this.points[1].x, baseY, this.points[1].z);
-    const p3 = new pc.Vec3(this.points[2].x, baseY, this.points[2].z);
-
-    const dir1 = new pc.Vec3().sub2(p2, p1);
-    if (dir1.length() < 1e-4) return;
-    dir1.normalize();
-    // 通过第一条边的水平法线，把第三点投影成矩形宽度，避免用户第三点略歪导致平行四边形。
-    const normal = new pc.Vec3().cross(new pc.Vec3(0, 1, 0), dir1).normalize();
-    const w = new pc.Vec3().sub2(p3, p1).dot(normal);
-    const off = normal.clone().mulScalar(w);
-
-    const c0 = p1.clone();
-    const c1 = p2.clone();
-    const c2 = new pc.Vec3().add2(p2, off);
-    const c3 = new pc.Vec3().add2(p1, off);
-    const up = new pc.Vec3(0, this.opts.height, 0);
-    const verts = [
-      c0, c1, c2, c3,
-      new pc.Vec3().add2(c0, up),
-      new pc.Vec3().add2(c1, up),
-      new pc.Vec3().add2(c2, up),
-      new pc.Vec3().add2(c3, up),
-    ];
+    const verts = buildOrthogonalBoxVertsFromThreePoints(
+      this.points[0],
+      this.points[1],
+      this.points[2],
+      baseY,
+      this.opts.height,
+    );
+    if (!verts) return false;
+    this.points[2] = verts[2].clone();
 
     // 清放点态实体，转为立体矩形
     this.clickLines.forEach((e) => e.destroy());
@@ -360,6 +350,7 @@ export class ChargingAreaDrawing {
     });
     this.box = { verts, lines };
     this.requestRender();
+    return true;
   }
 
   private buildBoxFromVerts(vertsInput: pc.Vec3[]) {
@@ -437,6 +428,7 @@ export class ChargingAreaDrawing {
     const scaleY = this.gd.height > 0 ? rect.height / this.gd.height : 1;
     this.labelEl.style.left = `${sp.x * scaleX}px`;
     this.labelEl.style.top = `${sp.y * scaleY}px`;
+    this.labelEl.style.display = "block";
   }
 
   private destroyLabels() {

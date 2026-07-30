@@ -285,6 +285,7 @@ export default function ImageEdit() {
   const [surveyProgressLoading, setSurveyProgressLoading] = useState(false);
   const surveyProgressRequestRef = useRef(false);
   const surveyPendingStartUntilRef = useRef(0);
+  const selectedRobotInfoRef = useRef<{ name: string; id: number } | null>(null);
 
   // 已加载的地图数据
   const [loadedMap, setLoadedMap] = useState<string | null>(null);
@@ -456,10 +457,6 @@ export default function ImageEdit() {
       message.warning("请先选择项目");
       return;
     }
-    if (!loadedMapRef.current) {
-      message.warning("请先加载勘察图像");
-      return;
-    }
     setSurveyPhotoMode(mode);
     setSurveyPhotoOpen(true);
   }, [message, selectedProject]);
@@ -467,10 +464,6 @@ export default function ImageEdit() {
   const handleOpenCabinetPhoto = useCallback(() => {
     if (!selectedProject) {
       message.warning("请先选择项目");
-      return;
-    }
-    if (!loadedMapRef.current) {
-      message.warning("请先加载当前地图");
       return;
     }
     setCabinetPhotoOpen(true);
@@ -488,6 +481,11 @@ export default function ImageEdit() {
     if (!selectedRobot) {
       if (!silent) message.warning("请先在顶部选择机器人");
       return null;
+    }
+
+    const cached = selectedRobotInfoRef.current;
+    if (cached?.name === selectedRobot && Number.isFinite(cached.id)) {
+      return cached;
     }
 
     const robotRes = await getAllRobot();
@@ -508,8 +506,14 @@ export default function ImageEdit() {
       if (!silent) message.error(`机器人「${selectedRobot}」ID 无效`);
       return null;
     }
-    return { id: robotId, name: selectedRobot };
+    const robotInfo = { id: robotId, name: selectedRobot };
+    selectedRobotInfoRef.current = robotInfo;
+    return robotInfo;
   }, [message, selectedRobot]);
+
+  useEffect(() => {
+    selectedRobotInfoRef.current = null;
+  }, [selectedRobot]);
 
   const resolveSelectedRobotId = useCallback(async (): Promise<number | null> => {
     const robot = await resolveSelectedRobotInfo(false);
@@ -518,15 +522,15 @@ export default function ImageEdit() {
 
   const refreshSurveyRunning = useCallback(async (options?: { silent?: boolean }) => {
     if (surveyProgressRequestRef.current) return;
-    const robot = await resolveSelectedRobotInfo(options?.silent ?? true);
-    if (!robot) {
-      setSurveyRunning(null);
-      return;
-    }
-
     surveyProgressRequestRef.current = true;
-    setSurveyProgressLoading(true);
     try {
+      const robot = await resolveSelectedRobotInfo(options?.silent ?? true);
+      if (!robot) {
+        setSurveyRunning(null);
+        return;
+      }
+
+      setSurveyProgressLoading(true);
       const res = await getSurveyRunning(robot.id);
       const body = res.data;
       if (!body?.success) {
@@ -624,6 +628,11 @@ export default function ImageEdit() {
 
   const handleCabinetPhotoDispatch = useCallback(async (items: CabinetPhotoDispatchItem[]) => {
     try {
+      if (surveyRunning?.running) {
+        message.warning("勘察任务执行中，请等待结束后再下发");
+        return false;
+      }
+
       const robotId = await resolveSelectedRobotId();
       if (robotId == null) return false;
 
@@ -641,12 +650,15 @@ export default function ImageEdit() {
       }
 
       message.success(`已下发 ${cabinetIds.length} 个屏柜`);
+      surveyPendingStartUntilRef.current = Date.now() + SURVEY_START_WAIT_MS;
+      setSurveyRunning(buildSurveyStartingState("屏柜拍照"));
+      refreshSurveyRunning({ silent: true });
       return true;
     } catch (e: any) {
       message.error("屏柜拍照下发失败: " + (e?.message || e));
       return false;
     }
-  }, [message, resolveSelectedRobotId]);
+  }, [message, refreshSurveyRunning, resolveSelectedRobotId, surveyRunning?.running]);
 
   const handleVerifyTaskDispatch = useCallback(async (payload: {
     type: "bay" | "point";
@@ -654,6 +666,11 @@ export default function ImageEdit() {
     points: VerifyTaskPointItem[];
   }) => {
     try {
+      if (surveyRunning?.running) {
+        message.warning("勘察任务执行中，请等待结束后再下发");
+        return false;
+      }
+
       const robotId = await resolveSelectedRobotId();
       if (robotId == null) return false;
 
@@ -677,12 +694,15 @@ export default function ImageEdit() {
       }
 
       message.success(isBayTask ? `已下发 ${codes.length} 个间隔` : `已下发 ${codes.length} 个点位`);
+      surveyPendingStartUntilRef.current = Date.now() + SURVEY_START_WAIT_MS;
+      setSurveyRunning(buildSurveyStartingState("验证任务"));
+      refreshSurveyRunning({ silent: true });
       return true;
     } catch (e: any) {
       message.error("巡视任务下发失败: " + (e?.message || e));
       return false;
     }
-  }, [message, resolveSelectedRobotId]);
+  }, [message, refreshSurveyRunning, resolveSelectedRobotId, surveyRunning?.running]);
 
   const surveyPhotoMenu: MenuProps = {
     items: [
@@ -941,6 +961,7 @@ export default function ImageEdit() {
         open={cabinetPhotoOpen}
         projectName={selectedProject}
         mapName={loadedMap}
+        surveyRunning={surveyRunning}
         onClose={() => setCabinetPhotoOpen(false)}
         onDispatch={handleCabinetPhotoDispatch}
       />
@@ -948,6 +969,7 @@ export default function ImageEdit() {
       <VerifyTaskModal
         open={verifyTaskOpen}
         projectName={selectedProject}
+        surveyRunning={surveyRunning}
         onClose={() => setVerifyTaskOpen(false)}
         onDispatch={handleVerifyTaskDispatch}
       />

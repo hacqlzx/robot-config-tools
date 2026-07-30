@@ -36,11 +36,13 @@ import {
 const RED = new pc.Color(1, 0.1, 0.1);
 const GREEN = new pc.Color(0.2, 1, 0.3);
 const PATH_COLOR = new pc.Color(0.3, 0.9, 0.4);
+const PATH_CURVE_COLOR = new pc.Color(0.95, 0.66, 0.12);
 const RAY_COLOR = new pc.Color(1, 0.84, 0.12);
 const CHARGING_COLOR = new pc.Color(1, 0.55, 0.1);
 const DEVICE_COLOR = new pc.Color(0.2, 0.6, 1);
 const DEVICE_LABEL_COLOR = "#3399ff";
 const PATH_LABEL_COLOR = "#44e95f";
+const PATH_TOPO_LABEL_COLOR = "#c7ccd4";
 const RAY_LABEL_COLOR = "#ffd666";
 const THICKNESS = 0.01;
 const HIGHLIGHT_THICKNESS = 0.025;
@@ -50,6 +52,8 @@ const PATH_HIGHLIGHT_THICKNESS = 0.08;
 const PATH_HIT_DISTANCE_SQ = 100;
 const PATH_SPHERE_SCALE = 0.12;
 const PATH_SPHERE_HIGHLIGHT_SCALE = 0.18;
+const PATH_TOPO_POINT_COLOR = new pc.Color(0.76, 0.78, 0.82);
+const PATH_TOPO_POINT_SCALE = 0.065;
 const RAY_DEFAULT_LENGTH = 4;
 const RAY_THICKNESS = 0.025;
 const RAY_ORIGIN_SCALE = 0.09;
@@ -71,6 +75,40 @@ function finiteVec3(arr: unknown): arr is [number, number, number] {
     && Number.isFinite(arr[0])
     && Number.isFinite(arr[1])
     && Number.isFinite(arr[2]);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function pathPointStyle(point: PathVertex): PathPointStyle | null {
+  if (point.role === "waypoint") return null;
+  switch (point.robotType) {
+    case "4":
+      return { color: PATH_TOPO_POINT_COLOR, scale: PATH_TOPO_POINT_SCALE, labelColor: PATH_TOPO_LABEL_COLOR };
+    case "5":
+      return { color: PATH_COLOR, scale: PATH_SPHERE_SCALE * 1.2, labelColor: PATH_LABEL_COLOR };
+    default:
+      return { color: PATH_COLOR, scale: PATH_SPHERE_SCALE, labelColor: PATH_LABEL_COLOR };
+  }
+}
+
+function pathSegmentColor(segment: PathSegmentValue): pc.Color {
+  return segment.bezier ? PATH_CURVE_COLOR : PATH_COLOR;
+}
+
+function bezierPoint(t: number, p0: pc.Vec3, cp1: pc.Vec3, cp2: pc.Vec3, p1: pc.Vec3): pc.Vec3 {
+  const mt = 1 - t;
+  return new pc.Vec3(
+    mt * mt * mt * p0.x + 3 * mt * mt * t * cp1.x + 3 * mt * t * t * cp2.x + t * t * t * p1.x,
+    mt * mt * mt * p0.y + 3 * mt * mt * t * cp1.y + 3 * mt * t * t * cp2.y + t * t * t * p1.y,
+    mt * mt * mt * p0.z + 3 * mt * mt * t * cp1.z + 3 * mt * t * t * cp2.z + t * t * t * p1.z,
+  );
+}
+
+function pathBezierControlPoints(bezier: unknown): { cp1: pc.Vec3; cp2: pc.Vec3 } | null {
+  if (!isRecord(bezier) || !finiteVec3(bezier.cp1) || !finiteVec3(bezier.cp2)) return null;
+  return { cp1: v3(bezier.cp1), cp2: v3(bezier.cp2) };
 }
 
 function cabinetTopCenters(verts: pc.Vec3[], splits: number[]): pc.Vec3[] {
@@ -121,6 +159,8 @@ interface PathPointItem {
   pos: pc.Vec3;
   sphere: pc.Entity;
   selected: boolean;
+  color: pc.Color;
+  scale: number;
 }
 
 interface PathLineItem {
@@ -129,6 +169,22 @@ interface PathLineItem {
   to: pc.Vec3;
   line: pc.Entity;
   selected: boolean;
+  color: pc.Color;
+  thickness: number;
+}
+
+interface PathVertex {
+  pos: pc.Vec3;
+  id?: string | number;
+  name?: string;
+  role?: "stop" | "waypoint";
+  robotType?: string;
+}
+
+interface PathPointStyle {
+  color: pc.Color;
+  scale: number;
+  labelColor: string;
 }
 
 export type DrawingRendererSelectInfo =
@@ -337,33 +393,51 @@ export class DrawingRenderer {
     // 路径文件历史上有两种格式：数组下标连线、id 连线。这里统一转成 Vec3 + 可选 id。
     const points = data.points
       .map((pt) => this.toPathVertex(pt))
-      .filter((pt): pt is { pos: pc.Vec3; id?: string | number; name?: string } => !!pt);
+      .filter((pt): pt is PathVertex => !!pt);
     const pointById = new Map<string | number, pc.Vec3>();
 
     points.forEach((pt, index) => {
       if (pt.id !== undefined) pointById.set(pt.id, pt.pos);
       const p = pt.pos;
-      const sphere = createSphere(this.app, p, PATH_COLOR, PATH_SPHERE_SCALE);
+      const style = pathPointStyle(pt);
+      if (!style) return;
+
+      const sphere = createSphere(this.app, p, style.color, style.scale);
       if (pt.name) {
         const el = this.createLabelEl();
-        el.style.color = PATH_LABEL_COLOR;
+        el.style.color = style.labelColor;
         el.style.fontSize = "16px";
         el.style.transform = "translate(-50%,-145%)";
         this.allLabels.push({ center: p, name: pt.name, el });
       }
       this.entities.push(sphere);
       this.pathEntities.push(sphere);
-      this.pathPoints.push({ index, pos: p, sphere, selected: false });
+      this.pathPoints.push({ index, pos: p, sphere, selected: false, color: style.color, scale: style.scale });
     });
     data.paths.forEach((seg, index) => {
       const p1 = this.resolvePathPoint(seg, "start", "from", points, pointById);
       const p2 = this.resolvePathPoint(seg, "end", "to", points, pointById);
       if (!p1 || !p2) return;
-      const line = createLine(this.app, p1, p2, PATH_COLOR, PATH_THICKNESS);
-      this.entities.push(line);
-      this.pathEntities.push(line);
-      this.pathLines.push({ index, from: p1, to: p2, line, selected: false });
+      const color = pathSegmentColor(seg);
+      const bezier = pathBezierControlPoints(seg.bezier);
+      if (bezier) {
+        let prev = p1;
+        for (let step = 1; step <= 16; step++) {
+          const next = bezierPoint(step / 16, p1, bezier.cp1, bezier.cp2, p2);
+          this.addPathLine(index, prev, next, color, PATH_THICKNESS);
+          prev = next;
+        }
+        return;
+      }
+      this.addPathLine(index, p1, p2, color, PATH_THICKNESS);
     });
+  }
+
+  private addPathLine(index: number, from: pc.Vec3, to: pc.Vec3, color: pc.Color, thickness: number) {
+    const line = createLine(this.app, from, to, color, thickness);
+    this.entities.push(line);
+    this.pathEntities.push(line);
+    this.pathLines.push({ index, from, to, line, selected: false, color, thickness });
   }
 
   private renderRays(data: RayRenderData) {
@@ -408,13 +482,16 @@ export class DrawingRenderer {
     return entities;
   }
 
-  private toPathVertex(point: PathPointValue): { pos: pc.Vec3; id?: string | number; name?: string } | null {
+  private toPathVertex(point: PathPointValue): PathVertex | null {
     const tuple = pointToTuple(point);
     if (!tuple) return null;
+    const isObject = isPathPointObject(point);
     return {
       pos: v3(tuple),
-      id: isPathPointObject(point) ? point.id : undefined,
-      name: isPathPointObject(point) ? point.name : undefined,
+      id: isObject ? point.id : undefined,
+      name: isObject ? point.name : undefined,
+      role: isObject ? point.role : undefined,
+      robotType: isObject ? point.robotType : undefined,
     };
   }
 
@@ -422,7 +499,7 @@ export class DrawingRenderer {
     segment: PathSegmentValue,
     indexKey: "start" | "end",
     idKey: "from" | "to",
-    points: { pos: pc.Vec3; id?: string | number }[],
+    points: PathVertex[],
     pointById: Map<string | number, pc.Vec3>,
   ): pc.Vec3 | null {
     // 优先兼容旧格式 start/end 下标，再兼容新格式 from/to id。
@@ -464,7 +541,7 @@ export class DrawingRenderer {
   private selectPathPoint(point: PathPointItem) {
     if (point.selected) return;
     this.deselectAll();
-    setEntityColor(point.sphere, PATH_COLOR);
+    setEntityColor(point.sphere, point.color);
     point.sphere.setLocalScale(PATH_SPHERE_HIGHLIGHT_SCALE, PATH_SPHERE_HIGHLIGHT_SCALE, PATH_SPHERE_HIGHLIGHT_SCALE);
     point.selected = true;
     this.requestRender();
@@ -473,7 +550,7 @@ export class DrawingRenderer {
   private selectPathLine(path: PathLineItem) {
     if (path.selected) return;
     this.deselectAll();
-    setEntityColor(path.line, PATH_COLOR);
+    setEntityColor(path.line, path.color);
     updateLineEntity(path.line, path.from, path.to, PATH_HIGHLIGHT_THICKNESS);
     path.selected = true;
     this.requestRender();
@@ -498,14 +575,14 @@ export class DrawingRenderer {
     }
     for (const path of this.pathLines) {
       if (!path.selected) continue;
-      setEntityColor(path.line, PATH_COLOR);
-      updateLineEntity(path.line, path.from, path.to, PATH_THICKNESS);
+      setEntityColor(path.line, path.color);
+      updateLineEntity(path.line, path.from, path.to, path.thickness);
       path.selected = false;
     }
     for (const point of this.pathPoints) {
       if (!point.selected) continue;
-      setEntityColor(point.sphere, PATH_COLOR);
-      point.sphere.setLocalScale(PATH_SPHERE_SCALE, PATH_SPHERE_SCALE, PATH_SPHERE_SCALE);
+      setEntityColor(point.sphere, point.color);
+      point.sphere.setLocalScale(point.scale, point.scale, point.scale);
       point.selected = false;
     }
     this.requestRender();

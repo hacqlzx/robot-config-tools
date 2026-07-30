@@ -1,12 +1,24 @@
 .survey-photo-modal {
+  .ant-modal-content {
+    padding: 20px 28px 18px;
+  }
+
+  .ant-modal-header {
+    margin-bottom: 14px;
+  }
+
   .ant-modal-title {
     font-size: 14px;
     font-weight: 600;
   }
+
+  .ant-modal-footer {
+    margin-top: 14px;
+  }
 }
 
 .survey-photo-filter-form {
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 
   .ant-form-item {
     margin-bottom: 0;
@@ -20,11 +32,49 @@
   .ant-input {
     font-size: 13px;
   }
+
+  .ant-select {
+    font-size: 13px;
+  }
+}
+
+.survey-photo-normal-filter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px 18px;
+  align-items: center;
+
+  .ant-form-item {
+    margin-right: 0;
+    min-width: 0;
+  }
+
+  .ant-form-item-row {
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr);
+    align-items: center;
+    column-gap: 8px;
+    width: 100%;
+  }
+
+  .ant-form-item-label {
+    padding-bottom: 0;
+    text-align: left;
+  }
+
+  .ant-form-item-control {
+    min-width: 0;
+  }
+
+  .ant-select,
+  .ant-input {
+    width: 100%;
+  }
 }
 
 .survey-photo-progress {
   margin-bottom: 12px;
-  padding: 10px 12px;
+  padding: 8px 12px;
   background: #f6ffed;
   border: 1px solid #b7eb8f;
   border-radius: 6px;
@@ -40,7 +90,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   color: #404040;
   font-size: 13px;
 
@@ -58,7 +108,7 @@
 }
 
 .survey-photo-progress-meta {
-  margin-top: 4px;
+  margin-top: 2px;
   color: #737373;
   font-size: 12px;
   overflow: hidden;
@@ -67,10 +117,10 @@
 }
 
 .survey-photo-supplement-filter {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 1fr) auto;
   align-items: center;
-  flex-wrap: nowrap;
-  gap: 12px;
+  gap: 12px 16px;
   padding: 12px;
   background: #fafafa;
   border-radius: 6px;
@@ -78,14 +128,29 @@
   .ant-form-item {
     margin-right: 0;
     margin-bottom: 0;
+    min-width: 0;
+  }
+
+  .ant-form-item-row {
+    display: grid;
+    grid-template-columns: 52px minmax(0, 1fr);
+    align-items: center;
+    column-gap: 8px;
+    width: 100%;
   }
 
   .ant-form-item-label {
     padding-bottom: 0;
+    text-align: left;
   }
 
   .ant-form-item-control {
-    width: 180px;
+    min-width: 0;
+  }
+
+  .ant-select,
+  .ant-input {
+    width: 100%;
   }
 
   .ant-btn {
@@ -117,23 +182,35 @@
   }
 
   .ant-table-thead > tr > th {
-    height: 34px;
-    padding-top: 6px;
-    padding-bottom: 6px;
+    height: 32px;
+    padding-top: 5px;
+    padding-bottom: 5px;
     color: #595959;
     font-weight: 600;
     background: #fafafa;
   }
 
   .ant-table-tbody > tr > td {
-    height: 34px;
-    padding-top: 6px;
-    padding-bottom: 6px;
+    height: 32px;
+    padding-top: 5px;
+    padding-bottom: 5px;
     color: #404040;
   }
 
   .ant-table-selection-column {
     width: 42px;
+  }
+
+  .ant-table-body {
+    height: 220px;
+  }
+
+  &.is-supplement .ant-table-body {
+    height: 260px;
+  }
+
+  .ant-empty {
+    margin: 44px 0;
   }
 }
 

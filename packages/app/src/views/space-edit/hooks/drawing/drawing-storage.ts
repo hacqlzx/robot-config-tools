@@ -62,6 +62,7 @@ import {
   orderedPathPoints,
   PATH_START_CHARGING_AREA_MESSAGE,
   parseReferencePathText,
+  referencePathGroundZ,
   parseRobotRoutePathData,
   parseRobotStopPoints,
   pathTextFromLasPoints,
@@ -473,11 +474,21 @@ function robotPathAbsPath(modelPath: string): string {
   return mapSiblingFilePath(modelPath, ROBOT_PATH_FILE_NAME);
 }
 
-async function readRobotStopPoints(api: ElectronAPI, pathJsonPath: string): Promise<Map<string, PathPoint>> {
+async function readReferencePathGroundZ(api: ElectronAPI, pathJsonPath: string): Promise<number | undefined> {
+  try {
+    const text = await readTextFile(api, mapSiblingFilePath(pathJsonPath, PATH_FILE_NAME));
+    return referencePathGroundZ(text) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function readRobotStopPoints(api: ElectronAPI, pathJsonPath: string, groundZ?: number): Promise<Map<string, PathPoint>> {
+  const options = groundZ == null ? undefined : { groundZ };
   for (const fileName of ROBOT_STOP_POINTS_FILE_NAMES) {
     try {
       const data = await readJsonFile(api, mapSiblingFilePath(pathJsonPath, fileName));
-      const result = parseRobotStopPoints(data);
+      const result = parseRobotStopPoints(data, options);
       if (result.size > 0) return result;
     } catch {}
   }
@@ -485,12 +496,14 @@ async function readRobotStopPoints(api: ElectronAPI, pathJsonPath: string): Prom
 }
 
 async function loadRobotRouteDrawing(api: ElectronAPI, pathJsonPath: string): Promise<PathData | null> {
-  const [routeData, stopPoints, coordinate] = await Promise.all([
+  const [routeData, groundZ, coordinate] = await Promise.all([
     readJsonFile(api, pathJsonPath),
-    readRobotStopPoints(api, pathJsonPath),
+    readReferencePathGroundZ(api, pathJsonPath),
     loadLasCoordinateTransform(api, pathJsonPath),
   ]);
-  const data = parseRobotRoutePathData(routeData, stopPoints);
+  const stopPoints = await readRobotStopPoints(api, pathJsonPath, groundZ);
+  const options = groundZ == null ? undefined : { groundZ };
+  const data = parseRobotRoutePathData(routeData, stopPoints, options);
   return data ? lasPathDataToScene(data, coordinate) : null;
 }
 

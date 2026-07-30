@@ -30,6 +30,8 @@ export function useLasLoader({
   fileSource,
 }: UseLasLoaderParams) {
   const loaderRef = useRef<PointCloudLoader | null>(null);
+  const activeLoadsRef = useRef<Map<string, Promise<void>>>(new Map());
+  const latestLoadRequestRef = useRef(0);
 
   // 当 app 就绪时初始化 loader。这里仍保留 space-edit 自己的 ref 同步，
   // 因为裁切、可见性、保存状态都需要直接访问已加载实体和 LAS header。
@@ -57,29 +59,69 @@ export function useLasLoader({
     pointStatsRef.current = loader.pointStats;
   };
 
+  const removeLoadedFile = (loader: PointCloudLoader, fileKey: string) => {
+    for (const [name, loadedPath] of Array.from(loader.filePaths.entries())) {
+      if (loadedFileKey(loadedPath) !== fileKey) continue;
+      loader.entities.get(name)?.destroy();
+      loader.entities.delete(name);
+      loader.lasHeaders.delete(name);
+      loader.filePaths.delete(name);
+      loader.pointStats.delete(name);
+    }
+    setLoadedFiles((prev) => {
+      if (!prev.has(fileKey)) return prev;
+      const next = new Set(prev);
+      next.delete(fileKey);
+      return next;
+    });
+  };
+
   const loadLasFromPath = useCallback(async (filePath: string) => {
     const loader = loaderRef.current;
     if (!loader) return;
     const fileKey = loadedFileKey(filePath);
-    setLoading(true);
-    setLoadingFile(fileKey);
-    setLoadingText("正在加载模型...");
-    try {
-      const model = await loader.loadLasFromPath(filePath);
-      syncRefs();
-      // 地面 Y 来自点云高度直方图，用作充电区/设备区默认底面，避免第一点高度漂浮。
-      modelGroundYRef.current = model.groundY;
-      // loader 返回的是局部坐标中心，必须直接用于相机聚焦。
-      focusOnModel(model.center[0], model.center[1], model.center[2], model.extent);
-      requestRender();
-      setLoadedFiles((prev) => new Set([...prev, fileKey]));
-    } catch (e: any) {
-      console.error("LAS 加载失败:", e.message);
+    const existingLoad = activeLoadsRef.current.get(fileKey);
+    if (existingLoad) return existingLoad;
+    const alreadyLoaded = Array.from(loader.filePaths.values()).some((loadedPath) => loadedFileKey(loadedPath) === fileKey);
+    if (alreadyLoaded) {
+      setLoadedFiles((prev) => prev.has(fileKey) ? prev : new Set([...prev, fileKey]));
+      return;
     }
-    setLoading(false);
-    setLoadingFile("");
-    setLoadingText("");
-    setLoadingProgress(0);
+
+    const requestId = ++latestLoadRequestRef.current;
+    const loadPromise = (async () => {
+      setLoading(true);
+      setLoadingFile(fileKey);
+      setLoadingText("正在加载模型...");
+      try {
+        const model = await loader.loadLasFromPath(filePath);
+        if (requestId !== latestLoadRequestRef.current) {
+          removeLoadedFile(loader, fileKey);
+          syncRefs();
+          requestRender();
+          return;
+        }
+        syncRefs();
+        // 地面 Y 来自点云高度直方图，用作充电区/设备区默认底面，避免第一点高度漂浮。
+        modelGroundYRef.current = model.groundY;
+        // loader 返回的是局部坐标中心，必须直接用于相机聚焦。
+        focusOnModel(model.center[0], model.center[1], model.center[2], model.extent);
+        requestRender();
+        setLoadedFiles((prev) => new Set([...prev, fileKey]));
+      } catch (e: any) {
+        if (requestId === latestLoadRequestRef.current) console.error("LAS 加载失败:", e.message);
+      } finally {
+        activeLoadsRef.current.delete(fileKey);
+        if (requestId === latestLoadRequestRef.current) {
+          setLoading(false);
+          setLoadingFile("");
+          setLoadingText("");
+          setLoadingProgress(0);
+        }
+      }
+    })();
+    activeLoadsRef.current.set(fileKey, loadPromise);
+    return loadPromise;
   }, [focusOnModel, requestRender, setLoadedFiles]);
 
   return { loadLasFromPath };

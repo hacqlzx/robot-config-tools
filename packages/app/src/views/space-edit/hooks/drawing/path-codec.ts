@@ -28,9 +28,18 @@ interface RobotPathRecord {
   name?: string;
   start_id?: string | number;
   end_id?: string | number;
+  type?: string | number;
+  road_direction?: string | number;
+  control_point_a?: string | number;
+  control_point_b?: string | number;
   /** 中间点字符串，格式为 x,y,z;x,y,z；缺少 z 时按 0 处理。 */
   waypoints?: string;
   [key: string]: unknown;
+}
+
+interface RobotPathParseOptions {
+  /** 机器人路径文件通常省略高度，使用同目录 reference_path.txt 的 LAS-Z 补齐地面高度。 */
+  groundZ?: number;
 }
 
 /**
@@ -47,21 +56,36 @@ function normalizeRecordArray(data: unknown, keys: string[] = []): Record<string
   return [];
 }
 
-function parseRobotStopPoint(record: Record<string, unknown>): { id: string; point: PathPoint } | null {
+function robotStopPointName(id: string, type: string, rawName: string): string | undefined {
+  if (rawName) return rawName;
+  if (type === "4") return undefined;
+  return id;
+}
+
+function robotGroundZ(options?: RobotPathParseOptions): number {
+  return Number.isFinite(options?.groundZ) ? options.groundZ! : 0;
+}
+
+function parseRobotStopPoint(record: Record<string, unknown>, options?: RobotPathParseOptions): { id: string; point: PathPoint } | null {
   const id = valueText(record.id);
   const x = asFiniteNumber(record.pose_x);
   const y = asFiniteNumber(record.pose_y);
-  const z = asFiniteNumber(record.pose_z) ?? 0;
+  const yaw = asFiniteNumber(record.pose_yaw);
+  const type = valueText(record.type);
   if (!id || x == null || y == null) return null;
   return {
     id,
     point: {
       // 添加命名空间，避免机器人停靠点 id 与编辑器生成的普通路径点 id 碰撞。
       id: `stop:${id}`,
-      name: valueText(record.name) || id,
+      name: robotStopPointName(id, type, valueText(record.name)),
       x,
       y,
-      z,
+      // 真实机器人停靠点文件通常省略 pose_z；路径回显用参考路径地面高度补齐。
+      z: robotGroundZ(options),
+      role: "stop",
+      ...(type ? { robotType: type } : {}),
+      ...(yaw != null ? { yaw } : {}),
     },
   };
 }
@@ -70,28 +94,39 @@ function parseRobotStopPoint(record: Record<string, unknown>): { id: string; poi
  * 解析一个停靠点文件。
  * 无效记录会被忽略；同一 id 重复出现时以后出现的有效记录为准，与 Map 的覆盖语义一致。
  */
-export function parseRobotStopPoints(data: unknown): Map<string, PathPoint> {
+export function parseRobotStopPoints(data: unknown, options?: RobotPathParseOptions): Map<string, PathPoint> {
   const records = normalizeRecordArray(data, ["stop_points", "stopPoints", "items"]);
   const result = new Map<string, PathPoint>();
   for (const record of records) {
-    const parsed = parseRobotStopPoint(record);
+    const parsed = parseRobotStopPoint(record, options);
     if (parsed) result.set(parsed.id, parsed.point);
   }
   return result;
 }
 
-function parseRobotWaypointString(value: unknown): Vec3Tuple[] {
+function parseRobotWaypointString(value: unknown, options?: RobotPathParseOptions): Vec3Tuple[] {
   if (typeof value !== "string" || !value.trim()) return [];
+  const groundZ = robotGroundZ(options);
   return value.split(";")
     .map((part) => part.trim())
     .filter(Boolean)
     .map((part) => {
       const numbers = part.split(",").map((number) => Number(number.trim()));
       if (numbers.length < 2 || !Number.isFinite(numbers[0]) || !Number.isFinite(numbers[1])) return null;
-      const z = Number.isFinite(numbers[2]) ? numbers[2] : 0;
-      return [numbers[0], numbers[1], z] as Vec3Tuple;
+      return [numbers[0], numbers[1], groundZ] as Vec3Tuple;
     })
     .filter((point): point is Vec3Tuple => point !== null);
+}
+
+function parseRobotPlanarPoint(value: unknown, options?: RobotPathParseOptions): Vec3Tuple | null {
+  if (value == null) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  const numbers = text.split(/[,_\s]+/)
+    .map((part) => Number(part.trim()))
+    .filter((number) => Number.isFinite(number));
+  if (numbers.length < 2) return null;
+  return [numbers[0], numbers[1], robotGroundZ(options)];
 }
 
 function samePathPosition(a: PathPoint | null | undefined, b: PathPoint | null | undefined): boolean {
@@ -108,14 +143,27 @@ function addPathPoint(points: PathPoint[], byId: Map<string, PathPoint>, point: 
   return point.id;
 }
 
-function addRobotRouteSegment(paths: PathSegment[], routeKey: string, from: string, to: string, index: number) {
+function addRobotRouteSegment(
+  paths: PathSegment[],
+  routeKey: string,
+  from: string,
+  to: string,
+  index: number,
+  options: {
+    bezier?: PathSegment["bezier"];
+    routeType?: string;
+    roadDirection?: string;
+  } = {},
+) {
   if (from === to) return;
   paths.push({
     id: `route:${routeKey}:seg:${index}`,
     from,
     to,
     // 机器人 waypoints 只描述折线节点，没有贝塞尔控制点，因此按直线段回显。
-    bezier: null,
+    bezier: options.bezier ?? null,
+    ...(options.routeType ? { routeType: options.routeType } : {}),
+    ...(options.roadDirection ? { roadDirection: options.roadDirection } : {}),
   });
 }
 
@@ -129,6 +177,7 @@ function addRobotRouteSegment(paths: PathSegment[], routeKey: string, from: stri
 export function parseRobotRoutePathData(
   data: unknown,
   stopPoints: ReadonlyMap<string, PathPoint>,
+  options?: RobotPathParseOptions,
 ): PathData | null {
   const routes = normalizeRecordArray(data, ["paths", "routes", "items"]) as RobotPathRecord[];
   const points: PathPoint[] = [];
@@ -138,6 +187,8 @@ export function parseRobotRoutePathData(
   routes.forEach((route, routeIndex) => {
     const startId = valueText(route.start_id);
     const endId = valueText(route.end_id);
+    const routeType = valueText(route.type);
+    const roadDirection = valueText(route.road_direction);
     const routeBaseKey = valueText(route.id) || valueText(route.name) || `${startId}_${endId}` || "route";
     const routeKey = `${routeBaseKey}:${routeIndex + 1}`;
     const pointIds: string[] = [];
@@ -151,19 +202,37 @@ export function parseRobotRoutePathData(
 
     pushPoint(stopPoints.get(startId));
 
-    parseRobotWaypointString(route.waypoints).forEach((tuple, waypointIndex) => {
+    const cp1 = parseRobotPlanarPoint(route.control_point_a, options);
+    const cp2 = parseRobotPlanarPoint(route.control_point_b, options);
+    if (cp1 && cp2 && stopPoints.has(startId) && stopPoints.has(endId)) {
+      pushPoint(stopPoints.get(endId));
+      if (pointIds.length >= 2) {
+        addRobotRouteSegment(paths, routeKey, pointIds[0], pointIds[1], 1, {
+          bezier: { cp1, cp2 },
+          routeType,
+          roadDirection,
+        });
+      }
+      return;
+    }
+
+    parseRobotWaypointString(route.waypoints, options).forEach((tuple, waypointIndex) => {
       pushPoint({
         id: `route:${routeKey}:wp:${waypointIndex + 1}`,
         x: tuple[0],
         y: tuple[1],
         z: tuple[2],
+        role: "waypoint",
       });
     });
 
     pushPoint(stopPoints.get(endId));
 
     for (let index = 0; index < pointIds.length - 1; index++) {
-      addRobotRouteSegment(paths, routeKey, pointIds[index], pointIds[index + 1], index + 1);
+      addRobotRouteSegment(paths, routeKey, pointIds[index], pointIds[index + 1], index + 1, {
+        routeType,
+        roadDirection,
+      });
     }
   });
 
@@ -278,4 +347,16 @@ export function parseReferencePathText(text: string): PathData | null {
     bezier: null,
   }));
   return { points, paths };
+}
+
+export function referencePathGroundZ(text: string): number | null {
+  const data = parseReferencePathText(text);
+  if (!data || data.points.length === 0) return null;
+  const zs = data.points
+    .map((point) => point.z)
+    .filter((z) => Number.isFinite(z))
+    .sort((a, b) => a - b);
+  if (zs.length === 0) return null;
+  const middle = Math.floor(zs.length / 2);
+  return zs.length % 2 === 1 ? zs[middle] : (zs[middle - 1] + zs[middle]) / 2;
 }

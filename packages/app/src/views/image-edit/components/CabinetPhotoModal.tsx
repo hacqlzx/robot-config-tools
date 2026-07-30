@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, type Key } from "react";
-import { App, Button, Empty, Input, Modal, Select, Spin, Table } from "antd";
+import { App, Button, Empty, Input, Modal, Progress, Select, Spin, Table } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { DeviceMain } from "@robot/database";
 import type { RobotAreaRecord } from "@/components/three-d-engine/drawing-data";
+import type { SurveyRunningState } from "./SurveyPhotoModal";
 import "./CabinetPhotoModal.scss";
 
 const MAP_DIR_NAME = "地图";
@@ -32,6 +33,7 @@ interface CabinetPhotoModalProps {
   open: boolean;
   projectName?: string | null;
   mapName?: string | null;
+  surveyRunning?: SurveyRunningState | null;
   onClose: () => void;
   onDispatch?: (items: CabinetPhotoDispatchItem[]) => boolean | void | Promise<boolean | void>;
 }
@@ -179,12 +181,15 @@ export default function CabinetPhotoModal({
   open,
   projectName,
   mapName,
+  surveyRunning,
   onClose,
   onDispatch,
 }: CabinetPhotoModalProps) {
   const { message } = App.useApp();
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [mapOptions, setMapOptions] = useState<{ label: string; value: string }[]>([]);
+  const [selectedMapName, setSelectedMapName] = useState<string | undefined>(undefined);
   const [rows, setRows] = useState<CabinetPhotoDispatchItem[]>([]);
   const [selectedKeys, setSelectedKeys] = useState<Key[]>([]);
   const [areaFilter, setAreaFilter] = useState<string[]>([]);
@@ -193,6 +198,8 @@ export default function CabinetPhotoModal({
   const resetModalState = useCallback(() => {
     setLoading(false);
     setSubmitting(false);
+    setMapOptions([]);
+    setSelectedMapName(undefined);
     setRows([]);
     setSelectedKeys([]);
     setAreaFilter([]);
@@ -211,7 +218,43 @@ export default function CabinetPhotoModal({
       return;
     }
 
-    if (!projectName || !mapName || !window.electronAPI?.project || !window.electronAPI?.readLargeFile) {
+    setSelectedMapName(valueText(mapName) || undefined);
+  }, [mapName, open, resetModalState]);
+
+  useEffect(() => {
+    if (!open) return;
+    const api = window.electronAPI?.project;
+    if (!projectName || !api) {
+      setMapOptions([]);
+      return;
+    }
+
+    let ignore = false;
+    (async () => {
+      try {
+        const tree = await api.listTree(projectName, MAP_DIR_NAME);
+        if (!ignore) setMapOptions(tree.filter((node) => node.isDir).map((node) => ({ label: node.name, value: node.name })));
+      } catch {
+        if (!ignore) setMapOptions([]);
+      }
+    })();
+
+    return () => {
+      ignore = true;
+    };
+  }, [open, projectName]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    setAreaFilter([]);
+    setSelectedKeys([]);
+  }, [open, selectedMapName]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    if (!projectName || !selectedMapName || !window.electronAPI?.project || !window.electronAPI?.readLargeFile) {
       setRows([]);
       setSelectedKeys([]);
       return;
@@ -219,9 +262,11 @@ export default function CabinetPhotoModal({
 
     let ignore = false;
     setLoading(true);
+    setRows([]);
+    setSelectedKeys([]);
     (async () => {
       try {
-        const tree = await window.electronAPI!.project.listTree(projectName, `${MAP_DIR_NAME}/${mapName}`);
+        const tree = await window.electronAPI!.project.listTree(projectName, `${MAP_DIR_NAME}/${selectedMapName}`);
         const areaFilePath = findFilePath(tree as TreeNode[], AREA_FILE_NAME);
         if (!areaFilePath) {
           if (!ignore) {
@@ -253,7 +298,7 @@ export default function CabinetPhotoModal({
     return () => {
       ignore = true;
     };
-  }, [mapName, message, open, projectName, resetModalState]);
+  }, [message, open, projectName, selectedMapName]);
 
   const areaOptions = useMemo(() => {
     const map = new Map<string, { label: string; value: string }>();
@@ -312,6 +357,10 @@ export default function CabinetPhotoModal({
   ];
 
   const handleDispatch = async () => {
+    if (surveyRunning?.running) {
+      message.warning("勘察任务执行中，请等待结束后再下发");
+      return;
+    }
     if (selectedRows.length === 0) {
       message.warning("请选择屏柜");
       return;
@@ -336,17 +385,48 @@ export default function CabinetPhotoModal({
       onCancel={handleClose}
       destroyOnHidden
       centered
-      width={720}
+      width={860}
       footer={(
         <div className="cabinet-photo-modal-footer">
           <Button onClick={handleClose} disabled={submitting}>取消</Button>
-          <Button type="primary" onClick={handleDispatch} loading={submitting} disabled={selectedRows.length === 0}>
+          <Button type="primary" onClick={handleDispatch} loading={submitting} disabled={selectedRows.length === 0 || !!surveyRunning?.running}>
             确定
           </Button>
         </div>
       )}
     >
+      {surveyRunning && !surveyRunning.queryFailed && (
+        <div className={`cabinet-photo-progress${surveyRunning.failed ? " is-error" : ""}`}>
+          <div className="cabinet-photo-progress-head">
+            <span>{surveyRunning.taskName || "勘察任务"}</span>
+            <span>{surveyRunning.statusText}</span>
+          </div>
+          <Progress
+            percent={surveyRunning.progressPercent}
+            size="small"
+            status={surveyRunning.failed ? "exception" : surveyRunning.finished ? "success" : "active"}
+          />
+          {(surveyRunning.taskCode || surveyRunning.errorMessage) && (
+            <div className="cabinet-photo-progress-meta">
+              {surveyRunning.errorMessage || surveyRunning.taskCode}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="cabinet-photo-filter">
+        <div className="cabinet-photo-filter-item">
+          <span className="cabinet-photo-filter-label">地图</span>
+          <Select
+            allowClear
+            showSearch
+            placeholder="请选择地图"
+            value={selectedMapName}
+            onChange={setSelectedMapName}
+            options={mapOptions}
+            optionFilterProp="label"
+          />
+        </div>
         <div className="cabinet-photo-filter-item">
           <span className="cabinet-photo-filter-label">区域</span>
           <Select
@@ -382,7 +462,7 @@ export default function CabinetPhotoModal({
           columns={columns}
           dataSource={filteredRows}
           size="small"
-          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无屏柜" /> }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={!selectedMapName ? "请先选择地图" : "暂无屏柜"} /> }}
           scroll={{ y: 270 }}
           rowSelection={{
             selectedRowKeys: selectedKeys,

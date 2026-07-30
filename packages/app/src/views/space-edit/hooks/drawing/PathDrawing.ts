@@ -53,16 +53,41 @@ const CLICK_THRESHOLD = 3;
 const CLICK_CLAIM_OWNER = "path";
 const POINT_LABEL_COLOR = "#9be58f";
 const ROBOT_PATH_COLOR = new pc.Color(0.08, 0.72, 0.32);
+const ROBOT_CURVE_PATH_COLOR = new pc.Color(0.95, 0.66, 0.12);
 const ROBOT_POINT_COLOR = new pc.Color(0.18, 0.78, 0.38);
 const ROBOT_LABEL_COLOR = "#34c76b";
 const ROBOT_PATH_THICKNESS = 0.07;
 const ROBOT_POINT_SCALE = 0.11;
+const ROBOT_TOPO_POINT_COLOR = new pc.Color(0.76, 0.78, 0.82);
+const ROBOT_TOPO_POINT_SCALE = 0.065;
 
 interface ReadonlyPathRender {
   points: pc.Vec3[];
   spheres: pc.Entity[];
   lines: pc.Entity[];
   labels: (HTMLDivElement | null)[];
+}
+
+interface RobotPointStyle {
+  color: pc.Color;
+  scale: number;
+  labelColor: string;
+}
+
+function robotPointStyle(point: PathPoint, defaultStyle: RobotPointStyle): RobotPointStyle | null {
+  if (point.role === "waypoint") return null;
+  switch (point.robotType) {
+    case "4":
+      return { color: ROBOT_TOPO_POINT_COLOR, scale: ROBOT_TOPO_POINT_SCALE, labelColor: "#c7ccd4" };
+    case "5":
+      return { color: defaultStyle.color, scale: defaultStyle.scale * 1.2, labelColor: defaultStyle.labelColor };
+    default:
+      return defaultStyle;
+  }
+}
+
+function robotSegmentColor(segment: PathSegment, defaultColor: pc.Color): pc.Color {
+  return segment.bezier ? ROBOT_CURVE_PATH_COLOR : defaultColor;
 }
 
 let _idCounter = 0;
@@ -414,13 +439,21 @@ export class PathDrawing {
     const lines: pc.Entity[] = [];
     const labels: (HTMLDivElement | null)[] = [];
     const indexMap = new Map<string, number>();
+    const defaultPointStyle = {
+      color: style.pointColor,
+      scale: style.pointScale,
+      labelColor: style.labelColor,
+    };
 
     for (const point of data.points) {
       const pos = new pc.Vec3(point.x, point.y, point.z);
       indexMap.set(point.id, points.length);
       points.push(pos);
-      spheres.push(createSphere(this.app, pos, style.pointColor, style.pointScale));
-      labels.push(point.name ? this.createPointLabel(point.name, style.labelColor) : null);
+      const pointStyle = robotPointStyle(point, defaultPointStyle);
+      if (pointStyle) {
+        spheres.push(createSphere(this.app, pos, pointStyle.color, pointStyle.scale));
+      }
+      labels.push(pointStyle && point.name ? this.createPointLabel(point.name, pointStyle.labelColor) : null);
     }
 
     for (const segment of data.paths) {
@@ -429,17 +462,18 @@ export class PathDrawing {
       if (fromIndex === undefined || toIndex === undefined) continue;
       const from = points[fromIndex];
       const to = points[toIndex];
+      const lineColor = robotSegmentColor(segment, style.lineColor);
       if (segment.bezier) {
         let prev = from;
         const cp1 = new pc.Vec3(segment.bezier.cp1[0], segment.bezier.cp1[1], segment.bezier.cp1[2]);
         const cp2 = new pc.Vec3(segment.bezier.cp2[0], segment.bezier.cp2[1], segment.bezier.cp2[2]);
         for (let step = 1; step <= CURVE_SEGMENTS; step++) {
           const point = PathDrawing.bezierPoint(step / CURVE_SEGMENTS, from, cp1, cp2, to);
-          lines.push(createLine(this.app, prev, point, style.lineColor, style.lineThickness));
+          lines.push(createLine(this.app, prev, point, lineColor, style.lineThickness));
           prev = point;
         }
       } else {
-        lines.push(createLine(this.app, from, to, style.lineColor, style.lineThickness));
+        lines.push(createLine(this.app, from, to, lineColor, style.lineThickness));
       }
     }
 

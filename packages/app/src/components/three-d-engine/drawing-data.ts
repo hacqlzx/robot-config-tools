@@ -57,6 +57,12 @@ export interface PathPointObject {
   x: number;
   y: number;
   z: number;
+  /** 机器人路径回显：stop 为真实停靠点，waypoint 为路径离散采样点。 */
+  role?: "stop" | "waypoint";
+  /** 机器人停靠点类型：0=充电点，1=对位点，2=起始点，3=普通停靠点，4=topo点，5=采集点。 */
+  robotType?: string;
+  /** 机器人停靠点朝向，单位沿用外部协议。 */
+  yaw?: number;
 }
 
 export type PathPointValue = PathPointObject | number[];
@@ -71,6 +77,10 @@ export interface PathSegmentValue {
   to?: string | number;
   /** 当前公共回显仍按直线显示，字段先保留给空间编辑里的贝塞尔路径。 */
   bezier?: unknown;
+  /** 机器人路径类型：0=贝塞尔曲线，1=离散点。 */
+  routeType?: string | number;
+  /** 机器人路径方向：-1=end->start，0=any，1=start->end。 */
+  roadDirection?: string | number;
 }
 
 export interface PathRenderData {

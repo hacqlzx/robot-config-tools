@@ -23,8 +23,15 @@ import LoadModelModal from "./components/LoadModelModal";
 import SpaceEditLayout from "./components/SpaceEditLayout";
 import SpaceEditScene from "./components/SpaceEditScene";
 import { useSelectedProject } from "@/stores/appContextStore";
-import { loadCabinetNameSequence, type CabinetItem } from "./hooks/drawing/drawing-storage";
+import {
+  DRAWING_FILE_NAME,
+  PATH_FILE_NAME,
+  ROBOT_PATH_FILE_NAME,
+  loadCabinetNameSequence,
+  type CabinetItem,
+} from "./hooks/drawing/drawing-storage";
 import { getCurrentModelPathFromRefs } from "./utils/model-state";
+import { MAP_DIR_NAME } from "./utils/space-paths";
 import type { ModelCenter, ModelPointStats, SaveStatus, ViewDirection } from "./types";
 
 interface CabinetSaveData {
@@ -34,11 +41,41 @@ interface CabinetSaveData {
   rows: { key: string; code: string; name: string }[];
 }
 
+interface SpaceFileNode {
+  name: string;
+  path: string;
+  isDir: boolean;
+  children?: SpaceFileNode[];
+}
+
 /** 根据点数和硬件决定加载比例 */
 function getLoadFraction(pointCount: number): number {
   if (pointCount > 20_000_000) return 0.25;
   if (pointCount > 10_000_000) return 0.5;
   return 1;
+}
+
+function mapDirSubPathFromModelPath(modelPath: string): string {
+  const parts = modelPath.replace(/\\/g, "/").split("/").filter(Boolean);
+  const idx = parts.lastIndexOf(MAP_DIR_NAME);
+  if (idx < 0 || idx + 1 >= parts.length) return "";
+  return `${MAP_DIR_NAME}/${parts[idx + 1]}`;
+}
+
+function findFilesByName(nodes: SpaceFileNode[], names: readonly string[]): string[] {
+  const wanted = new Set(names);
+  const result: string[] = [];
+  const walk = (items: SpaceFileNode[]) => {
+    for (const item of items) {
+      if (item.isDir) {
+        if (item.children) walk(item.children);
+        continue;
+      }
+      if (wanted.has(item.name)) result.push(item.path);
+    }
+  };
+  walk(nodes);
+  return result;
 }
 
 export default function SpaceEdit() {
@@ -265,18 +302,46 @@ export default function SpaceEdit() {
     setImporting, setLoading, setLoadingFile, setLoadingText, setLoadingProgress,
     setLoadedFiles, setTreeKey, setClipEntityName, setClipMode, message,
   });
+  const loadModelCompanionFiles = useCallback(async (modelPath: string | null | undefined) => {
+    if (!modelPath || !selectedProject || !window.electronAPI?.project) return;
+    const subDir = mapDirSubPathFromModelPath(modelPath);
+    if (!subDir) return;
+
+    try {
+      const tree = await window.electronAPI.project.listTree(selectedProject, subDir) as SpaceFileNode[];
+      const drawingPath = findFilesByName(tree, [DRAWING_FILE_NAME])[0];
+      if (drawingPath) await handleToggleDrawing(drawingPath, true);
+
+      const pathFiles = findFilesByName(tree, [PATH_FILE_NAME, ROBOT_PATH_FILE_NAME])
+        .sort((a, b) => {
+          const aName = a.split(/[\\/]/).pop();
+          const bName = b.split(/[\\/]/).pop();
+          const aRank = aName === PATH_FILE_NAME ? 0 : 1;
+          const bRank = bName === PATH_FILE_NAME ? 0 : 1;
+          return aRank - bRank || a.localeCompare(b);
+        });
+      for (const pathFile of pathFiles) {
+        await handleTogglePathFile(pathFile, true);
+      }
+    } catch (error) {
+      console.warn("[space-edit] 自动加载区域/路径失败", { modelPath, error });
+    }
+  }, [handleToggleDrawing, handleTogglePathFile, selectedProject]);
+
   const handleLoadLasFromPathWithHistoryReset = useCallback(async (filePath: string) => {
     drawingHistory.clear();
     clearMapDrawingVisibility();
     clearDrawingDrafts();
-    await handleLoadLasFromPath(filePath);
-  }, [clearDrawingDrafts, clearMapDrawingVisibility, drawingHistory.clear, handleLoadLasFromPath]);
+    const loadedPath = await handleLoadLasFromPath(filePath);
+    await loadModelCompanionFiles(loadedPath);
+  }, [clearDrawingDrafts, clearMapDrawingVisibility, drawingHistory.clear, handleLoadLasFromPath, loadModelCompanionFiles]);
   const handleFileSelectWithHistoryReset = useCallback(async (file: File) => {
     drawingHistory.clear();
     clearMapDrawingVisibility();
     clearDrawingDrafts();
-    await handleFileSelect(file);
-  }, [clearDrawingDrafts, clearMapDrawingVisibility, drawingHistory.clear, handleFileSelect]);
+    const modelPath = await handleFileSelect(file);
+    await loadModelCompanionFiles(modelPath);
+  }, [clearDrawingDrafts, clearMapDrawingVisibility, drawingHistory.clear, handleFileSelect, loadModelCompanionFiles]);
   const handleToggleVisibleWithHistoryReset = useCallback((filePath: string) => {
     drawingHistory.clear();
     clearMapDrawingVisibility();

@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useState, type Key } from "react";
-import { App, Button, Empty, Input, Modal, Select, Spin, Table, Tabs, Tooltip } from "antd";
+import { App, Button, Empty, Input, Modal, Progress, Select, Spin, Table, Tabs, Tooltip } from "antd";
 import { CloseOutlined, RightOutlined } from "@ant-design/icons";
 import type { ColumnsType, TablePaginationConfig } from "antd/es/table";
 import type { DeviceBay, DevicePoint, DeviceVoltage } from "@robot/database";
+import type { SurveyRunningState } from "./SurveyPhotoModal";
 import "./VerifyTaskModal.scss";
 
 const VERIFY_BAY_TYPES = ["设备区", "屏柜区"] as const;
-const BAY_TABLE_SCROLL = { y: 220 } as const;
-const POINT_TABLE_SCROLL = { y: 214 } as const;
+const BAY_TABLE_SCROLL = { y: 320 } as const;
+const POINT_TABLE_SCROLL = { y: 350 } as const;
 const SELECT_MAX_TAG_COUNT = 1;
 const DEFAULT_PAGE_SIZE = 20;
 const PAGE_SIZE_OPTIONS = ["20", "50", "100", "500"];
@@ -63,6 +64,7 @@ export interface VerifyTaskPointItem {
 interface VerifyTaskModalProps {
   open: boolean;
   projectName?: string | null;
+  surveyRunning?: SurveyRunningState | null;
   onClose: () => void;
   onDispatch?: (payload: {
     type: TabKey;
@@ -238,6 +240,7 @@ function paginationConfig(page: PageState, total: number, onChange: (next: PageS
 export default function VerifyTaskModal({
   open,
   projectName,
+  surveyRunning,
   onClose,
   onDispatch,
 }: VerifyTaskModalProps) {
@@ -443,6 +446,11 @@ export default function VerifyTaskModal({
   };
 
   const handleConfirm = async () => {
+    if (surveyRunning?.running) {
+      message.warning("勘察任务执行中，请等待结束后再下发");
+      return;
+    }
+
     const isBayTab = activeTab === "bay";
     const currentCount = isBayTab ? selectedBays.length : selectedPoints.length;
     if (currentCount === 0) {
@@ -582,16 +590,36 @@ export default function VerifyTaskModal({
       destroyOnHidden
       centered
       width={1080}
+      styles={{ body: { maxHeight: "none", overflowY: "visible" } }}
       footer={(
         <div className="verify-task-footer">
           <span className="verify-task-footer-count">{activeSelectedLabel}</span>
           <Button onClick={handleClose} disabled={submitting}>取消</Button>
-          <Button type="primary" onClick={handleConfirm} loading={submitting} disabled={activeSelectedCount === 0}>
+          <Button type="primary" onClick={handleConfirm} loading={submitting} disabled={activeSelectedCount === 0 || !!surveyRunning?.running}>
             确定
           </Button>
         </div>
       )}
     >
+      {surveyRunning && !surveyRunning.queryFailed && (
+        <div className={`verify-task-progress${surveyRunning.failed ? " is-error" : ""}`}>
+          <div className="verify-task-progress-head">
+            <span>{surveyRunning.taskName || "勘察任务"}</span>
+            <span>{surveyRunning.statusText}</span>
+          </div>
+          <Progress
+            percent={surveyRunning.progressPercent}
+            size="small"
+            status={surveyRunning.failed ? "exception" : surveyRunning.finished ? "success" : "active"}
+          />
+          {(surveyRunning.taskCode || surveyRunning.errorMessage) && (
+            <div className="verify-task-progress-meta">
+              {surveyRunning.errorMessage || surveyRunning.taskCode}
+            </div>
+          )}
+        </div>
+      )}
+
       <Tabs
         className="verify-task-tabs"
         activeKey={activeTab}

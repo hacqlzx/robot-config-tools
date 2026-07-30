@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { Modal } from "antd";
 import * as pc from "playcanvas";
 import { parsePointExcel } from "@/utils/excel-parser";
@@ -75,12 +75,19 @@ export function useFileOperations(params: UseFileOperationsParams) {
     loadLasFromPath, requestRender, closeAllDrawingModes,
     setImporting, setLoading, setLoadingFile, setLoadingText, setLoadingProgress,
     setLoadedFiles, setTreeKey, setClipEntityName, setClipMode, message } = params;
+  const activeModelLoadsRef = useRef<Map<string, Promise<string | null>>>(new Map());
+  const modelImportingRef = useRef(false);
 
   /**
    * 路径标准化：将 Windows 反斜杠统一为正斜杠并转小写，
    * 用于跨平台比较文件路径是否相等。
    */
   const normalizePath = (value: string) => value.replace(/\\/g, "/").toLowerCase();
+
+  const isModelPathLoaded = useCallback((filePath: string) => {
+    const targetPath = normalizePath(filePath);
+    return Array.from(filePathRef.current.values()).some((loadedPath) => normalizePath(loadedPath) === targetPath);
+  }, [filePathRef]);
 
   /**
    * 清空当前所有已加载的模型实体及相关索引。
@@ -107,15 +114,31 @@ export function useFileOperations(params: UseFileOperationsParams) {
     setLoadedFiles,
   ]);
 
+  const loadModelExclusive = useCallback(async (filePath: string): Promise<string | null> => {
+    const fileKey = loadedFileKey(filePath);
+    if (isModelPathLoaded(filePath)) return filePath;
+    const activeLoad = activeModelLoadsRef.current.get(fileKey);
+    if (activeLoad) return activeLoad;
+
+    const loadPromise = (async () => {
+      closeAllDrawingModes();
+      clearLoadedModels();
+      await loadLasFromPath(filePath);
+      return isModelPathLoaded(filePath) ? filePath : null;
+    })().finally(() => {
+      activeModelLoadsRef.current.delete(fileKey);
+    });
+    activeModelLoadsRef.current.set(fileKey, loadPromise);
+    return loadPromise;
+  }, [clearLoadedModels, closeAllDrawingModes, isModelPathLoaded, loadLasFromPath]);
+
   /**
    * 从磁盘路径加载模型（地图树点击时使用）。
    * 切换前先关闭所有绘制模式，防止新旧模型的点云坐标混用导致绘制偏移。
    */
   const handleLoadLasFromPath = useCallback(async (filePath: string) => {
-    closeAllDrawingModes();
-    clearLoadedModels();
-    await loadLasFromPath(filePath);
-  }, [clearLoadedModels, closeAllDrawingModes, loadLasFromPath]);
+    return await loadModelExclusive(filePath);
+  }, [loadModelExclusive]);
 
   /**
    * 点表 Excel 导入。
@@ -174,26 +197,31 @@ export function useFileOperations(params: UseFileOperationsParams) {
    * 注意：通过 getSelectedProject() 在调用时读取最新项目，
    * 而非依赖 React hook 的渲染时闭包，避免 LoadModelModal 内切换项目后读到旧值。
    */
-  const handleFileSelect = useCallback(async (file: File) => {
+  const handleFileSelect = useCallback(async (file: File): Promise<string | null> => {
+    if (modelImportingRef.current) {
+      message.warning("模型正在导入或加载中，请稍后再试");
+      return null;
+    }
     const isPointCloud = isLasOrLazFileName(file.name);
     const isZip = isZipFileName(file.name);
     if (!isPointCloud && !isZip) {
       message.warning("仅支持 LAS/LAZ 模型文件或 ZIP 空间模型包");
-      return;
+      return null;
     }
 
     if (!window.electronAPI) {
       message.warning("模型导入仅 Electron 模式可用");
-      return;
+      return null;
     }
 
     // 调用时从 store 实时读取，确保能获取弹窗内刚写入的最新项目名
     const project = getSelectedProject();
     if (!project) {
       message.warning("请先选择一个项目");
-      return;
+      return null;
     }
 
+    modelImportingRef.current = true;
     setLoading(true);
     setLoadingFile(file.name);
     setLoadingProgress(0);
@@ -214,7 +242,7 @@ export function useFileOperations(params: UseFileOperationsParams) {
           if (!confirmed) {
             setLoadingFile("");
             setLoadingProgress(0);
-            return;
+            return null;
           }
           setLoading(true);
           setLoadingFile(file.name);
@@ -230,24 +258,23 @@ export function useFileOperations(params: UseFileOperationsParams) {
         targetPath = await window.electronAPI.project.importFile(project, sourcePath, baseName);
       }
 
-      closeAllDrawingModes();
-      // 导入新模型等价于切换当前地图：清空旧 GPU 实体和 loader 侧索引，避免可见性树误操作旧实体
-      clearLoadedModels();
-      await loadLasFromPath(targetPath);
+      const loadedPath = await loadModelExclusive(targetPath);
+      if (!loadedPath) return null;
       setTreeKey((k) => k + 1);
       message.success(isZip ? (replaced ? "空间模型包替换成功" : "空间模型包导入成功") : "模型导入成功");
+      return loadedPath;
     } catch (err: any) {
       message.error("模型导入失败: " + (err?.message || err));
+      return null;
     } finally {
+      modelImportingRef.current = false;
       setLoading(false);
       setLoadingFile("");
       setLoadingText("");
       setLoadingProgress(0);
     }
   }, [
-    clearLoadedModels,
-    closeAllDrawingModes,
-    loadLasFromPath,
+    loadModelExclusive,
     message,
     setLoading,
     setLoadingFile,
@@ -293,10 +320,8 @@ export function useFileOperations(params: UseFileOperationsParams) {
    */
   const handleToggleVisible = useCallback((filePath: string) => {
     if (handleUnloadModelFromPath(filePath)) return;
-    closeAllDrawingModes();
-    clearLoadedModels();
-    loadLasFromPath(filePath);
-  }, [clearLoadedModels, handleUnloadModelFromPath, loadLasFromPath, closeAllDrawingModes]);
+    void loadModelExclusive(filePath);
+  }, [handleUnloadModelFromPath, loadModelExclusive]);
 
   /**
    * 进入裁切模式。

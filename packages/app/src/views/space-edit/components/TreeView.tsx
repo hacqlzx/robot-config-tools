@@ -95,6 +95,26 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
   const isHiddenFile = (name: string) => name === MAP_INFO_FILE_NAME || isRobotStopPointFileName(name);
   const isVisibleTreeNode = (node: SpaceTreeNode) => node.isDir || !isHiddenFile(node.name);
 
+  const uniqueByPath = (items: SpaceTreeNode[]) => {
+    const seen = new Set<string>();
+    const result: SpaceTreeNode[] = [];
+    for (const item of items) {
+      const key = loadedFileKey(item.path);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(item);
+    }
+    return result;
+  };
+
+  const sortPreferredModels = (items: SpaceTreeNode[]) => (
+    [...items].sort((a, b) => {
+      const aRank = a.name.toLowerCase() === "map.las" ? 0 : 1;
+      const bRank = b.name.toLowerCase() === "map.las" ? 0 : 1;
+      return aRank - bRank || a.name.localeCompare(b.name) || a.path.localeCompare(b.path);
+    })
+  );
+
   /** 合并节点自身的 children 与懒加载的 children */
   const getEffectiveChildren = (node: SpaceTreeNode): SpaceTreeNode[] | undefined => {
     if (node.children && node.children.length > 0) return node.children;
@@ -190,20 +210,24 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
         };
         collect(list);
 
-        for (const child of lasNodes) {
+        const uniqueLasNodes = sortPreferredModels(uniqueByPath(lasNodes));
+        const lasNodesToApply = checked ? uniqueLasNodes.slice(0, 1) : uniqueLasNodes;
+
+        for (const child of lasNodesToApply) {
+          const fileKey = loadedFileKey(child.path);
           const isLoaded = loadedFiles.has(loadedFileKey(child.path));
           if (checked) {
-            if (!isLoaded) await onLoadLas?.(child.path);
+            if (!isLoaded && loadingFile !== fileKey) await onLoadLas?.(child.path);
           } else {
             if (isLoaded) onToggleVisible?.(child.path);
           }
         }
 
-        for (const child of drawNodes) {
+        for (const child of uniqueByPath(drawNodes)) {
           onToggleDrawing?.(child.path, checked);
         }
 
-        for (const child of pathNodes) {
+        for (const child of uniqueByPath(pathNodes)) {
           onTogglePath?.(child.path, checked);
         }
       };
@@ -216,8 +240,9 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
       onTogglePath?.(siblingPath(node.path, ROBOT_PATH_FILE_NAME), checked);
     } else if (isLas(node.name)) {
       const isLoaded = loadedFiles.has(loadedFileKey(node.path));
+      const isLoading = loadingFile === loadedFileKey(node.path);
       if (checked) {
-        if (!isLoaded) onLoadLas?.(node.path);
+        if (!isLoaded && !isLoading) onLoadLas?.(node.path);
       } else {
         if (isLoaded) onToggleVisible?.(node.path);
       }

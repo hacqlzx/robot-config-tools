@@ -159,3 +159,91 @@ export function createLine(app: pc.Application, from: pc.Vec3, to: pc.Vec3, colo
   app.root.addChild(line);
   return line;
 }
+
+/**
+ * 三点修正成长方体顶点。
+ *
+ * p1->p2 作为底面第一条边，p3 只取垂直于第一条边的水平宽度分量；
+ * 这样用户第三点略歪时不会生成平行四边形，底面始终是矩形，顶部再沿 Y 轴拉伸。
+ */
+export function buildOrthogonalBoxVertsFromThreePoints(
+  p1: pc.Vec3,
+  p2: pc.Vec3,
+  p3: pc.Vec3,
+  baseY: number,
+  height: number,
+): pc.Vec3[] | null {
+  const c0 = new pc.Vec3(p1.x, baseY, p1.z);
+  const c1 = new pc.Vec3(p2.x, baseY, p2.z);
+  const third = new pc.Vec3(p3.x, baseY, p3.z);
+
+  const edge = new pc.Vec3().sub2(c1, c0);
+  if (edge.length() < 1e-4 || height <= 0) return null;
+  edge.normalize();
+
+  const normal = new pc.Vec3().cross(new pc.Vec3(0, 1, 0), edge);
+  if (normal.length() < 1e-4) return null;
+  normal.normalize();
+
+  const width = new pc.Vec3().sub2(third, c0).dot(normal);
+  if (Math.abs(width) < 1e-4) return null;
+  const offset = normal.mulScalar(width);
+
+  const c2 = new pc.Vec3().add2(c1, offset);
+  const c3 = new pc.Vec3().add2(c0, offset);
+  const up = new pc.Vec3(0, height, 0);
+  return [
+    c0, c1, c2, c3,
+    new pc.Vec3().add2(c0, up),
+    new pc.Vec3().add2(c1, up),
+    new pc.Vec3().add2(c2, up),
+    new pc.Vec3().add2(c3, up),
+  ];
+}
+
+/**
+ * 屏柜四点协议修正成长方体顶点。
+ *
+ * A/B/C 为正面三点，DC 为设备正面朝向：
+ * - AB 作为正面底边；
+ * - BC 只保留垂直于 AB 的分量，修正正面为矩形；
+ * - CD 只保留垂直于正面的深度分量，保证盒体三轴正交。
+ */
+export function buildOrthogonalCabinetVertsFromPosePoints(
+  a: pc.Vec3,
+  b: pc.Vec3,
+  c: pc.Vec3,
+  d: pc.Vec3,
+): pc.Vec3[] | null {
+  const width = new pc.Vec3().sub2(b, a);
+  if (width.length() < 1e-4) return null;
+  const widthDir = width.clone().normalize();
+
+  const rawHeight = new pc.Vec3().sub2(c, b);
+  const height = rawHeight.clone().sub(widthDir.clone().mulScalar(rawHeight.dot(widthDir)));
+  if (height.length() < 1e-4) return null;
+  const heightDir = height.clone().normalize();
+
+  const frontDir = new pc.Vec3().cross(widthDir, heightDir);
+  if (frontDir.length() < 1e-4) return null;
+  frontDir.normalize();
+
+  // 按协议 DC 是正面朝向；若 AB×BC 与 DC 相反，则翻转法线。
+  const dc = new pc.Vec3().sub2(c, d);
+  if (frontDir.dot(dc) < 0) frontDir.mulScalar(-1);
+
+  const rawDepth = new pc.Vec3().sub2(d, c);
+  const depthLength = Math.abs(rawDepth.dot(frontDir));
+  if (depthLength < 1e-4) return null;
+  const depth = frontDir.mulScalar(-depthLength);
+
+  const p0 = a.clone();
+  const p1 = b.clone();
+  const p2 = new pc.Vec3().add2(p1, height);
+  const p3 = new pc.Vec3().add2(p0, height);
+  const p4 = new pc.Vec3().add2(p0, depth);
+  const p5 = new pc.Vec3().add2(p1, depth);
+  const p6 = new pc.Vec3().add2(p2, depth);
+  const p7 = new pc.Vec3().add2(p3, depth);
+  return [p0, p1, p2, p3, p4, p5, p6, p7];
+}

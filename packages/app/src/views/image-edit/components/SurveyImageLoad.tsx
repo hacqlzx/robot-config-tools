@@ -151,15 +151,13 @@ export default function SurveyImageLoad({ open, onClose, onImport, onTaskImport 
         const ids = result.importedSpIds || [];
         setImportedSpIds(ids);
         if (ids.length > 0) message.success(`已导入点位数据：${formatSpIds(ids)}`);
-        taskDirToLoad = result.surveyDir || surveyDataDir || await resolveSurveyDataDir(mapName);
+        if (ids.length > 0) taskDirToLoad = result.surveyDir || surveyDataDir || await resolveSurveyDataDir(mapName);
       } else if (onTaskImport) {
         const dir = surveyDataDir || await resolveSurveyDataDir(mapName);
         const ids = importedSpIds.length > 0 ? importedSpIds : await readImportedSpIds(dir);
         if (ids.length > 0) {
           setImportedSpIds(ids);
           taskDirToLoad = dir;
-        } else {
-          message.info("当前地图暂无已导入点位数据");
         }
       }
 

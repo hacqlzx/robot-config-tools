@@ -62,25 +62,85 @@ export function useMapDrawingVisibility({
   // 一个 JSON 文件里可能包含多个屏柜，按 jsonPath 记录柜排 id，取消勾选时精准隐藏对应回显。
   const shownByJsonRef = useRef<Map<string, number[]>>(new Map());
   const drawingShownRef = useRef(drawingShown);
+  const drawingLoadingRef = useRef<Set<string>>(new Set());
+  const drawingDesiredRef = useRef<Map<string, boolean>>(new Map());
+  const pathShownRef = useRef(pathShown);
+  const pathLoadingRef = useRef<Set<string>>(new Set());
+  const pathDesiredRef = useRef<Map<string, boolean>>(new Map());
   const chargingAreaSavedRef = useRef(false);
   const chargedJsonPathRef = useRef("");
 
   drawingShownRef.current = drawingShown;
+  pathShownRef.current = pathShown;
+
+  const addDrawingShown = useCallback((jsonPath: string) => {
+    setDrawingShown((prev) => {
+      if (prev.has(jsonPath)) {
+        drawingShownRef.current = prev;
+        return prev;
+      }
+      const next = new Set(prev);
+      next.add(jsonPath);
+      drawingShownRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const removeDrawingShown = useCallback((jsonPath: string) => {
+    setDrawingShown((prev) => {
+      if (!prev.has(jsonPath)) {
+        drawingShownRef.current = prev;
+        return prev;
+      }
+      const next = new Set(prev);
+      next.delete(jsonPath);
+      drawingShownRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const addPathShown = useCallback((jsonPath: string) => {
+    setPathShown((prev) => {
+      if (prev.has(jsonPath)) {
+        pathShownRef.current = prev;
+        return prev;
+      }
+      const next = new Set(prev);
+      next.add(jsonPath);
+      pathShownRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const removePathShown = useCallback((jsonPath: string) => {
+    setPathShown((prev) => {
+      if (!prev.has(jsonPath)) {
+        pathShownRef.current = prev;
+        return prev;
+      }
+      const next = new Set(prev);
+      next.delete(jsonPath);
+      pathShownRef.current = next;
+      return next;
+    });
+  }, []);
 
   const markDrawingFileShown = useCallback((jsonPath: string, type: DrawingType) => {
-    setDrawingShown((prev) => new Set(prev).add(jsonPath));
+    addDrawingShown(jsonPath);
+    drawingDesiredRef.current.set(jsonPath, true);
     if (type === "charging-area") {
       chargingExistingRef.current = true;
       chargingAreaSavedRef.current = true;
       chargedJsonPathRef.current = jsonPath;
     }
     refreshTree();
-  }, [chargingExistingRef, refreshTree]);
+  }, [addDrawingShown, chargingExistingRef, refreshTree]);
 
   const markPathFileShown = useCallback((jsonPath: string) => {
-    setPathShown((prev) => new Set(prev).add(jsonPath));
+    addPathShown(jsonPath);
+    pathDesiredRef.current.set(jsonPath, true);
     refreshTree();
-  }, [refreshTree]);
+  }, [addPathShown, refreshTree]);
 
   const clearMapDrawingVisibility = useCallback(() => {
     cabinetViewerRef.current?.clear();
@@ -88,6 +148,12 @@ export function useMapDrawingVisibility({
     chargingDrawingRef.current?.clear();
     deviceAreaDrawingRef.current?.clearAll();
     shownByJsonRef.current.clear();
+    drawingShownRef.current = new Set();
+    drawingLoadingRef.current.clear();
+    drawingDesiredRef.current.clear();
+    pathShownRef.current = new Set();
+    pathLoadingRef.current.clear();
+    pathDesiredRef.current.clear();
     chargingExistingRef.current = false;
     chargingAreaSavedRef.current = false;
     chargedJsonPathRef.current = "";
@@ -130,58 +196,74 @@ export function useMapDrawingVisibility({
     if (!api) return;
     const fileName = fileNameFromPath(jsonPath);
     const isRobotPath = fileName === ROBOT_PATH_FILE_NAME;
+    pathDesiredRef.current.set(jsonPath, checked);
     if (checked) {
+      if (pathShownRef.current.has(jsonPath) || pathLoadingRef.current.has(jsonPath)) return;
+      pathLoadingRef.current.add(jsonPath);
       // 参考路径作为可编辑路径加载；巡视路径作为只读叠加层加载，两者允许同时显示。
-      const data = await loadPathDrawing(api, jsonPath);
-      if (data) {
-        if (isRobotPath) pathDrawingRef.current?.loadRobotPathData?.(jsonPath, data);
-        else pathDrawingRef.current?.loadData(data);
+      try {
+        const data = await loadPathDrawing(api, jsonPath);
+        if (pathDesiredRef.current.get(jsonPath) !== true) return;
+        if (data) {
+          if (isRobotPath) pathDrawingRef.current?.loadRobotPathData?.(jsonPath, data);
+          else pathDrawingRef.current?.loadData(data);
+        }
+        addPathShown(jsonPath);
+      } finally {
+        pathLoadingRef.current.delete(jsonPath);
       }
-      setPathShown((prev) => {
-        const next = new Set(prev);
-        next.add(jsonPath);
-        return next;
-      });
     } else {
+      if (!pathShownRef.current.has(jsonPath) && pathLoadingRef.current.has(jsonPath)) return;
+      if (!pathShownRef.current.has(jsonPath)) return;
       if (isRobotPath) pathDrawingRef.current?.clearRobotPathData?.(jsonPath);
       else pathDrawingRef.current?.clear();
-      setPathShown((prev) => { const next = new Set(prev); next.delete(jsonPath); return next; });
+      removePathShown(jsonPath);
     }
-  }, [pathDrawingRef]);
+  }, [addPathShown, pathDrawingRef, removePathShown]);
 
   const handleToggleDrawing = useCallback(async (jsonPath: string, checked: boolean) => {
     const viewer = cabinetViewerRef.current;
     const api = window.electronAPI;
     if (!viewer || !api) return;
+    drawingDesiredRef.current.set(jsonPath, checked);
     if (checked) {
-      const items = await loadAllItemsFromJson(api, jsonPath);
-      // 同一个绘制 JSON 内混放屏柜、充电区域、设备区，勾选时按 type 分发到不同渲染器。
-      const cabItems = items.filter((it): it is CabinetItem => it.type === "cabinet");
-      cabItems.forEach((it) => viewer.show(it, jsonPath));
-      shownByJsonRef.current.set(jsonPath, cabItems.map(cabinetKey).filter((id): id is number => id != null));
-      setDrawingShown((prev) => new Set(prev).add(jsonPath));
+      if (drawingShownRef.current.has(jsonPath) || drawingLoadingRef.current.has(jsonPath)) return;
+      drawingLoadingRef.current.add(jsonPath);
+      try {
+        const items = await loadAllItemsFromJson(api, jsonPath);
+        if (drawingDesiredRef.current.get(jsonPath) !== true) return;
+        // 同一个绘制 JSON 内混放屏柜、充电区域、设备区，勾选时按 type 分发到不同渲染器。
+        const cabItems = items.filter((it): it is CabinetItem => it.type === "cabinet");
+        cabItems.forEach((it) => viewer.show(it, jsonPath));
+        shownByJsonRef.current.set(jsonPath, cabItems.map(cabinetKey).filter((id): id is number => id != null));
+        addDrawingShown(jsonPath);
 
-      const chargingItem = items.find((it): it is ChargingAreaItem => it.type === "charging-area");
-      if (chargingItem) {
-        const drawing = chargingDrawingRef.current;
-        if (drawing && !drawing.hasBox()) {
-          drawing.loadBox(chargingItem.geometry.verts);
-          chargingExistingRef.current = true;
-          chargingAreaSavedRef.current = true;
-          chargedJsonPathRef.current = jsonPath;
+        const chargingItem = items.find((it): it is ChargingAreaItem => it.type === "charging-area");
+        if (chargingItem) {
+          const drawing = chargingDrawingRef.current;
+          if (drawing && !drawing.hasBox()) {
+            drawing.loadBox(chargingItem.geometry.verts);
+            chargingExistingRef.current = true;
+            chargingAreaSavedRef.current = true;
+            chargedJsonPathRef.current = jsonPath;
+          }
         }
-      }
 
-      const deviceAreaItems = items.filter((it): it is DeviceAreaItem => it.type === "device-area");
-      if (deviceAreaItems.length > 0) {
-        deviceAreaDrawingRef.current?.loadBoxes(deviceAreaItems.map((it) => ({ id: it.id, verts: it.geometry.verts, height: it.height, bay: it.bay })));
+        const deviceAreaItems = items.filter((it): it is DeviceAreaItem => it.type === "device-area");
+        if (deviceAreaItems.length > 0) {
+          deviceAreaDrawingRef.current?.loadBoxes(deviceAreaItems.map((it) => ({ id: it.id, verts: it.geometry.verts, height: it.height, bay: it.bay })));
+        }
+      } finally {
+        drawingLoadingRef.current.delete(jsonPath);
       }
     } else {
+      if (!drawingShownRef.current.has(jsonPath) && drawingLoadingRef.current.has(jsonPath)) return;
+      if (!drawingShownRef.current.has(jsonPath)) return;
       // 取消勾选要同步清理三类回显，否则 UI 树状态和场景内容会不一致。
       const ids = shownByJsonRef.current.get(jsonPath) || [];
       ids.forEach((id) => viewer.hide(id));
       shownByJsonRef.current.delete(jsonPath);
-      setDrawingShown((prev) => { const next = new Set(prev); next.delete(jsonPath); return next; });
+      removeDrawingShown(jsonPath);
       if (chargedJsonPathRef.current === jsonPath) {
         if (chargingDrawingRef.current?.hasBox()) chargingDrawingRef.current.clear();
         chargingExistingRef.current = false;
@@ -190,7 +272,7 @@ export function useMapDrawingVisibility({
       }
       deviceAreaDrawingRef.current?.clearAll();
     }
-  }, [cabinetViewerRef, chargingDrawingRef, chargingExistingRef, deviceAreaDrawingRef]);
+  }, [addDrawingShown, cabinetViewerRef, chargingDrawingRef, chargingExistingRef, deviceAreaDrawingRef, removeDrawingShown]);
 
   const handleDeleteCabinetItem = useCallback(async (jsonPath: string, cabinetId: number) => {
     const api = window.electronAPI;
@@ -233,11 +315,11 @@ export function useMapDrawingVisibility({
         const key = cabinetKey(saved.item);
         const ids = shownByJsonRef.current.get(saved.jsonPath) || [];
         if (key != null && !ids.includes(key)) shownByJsonRef.current.set(saved.jsonPath, [...ids, key]);
-        setDrawingShown((prev) => new Set(prev).add(saved.jsonPath));
+        addDrawingShown(saved.jsonPath);
       }
       savedCabinetRef.current = null;
     }
-  }, [cabinetMode, cabinetViewerRef, savedCabinetRef]);
+  }, [addDrawingShown, cabinetMode, cabinetViewerRef, savedCabinetRef]);
 
   return {
     drawingShown,

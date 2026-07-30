@@ -146,6 +146,27 @@ function dot(a: VecTuple, b: VecTuple): number {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
+function scale(a: VecTuple, factor: number): VecTuple {
+  return [a[0] * factor, a[1] * factor, a[2] * factor];
+}
+
+function length(a: VecTuple): number {
+  return Math.hypot(a[0], a[1], a[2]);
+}
+
+function normalize(a: VecTuple): VecTuple | null {
+  const len = length(a);
+  return len > 1e-4 ? scale(a, 1 / len) : null;
+}
+
+function cross(a: VecTuple, b: VecTuple): VecTuple {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
+}
+
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
@@ -158,11 +179,27 @@ function vertsToPose(verts: number[][], indices: number[]): string | null {
 
 function cabinetPoseToVerts(points: VecTuple[]): number[][] {
   // 屏柜协议依次保存编辑器顶点 [0, 1, 2, 6]。
-  // 先由 1→2 得到高度向量、2→6 得到深度向量，再补齐剩余四个平行顶点。
+  // A/B/C 为正面，DC 为正面朝向；加载时做正交补全，避免旧数据或人工数据略歪时生成斜盒。
   // 该索引顺序与现有屏柜绘制器一致，不能直接套用下方区域盒子的顺序。
   const [p0, p1, p2, p6] = points;
-  const up = sub(p2, p1);
-  const depth = sub(p6, p2);
+  const width = sub(p1, p0);
+  const widthDir = normalize(width);
+  const rawUp = sub(p2, p1);
+  const up = widthDir
+    ? sub(rawUp, scale(widthDir, dot(rawUp, widthDir)))
+    : rawUp;
+  const upDir = normalize(up);
+  const rawDepth = sub(p6, p2);
+  let depth = rawDepth;
+  if (widthDir && upDir) {
+    let frontDir = normalize(cross(widthDir, upDir));
+    if (frontDir) {
+      const dc = sub(p2, p6);
+      if (dot(frontDir, dc) < 0) frontDir = scale(frontDir, -1);
+      const depthLength = Math.abs(dot(rawDepth, frontDir));
+      if (depthLength > 1e-4) depth = scale(frontDir, -depthLength);
+    }
+  }
   const p3 = add(p0, up);
   const p4 = add(p0, depth);
   const p5 = add(p1, depth);

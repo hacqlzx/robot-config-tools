@@ -1,8 +1,10 @@
 import { shell } from "electron";
-import AdmZip from "adm-zip";
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { Readable } from "stream";
+import { pipeline } from "stream/promises";
+import { createInflateRaw } from "zlib";
 import {
   deleteProjectData,
   getDatabase,
@@ -82,6 +84,27 @@ interface ResolvedMapImportPlan {
   existingMapDir: string | null;
 }
 
+interface ZipEntryMeta {
+  entryName: string;
+  isDirectory: boolean;
+  flags: number;
+  compressionMethod: number;
+  compressedSize: number;
+  uncompressedSize: number;
+  localHeaderOffset: number;
+}
+
+const ZIP_EOCD_SIGNATURE = 0x06054b50;
+const ZIP64_EOCD_LOCATOR_SIGNATURE = 0x07064b50;
+const ZIP64_EOCD_SIGNATURE = 0x06064b50;
+const ZIP_CENTRAL_FILE_HEADER_SIGNATURE = 0x02014b50;
+const ZIP_LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50;
+const ZIP_TAIL_READ_SIZE = 1024 * 1024;
+const ZIP_MAX_CENTRAL_DIRECTORY_SIZE = 256 * 1024 * 1024;
+const ZIP_MAX_TEXT_ENTRY_SIZE = 2 * 1024 * 1024;
+const ZIP_COMPRESSION_STORE = 0;
+const ZIP_COMPRESSION_DEFLATE = 8;
+
 function makeProjectTreeWritable(targetPath: string): void {
   if (!fs.existsSync(targetPath)) return;
   const stat = fs.lstatSync(targetPath);
@@ -135,6 +158,277 @@ function textValue(value: unknown): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function toSafeNumber(value: bigint, label: string): number {
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`${label}过大，暂不支持导入`);
+  }
+  return Number(value);
+}
+
+function readUInt64LE(buffer: Buffer, offset: number, label: string): number {
+  return toSafeNumber(buffer.readBigUInt64LE(offset), label);
+}
+
+async function readExact(handle: fs.promises.FileHandle, length: number, position: number): Promise<Buffer> {
+  const buffer = Buffer.alloc(length);
+  const { bytesRead } = await handle.read(buffer, 0, length, position);
+  if (bytesRead !== length) {
+    throw new Error("ZIP 文件结构不完整");
+  }
+  return buffer;
+}
+
+function normalizeZipEntryName(entryName: string): string {
+  const raw = String(entryName ?? "").replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!raw) return "";
+  const hasTrailingSlash = raw.endsWith("/");
+  const parts = raw.split("/").filter(Boolean);
+  if (parts.some((part) => part === "." || part === ".." || /[<>:"|?*\x00-\x1F]/.test(part))) {
+    throw new Error("ZIP 包含非法路径");
+  }
+  return `${parts.join("/")}${hasTrailingSlash ? "/" : ""}`;
+}
+
+function zipDirName(entryName: string): string {
+  const normalized = normalizeZipEntryName(entryName).replace(/\/$/, "");
+  const dir = path.posix.dirname(normalized);
+  return dir === "." ? "" : dir;
+}
+
+function zipBaseName(entryName: string): string {
+  return path.posix.basename(normalizeZipEntryName(entryName).replace(/\/$/, ""));
+}
+
+function isSupportedMapEntry(entryName: string): boolean {
+  return SUPPORTED_MAP_EXTS.has(path.posix.extname(entryName).toLowerCase());
+}
+
+function resolveZipOutputPath(targetDir: string, entryName: string): string {
+  const normalized = normalizeZipEntryName(entryName).replace(/\/$/, "");
+  if (!normalized) return path.resolve(targetDir);
+  return assertInside(targetDir, path.resolve(targetDir, ...normalized.split("/")), "解压ZIP");
+}
+
+function findEndOfCentralDirectory(tail: Buffer): number {
+  for (let offset = tail.length - 22; offset >= 0; offset--) {
+    if (tail.readUInt32LE(offset) !== ZIP_EOCD_SIGNATURE) continue;
+    const commentLength = tail.readUInt16LE(offset + 20);
+    if (offset + 22 + commentLength === tail.length) return offset;
+  }
+  return -1;
+}
+
+async function readZipEntries(zipPath: string): Promise<ZipEntryMeta[]> {
+  const handle = await fs.promises.open(zipPath, "r");
+  try {
+    const stat = await handle.stat();
+    const fileSize = stat.size;
+    const tailSize = Math.min(fileSize, ZIP_TAIL_READ_SIZE);
+    const tail = await readExact(handle, tailSize, fileSize - tailSize);
+    const eocdOffsetInTail = findEndOfCentralDirectory(tail);
+    if (eocdOffsetInTail < 0) throw new Error("无法识别 ZIP 中央目录");
+
+    const eocdAbsoluteOffset = fileSize - tailSize + eocdOffsetInTail;
+    const diskNumber = tail.readUInt16LE(eocdOffsetInTail + 4);
+    const centralDirectoryDisk = tail.readUInt16LE(eocdOffsetInTail + 6);
+    if (diskNumber !== 0 || centralDirectoryDisk !== 0) {
+      throw new Error("暂不支持多卷 ZIP 空间模型包");
+    }
+
+    let totalEntries = tail.readUInt16LE(eocdOffsetInTail + 10);
+    let centralDirectorySize = tail.readUInt32LE(eocdOffsetInTail + 12);
+    let centralDirectoryOffset = tail.readUInt32LE(eocdOffsetInTail + 16);
+
+    const needsZip64 = totalEntries === 0xffff
+      || centralDirectorySize === 0xffffffff
+      || centralDirectoryOffset === 0xffffffff;
+    if (needsZip64) {
+      if (eocdAbsoluteOffset < 20) throw new Error("ZIP64 目录结构不完整");
+      const locator = await readExact(handle, 20, eocdAbsoluteOffset - 20);
+      if (locator.readUInt32LE(0) !== ZIP64_EOCD_LOCATOR_SIGNATURE) {
+        throw new Error("无法识别 ZIP64 中央目录");
+      }
+      const zip64EocdOffset = readUInt64LE(locator, 8, "ZIP64 中央目录偏移");
+      const zip64Eocd = await readExact(handle, 56, zip64EocdOffset);
+      if (zip64Eocd.readUInt32LE(0) !== ZIP64_EOCD_SIGNATURE) {
+        throw new Error("ZIP64 中央目录结构无效");
+      }
+      totalEntries = readUInt64LE(zip64Eocd, 32, "ZIP64 文件数量");
+      centralDirectorySize = readUInt64LE(zip64Eocd, 40, "ZIP64 中央目录大小");
+      centralDirectoryOffset = readUInt64LE(zip64Eocd, 48, "ZIP64 中央目录偏移");
+    }
+
+    if (centralDirectorySize > ZIP_MAX_CENTRAL_DIRECTORY_SIZE) {
+      throw new Error("ZIP 文件目录过大，暂不支持导入");
+    }
+
+    const centralDirectory = await readExact(handle, centralDirectorySize, centralDirectoryOffset);
+    const entries: ZipEntryMeta[] = [];
+    let offset = 0;
+    while (offset < centralDirectory.length && entries.length < totalEntries) {
+      if (centralDirectory.readUInt32LE(offset) !== ZIP_CENTRAL_FILE_HEADER_SIGNATURE) {
+        throw new Error("ZIP 中央目录结构无效");
+      }
+      const flags = centralDirectory.readUInt16LE(offset + 8);
+      const compressionMethod = centralDirectory.readUInt16LE(offset + 10);
+      const nameLength = centralDirectory.readUInt16LE(offset + 28);
+      const extraLength = centralDirectory.readUInt16LE(offset + 30);
+      const commentLength = centralDirectory.readUInt16LE(offset + 32);
+      const nameStart = offset + 46;
+      const extraStart = nameStart + nameLength;
+      const commentStart = extraStart + extraLength;
+      if (commentStart + commentLength > centralDirectory.length) {
+        throw new Error("ZIP 中央目录条目不完整");
+      }
+
+      const rawName = centralDirectory.subarray(nameStart, extraStart);
+      const entryName = normalizeZipEntryName(rawName.toString("utf8"));
+      let compressedSize = centralDirectory.readUInt32LE(offset + 20);
+      let uncompressedSize = centralDirectory.readUInt32LE(offset + 24);
+      let localHeaderOffset = centralDirectory.readUInt32LE(offset + 42);
+
+      if (compressedSize === 0xffffffff || uncompressedSize === 0xffffffff || localHeaderOffset === 0xffffffff) {
+        let extraOffset = extraStart;
+        while (extraOffset + 4 <= commentStart) {
+          const headerId = centralDirectory.readUInt16LE(extraOffset);
+          const dataSize = centralDirectory.readUInt16LE(extraOffset + 2);
+          const dataStart = extraOffset + 4;
+          const dataEnd = dataStart + dataSize;
+          if (dataEnd > commentStart) break;
+          if (headerId === 0x0001) {
+            let dataOffset = dataStart;
+            if (uncompressedSize === 0xffffffff && dataOffset + 8 <= dataEnd) {
+              uncompressedSize = readUInt64LE(centralDirectory, dataOffset, "ZIP64 解压后大小");
+              dataOffset += 8;
+            }
+            if (compressedSize === 0xffffffff && dataOffset + 8 <= dataEnd) {
+              compressedSize = readUInt64LE(centralDirectory, dataOffset, "ZIP64 压缩后大小");
+              dataOffset += 8;
+            }
+            if (localHeaderOffset === 0xffffffff && dataOffset + 8 <= dataEnd) {
+              localHeaderOffset = readUInt64LE(centralDirectory, dataOffset, "ZIP64 本地头偏移");
+            }
+            break;
+          }
+          extraOffset = dataEnd;
+        }
+      }
+
+      if (entryName) {
+        entries.push({
+          entryName,
+          isDirectory: entryName.endsWith("/"),
+          flags,
+          compressionMethod,
+          compressedSize,
+          uncompressedSize,
+          localHeaderOffset,
+        });
+      }
+      offset = commentStart + commentLength;
+    }
+
+    return entries;
+  } finally {
+    await handle.close();
+  }
+}
+
+function assertZipEntryCanRead(entry: ZipEntryMeta): void {
+  if (entry.flags & 0x1) throw new Error("暂不支持加密 ZIP 空间模型包");
+  if (entry.compressionMethod !== ZIP_COMPRESSION_STORE && entry.compressionMethod !== ZIP_COMPRESSION_DEFLATE) {
+    throw new Error(`暂不支持 ZIP 压缩方式: ${entry.compressionMethod}`);
+  }
+}
+
+async function getZipEntryDataStart(zipPath: string, entry: ZipEntryMeta): Promise<number> {
+  const handle = await fs.promises.open(zipPath, "r");
+  try {
+    const localHeader = await readExact(handle, 30, entry.localHeaderOffset);
+    if (localHeader.readUInt32LE(0) !== ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
+      throw new Error("ZIP 本地文件头无效");
+    }
+    const nameLength = localHeader.readUInt16LE(26);
+    const extraLength = localHeader.readUInt16LE(28);
+    return entry.localHeaderOffset + 30 + nameLength + extraLength;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function openZipEntryStream(zipPath: string, entry: ZipEntryMeta): Promise<NodeJS.ReadableStream> {
+  assertZipEntryCanRead(entry);
+  if (entry.compressedSize === 0) return Readable.from(Buffer.alloc(0));
+
+  const dataStart = await getZipEntryDataStart(zipPath, entry);
+  const rawStream = fs.createReadStream(zipPath, {
+    start: dataStart,
+    end: dataStart + entry.compressedSize - 1,
+  });
+  if (entry.compressionMethod === ZIP_COMPRESSION_STORE) return rawStream;
+  return rawStream.pipe(createInflateRaw());
+}
+
+async function readZipEntryBuffer(zipPath: string, entry: ZipEntryMeta, maxBytes = ZIP_MAX_TEXT_ENTRY_SIZE): Promise<Buffer> {
+  if (entry.uncompressedSize > maxBytes) {
+    throw new Error("ZIP 文本配置过大，暂不支持读取");
+  }
+  const stream = await openZipEntryStream(zipPath, entry);
+  const chunks: Buffer[] = [];
+  let total = 0;
+  await new Promise<void>((resolve, reject) => {
+    stream.on("data", (chunk: Buffer) => {
+      total += chunk.length;
+      if (total > maxBytes) {
+        stream.destroy(new Error("ZIP 文本配置过大，暂不支持读取"));
+        return;
+      }
+      chunks.push(Buffer.from(chunk));
+    });
+    stream.on("error", reject);
+    stream.on("end", resolve);
+  });
+  return Buffer.concat(chunks);
+}
+
+async function extractZipEntryToFile(zipPath: string, entry: ZipEntryMeta, targetPath: string): Promise<void> {
+  const stream = await openZipEntryStream(zipPath, entry);
+  await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+  await pipeline(stream, fs.createWriteStream(targetPath));
+}
+
+async function extractZipToDirectory(zipPath: string, targetDir: string): Promise<void> {
+  const entries = await readZipEntries(zipPath);
+  await fs.promises.mkdir(targetDir, { recursive: true });
+
+  for (const entry of entries) {
+    const outputPath = resolveZipOutputPath(targetDir, entry.entryName);
+    if (entry.isDirectory) {
+      await fs.promises.mkdir(outputPath, { recursive: true });
+      continue;
+    }
+    await extractZipEntryToFile(zipPath, entry, outputPath);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
+async function removeProjectDirectoryAsync(dirPath: string): Promise<void> {
+  if (!fs.existsSync(dirPath)) return;
+  const removeOptions = {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 200,
+  };
+  try {
+    await fs.promises.rm(dirPath, removeOptions);
+  } catch (error: any) {
+    if (error?.code !== "EPERM" && error?.code !== "EACCES") throw error;
+    makeProjectTreeWritable(dirPath);
+    await fs.promises.rm(dirPath, removeOptions);
+  }
 }
 
 function areaType(record: Record<string, unknown>): string {
@@ -246,6 +540,15 @@ function resolveMapImportPlan(
   mapsSubDir: string,
 ): ResolvedMapImportPlan {
   const mapInfo = readMapInfoValues(mapSourceDir);
+  return resolveMapImportPlanFromMapInfo(projectName, sourceZipPath, mapInfo, mapsSubDir);
+}
+
+function resolveMapImportPlanFromMapInfo(
+  projectName: string,
+  sourceZipPath: string,
+  mapInfo: MapInfoValues,
+  mapsSubDir: string,
+): ResolvedMapImportPlan {
   const existingMapDir = findExistingMapDirByCode(projectName, mapsSubDir, mapInfo.mapCode);
   const existingMapInfo = existingMapDir ? readMapInfoValues(existingMapDir) : null;
   const desiredMapName = normalizeImportedMapName(path.basename(sourceZipPath, ".zip"));
@@ -262,6 +565,77 @@ function resolveMapImportPlan(
     willReplace: !!existingMapDir,
     existingMapDir,
   };
+}
+
+async function readMapInfoFromZip(zipPath: string, entry: ZipEntryMeta | undefined): Promise<MapInfoValues> {
+  if (!entry || entry.isDirectory) return { mapCode: "", mapName: "" };
+  try {
+    const text = (await readZipEntryBuffer(zipPath, entry)).toString("utf-8");
+    const parsed = JSON.parse(text);
+    if (!isRecord(parsed)) return { mapCode: "", mapName: "" };
+    return {
+      mapCode: textValue(parsed.map_code ?? parsed.mapCode ?? parsed.map_id ?? parsed.mapId),
+      mapName: textValue(parsed.map_name ?? parsed.mapName ?? parsed.name),
+    };
+  } catch {
+    return { mapCode: "", mapName: "" };
+  }
+}
+
+function findOuterMapZipEntry(entries: ZipEntryMeta[]): ZipEntryMeta | null {
+  const mapRoot = `${MAP_DIR_NAME}/`;
+  const zipEntries = entries.filter((entry) => {
+    if (entry.isDirectory || !entry.entryName.startsWith(mapRoot)) return false;
+    const rest = entry.entryName.slice(mapRoot.length);
+    return !!rest && !rest.includes("/") && path.posix.extname(rest).toLowerCase() === ".zip";
+  });
+  if (zipEntries.length > 1) {
+    throw new Error("空间模型加载仅支持单个地图包，请选择单地图导出的 ZIP");
+  }
+  return zipEntries[0] || null;
+}
+
+function findPreferredModelZipEntry(entries: ZipEntryMeta[]): ZipEntryMeta | null {
+  const candidates = entries.filter((entry) => !entry.isDirectory && isSupportedMapEntry(entry.entryName));
+  if (candidates.length === 0) return null;
+
+  return candidates.sort((a, b) => {
+    const dirA = zipDirName(a.entryName);
+    const dirB = zipDirName(b.entryName);
+    const depthA = dirA ? dirA.split("/").length : 0;
+    const depthB = dirB ? dirB.split("/").length : 0;
+    const nameRankA = zipBaseName(a.entryName).toLowerCase() === MAP_MODEL_FILE_NAME ? 0 : 1;
+    const nameRankB = zipBaseName(b.entryName).toLowerCase() === MAP_MODEL_FILE_NAME ? 0 : 1;
+    const mapRootRankA = dirA === MAP_DIR_NAME || dirA.startsWith(`${MAP_DIR_NAME}/`) ? 0 : 1;
+    const mapRootRankB = dirB === MAP_DIR_NAME || dirB.startsWith(`${MAP_DIR_NAME}/`) ? 0 : 1;
+    return nameRankA - nameRankB
+      || mapRootRankA - mapRootRankB
+      || depthA - depthB
+      || a.entryName.localeCompare(b.entryName);
+  })[0] || null;
+}
+
+async function inspectModelZipMapInfo(sourceZipPath: string): Promise<MapInfoValues> {
+  const entries = await readZipEntries(sourceZipPath);
+  const outerMapZip = findOuterMapZipEntry(entries);
+  if (outerMapZip) {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "robot-space-import-preview-nested-"));
+    try {
+      const nestedZipPath = path.join(tempRoot, zipBaseName(outerMapZip.entryName));
+      await extractZipEntryToFile(sourceZipPath, outerMapZip, nestedZipPath);
+      return await inspectModelZipMapInfo(nestedZipPath);
+    } finally {
+      await fs.promises.rm(tempRoot, { recursive: true, force: true });
+    }
+  }
+
+  const modelEntry = findPreferredModelZipEntry(entries);
+  if (!modelEntry) throw new Error("压缩包中未找到地图模型文件");
+
+  const modelDir = zipDirName(modelEntry.entryName);
+  const mapInfoEntryName = modelDir ? `${modelDir}/${MAP_INFO_FILE_NAME}` : MAP_INFO_FILE_NAME;
+  const mapInfoEntry = entries.find((entry) => !entry.isDirectory && entry.entryName === mapInfoEntryName);
+  return readMapInfoFromZip(sourceZipPath, mapInfoEntry);
 }
 
 function getDirectProjectMapName(projectName: string, projectDir: string, targetPath: string): string | null {
@@ -677,24 +1051,15 @@ export async function inspectProjectModelZipImport(projectName: string, sourcePa
   const sourceResolved = await resolveModelZipSource(sourcePath);
   const manifest = ensureProjectManifest(projectName);
   const mapsSubDir = manifest.layout.dirs.maps || MAP_DIR_NAME;
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "robot-space-import-preview-"));
-
-  try {
-    const zip = new AdmZip(sourceResolved);
-    zip.extractAllTo(tempRoot, true);
-
-    const prepared = prepareMapSourceDir(tempRoot, sourceResolved);
-    const plan = resolveMapImportPlan(projectName, sourceResolved, prepared.sourceDir, mapsSubDir);
-    return {
-      mapCode: plan.mapCode,
-      mapName: plan.targetMapName,
-      willReplace: plan.willReplace,
-      existingMapName: plan.willReplace ? plan.targetMapName : undefined,
-      existingMapDir: plan.existingMapDir || undefined,
-    };
-  } finally {
-    fs.rmSync(tempRoot, { recursive: true, force: true });
-  }
+  const mapInfo = await inspectModelZipMapInfo(sourceResolved);
+  const plan = resolveMapImportPlanFromMapInfo(projectName, sourceResolved, mapInfo, mapsSubDir);
+  return {
+    mapCode: plan.mapCode,
+    mapName: plan.targetMapName,
+    willReplace: plan.willReplace,
+    existingMapName: plan.willReplace ? plan.targetMapName : undefined,
+    existingMapDir: plan.existingMapDir || undefined,
+  };
 }
 
 export async function importProjectModelZip(projectName: string, sourcePath: string): Promise<ImportedSpaceModelZipResult> {
@@ -703,10 +1068,9 @@ export async function importProjectModelZip(projectName: string, sourcePath: str
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "robot-space-import-"));
 
   try {
-    const zip = new AdmZip(sourceResolved);
-    zip.extractAllTo(tempRoot, true);
+    await extractZipToDirectory(sourceResolved, tempRoot);
 
-    const prepared = prepareMapSourceDir(tempRoot, sourceResolved);
+    const prepared = await prepareMapSourceDir(tempRoot, sourceResolved);
     const mapSourceDir = prepared.sourceDir;
     const mapsSubDir = manifest.layout.dirs.maps || MAP_DIR_NAME;
     const plan = resolveMapImportPlan(projectName, sourceResolved, mapSourceDir, mapsSubDir);
@@ -714,11 +1078,11 @@ export async function importProjectModelZip(projectName: string, sourcePath: str
     const mapName = plan.targetMapName;
 
     if (fs.existsSync(targetDir)) {
-      removeProjectDirectory(targetDir);
+      await removeProjectDirectoryAsync(targetDir);
       removeManifestAssetsUnderPath(projectName, targetDir);
     }
-    fs.mkdirSync(targetDir, { recursive: true });
-    fs.cpSync(mapSourceDir, targetDir, { recursive: true, force: true });
+    await fs.promises.mkdir(targetDir, { recursive: true });
+    await fs.promises.cp(mapSourceDir, targetDir, { recursive: true, force: true });
 
     const modelPath = findPreferredModelFile(targetDir);
     if (!modelPath) {
@@ -736,18 +1100,18 @@ export async function importProjectModelZip(projectName: string, sourcePath: str
 
     return { mapName, mapDir: targetDir, modelPath };
   } finally {
-    fs.rmSync(tempRoot, { recursive: true, force: true });
+    await fs.promises.rm(tempRoot, { recursive: true, force: true });
   }
 }
 
-function prepareMapSourceDir(extractDir: string, sourceZipPath: string): PreparedMapSource {
+async function prepareMapSourceDir(extractDir: string, sourceZipPath: string): Promise<PreparedMapSource> {
   const outerMapZip = findOuterMapZip(extractDir);
   if (outerMapZip) {
     const mapName = assertSafePathSegment(path.basename(outerMapZip, ".zip"), "地图名称");
     const mapExtractDir = path.join(extractDir, "__map__", mapName);
-    fs.mkdirSync(mapExtractDir, { recursive: true });
-    new AdmZip(outerMapZip).extractAllTo(mapExtractDir, true);
-    flattenSingleWrapperDir(mapExtractDir);
+    await fs.promises.mkdir(mapExtractDir, { recursive: true });
+    await extractZipToDirectory(outerMapZip, mapExtractDir);
+    await flattenSingleWrapperDir(mapExtractDir);
     normalizeMapModelFileName(mapExtractDir);
     return { sourceDir: mapExtractDir, mapName };
   }
@@ -758,7 +1122,7 @@ function prepareMapSourceDir(extractDir: string, sourceZipPath: string): Prepare
     return { sourceDir: mapDirFromOuterPackage, mapName: path.basename(mapDirFromOuterPackage) };
   }
 
-  flattenSingleWrapperDir(extractDir);
+  await flattenSingleWrapperDir(extractDir);
   const directModel = findPreferredModelFile(extractDir, false);
   if (directModel) {
     normalizeMapModelFileName(extractDir);
@@ -800,7 +1164,7 @@ function findMapDirUnderMapRoot(rootDir: string): string | null {
   return mapDir ? path.join(mapRoot, mapDir.name) : null;
 }
 
-function flattenSingleWrapperDir(targetDir: string): void {
+async function flattenSingleWrapperDir(targetDir: string): Promise<void> {
   const items = fs.readdirSync(targetDir, { withFileTypes: true })
     .filter((item) => !item.name.startsWith(".") && !item.name.startsWith("__"));
   if (items.length !== 1 || !items[0].isDirectory()) return;
@@ -811,9 +1175,9 @@ function flattenSingleWrapperDir(targetDir: string): void {
   for (const item of fs.readdirSync(wrapper, { withFileTypes: true })) {
     const src = path.join(wrapper, item.name);
     const dst = path.join(targetDir, item.name);
-    fs.cpSync(src, dst, { recursive: true, force: true });
+    await fs.promises.cp(src, dst, { recursive: true, force: true });
   }
-  fs.rmSync(wrapper, { recursive: true, force: true });
+  await fs.promises.rm(wrapper, { recursive: true, force: true });
 }
 
 function findDirContainingModel(rootDir: string): string | null {

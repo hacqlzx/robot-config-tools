@@ -8,6 +8,7 @@ import {
   pointToSegmentDistSq,
   claimSpaceEditClick,
   isSpaceEditClickClaimedByOther,
+  buildOrthogonalBoxVertsFromThreePoints,
 } from "./drawing-utils";
 
 export interface DeviceAreaDrawingOptions {
@@ -375,41 +376,31 @@ export class DeviceAreaDrawing {
     this.points.push(pos.clone());
     if (this.points.length === 3) {
       // 三点完成后立即成盒，并清掉临时点/线，后续操作都围绕 boxes 集合。
-      this.buildBox();
-      this.clearPlacement();
+      if (this.buildBox()) {
+        this.clearPlacement();
+      } else {
+        this.pointSpheres.pop()?.destroy();
+        this.points.pop();
+        this.clickLines.pop()?.destroy();
+      }
     }
     this.emitChange();
     this.recordHistory("绘制设备区点", before);
   }
 
-  private buildBox() {
+  private buildBox(): boolean {
     // 底面高度优先使用点云估算地面 Y，保证设备区贴地；没有地面估算时回退到三点最低值。
     const baseY = this.groundY !== -Infinity
       ? this.groundY
       : Math.min(this.points[0].y, this.points[1].y, this.points[2].y);
-    const p1 = new pc.Vec3(this.points[0].x, baseY, this.points[0].z);
-    const p2 = new pc.Vec3(this.points[1].x, baseY, this.points[1].z);
-    const p3 = new pc.Vec3(this.points[2].x, baseY, this.points[2].z);
-
-    const edge1 = new pc.Vec3().sub2(p2, p1);
-    if (edge1.length() < 1e-4) return;
-    const edge2 = new pc.Vec3().sub2(p3, p2);
-    if (edge2.length() < 1e-4) return;
-
-    // 设备区保留 p1->p2 和 p2->p3 两条边方向，适合用户按设备区边界连续点三点。
-    const c0 = p1.clone();
-    const c1 = p2.clone();
-    const c2 = p3.clone();
-    const c3 = new pc.Vec3().add2(p1, edge2);
-
-    const up = new pc.Vec3(0, this.opts.height, 0);
-    const verts = [
-      c0, c1, c2, c3,
-      new pc.Vec3().add2(c0, up),
-      new pc.Vec3().add2(c1, up),
-      new pc.Vec3().add2(c2, up),
-      new pc.Vec3().add2(c3, up),
-    ];
+    const verts = buildOrthogonalBoxVertsFromThreePoints(
+      this.points[0],
+      this.points[1],
+      this.points[2],
+      baseY,
+      this.opts.height,
+    );
+    if (!verts) return false;
 
     const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
     const lines = BOX_EDGES.map(([a, b]) =>
@@ -426,6 +417,7 @@ export class DeviceAreaDrawing {
     this.boxes.push(box);
     this.selectBox(box);
     this.requestRender();
+    return true;
   }
 
   /** 删除选中的框 */
@@ -549,6 +541,7 @@ export class DeviceAreaDrawing {
       if (!sp) { box.labelEl.style.display = "none"; continue; }
       box.labelEl.style.left = `${sp.x * scaleX}px`;
       box.labelEl.style.top = `${sp.y * scaleY}px`;
+      box.labelEl.style.display = "block";
     }
   }
 
