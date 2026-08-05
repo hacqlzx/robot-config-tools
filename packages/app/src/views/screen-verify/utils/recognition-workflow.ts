@@ -1047,6 +1047,15 @@ function createAlignedRowsForLabelAndDeviceRow(labelRow: ImageRect[], deviceRow:
   let unboundLabelCount = 0;
   let unboundDeviceCount = 0;
 
+  if (shouldUseSingleLabelForMultipleDevices(sortedLabels, sortedDevices)) {
+    sortedDevices.forEach((deviceRect) => {
+      usedDeviceIds.add(deviceRect.id);
+      usedLabelIds.add(sortedLabels[0].id);
+      rows.push(createPointRowFromLabelAndDevice(sortedLabels[0], deviceRect, "deviceBox"));
+    });
+    return { rows, usedDeviceIds, unboundLabelCount: 0, unboundDeviceCount: 0 };
+  }
+
   if (sortedLabels.length === sortedDevices.length) {
     sortedDevices.forEach((deviceRect, index) => {
       usedDeviceIds.add(deviceRect.id);
@@ -1079,6 +1088,34 @@ function createAlignedRowsForLabelAndDeviceRow(labelRow: ImageRect[], deviceRow:
   }
 
   return { rows, usedDeviceIds, unboundLabelCount, unboundDeviceCount };
+}
+
+function shouldUseSingleLabelForMultipleDevices(labelRow: ImageRect[], deviceRow: ImageRect[]): boolean {
+  if (labelRow.length !== 1 || deviceRow.length <= 1) return false;
+  const labelRect = labelRow[0];
+  if (!hasVisibleLabelTextRect(labelRect)) return false;
+
+  const deviceSpan = getRowHorizontalSpan(deviceRow);
+  const deviceCenterX = (deviceSpan.left + deviceSpan.right) / 2;
+  const labelCenterX = getRectCenterX(labelRect);
+  const labelCenterY = getRectCenterY(labelRect);
+  const deviceCenterY = median(deviceRow.map(getRectCenterY));
+  const medianDeviceWidth = Math.max(MIN_ANNOTATION_RECT_SIZE, getMedianRectWidth(deviceRow));
+  const medianDeviceHeight = Math.max(MIN_ANNOTATION_RECT_SIZE, median(deviceRow.map((rect) => rect.h)));
+  const deviceSpanWidth = Math.max(0, deviceSpan.right - deviceSpan.left);
+  const compactSpanLimit = Math.max(labelRect.w * 4, medianDeviceWidth * deviceRow.length * 2.2);
+  if (deviceSpanWidth > compactSpanLimit) return false;
+
+  const nearestDeviceDistanceX = Math.min(...deviceRow.map((deviceRect) => Math.abs(getRectCenterX(deviceRect) - labelCenterX)));
+  const expandedLabelLeft = labelRect.x - Math.max(labelRect.w, medianDeviceWidth);
+  const expandedLabelRight = labelRect.x + labelRect.w + Math.max(labelRect.w, medianDeviceWidth);
+  const expandedOverlap = getAxisOverlap(expandedLabelLeft, expandedLabelRight, deviceSpan.left, deviceSpan.right);
+  const localXRelated = expandedOverlap > 0
+    || nearestDeviceDistanceX <= Math.max(labelRect.w * 1.8, medianDeviceWidth * 2.5);
+  if (!localXRelated) return false;
+
+  const maxVerticalDistance = Math.max(labelRect.h * 8, medianDeviceHeight * 4, MIN_ANNOTATION_RECT_SIZE * 8);
+  return Math.abs(deviceCenterY - labelCenterY) <= maxVerticalDistance;
 }
 
 function hasVisibleLabelTextRect(rect: ImageRect): boolean {
