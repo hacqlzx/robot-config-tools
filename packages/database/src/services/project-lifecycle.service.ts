@@ -10,12 +10,19 @@ const PROJECT_DATA_TABLES = [
 ] as const;
 
 export interface ProjectDataCounts {
+  /** 项目-厂站绑定记录数 */
   stationBindings: number;
+  /** 电压区记录数 */
   voltages: number;
+  /** 间隔记录数 */
   bays: number;
+  /** 主设备记录数 */
   mainDevices: number;
+  /** 部件记录数 */
   components: number;
+  /** 点位记录数 */
   points: number;
+  /** 以上记录总数 */
   total: number;
 }
 
@@ -31,6 +38,10 @@ function emptyCounts(): ProjectDataCounts {
   };
 }
 
+/**
+ * 统计某个项目在本地数据库中的关联数据量。
+ * 项目删除/重命名前用它给前端提示影响范围。
+ */
 export function getProjectDataCounts(db: DbWrapper, projectName: string): ProjectDataCounts {
   const counts = emptyCounts();
   for (const [key, table] of PROJECT_DATA_TABLES) {
@@ -43,6 +54,10 @@ export function getProjectDataCounts(db: DbWrapper, projectName: string): Projec
   return counts;
 }
 
+/**
+ * 重命名数据库中的项目字段。
+ * 如果目标项目名已经有数据，直接拒绝，避免两个项目数据混合。
+ */
 export function renameProjectData(db: DbWrapper, oldName: string, newName: string): ProjectDataCounts {
   const sourceCounts = getProjectDataCounts(db, oldName);
   const targetCounts = getProjectDataCounts(db, newName);
@@ -59,6 +74,10 @@ export function renameProjectData(db: DbWrapper, oldName: string, newName: strin
   return sourceCounts;
 }
 
+/**
+ * 删除项目关联的数据库数据。
+ * 按从点位到上层设备的反向顺序删除，减少外键/层级残留风险。
+ */
 export function deleteProjectData(db: DbWrapper, projectName: string): ProjectDataCounts {
   const counts = getProjectDataCounts(db, projectName);
   db.transaction(() => {

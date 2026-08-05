@@ -188,6 +188,7 @@ interface PathPointStyle {
 }
 
 export type DrawingRendererSelectInfo =
+  /** 只读回显的选中事件：区域类返回绑定间隔 id，路径类返回点/线索引。 */
   | { type: "cabinet" | "device-area" | "charging-area"; bayId: number }
   | { type: "path"; bayId: 0; index: number; target: "point" | "line" };
 
@@ -246,6 +247,7 @@ export class DrawingRenderer {
     this.canvas.addEventListener("mouseup", this.onMouseUp);
   }
 
+  /** 读取并渲染绘制 JSON；会根据文件内容自动识别区域协议、路径协议或射线回显数据。 */
   async loadJson(filePath: string) {
     // 文件读取走 FileSource，便于业务层替换读取方式；解析后的结构再交给 loadData 统一分发。
     const buf = await this.fileSource.readAll(filePath);
@@ -264,6 +266,7 @@ export class DrawingRenderer {
     this.loadData(data);
   }
 
+  /** 渲染已解析的数据对象，供业务层绕过文件 IO 直接刷新临时射线/路径回显。 */
   loadData(data: DrawingRenderData | unknown) {
     // 同一个地图目录下可能同时存在区域 JSON 和路径 JSON；按数据形状判断具体渲染入口。
     if (isRayRenderData(data)) {
@@ -289,6 +292,7 @@ export class DrawingRenderer {
     }
   }
 
+  /** 清空所有区域、路径、射线和 HTML 标签。 */
   clear() {
     this.deselectAll();
     for (const e of this.entities) this.app.root.removeChild(e);
@@ -304,6 +308,7 @@ export class DrawingRenderer {
     this.rayLabels = [];
   }
 
+  /** 仅清空勘察图像 hover 产生的相机射线，不影响已加载区域和路径。 */
   clearRays() {
     if (this.rayEntities.length === 0 && this.rayLabels.length === 0) return;
     const rayEntities = new Set(this.rayEntities);
@@ -317,6 +322,7 @@ export class DrawingRenderer {
     this.requestRender();
   }
 
+  /** 释放 DOM 标签层、鼠标事件和已创建的 PlayCanvas 实体。 */
   destroy() {
     if (this.labelRafId) cancelAnimationFrame(this.labelRafId);
     this.canvas.removeEventListener("mousedown", this.onMouseDown);

@@ -8,10 +8,15 @@ import { mapSiblingFilePath } from "../utils/space-paths";
 import { useSelectedProject } from "@/stores/appContextStore";
 
 interface UseSaveHandlersParams {
+  /** 当前 PlayCanvas 场景中已加载的模型实体索引，key 为模型显示名。 */
   entitiesRef: React.MutableRefObject<Map<string, pc.Entity>>;
+  /** 模型显示名到磁盘绝对路径的映射，用来推导同目录的绘制文件路径。 */
   filePathRef: React.MutableRefObject<Map<string, string>>;
+  /** 自动保存标记；为 true 时保存失败/跳过不弹出普通交互提示。 */
   isAutoSavingRef: React.MutableRefObject<boolean>;
+  /** 保存状态徽标 setter：idle/saving/saved/error。 */
   saveStatusSetter: React.Dispatch<React.SetStateAction<SaveStatus>>;
+  /** Ant Design message 封装，统一显示空间编辑页提示。 */
   message: SpaceMessageApi;
   /** 屏柜保存后回显：设置此 ref 供 cabinetMode useEffect 消费 */
   savedCabinetRef: React.MutableRefObject<{ item: CabinetItem; jsonPath: string } | null>;
@@ -34,19 +39,27 @@ interface UseSaveHandlersParams {
 }
 
 interface CabinetDeviceInput {
+  /** 弹窗行唯一 key，仅用于前端列表渲染，保存协议不依赖它。 */
   key?: string;
+  /** 屏柜编码：用户输入，不做 0 补全，直接写入数据库和区域 JSON。 */
   code: string;
+  /** 屏柜名称：用于左侧屏柜树和主设备名称。 */
   name: string;
 }
 
 interface CabinetSaveData {
+  /** 屏柜所属电压区域，来自设备台账。 */
   area: { id: number; name: string; code: string };
+  /** 屏柜所属间隔，来自设备台账。 */
   bay: { id: number; name: string; code: string };
+  /** 多柜成排时的柜排信息；单独屏柜可为空。柜排只落区域文件，不入主设备库。 */
   cabinetRow?: CabinetDeviceInput | null;
+  /** 屏柜列表，顺序必须与绘制分割线从左到右的顺序一致。 */
   rows: CabinetDeviceInput[];
 }
 
 interface SaveFileMarkOptions {
+  /** 是否通知地图树显示/刷新对应文件；自动保存通常设为 false，避免频繁扰动 UI。 */
   markFileShown?: boolean;
 }
 
@@ -220,6 +233,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     const modelPath = getCurrentModelPath();
     if (!modelPath) { if (showError) message.warning("未找到模型路径，无法保存"); return false; }
     try {
+      // path-codec 会在真正写文件前校验起点是否在充电区内，失败时不改写 reference_path.txt。
       await savePathDrawing({ api, projectName: selectedProject, modelPath, data });
       if (markFileShown) params.onPathFileSaved?.(getPathJsonPath(modelPath));
       return true;
@@ -299,6 +313,7 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
     isAutoSavingRef.current = true;
     let pathSaved = false;
     try {
+      // 手动“保存全部”和自动保存都走同一套分项保存函数，但不重复触发文件树高亮。
       if (hasCharging) await handleSaveChargingArea({ markFileShown: false });
       await handleSaveDeviceAreas({ markFileShown: false });
       pathSaved = await savePathInternal(!silent, { markFileShown: false });

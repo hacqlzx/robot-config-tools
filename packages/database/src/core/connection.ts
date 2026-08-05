@@ -28,6 +28,12 @@ interface Statement {
   all(...params: any[]): any[];
 }
 
+/**
+ * sql.js 数据库包装层。
+ *
+ * sql.js 是内存数据库，任何写操作都需要 export 后写回磁盘；
+ * 这里统一处理 named params、snake_case 转 camelCase、延迟写盘和事务。
+ */
 export class DbWrapper {
   private dirty = false;
   private batchDepth = 0;
@@ -40,6 +46,10 @@ export class DbWrapper {
     private filePath: string,
   ) {}
 
+  /**
+   * 准备 SQL 语句。
+   * 返回的 get/all 会把数据库字段从 snake_case 转成前端常用的 camelCase。
+   */
   prepare(sql: string): Statement {
     const self = this;
     return {
@@ -106,12 +116,17 @@ export class DbWrapper {
     };
   }
 
+  /** 执行原始 SQL，多用于迁移和批量建表。 */
   exec(sql: string): void {
     this.db.exec(sql);
     this.dirty = true;
     this.scheduleSave();
   }
 
+  /**
+   * 批量写入模式。
+   * fn 内部的多次写操作不会频繁触发保存，最外层结束后统一写盘。
+   */
   batchMode<T>(fn: () => T, saveReason = "batch"): T {
     if (this.batchDepth === 0) this.batchSaveReason = saveReason;
     this.batchDepth += 1;
@@ -127,6 +142,10 @@ export class DbWrapper {
     }
   }
 
+  /**
+   * 将内存数据库完整导出到本地 db 文件。
+   * reason 用于日志追踪本次写盘来源。
+   */
   saveToDisk(reason = "explicit"): void {
     if (!this.dirty) return;
     if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
@@ -186,6 +205,9 @@ export class DbWrapper {
     this.saveTimer = setTimeout(() => this.saveToDisk("scheduled"), 5000);
   }
 
+  /**
+   * 事务包装。保持和 better-sqlite3 类似的调用方式：db.transaction(fn)()。
+   */
   transaction(fn: () => void): () => void {
     return () => {
       this.db.exec("BEGIN");
@@ -216,6 +238,10 @@ function getDataDir(): string {
   return path.resolve(__dirname, "..", "..", "..", "data");
 }
 
+/**
+ * 初始化本地数据库。
+ * dbDir 可用于测试或自定义目录；默认开发环境落到仓库 data，打包后落到 userData/database。
+ */
 export async function initDatabase(dbDir?: string): Promise<DbWrapper> {
   if (db) return db;
   const dir = dbDir ?? getDataDir();
@@ -233,6 +259,9 @@ export async function initDatabase(dbDir?: string): Promise<DbWrapper> {
   return db;
 }
 
+/**
+ * 获取已初始化数据库实例。
+ */
 export function getDatabase(): DbWrapper {
   if (!db) throw new Error("Database not initialized. Call initDatabase() first.");
   return db;

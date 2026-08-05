@@ -6,19 +6,30 @@ import type { ModelPointStats } from "../types";
 import { loadedFileKey } from "../utils/space-paths";
 
 interface UseLasLoaderParams {
+  /** PlayCanvas Application，由空间编辑专用引擎初始化。 */
   appRef: React.MutableRefObject<pc.Application | null>;
+  /** 加载后的模型实体索引，和 PointCloudLoader 内部 Map 保持同步引用。 */
   entitiesRef: React.MutableRefObject<Map<string, pc.Entity>>;
+  /** LAS/LAZ 文件头信息，裁切保存和坐标转换会读取 header bbox/scale/offset。 */
   lasHeadersRef: React.MutableRefObject<Map<string, any>>;
+  /** 实体名到模型绝对路径映射，用于地图树可见性、保存和同目录文件推导。 */
   filePathRef: React.MutableRefObject<Map<string, string>>;
+  /** 模型点数统计：total 为原始点数，loaded 为降采样后实际上传点数。 */
   pointStatsRef: React.MutableRefObject<Map<string, ModelPointStats>>;
+  /** 当前模型推算地面高度，用作区域绘制默认底面。 */
   modelGroundYRef: React.MutableRefObject<number>;
+  /** 通知 PlayCanvas 按需渲染一帧。 */
   requestRender: () => void;
+  /** 根据模型局部中心和范围聚焦相机。 */
   focusOnModel: (cx: number, cy: number, cz: number, extent: number) => void;
+  /** loading 状态 setter：空间编辑页顶部/遮罩使用。 */
   setLoading: (v: boolean) => void;
   setLoadingFile: (v: string) => void;
   setLoadingText: (v: string) => void;
   setLoadingProgress: (v: number) => void;
+  /** 当前已加载文件 key 集合，用于地图树勾选状态。 */
   setLoadedFiles: React.Dispatch<React.SetStateAction<Set<string>>>;
+  /** 可替换文件读取源；默认走 Electron IPC，测试或其他环境可注入自定义实现。 */
   fileSource?: FileSource;
 }
 
@@ -60,6 +71,7 @@ export function useLasLoader({
   };
 
   const removeLoadedFile = (loader: PointCloudLoader, fileKey: string) => {
+    // 用 loadedFileKey 比较而不是实体名比较，兼容 map.las 这种实体名取父目录的情况。
     for (const [name, loadedPath] of Array.from(loader.filePaths.entries())) {
       if (loadedFileKey(loadedPath) !== fileKey) continue;
       loader.entities.get(name)?.destroy();
@@ -96,6 +108,7 @@ export function useLasLoader({
       try {
         const model = await loader.loadLasFromPath(filePath);
         if (requestId !== latestLoadRequestRef.current) {
+          // 用户快速切换模型时，旧加载任务可能后完成；完成后立即清理，避免旧地图重新出现在场景里。
           removeLoadedFile(loader, fileKey);
           syncRefs();
           requestRender();

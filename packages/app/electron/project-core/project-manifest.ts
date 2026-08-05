@@ -8,6 +8,7 @@ export const POINT_TABLE_EXTS = new Set([".xls", ".xlsx"]);
 export const PROJECT_MANIFEST_FILE = "project.manifest.json";
 const PROJECT_MANIFEST_SCHEMA_VERSION = 1;
 const PROJECT_LAYOUT_VERSION = 1;
+/** 项目内约定目录名称，业务代码不直接写死字符串时优先从 manifest 读取。 */
 const DEFAULT_PROJECT_DIRS = {
   maps: "地图",
   pointTables: "点表",
@@ -15,15 +16,21 @@ const DEFAULT_PROJECT_DIRS = {
 };
 
 export interface ProjectManifestAsset {
+  /** 资产唯一 ID，用于后续重命名/移动时保持关联 */
   id: string;
+  /** 展示名称，例如地图名或点表文件名 */
   name: string;
+  /** 相对项目根目录的 POSIX 路径 */
   relativePath: string;
+  /** 首次登记时间 */
   createdAt: string;
+  /** 最近更新时间 */
   updatedAt: string;
   [key: string]: unknown;
 }
 
 export interface ProjectManifest {
+  /** manifest schema 版本，用于后续兼容迁移 */
   schemaVersion: number;
   project: {
     id: string;
@@ -32,6 +39,7 @@ export interface ProjectManifest {
     updatedAt: string;
   };
   layout: {
+    /** 项目目录布局版本 */
     version: number;
     dirs: {
       maps: string;
@@ -41,8 +49,11 @@ export interface ProjectManifest {
     };
   };
   assets: {
+    /** 空间模型地图资产 */
     maps: ProjectManifestAsset[];
+    /** 点表 Excel 资产 */
     pointTables: ProjectManifestAsset[];
+    /** 勘察任务资产，当前仍在逐步接入 */
     surveyTasks: ProjectManifestAsset[];
   };
 }
@@ -84,6 +95,9 @@ function sanitizeAssetList(value: unknown): ProjectManifestAsset[] {
     .filter((item) => item.name && item.relativePath);
 }
 
+/**
+ * 新项目或旧项目缺失 manifest 时生成默认结构。
+ */
 export function createDefaultManifest(projectName: string): ProjectManifest {
   const stamp = nowIso();
   return {
@@ -106,6 +120,9 @@ export function createDefaultManifest(projectName: string): ProjectManifest {
   };
 }
 
+/**
+ * 兼容旧版/损坏 manifest：缺字段时回填默认布局和空资产列表。
+ */
 function normalizeManifest(projectName: string, raw: any): ProjectManifest {
   const defaults = createDefaultManifest(projectName);
   const project = raw?.project && typeof raw.project === "object" ? raw.project : {};
@@ -157,12 +174,18 @@ export function writeProjectManifestByDir(projectDir: string, manifest: ProjectM
   return manifest;
 }
 
+/**
+ * 确保项目目录下存在 project.manifest.json，并返回规范化后的内容。
+ */
 export function ensureProjectManifest(projectName: string): ProjectManifest {
   const projectDir = resolveProjectDir(projectName);
   const manifest = readProjectManifestByDir(projectDir, projectName);
   return writeProjectManifestByDir(projectDir, manifest);
 }
 
+/**
+ * 统一的 manifest 读改写入口。
+ */
 function updateProjectManifest(projectName: string, mutate: (manifest: ProjectManifest, projectDir: string) => void): ProjectManifest {
   const projectDir = resolveProjectDir(projectName);
   const manifest = readProjectManifestByDir(projectDir, projectName);
@@ -172,6 +195,9 @@ function updateProjectManifest(projectName: string, mutate: (manifest: ProjectMa
   return writeProjectManifestByDir(projectDir, manifest);
 }
 
+/**
+ * 按相对路径或名称更新资产；已有资产保留 createdAt，只刷新 updatedAt。
+ */
 function upsertManifestAsset(
   manifest: ProjectManifest,
   collection: ManifestAssetCollection,
@@ -197,6 +223,9 @@ function upsertManifestAsset(
   }
 }
 
+/**
+ * 根据项目内写入路径维护地图资产。
+ */
 function touchMapAssetForPath(manifest: ProjectManifest, relativePath: string): void {
   const normalizedPath = relativePath.replace(/\\/g, "/");
   const mapDir = manifest.layout.dirs.maps;
@@ -225,6 +254,9 @@ function touchMapAssetForPath(manifest: ProjectManifest, relativePath: string): 
   }
 }
 
+/**
+ * 根据项目内写入路径维护点表资产。
+ */
 function touchPointTableAssetForPath(manifest: ProjectManifest, relativePath: string, fileSize?: number): void {
   const normalizedPath = relativePath.replace(/\\/g, "/");
   const pointTableDir = manifest.layout.dirs.pointTables;

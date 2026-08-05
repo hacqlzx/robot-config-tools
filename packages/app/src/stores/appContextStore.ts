@@ -7,6 +7,15 @@ const CACHED_ROBOT_LIST_KEY = "cachedRobotList";
 
 export type ConnectionStatus = "disconnected" | "connected" | "failed";
 
+/**
+ * 全局应用上下文。
+ *
+ * selectedProject：当前项目名称，业务页面用它定位项目目录和数据库项目字段。
+ * selectedRobot：当前后台机器人名称/编码，配置和导入导出接口会用到。
+ * backendIp：当前后台 IP，不包含协议头。
+ * connectionStatus：后台连接状态，用于拦截请求和驱动顶部状态。
+ * backendIpVersion：后台 IP 或连接成功事件的版本号，供配置页判断是否需要重新拉取数据。
+ */
 export interface AppContextState {
   selectedProject: string | null;
   selectedRobot: string | null;
@@ -18,7 +27,9 @@ export interface AppContextState {
 type Listener = () => void;
 
 export interface RobotOption {
+  /** 展示在顶部机器人下拉框里的名称 */
   label: string;
+  /** 后台接口使用的机器人值 */
   value: string;
 }
 
@@ -63,6 +74,9 @@ const listeners = new Set<Listener>();
 const robotOptionListeners = new Set<Listener>();
 let robotOptions = readRobotOptions();
 
+/**
+ * 合并更新上下文状态，并只在实际变化时通知订阅者。
+ */
 function updateState(patch: Partial<AppContextState>): void {
   const next = { ...state, ...patch };
   const changed = Object.keys(patch).some((key) =>
@@ -91,6 +105,10 @@ export function subscribeRobotOptions(listener: Listener): () => void {
   return () => robotOptionListeners.delete(listener);
 }
 
+/**
+ * 更新机器人下拉选项。
+ * validateSelection=true 时会校验当前选中机器人是否仍存在，不存在则清空。
+ */
 function updateRobotOptions(options: RobotOption[], validateSelection: boolean): void {
   const seen = new Set<string>();
   const next = options.reduce<RobotOption[]>((result, option) => {
@@ -148,6 +166,7 @@ export function setSelectedProject(projectName: string | null): void {
   updateState({ selectedProject: value });
 }
 
+/** 设置当前机器人；传空时清空本地持久化选择。 */
 export function getSelectedRobot(): string | null {
   return state.selectedRobot;
 }
@@ -158,10 +177,12 @@ export function setSelectedRobot(robotName: string | null): void {
   updateState({ selectedRobot: value });
 }
 
+/** 读取后台 IP，返回值不带 https://。 */
 export function getBackendIp(): string {
   return state.backendIp;
 }
 
+/** 仅更新后台 IP，不代表连接已成功。 */
 export function setBackendIp(ip: string): void {
   const value = ip.trim();
   writeStorage(BACKEND_IP_KEY, value || null);

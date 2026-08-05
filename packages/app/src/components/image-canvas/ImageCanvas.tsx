@@ -3,29 +3,50 @@ import { Button, Tooltip } from "antd";
 import { CompressOutlined, ZoomInOutlined, ZoomOutOutlined } from "@ant-design/icons";
 
 export interface ImageItem {
+  /** 已解码的图片对象；缩略图总览通常懒加载，双击原图时会补齐。 */
   img?: HTMLImageElement;
+  /** 图片绝对路径，通过 Electron IPC 读取。 */
   imagePath: string;
+  /** 图片稳定 id，标定框回显按此 id 关联。 */
   id: number;
+  /** 图片在总览 canvas 世界坐标中的左上角 X。 */
   x: number;
+  /** 图片在总览 canvas 世界坐标中的左上角 Y。 */
   y: number;
+  /** 总览缩略图宽度。 */
   w: number;
+  /** 总览缩略图高度。 */
   h: number;
+  /** 原图宽度，缺失时缩略图懒加载后回填。 */
   naturalWidth?: number;
+  /** 原图高度，缺失时缩略图懒加载后回填。 */
   naturalHeight?: number;
+  /** 云台方向。 */
   side: "left" | "right";
+  /** 所属停靠点 id。 */
   spId: number;
+  /** 列分组 key，按停靠点+组号+云台侧聚合。 */
   columnKey?: string;
+  /** 列头展示文本。 */
   columnLabel?: string;
+  /** 可见光图片文件名。 */
   visName: string;
 }
 
 interface Props {
+  /** 总览 canvas ref，由父组件持有。 */
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
+  /** 外层容器 ref，用于自适应尺寸和缩放中心。 */
   containerRef: React.RefObject<HTMLDivElement | null>;
+  /** 已计算布局的图片列表。 */
   images: ImageItem[];
+  /** 是否显示总览画布；标定详情打开时会隐藏但不销毁。 */
   visible?: boolean;
+  /** 双击缩略图进入原图标定。 */
   onImageDoubleClick?: (item: ImageItem) => void | Promise<void>;
+  /** hover 图片时通知 3D 地图显示对应相机射线。 */
   onImageHover?: (item: ImageItem | null) => void;
+  /** 已保存标定框，key 为 imageId，value 为原图坐标矩形数组。 */
   calibrationRects?: Map<number, { x: number; y: number; w: number; h: number }[]>;
 }
 
@@ -36,8 +57,11 @@ interface ThumbEntry {
   lastUsed: number;
 }
 
+/** 缩略图缓存相对显示尺寸的放大倍数，兼顾清晰度和内存。 */
 const THUMB_CACHE_SCALE = 4;
+/** 内存中保留的缩略图上限，超过后按最近使用时间淘汰。 */
 const MAX_THUMB_CACHE_SIZE = 180;
+/** 并发读取图片数量，避免大量图片同时走 IPC 造成卡顿。 */
 const MAX_CONCURRENT_LOADS = 3;
 const COLUMN_HEADER_HEIGHT = 28;
 const COLUMN_HEADER_GAP = 8;

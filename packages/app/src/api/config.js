@@ -230,6 +230,8 @@ export async function getSurveyRunning(robotId) {
   try {
     return await http.get(surveyRunningEndpoint, { robotId });
   } catch (e) {
+    // 兼容不同后台版本：旧版使用 /survey/check，新版使用 /survey/getSurveyRunning。
+    // 一旦 fallback 成功，后续查询固定使用成功的路径，减少重复失败请求。
     if (surveyRunningEndpoint !== "/robot/tool/task/survey/check") {
       const res = await http.get("/robot/tool/task/survey/check", { robotId });
       surveyRunningEndpoint = "/robot/tool/task/survey/check";

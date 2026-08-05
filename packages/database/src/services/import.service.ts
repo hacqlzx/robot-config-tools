@@ -142,21 +142,36 @@ function matchesPointPath(
 
 /** Excel 每行数据结构（与 excel-parser.ts 共享） */
 export interface PointExcelRow {
+  /** 电压区/区域名称 */
   voltName: string;
+  /** 电压区/区域编码；为空时按同名路径复用或自动生成 */
   voltCode?: string;
+  /** 间隔名称 */
   bayName: string;
+  /** 间隔类型，例如设备区、屏柜区 */
   bayType?: string;
+  /** 间隔编码；为空时按同名路径复用或自动生成 */
   bayCode?: string;
+  /** 主设备名称 */
   mainDeviceName: string;
+  /** 主设备类型编码 */
   mainDeviceType?: number;
+  /** 主设备编码；为空时自动生成 */
   mainDeviceCode?: string;
   phaseType?: number;
+  /** 部件名称 */
   componentName: string;
+  /** 部件类型 */
   componentType?: string;
+  /** 部件编码；为空时自动生成 */
   componentCode?: string;
+  /** 点位名称 */
   pointName: string;
+  /** 点位编码；为空时自动生成 */
   pointCode?: string;
+  /** 巡检点 ID；为空时生成 16 位数字 ID */
   cruiseId?: string;
+  /** 识别类型列表，保持点表原始配置 */
   recognitionTypeList?: string;
   saveTypeList?: number;
   meterType?: number;
@@ -170,14 +185,24 @@ export interface PointExcelRow {
 }
 
 export interface ImportResult {
+  /** 输入总行数 */
   total: number;
+  /** 新增层级/点位计数 */
   inserted: number;
+  /** 更新层级/点位计数 */
   updated: number;
+  /** 导入校验错误，非空时不会写入数据 */
   errors: string[];
 }
 
 /**
  * 导入点表数据：Excel 行 → 设备树（增量 upsert）
+ *
+ * @param db 本地数据库连接
+ * @param rows 已由前端 excel-parser 解析出的点表行
+ * @param stationName 点表所属厂站名称
+ * @param stationCode 点表所属厂站编码
+ * @param projectName 当前项目名称，用于隔离多项目数据
  *
  * stationName / stationCode 直接透传到各层级，厂站仅作为筛选字段不单独建表。
  * stationId 传 0 表示不关联外部厂站记录。

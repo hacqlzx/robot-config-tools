@@ -45,7 +45,9 @@ interface TreeNode {
 
 const SURVEY_DIR_NAME = "勘察数据";
 const CALIBRATION_FILE_NAME = "勘察数据.json";
+/** 查询后台勘察任务进度的轮询间隔。 */
 const SURVEY_POLL_INTERVAL_MS = 2000;
+/** 任务刚下发后后台可能短暂查不到运行态，此窗口内先显示“执行中”。 */
 const SURVEY_START_WAIT_MS = 15000;
 
 function getSharedCalibrationFilePath(surveyDir: string): string {
@@ -62,6 +64,7 @@ function getCalibrationEntryMapCode(entry: any, fileMapCode?: string): string {
 }
 
 function parseProgressPercent(value: unknown): number {
+  // 后台 progress 可能是 "20%"、"20.5" 或其他文本，提取首个数字并限制到 0~100。
   const match = String(value ?? "").match(/\d+(?:\.\d+)?/);
   if (!match) return 0;
   const parsed = Number.parseFloat(match[0]);
@@ -70,6 +73,7 @@ function parseProgressPercent(value: unknown): number {
 }
 
 function buildSurveyRunningState(data: any): SurveyRunningState | null {
+  // 后台以 status/progress 组合表达任务状态；完成返回 null，表示工具栏不再显示进度条。
   if (!data) return null;
   const progressPercent = parseProgressPercent(data.progress);
   const statusText = String(data.status ?? "");
@@ -192,6 +196,7 @@ export default function ImageEdit() {
       const map = new Map<number, { x: number; y: number; w: number; h: number }[]>();
       const codes = new Set<string>();
       for (const entry of json.data || []) {
+        // 勘察数据是项目级共享文件，必须按当前地图过滤，避免其他地图标定状态串到当前页。
         if (currentMapCode && getCalibrationEntryMapCode(entry, json.mapCode) !== currentMapCode) continue;
         if (entry.rects && entry.rects.length > 0) {
           map.set(entry.imageId, entry.rects.map((r: any) => ({ x: r.x, y: r.y, w: r.w, h: r.h })));
@@ -293,7 +298,7 @@ export default function ImageEdit() {
   /** 加载勘察图像（地图模式：LAS + 区域绘制 + 机器人路径/停靠点） */
   const handleSurveyLoad = useCallback(async (mapName: string) => {
     if (!selectedProject || !window.electronAPI?.project) return;
-    // 卸载旧模型
+    // 卸载旧模型和旧任务状态；勘察页同一时间只展示一张地图，避免区域/射线跨地图残留。
     loaderRef.current?.destroy();
     drawingRef.current?.clear();
     loadedMapRef.current = null;
@@ -371,6 +376,7 @@ export default function ImageEdit() {
 
       if (pathFile && stopPointFile) {
         try {
+          // 机器人路径用 path.json + stop_points.json 组合回显，和空间编辑写的 reference_path.txt 分开处理。
           const pathData = await loadRobotRouteDrawingData({
             fileSource: electronFileSource,
             pathFilePath: pathFile,
@@ -404,6 +410,7 @@ export default function ImageEdit() {
       surveyDirRef.current = result.surveyDir;
       if (loadedModelPathRef.current) {
         try {
+          // 根据任务图片的 SP 位姿生成相机射线；hover 缩略图时只展示当前图片对应射线。
           const rayData = await loadSurveyRayDrawingData({
             fileSource: electronFileSource,
             deviceDir: result.deviceDir,
@@ -541,6 +548,7 @@ export default function ImageEdit() {
       }
       const nextState = buildSurveyRunningState(body.data);
       if (!nextState && Date.now() < surveyPendingStartUntilRef.current) {
+        // 刚下发后接口可能还未生成任务记录，短时间内保持本地“执行中”状态，避免进度条闪退。
         setSurveyRunning((prev) => prev?.running ? prev : buildSurveyStartingState("勘察任务"));
         return;
       }

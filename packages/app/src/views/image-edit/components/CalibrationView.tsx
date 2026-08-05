@@ -15,45 +15,69 @@ import { useSelectedProject } from "@/stores/appContextStore";
 import type { ImageItem } from "@/components/image-canvas/ImageCanvas";
 import "./CalibrationView.scss";
 
-/** 标定矩形（图片坐标系） */
 interface PointBinding {
+  /** 点位编码，绑定/解绑标定 ID 时以此字段操作数据库。 */
   pointCode: string;
+  /** 点位名称，用于画布框体标签和右侧点表显示。 */
   pointName: string;
 }
 
+/** 标定矩形（图片原图坐标系，非 canvas 缩放后的屏幕坐标） */
 interface RectData {
+  /** 前端标定框 id，仅在当前图片标定数据内保持唯一。 */
   id: number;
+  /** 原图坐标系左上角 X。 */
   x: number;
+  /** 原图坐标系左上角 Y。 */
   y: number;
+  /** 原图坐标系宽度。 */
   w: number;
+  /** 原图坐标系高度。 */
   h: number;
+  /** 当前框绑定的点位；业务上限制一个框只绑定一个点位。 */
   bindings: PointBinding[];
 }
 
 /** 勘察数据文件结构 */
 interface CalibrationFileData {
+  /** 文件版本；v2 开始每条 entry 都可携带 mapCode，支持同项目多地图共享一个文件。 */
   version?: number;
+  /** 旧版全文件地图编码，读取时会下沉到 entry.mapCode。 */
   mapCode?: string;
+  /** 按图片维度保存的标定数据数组。 */
   data: Array<{
+    /** 地图编码/名称，用于同一项目多地图过滤。 */
     mapCode?: string;
+    /** ImageCanvas 中的图片稳定 id。 */
     imageId: number;
+    /** 可见光图片文件名。 */
     imageName: string;
+    /** 任务停靠点 id。 */
     spId: number;
+    /** 云台侧：左/右。 */
     side: "left" | "right";
+    /** 该图片下的全部标定框。 */
     rects: RectData[];
   }>;
 }
 
 interface Props {
+  /** 当前双击打开的原图及其任务元数据。 */
   image: ImageItem & { img: HTMLImageElement };
+  /** 勘察任务目录，用于定位项目级 勘察数据.json。 */
   taskDir: string;
+  /** 当前加载的地图名称/编码，用于多地图标定数据隔离。 */
   mapName: string | null;
+  /** 右侧点表当前选中的设备区间隔 id。 */
   selBayId: number | undefined;
   onSelBayIdChange: (v: number | undefined) => void;
+  /** 点位名称过滤关键字。 */
   nameFilter: string;
   onNameFilterChange: (v: string) => void;
+  /** 点位标定状态过滤：全部/已标/未标。 */
   pointFilter: "all" | "marked" | "unmarked";
   onPointFilterChange: (v: "all" | "marked" | "unmarked") => void;
+  /** 返回缩略图总览页，返回前会 flush 未保存的标定快照。 */
   onBack: () => void;
 }
 
@@ -70,6 +94,7 @@ const SURVEY_DIR_NAME = "勘察数据";
 const CALIBRATION_FILE_NAME = "勘察数据.json";
 
 function getSharedCalibrationFilePath(taskDir: string): string {
+  // 无论当前打开的是地图目录还是 img/device 子目录，标定结果都统一回到 勘察数据/勘察数据.json。
   const normalized = taskDir.replace(/[\\/]+$/, "");
   const parts = normalized.split(/[\\/]/).filter(Boolean);
   if (parts.length === 0) return "";
@@ -83,6 +108,7 @@ function getEntryMapCode(entry: CalibrationFileData["data"][number], fileMapCode
 }
 
 function normalizeCalibrationEntries(file?: CalibrationFileData): CalibrationFileData["data"] {
+  // 兼容旧文件：旧版只在根字段写 mapCode，新版每条图片 entry 都写 mapCode。
   return (file?.data || []).map((entry) => ({
     ...entry,
     mapCode: getEntryMapCode(entry, file?.mapCode),
@@ -270,7 +296,7 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
     const subPath = `${SURVEY_DIR_NAME}/${CALIBRATION_FILE_NAME}`;
     const finalData = buildSaveData(rectSnapshot);
 
-    // 先读取现有文件，合并其他 spId/side 的数据
+    // 先读取现有文件，合并其他图片/地图的数据；本次只替换当前 imageId + mapCode 的记录。
     try {
       const buf = await window.electronAPI!.readLargeFile(sharedFilePath);
       const existing = JSON.parse(new TextDecoder().decode(buf)) as CalibrationFileData;

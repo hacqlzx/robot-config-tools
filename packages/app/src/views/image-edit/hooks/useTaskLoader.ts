@@ -11,8 +11,11 @@ const THUMBNAIL_WIDTH = 360;
 const COLUMN_HEADER_SPACE = 48;
 
 export interface TaskLoadResult {
+  /** 计算好 canvas 布局后的图片缩略图列表。 */
   items: ImageItem[];
+  /** 勘察任务根目录，项目级标定文件会写在该目录的上级/根目录约定位置。 */
   surveyDir: string;
+  /** 真正包含 json_list.json 和停靠点子目录的设备图目录。 */
   deviceDir: string;
 }
 
@@ -108,6 +111,7 @@ export function useTaskLoader() {
   }, []);
 
   const resolveDeviceTaskDir = useCallback(async (taskDir: string): Promise<string> => {
+    // 兼容多种导入 ZIP 解压结构：根目录、img、img/device、device 都可能是设备图目录。
     const normalized = taskDir.replace(/[\\/]+$/, "");
     if (await fileExists(pathJoin(normalized, "json_list.json"))) return normalized;
     const imgDir = pathJoin(normalized, "img");
@@ -119,6 +123,7 @@ export function useTaskLoader() {
   }, [fileExists]);
 
   const resolveSurveyDir = (taskDir: string, deviceDir: string): string => {
+    // 标定文件是勘察任务级共享文件，不能写到 img/device 这种设备图子目录下。
     const normalizedTask = taskDir.replace(/[\\/]+$/, "");
     const normalizedDevice = deviceDir.replace(/[\\/]+$/, "");
     if (/[\\/]img[\\/]device$/i.test(normalizedDevice)) return normalizedDevice.replace(/[\\/]img[\\/]device$/i, "");
@@ -144,6 +149,7 @@ export function useTaskLoader() {
     const allImages: TaskLoadedImage[] = [];
     let probedSize: { width: number; height: number } | null = null;
     for (const fileName of manifest.file_names) {
+      // 文件名中的第二段通常是停靠点/采集点 id，用它定位同名子目录。
       const parts = fileName.split("_");
       const cpId = Math.abs(parseInt(parts[1])) || 0;
       const spDir = String(cpId);
@@ -161,6 +167,7 @@ export function useTaskLoader() {
 
         const imgPath = pathJoin(pathJoin(deviceDir, spDir), cfg.vis_name);
         if (!probedSize) {
+          // 任务 JSON 可能缺少 width/height，先读取首张可见光图探测统一缩略图比例。
           try {
             const img = await loadImageElement(imgPath, cfg.vis_name);
             probedSize = { width: img.naturalWidth, height: img.naturalHeight };

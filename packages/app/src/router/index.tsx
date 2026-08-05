@@ -7,10 +7,20 @@ const ImageEdit = lazy(() => import("../views/image-edit"));
 const ImportExport = lazy(() => import("../views/import-export"));
 const Config = lazy(() => import("../views/config"));
 
+/**
+ * 延迟加载页面的统一包裹组件。
+ * 只用于非首屏核心页，减少启动阶段需要加载的 JS 体积。
+ */
 function LazyPage({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<div style={{ padding: 24, textAlign: "center" }}>Loading...</div>}>{children}</Suspense>;
 }
 
+/**
+ * 应用主路由。
+ *
+ * 注意：screen-verify 和 device-verify 的真实组件由 AppLayout 缓存渲染，
+ * 这里保留空 element 只是为了让菜单路由和地址栏匹配。
+ */
 const router = createHashRouter([
   {
     path: "/*",

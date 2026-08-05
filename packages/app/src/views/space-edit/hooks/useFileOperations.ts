@@ -114,6 +114,11 @@ export function useFileOperations(params: UseFileOperationsParams) {
     setLoadedFiles,
   ]);
 
+  /**
+   * 互斥加载单个模型。
+   * 左侧树切换模型时会先清空旧模型和绘制状态；同一路径正在加载时复用 Promise，
+   * 避免重复点击导致同一 LAS/LAZ 被上传两次。
+   */
   const loadModelExclusive = useCallback(async (filePath: string): Promise<string | null> => {
     const fileKey = loadedFileKey(filePath);
     if (isModelPathLoaded(filePath)) return filePath;

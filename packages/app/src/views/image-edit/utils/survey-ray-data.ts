@@ -10,17 +10,26 @@ import type { TaskImageConfig, TaskManifest, TaskSPConfig, TaskSPPose } from "..
 const DEFAULT_SURVEY_RAY_LENGTH = 4;
 
 interface LoadSurveyRayDrawingDataOptions {
+  /** 文件读取源；当前页面传 Electron 文件源。 */
   fileSource: FileSource;
+  /** 设备图任务目录，内部包含 json_list.json 和各停靠点子目录。 */
   deviceDir: string;
+  /** 当前地图主点云路径，用于读取 LAS 坐标转换并把机器人坐标转成场景坐标。 */
   modelPath: string;
+  /** 可选 stop_points.json 路径；存在时优先用机器人停靠点位姿生成射线。 */
   stopPointFilePath?: string;
+  /** 射线显示长度，单位沿用场景坐标。 */
   rayLength?: number;
 }
 
 interface StopPointPose {
+  /** 机器人/LAS 坐标系 X。 */
   x: number;
+  /** 机器人/LAS 坐标系 Y。 */
   y: number;
+  /** 机器人/LAS 坐标系 Z，高度缺失时按 0。 */
   z: number;
+  /** 停靠点朝向，兼容弧度和角度输入。 */
   yaw: number;
 }
 
@@ -61,6 +70,7 @@ function normalizeRecordArray(data: unknown, keys: string[] = []): Record<string
 }
 
 function parseLooseJsonText(text: string): unknown {
+  // 现场机器人 JSON 偶尔带尾逗号，先做轻量容错再交给 JSON.parse。
   return JSON.parse(text.replace(/,\s*([}\]])/g, "$1"));
 }
 
@@ -123,6 +133,7 @@ function buildRay(
   const height = finiteNumber(image.height) ? image.height : 0;
   const pan = finiteNumber(image.pan) ? image.pan : 0;
   const tilt = finiteNumber(image.tilt) ? image.tilt : 0;
+  // 射线方向 = 停靠点 yaw + 云台 pan，再叠加 tilt 作为俯仰角。
   const heading = yawToRadians(yaw) + degreesToRadians(pan);
   const pitch = degreesToRadians(tilt);
   const horizontal = Math.cos(pitch);
@@ -153,6 +164,7 @@ export async function loadSurveyRayDrawingData({
   stopPointFilePath,
   rayLength = DEFAULT_SURVEY_RAY_LENGTH,
 }: LoadSurveyRayDrawingDataOptions): Promise<RayRenderData | null> {
+  // 优先使用 stop_points.json 的精确停靠点位姿；缺失时回退到每个 SP 配置中的 sp_pose。
   const [manifest, stopPointPoses] = await Promise.all([
     readJson<TaskManifest>(fileSource, pathJoin(deviceDir, "json_list.json")),
     loadStopPointPoseMap(fileSource, stopPointFilePath).catch((e) => {

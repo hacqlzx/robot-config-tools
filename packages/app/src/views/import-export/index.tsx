@@ -23,27 +23,41 @@ import { useAppContext } from "@/stores/appContextStore";
 import "./index.scss";
 
 interface IEAction {
+  /** 行为类型，决定按钮图标和默认兜底文案。 */
   key: "import" | "export" | "export-log" | "export-error";
+  /** 按钮文案，也是分发具体导入导出逻辑时的区分条件之一。 */
   label: string;
+  /** 按钮下方的短说明。 */
   desc?: string;
+  /** 预留未接入能力的禁用态。 */
   disabled?: boolean;
 }
 
 interface IECard {
+  /** 卡片业务域 key，用于 handleAction 路由到具体接口。 */
   key: string;
+  /** 卡片标题。 */
   title: string;
+  /** 卡片整体描述，当前多数卡片为空。 */
   desc?: string;
+  /** 是否展示模板下载按钮。 */
   templateDownload?: boolean;
+  /** 卡片内的操作按钮列表。 */
   actions?: IEAction[];
 }
 
 type BackupImportType = "1" | "2";
 
 interface ImportDialogConfig {
+  /** 弹窗标题，同时作为上传 loading 状态的显示文案。 */
   title: string;
+  /** Upload accept 配置。 */
   accept: string;
+  /** 上传区域展示的格式说明。 */
   acceptHint: string;
+  /** 工程备份导入需要展示下发类型，其余导入隐藏。 */
   showBackupType?: boolean;
+  /** 真正执行导入的函数；backupType 只有工程备份导入会读取。 */
   onImport: (file: File, backupType: BackupImportType) => Promise<void>;
 }
 
@@ -263,6 +277,7 @@ export default function ImportExport() {
       const station = await resolveCurrentStation();
       if (!station) return;
 
+      // 后台点表导入要求同时携带机器人和厂站 id，这两个值来自当前顶部选择/后台默认厂站。
       const res = await importDevicePoint(file, robot.id, station.id);
       const body = res.data;
       if (body.success) {
@@ -565,7 +580,7 @@ export default function ImportExport() {
       return;
     }
 
-    // 屏柜标注参数导入
+    // 屏柜标注参数导入：目前只负责上传按钮和接口调用，参数内容校验由后台处理。
     if (card.key === "screen-verify" && actionKey === "import" && label === "标注参数导入") {
       openImportDialog({
         title: "标注参数导入",

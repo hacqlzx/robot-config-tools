@@ -47,8 +47,10 @@ const DESCRIPTION_FILE_NAME = "description_file.json";
 const MAP_DIR_NAME = "地图";
 const SURVEY_DIR_NAME = "勘察数据";
 const CALIBRATION_FILE_NAME = "勘察数据.json";
+/** description_file.json 中的区域类型：1=柜排，2=屏柜。 */
 const AREA_TYPE_CABINET_ROW = "1";
 const AREA_TYPE_CABINET = "2";
+/** 本地数据库中屏柜主设备的类型编码。 */
 const MAIN_DEVICE_TYPE_CABINET = 29;
 const CODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
@@ -59,8 +61,11 @@ interface ImportedSpaceModelZipResult {
 }
 
 export interface ImportedSpaceModelZipPlan {
+  /** 地图编码，来自 map_info.json 的 map_code */
   mapCode: string;
+  /** 导入后使用的地图名称 */
   mapName: string;
+  /** true 表示同 map_code 已存在，将全量替换旧地图目录 */
   willReplace: boolean;
   existingMapName?: string;
   existingMapDir?: string;
@@ -533,6 +538,9 @@ async function resolveModelZipSource(sourcePath: string): Promise<string> {
   return sourceResolved;
 }
 
+/**
+ * 根据待导入地图目录中的 map_info.json 生成落盘计划。
+ */
 function resolveMapImportPlan(
   projectName: string,
   sourceZipPath: string,
@@ -543,6 +551,9 @@ function resolveMapImportPlan(
   return resolveMapImportPlanFromMapInfo(projectName, sourceZipPath, mapInfo, mapsSubDir);
 }
 
+/**
+ * 导入规则：同 map_code 的地图已存在则全量替换，新增地图名使用 ZIP 文件名并自动避重。
+ */
 function resolveMapImportPlanFromMapInfo(
   projectName: string,
   sourceZipPath: string,
@@ -687,6 +698,9 @@ function pruneSurveyCalibrationForMap(projectName: string, projectDir: string, s
   }
 }
 
+/**
+ * 删除地图目录时同步删除同名勘察数据目录，并清理勘察标识文件中对应地图的绑定。
+ */
 function deleteSurveyDataForMap(projectName: string, projectDir: string, mapName: string): void {
   const manifest = ensureProjectManifest(projectName);
   const surveyRoot = assertInside(projectDir, path.join(projectDir, manifest.layout.dirs.surveyImages || SURVEY_DIR_NAME), "删除勘察数据");
@@ -746,6 +760,10 @@ interface CabinetMainImportItem {
   bayCode: string;
 }
 
+/**
+ * 从空间模型 description_file.json 提取屏柜主设备。
+ * 柜排只作为区域文件存在，真正入库的是 type=2 的屏柜。
+ */
 function collectCabinetMainImportItems(records: Record<string, unknown>[]): CabinetMainImportItem[] {
   const byId = new Map<string, Record<string, unknown>>();
   for (const record of records) {
@@ -782,6 +800,9 @@ function collectCabinetMainImportItems(records: Record<string, unknown>[]): Cabi
   return items;
 }
 
+/**
+ * 空间模型屏柜缺少编码时生成临时主设备编码。
+ */
 function generateMainDeviceCode(): string {
   let result = "MD";
   for (let i = result.length; i < 32; i++) {
@@ -826,6 +847,10 @@ function createCabinetMainDto(projectName: string, bay: DeviceBay, item: Cabinet
   };
 }
 
+/**
+ * 空间模型导入后，把 description_file.json 中的屏柜同步为主设备。
+ * 已存在同编码或同名称屏柜时跳过，避免重复入库。
+ */
 function syncCabinetMainDevicesFromImportedMap(projectName: string, mapDir: string): void {
   const files = findDescriptionFiles(mapDir);
   if (files.length === 0) return;
@@ -891,6 +916,9 @@ function syncCabinetMainDevicesFromImportedMap(projectName: string, mapDir: stri
   });
 }
 
+/**
+ * 列出项目根目录下的全部项目，并顺手修复缺失的 manifest。
+ */
 export async function listProjects(): Promise<string[]> {
   ensureProjectRoot();
   const entries = fs.readdirSync(getProjectRoot(), { withFileTypes: true });
@@ -909,6 +937,9 @@ export async function listProjects(): Promise<string[]> {
   return projectNames;
 }
 
+/**
+ * 创建项目目录和默认 manifest。
+ */
 export async function createProject(name: string): Promise<string> {
   if (!hasProjectRootConfig()) await initProjectRoot();
   ensureProjectRoot();
@@ -924,6 +955,10 @@ export async function createProject(name: string): Promise<string> {
   return safeName;
 }
 
+/**
+ * 重命名项目目录，并同步数据库中的 project_name。
+ * 任何一步失败都会尝试回滚目录和数据库状态。
+ */
 export async function renameProject(oldName: string, newName: string): Promise<string> {
   ensureProjectRoot();
   const safeOldName = assertSafePathSegment(oldName, "项目名称");
@@ -982,6 +1017,9 @@ export async function renameProject(oldName: string, newName: string): Promise<s
   return safeNewName;
 }
 
+/**
+ * 删除项目目录及数据库关联数据。
+ */
 export async function deleteProject(name: string): Promise<string> {
   ensureProjectRoot();
   const safeName = assertSafePathSegment(name, "项目名称");
@@ -1004,6 +1042,10 @@ export function getProjectDatabaseSummary(name: string): ProjectDataCounts {
   return getProjectDataCounts(getDatabase(), safeName);
 }
 
+/**
+ * 导入单个 LAS/LAZ 模型文件。
+ * 统一复制为 地图/{地图名}/map.las，并补齐 map_info.json。
+ */
 export async function importProjectModel(projectName: string, sourcePath: string, fileName: string): Promise<string> {
   const rawSourcePath = String(sourcePath ?? "").trim();
   if (!rawSourcePath || !path.isAbsolute(rawSourcePath)) {
@@ -1047,6 +1089,9 @@ export async function importProjectModel(projectName: string, sourcePath: string
   return targetPath;
 }
 
+/**
+ * 预检查空间模型 ZIP 导入计划，用于前端提示新增还是替换。
+ */
 export async function inspectProjectModelZipImport(projectName: string, sourcePath: string): Promise<ImportedSpaceModelZipPlan> {
   const sourceResolved = await resolveModelZipSource(sourcePath);
   const manifest = ensureProjectManifest(projectName);
@@ -1062,6 +1107,10 @@ export async function inspectProjectModelZipImport(projectName: string, sourcePa
   };
 }
 
+/**
+ * 导入单地图空间模型 ZIP。
+ * 支持从外层导出包中识别单个地图 ZIP，最终规范化为项目地图目录结构。
+ */
 export async function importProjectModelZip(projectName: string, sourcePath: string): Promise<ImportedSpaceModelZipResult> {
   const sourceResolved = await resolveModelZipSource(sourcePath);
   const manifest = ensureProjectManifest(projectName);
@@ -1222,15 +1271,25 @@ function normalizeMapModelFileName(mapDir: string): void {
   fs.renameSync(model, target);
 }
 
+/**
+ * 读取项目 manifest，供前端展示项目资产结构。
+ */
 export function getProjectManifest(projectName: string) {
   return ensureProjectManifest(projectName);
 }
 
+/**
+ * 读取项目内某个子目录的文件树。
+ */
 export async function listProjectTree(projectName: string, subDir: string): Promise<TreeNode[]> {
   const targetDir = resolveProjectPath(projectName, subDir || "");
   return readDirTree(targetDir);
 }
 
+/**
+ * 写入项目内文件。
+ * subPath 是相对项目根目录的路径，最终写入前会校验是否允许修改 manifest 管控文件。
+ */
 export async function writeProjectFile(projectName: string, subPath: string, data: ArrayBuffer): Promise<string> {
   const filePath = resolveProjectPath(projectName, subPath);
   assertWritableProjectFile(projectName, filePath);
@@ -1245,6 +1304,10 @@ export async function writeProjectFile(projectName: string, subPath: string, dat
   return filePath;
 }
 
+/**
+ * 删除项目内文件或目录。
+ * 如果删除的是地图目录，会同步删除该地图的勘察图片和标定数据。
+ */
 export async function deleteProjectPath(targetPath: string): Promise<boolean> {
   const resolved = resolveProjectRootPath(targetPath, "删除");
   if (path.relative(path.resolve(getProjectRoot()), resolved) === "") {
@@ -1276,6 +1339,9 @@ export async function deleteProjectPath(targetPath: string): Promise<boolean> {
   return true;
 }
 
+/**
+ * 重命名项目内文件或目录，并同步更新 manifest 中记录的相对路径。
+ */
 export async function renameProjectPath(targetPath: string, newName: string): Promise<string> {
   const resolved = resolveProjectRootPath(targetPath, "重命名");
   if (path.relative(path.resolve(getProjectRoot()), resolved) === "") {
@@ -1304,11 +1370,17 @@ export async function renameProjectPath(targetPath: string, newName: string): Pr
   return newPath;
 }
 
+/**
+ * 在系统文件管理器中定位项目文件。
+ */
 export async function openProjectPath(targetPath: string): Promise<void> {
   const resolved = resolveProjectRootPath(targetPath, "打开目录");
   shell.showItemInFolder(resolved);
 }
 
+/**
+ * 导出单个项目文件到用户选择目录。
+ */
 export async function exportProjectFile(projectName: string, subPath: string, destDir: string): Promise<string> {
   const srcPath = resolveProjectPath(projectName, subPath);
   if (!fs.existsSync(srcPath)) throw new Error("源文件不存在: " + subPath);
@@ -1323,10 +1395,16 @@ export async function exportProjectFile(projectName: string, subPath: string, de
 }
 
 export interface ExportZipItem {
+  /** 导出项类型，例如“地图” */
   type: string;
+  /** 导出项名称，例如地图目录名 */
   name: string;
 }
 
+/**
+ * 导出空间模型 ZIP。
+ * 导出包包含项目级点表 ZIP，以及每张地图单独的地图 ZIP。
+ */
 export async function exportProjectZip(
   projectName: string,
   items: ExportZipItem[],

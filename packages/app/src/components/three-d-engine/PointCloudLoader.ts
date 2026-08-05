@@ -44,16 +44,21 @@ export interface LoadedModel {
   /** 局部包围盒最大边长，用于相机距离和点大小估算。 */
   extent: number;
   totalPoints: number;
+  /** 实际上传 GPU 的点数，超大模型可能小于 totalPoints。 */
   loadedPoints: number;
+  /** 从点云高度直方图估算出的场景地面 Y，用于绘制区域贴地。 */
   groundY: number;
 }
 
 export interface PointCloudLoaderCallbacks {
+  /** 加载进度百分比，0~100。LAS 为流式进度，LAZ 为解压遍历进度。 */
   onProgress?: (pct: number) => void;
+  /** 文件成功挂载到场景后回调；name 是实体名，path 是源文件绝对路径。 */
   onFileLoaded?: (name: string, path: string) => void;
 }
 
 function entityKeyFromPath(filePath: string): string {
+  // 项目内地图通常保存为 地图名/map.las；实体名使用父目录更利于左侧树和用户理解。
   const parts = filePath.split(/[\\/]/).filter(Boolean);
   const fileName = parts[parts.length - 1] || "unknown.las";
   const parentName = parts[parts.length - 2];

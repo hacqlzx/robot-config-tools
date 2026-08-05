@@ -6,8 +6,11 @@ import type { DrawingRenderData } from "./drawing-data";
 import type { FileSource } from "./file-source";
 
 interface UseThreeDEngineParams {
+  /** 由调用页面持有的 canvas ref。 */
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
+  /** canvas 外层容器 ref，用于 ResizeObserver 计算真实显示尺寸。 */
   containerRef: React.RefObject<HTMLDivElement | null>;
+  /** 透传给 ThreeDEngine 的相机、背景、灯光配置。 */
   engineOptions?: ThreeDEngineOptions;
 }
 
@@ -38,10 +41,15 @@ export function useThreeDEngine({
 }
 
 interface UseThreeDViewerParams {
+  /** 点云/绘制回显使用的 canvas。 */
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
+  /** canvas 容器，用于自适应尺寸。 */
   containerRef: React.RefObject<HTMLDivElement | null>;
+  /** 3D 引擎显示参数。 */
   engineOptions?: ThreeDEngineOptions;
+  /** 文件读取源；默认 Electron IPC，单测或浏览器 demo 可注入。 */
   fileSource?: FileSource;
+  /** 区域/路径点击选中回调，用于联动右侧点表或树。 */
   onSelect?: (info: DrawingRendererSelectInfo) => void;
 }
 

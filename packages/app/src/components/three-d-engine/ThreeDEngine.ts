@@ -2,9 +2,13 @@ import * as pc from "playcanvas";
 import { SimpleOrbitCamera } from "../../playcanvas-core/simple-camera";
 
 export interface ThreeDEngineOptions {
+  /** 相机垂直视场角，单位为度。默认 60。 */
   fov?: number;
+  /** 相机清屏颜色，未传时使用深灰背景。 */
   clearColor?: pc.Color;
+  /** 场景环境光颜色，影响无材质区域/辅助线的基础亮度。 */
   ambientColor?: pc.Color;
+  /** 方向光强度，默认 1。 */
   lightIntensity?: number;
 }
 
@@ -106,10 +110,12 @@ export class ThreeDEngine {
     this.renderRafId = requestAnimationFrame(this.renderLoop);
   };
 
+  /** 标记下一帧需要渲染；加载模型、相机变化或绘制回显更新后调用。 */
   requestRender = () => {
     this.renderDirty = true;
   };
 
+  /** 将相机聚焦到模型局部坐标中心。extent 是模型最大边长，用于自动计算距离。 */
   focusOn(cx: number, cy: number, cz: number, extent: number) {
     // extent 同时影响相机距离、最大缩放距离和 orbit 的场景半径。
     // 这里使用“扩张式”设置，避免连续加载多个模型后后加载的小模型缩小可视范围。
@@ -122,6 +128,7 @@ export class ThreeDEngine {
     this.renderDirty = true;
   }
 
+  /** 监听容器尺寸并同步 canvas 像素尺寸，避免 CSS 缩放导致选中/投影偏移。 */
   observeResize(container: HTMLElement) {
     this.ro?.disconnect();
 
@@ -146,6 +153,7 @@ export class ThreeDEngine {
     window.addEventListener("resize", handler);
   }
 
+  /** 释放 RAF、ResizeObserver、相机事件和 PlayCanvas Application。 */
   destroy() {
     cancelAnimationFrame(this.renderRafId);
     cancelAnimationFrame(this.resizeRafId);
