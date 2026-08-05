@@ -126,6 +126,7 @@ function collectExportPointItems(input: CabinetAnnotationParamsExportInput, erro
         boundRectTool: point.boundRectTool,
         recognitionLabel: point.recognitionLabel,
         recognitionLabelDesc: point.recognitionLabelDesc,
+        deviceName: point.deviceName,
       })),
     ], annotations);
 

@@ -1,6 +1,11 @@
 import { detectCabinetDevices } from "../services/device-detection-service";
 import type { DeviceDetection } from "../services/device-detection-service";
-import { cropCabinetOcrImage, recognizeCabinetFacadeLabels, recognizeCabinetLabels } from "../services/ocr-service";
+import {
+  CABINET_OCR_NORMALIZED_COORDINATE_MAX,
+  cropCabinetOcrImage,
+  recognizeCabinetFacadeLabels,
+  recognizeCabinetLabels,
+} from "../services/ocr-service";
 import type { CabinetOcrDetectedLabel } from "../services/ocr-service";
 import { throwIfRecognitionCancelled } from "../services/recognition-request";
 import { validateAnnotationGroups } from "./annotation-group-utils";
@@ -19,13 +24,16 @@ interface CabinetOcrSource {
   originY: number;
   width?: number;
   height?: number;
+  roi?: { x: number; y: number; w: number; h: number };
   targetX?: number;
   targetY?: number;
   targetW?: number;
   targetH?: number;
   sourceRectId?: string;
   groupId?: string;
-  anchorRects?: ImageRect[];
+  masked?: boolean;
+  sourceMode?: "crop" | "masked-whole";
+  coordinateMode?: "original" | "crop-local";
 }
 
 export interface ComponentRecognitionResult {
@@ -89,28 +97,42 @@ export async function recognizeComponentImage(options: RecognizeComponentImageOp
 
   const generationKey = Date.now();
   const aiDeviceRects = mapDeviceDetectionsToImageRects(response.detections, preDetectionGroups, generationKey);
-  const gapFilledDeviceRects = fillDeviceBoxGapsByRows(aiDeviceRects, generationKey);
 
   const groupByInputLabelId = new Map<string, string>();
   for (const group of validation.groups) {
     for (const label of group.labelRects) groupByInputLabelId.set(label.id, group.id);
   }
-  const sources = await buildDeviceLabelOcrSources(imageDataUrl, targetLabels, groupByInputLabelId, gapFilledDeviceRects);
+  const sources = await buildDeviceLabelOcrSources(imageDataUrl, targetLabels, groupByInputLabelId);
   throwIfRecognitionCancelled(signal);
+  console.info("[screen-verify] label OCR request params", {
+    mode,
+    imageSize: getDebugImageSize(sources),
+    selectedDeviceLabelRects: targetLabels.map(toDebugRect),
+    selectedStandardPartRects: targetStandardPartRects.map(toDebugRect),
+    requestRois: sources.map(toDebugOcrSource),
+    aiDeviceRects: aiDeviceRects.map(toDebugRect),
+  });
   const ocrResult = await recognizeCabinetLabels(sources.map((source) => ({
     regionId: source.regionId,
     title: source.title,
     dataUrl: source.dataUrl,
+    roi: source.roi,
+    width: source.width,
+    height: source.height,
+    coordinateMode: source.coordinateMode,
   })), { signal });
-  const recognizedLabelRects = mapOcrLabelsToImageRects(ocrResult.labels, sources);
-  const generatedDeviceRects = completeDeviceBoxesByOcrRows(gapFilledDeviceRects, recognizedLabelRects, validation.groups, generationKey);
-  console.info("[screen-verify] multi-point label OCR result", {
+  const mappedLabelRects = mapOcrLabelsToImageRects(ocrResult.labels, sources);
+  const recognizedLabelRects = selectRecognitionLabelRectsForDeviceRows(mappedLabelRects, aiDeviceRects, validation.groups);
+  const generatedDeviceRects = completeDeviceBoxesByOcrRows(aiDeviceRects, recognizedLabelRects, validation.groups, generationKey);
+  console.info("[screen-verify] label OCR response params", {
     mode,
-    sources: sources.map(({ dataUrl, ...source }) => source),
+    imageSize: getDebugImageSize(sources),
+    sources: sources.map(toDebugOcrSource),
     rawText: ocrResult.rawText,
     regions: ocrResult.regions,
     labels: ocrResult.labels,
-    mappedRects: recognizedLabelRects,
+    mappedRects: mappedLabelRects,
+    filteredRects: recognizedLabelRects,
   });
   if (!recognizedLabelRects.length) throw new Error("未识别到标签");
 
@@ -130,8 +152,8 @@ export async function recognizeComponentImage(options: RecognizeComponentImageOp
     mode,
     rawDetections: response.detections,
     matchedRects: aiDeviceRects,
-    gapFilledRects: gapFilledDeviceRects,
     completedRects: generatedDeviceRects,
+    inferredRects: generatedDeviceRects.filter((rect) => rect.source === "inferred").map(toDebugRect),
     groups: recognizedGroups.map((group) => ({
       id: group.id,
       standardPartRect: group.standardPartRect,
@@ -198,15 +220,27 @@ async function recognizeFacadeComponentImage(options: {
   const groupByInputLabelId = new Map(targetLabels.map((rect) => [rect.id, groupId]));
   const sources = await buildDeviceLabelOcrSources(imageDataUrl, targetLabels, groupByInputLabelId);
   throwIfRecognitionCancelled(signal);
+  console.info("[screen-verify] facade label OCR request params", {
+    mode,
+    imageSize: getDebugImageSize(sources),
+    selectedDeviceLabelRects: targetLabels.map(toDebugRect),
+    selectedAppearanceRects: targetAppearanceRects.map(toDebugRect),
+    requestRois: sources.map(toDebugOcrSource),
+  });
   const ocrResult = await recognizeCabinetFacadeLabels(sources.map((source) => ({
     regionId: source.regionId,
     title: source.title,
     dataUrl: source.dataUrl,
+    roi: source.roi,
+    width: source.width,
+    height: source.height,
+    coordinateMode: source.coordinateMode,
   })), { signal });
   const recognizedLabelRects = mapOcrLabelsToImageRects(ocrResult.labels, sources);
-  console.info("[screen-verify] facade label OCR result", {
+  console.info("[screen-verify] facade label OCR response params", {
     mode,
-    sources: sources.map(({ dataUrl, ...source }) => source),
+    imageSize: getDebugImageSize(sources),
+    sources: sources.map(toDebugOcrSource),
     rawText: ocrResult.rawText,
     regions: ocrResult.regions,
     labels: ocrResult.labels,
@@ -324,6 +358,7 @@ function createFacadeDeviceRect(rect: ImageRect, groupId: string): ImageRect {
     groupId,
     recognitionLabel: FACADE_TARGET_TYPE.value,
     recognitionLabelDesc: FACADE_TARGET_TYPE.label,
+    deviceName: FACADE_TARGET_TYPE.deviceName,
   };
 }
 
@@ -339,6 +374,7 @@ function mapDeviceDetectionsToImageRects(
     const targetType = findTargetTypeOption(detection.result.classid, detection.result.labeldesc);
     const recognitionLabel = targetType?.value || detection.result.classid;
     const recognitionLabelDesc = targetType?.label || detection.result.labeldesc;
+    const deviceName = targetType?.deviceName || "";
     rects.push({
       id: `ai-device:${generationKey}:${rects.length}:${Math.random().toString(16).slice(2)}`,
       ...detection.result.rect,
@@ -351,14 +387,10 @@ function mapDeviceDetectionsToImageRects(
       generatedFromRectId: matchedGroup.standardPartRect.id,
       recognitionLabel,
       recognitionLabelDesc,
+      deviceName,
     });
   }
   return rects;
-}
-
-function fillDeviceBoxGapsByRows(deviceRects: ImageRect[], generationKey: number): ImageRect[] {
-  const rows = splitRectRows(deviceRects);
-  return rows.flatMap((row, rowIndex) => fillLargeGapsInRow(row, generationKey, rowIndex));
 }
 
 function completeDeviceBoxesByOcrRows(
@@ -373,17 +405,16 @@ function completeDeviceBoxesByOcrRows(
     const groupLabelRects = labelRects.filter((rect) => rect.groupId === group.id);
     if (!groupDeviceRects.length || !groupLabelRects.length) continue;
 
-    const rows = splitRectRows(groupDeviceRects);
-    const targetColumnCount = getTargetColumnCountForGroup(groupDeviceRects, groupLabelRects);
-    if (targetColumnCount <= 0) continue;
+    const deviceRows = splitRectRows(groupDeviceRects);
+    const labelRows = selectRelevantLabelRowsForDeviceRows(splitRectRows(groupLabelRects), deviceRows);
+    if (!hasDeviceLabelCountMismatch(labelRows, deviceRows)) continue;
 
-    const completedRows = rows.map((row, rowIndex) => fillRowToTargetCount(
-      row,
-      targetColumnCount,
+    const completedRows = completeDeviceRowsByLabelRows(
+      labelRows,
+      deviceRows,
       group.standardPartRect,
       generationKey,
-      rowIndex,
-    ));
+    );
     const completedGroupDeviceRects = completedRows.flat();
     result = [
       ...result.filter((rect) => rect.groupId !== group.id),
@@ -393,15 +424,112 @@ function completeDeviceBoxesByOcrRows(
   return sortRectsByPosition(result);
 }
 
-function getTargetColumnCountForGroup(deviceRects: ImageRect[], labelRects: ImageRect[]): number {
-  const deviceRows = splitRectRows(deviceRects);
-  const labelRows = splitRectRows(labelRects);
-  const maxDeviceCols = Math.max(0, ...deviceRows.map((row) => row.length));
-  const maxLabelCols = Math.max(0, ...labelRows.map((row) => row.length));
-  return Math.max(maxDeviceCols, maxLabelCols);
+function hasDeviceLabelCountMismatch(labelRows: ImageRect[][], deviceRows: ImageRect[][]): boolean {
+  if (!labelRows.length || !deviceRows.length) return false;
+  const deviceRowsById = new Map(deviceRows.map((row) => [getRectRowKey(row), row]));
+  const usedDeviceRowKeys = new Set<string>();
+
+  for (const labelRow of labelRows) {
+    const relatedRows = findRelatedDeviceRowsForLabelRow(labelRow, deviceRows);
+    if (!relatedRows.length) return true;
+    const uniqueRelatedRows = uniqueRectRows(relatedRows);
+    const relatedDeviceCount = uniqueRelatedRows.reduce((sum, row) => sum + row.length, 0);
+    if (relatedDeviceCount !== labelRow.length * uniqueRelatedRows.length) return true;
+    uniqueRelatedRows.forEach((row) => usedDeviceRowKeys.add(getRectRowKey(row)));
+  }
+
+  return [...deviceRowsById.keys()].some((key) => !usedDeviceRowKeys.has(key));
 }
 
-function fillLargeGapsInRow(row: ImageRect[], generationKey: number, rowIndex: number): ImageRect[] {
+function completeDeviceRowsByLabelRows(
+  labelRows: ImageRect[][],
+  deviceRows: ImageRect[][],
+  container: ImageRect,
+  generationKey: number,
+): ImageRect[][] {
+  const resultRows = sortRectRowsByPosition(deviceRows);
+  let inferredRowIndex = 0;
+
+  for (const labelRow of labelRows) {
+    const sortedLabels = sortRectsByCenterX(labelRow);
+    const relatedRows = uniqueRectRows(findRelatedDeviceRowsForLabelRow(sortedLabels, resultRows));
+    for (const deviceRow of relatedRows) {
+      const rowIndexInResult = findMatchingDeviceRowIndex(resultRows, deviceRow);
+      if (rowIndexInResult < 0) continue;
+      const currentRow = resultRows[rowIndexInResult];
+      if (currentRow.length === sortedLabels.length) {
+        continue;
+      }
+      const rowTypeTemplate = getRowDeviceTypeTemplate(currentRow);
+      resultRows[rowIndexInResult] = fillRowToMatchLabels(
+        currentRow,
+        sortedLabels,
+        container,
+        generationKey,
+        inferredRowIndex,
+        rowTypeTemplate,
+      );
+      inferredRowIndex += 1;
+    }
+  }
+
+  return sortRectRowsByPosition(resultRows);
+}
+
+function getRectRowKey(row: ImageRect[]): string {
+  return sortRectsByCenterX(row).map((rect) => rect.id).join("|");
+}
+
+function findMatchingDeviceRowIndex(rows: ImageRect[][], targetRow: ImageRect[]): number {
+  const targetIds = new Set(targetRow.map((rect) => rect.id));
+  return rows.findIndex((row) => row.some((rect) => targetIds.has(rect.id)));
+}
+
+function sortRectRowsByPosition(rows: ImageRect[][]): ImageRect[][] {
+  return [...rows]
+    .map(sortRectsByCenterX)
+    .sort((leftRow, rightRow) => median(leftRow.map(getRectCenterY)) - median(rightRow.map(getRectCenterY)));
+}
+
+function getRowDeviceTypeTemplate(row: ImageRect[]): Pick<ImageRect, "text" | "recognitionLabel" | "recognitionLabelDesc" | "deviceName"> {
+  const sortedRow = sortRectsByCenterX(row);
+  const recognized = sortedRow.find((rect) => rect.deviceName || rect.recognitionLabel || rect.recognitionLabelDesc || rect.text);
+  return {
+    text: recognized?.text,
+    recognitionLabel: recognized?.recognitionLabel,
+    recognitionLabelDesc: recognized?.recognitionLabelDesc,
+    deviceName: recognized?.deviceName,
+  };
+}
+
+function fillRowToMatchLabels(
+  row: ImageRect[],
+  labelRow: ImageRect[],
+  container: ImageRect,
+  generationKey: number,
+  rowIndex: number,
+  typeTemplate: Pick<ImageRect, "text" | "recognitionLabel" | "recognitionLabelDesc" | "deviceName">,
+): ImageRect[] {
+  let result = fillLargeGapsInRow(row, generationKey, rowIndex, typeTemplate, labelRow.length);
+  if (result.length >= labelRow.length) return result;
+  return fillRowToTargetCount(
+    result,
+    labelRow.length,
+    container,
+    generationKey,
+    rowIndex,
+    typeTemplate,
+    labelRow,
+  );
+}
+
+function fillLargeGapsInRow(
+  row: ImageRect[],
+  generationKey: number,
+  rowIndex: number,
+  typeTemplate: Pick<ImageRect, "text" | "recognitionLabel" | "recognitionLabelDesc" | "deviceName"> = {},
+  maxCount = Number.POSITIVE_INFINITY,
+): ImageRect[] {
   const sortedRow = sortRectsByCenterX(row);
   if (sortedRow.length < 2) return sortedRow;
 
@@ -410,6 +538,7 @@ function fillLargeGapsInRow(row: ImageRect[], generationKey: number, rowIndex: n
 
   const result: ImageRect[] = [];
   let inferredIndex = 0;
+  const maxInferredCount = Math.max(0, maxCount - sortedRow.length);
   for (let index = 0; index < sortedRow.length - 1; index += 1) {
     const leftRect = sortedRow[index];
     const rightRect = sortedRow[index + 1];
@@ -418,7 +547,11 @@ function fillLargeGapsInRow(row: ImageRect[], generationKey: number, rowIndex: n
     const currentSpacing = getRectCenterX(rightRect) - getRectCenterX(leftRect);
     if (currentSpacing <= avgSpacing * 1.5) continue;
 
-    const numToAdd = Math.max(0, Math.round(currentSpacing / avgSpacing) - 1);
+    const numToAdd = Math.min(
+      Math.max(0, Math.round(currentSpacing / avgSpacing) - 1),
+      maxInferredCount - inferredIndex,
+    );
+    if (numToAdd <= 0) continue;
     const spacingStep = currentSpacing / (numToAdd + 1);
     for (let offset = 1; offset <= numToAdd; offset += 1) {
       result.push(createInferredDeviceRectBetween(
@@ -428,8 +561,10 @@ function fillLargeGapsInRow(row: ImageRect[], generationKey: number, rowIndex: n
         generationKey,
         rowIndex,
         inferredIndex,
+        typeTemplate,
       ));
       inferredIndex += 1;
+      if (inferredIndex >= maxInferredCount) break;
     }
   }
   result.push(sortedRow[sortedRow.length - 1]);
@@ -442,14 +577,16 @@ function fillRowToTargetCount(
   container: ImageRect,
   generationKey: number,
   rowIndex: number,
+  typeTemplate: Pick<ImageRect, "text" | "recognitionLabel" | "recognitionLabelDesc" | "deviceName"> = {},
+  labelRow: ImageRect[] = [],
 ): ImageRect[] {
   let result = sortRectsByCenterX(row);
-  let avgSpacing = getRowFillSpacing(result, targetCount);
+  let avgSpacing = getRowFillSpacing(result, targetCount, labelRow);
   if (!avgSpacing || avgSpacing <= 0) return result;
 
   let inferredIndex = 0;
   while (result.length < targetCount) {
-    const insertion = findBestDeviceInsertion(result, avgSpacing, container, generationKey, rowIndex, inferredIndex);
+    const insertion = findBestDeviceInsertion(result, avgSpacing, container, generationKey, rowIndex, inferredIndex, typeTemplate, labelRow);
     if (!insertion) break;
     result = [
       ...result.slice(0, insertion.index),
@@ -457,7 +594,7 @@ function fillRowToTargetCount(
       ...result.slice(insertion.index),
     ];
     result = sortRectsByCenterX(result);
-    avgSpacing = getRowFillSpacing(result, targetCount) || avgSpacing;
+    avgSpacing = getRowFillSpacing(result, targetCount, labelRow) || avgSpacing;
     inferredIndex += 1;
   }
   return result;
@@ -470,13 +607,15 @@ function findBestDeviceInsertion(
   generationKey: number,
   rowIndex: number,
   inferredIndex: number,
+  typeTemplate: Pick<ImageRect, "text" | "recognitionLabel" | "recognitionLabelDesc" | "deviceName"> = {},
+  labelRow: ImageRect[] = [],
 ): { index: number; rect: ImageRect } | null {
   if (!row.length) return null;
   const sortedRow = sortRectsByCenterX(row);
   const candidates: { index: number; rect: ImageRect; score: number }[] = [];
 
   for (let index = 0; index <= sortedRow.length; index += 1) {
-    const rect = createInsertionCandidateRect(sortedRow, index, avgSpacing, generationKey, rowIndex, inferredIndex);
+    const rect = createInsertionCandidateRect(sortedRow, index, avgSpacing, generationKey, rowIndex, inferredIndex, typeTemplate, labelRow);
     if (!rect || !containsRect(container, rect)) continue;
     const candidateRow = sortRectsByCenterX([
       ...sortedRow.slice(0, index),
@@ -486,7 +625,7 @@ function findBestDeviceInsertion(
     candidates.push({
       index,
       rect,
-      score: getSpacingUniformityScore(candidateRow, avgSpacing),
+      score: getSpacingUniformityScore(candidateRow, avgSpacing) + getLabelColumnAlignmentScore(candidateRow, labelRow),
     });
   }
 
@@ -501,13 +640,18 @@ function createInsertionCandidateRect(
   generationKey: number,
   rowIndex: number,
   inferredIndex: number,
+  typeTemplate: Pick<ImageRect, "text" | "recognitionLabel" | "recognitionLabelDesc" | "deviceName"> = {},
+  labelRow: ImageRect[] = [],
 ): ImageRect | null {
   const sortedRow = sortRectsByCenterX(row);
   const template = sortedRow[index] || sortedRow[index - 1];
   if (!template) return null;
 
   let centerX: number;
-  if (index === 0) {
+  const targetLabel = labelRow[index];
+  if (targetLabel) {
+    centerX = getRectCenterX(targetLabel);
+  } else if (index === 0) {
     centerX = getRectCenterX(sortedRow[0]) - avgSpacing;
   } else if (index === sortedRow.length) {
     centerX = getRectCenterX(sortedRow[sortedRow.length - 1]) + avgSpacing;
@@ -515,7 +659,7 @@ function createInsertionCandidateRect(
     centerX = (getRectCenterX(sortedRow[index - 1]) + getRectCenterX(sortedRow[index])) / 2;
   }
 
-  return createInferredDeviceRectFromTemplate(template, centerX, generationKey, rowIndex, inferredIndex);
+  return createInferredDeviceRectFromTemplate(template, centerX, generationKey, rowIndex, inferredIndex, typeTemplate);
 }
 
 function createInferredDeviceRectBetween(
@@ -525,9 +669,10 @@ function createInferredDeviceRectBetween(
   generationKey: number,
   rowIndex: number,
   inferredIndex: number,
+  typeTemplate: Pick<ImageRect, "text" | "recognitionLabel" | "recognitionLabelDesc" | "deviceName"> = {},
 ): ImageRect {
   const template = getRectArea(leftRect) >= getRectArea(rightRect) ? leftRect : rightRect;
-  const inferred = createInferredDeviceRectFromTemplate(template, centerX, generationKey, rowIndex, inferredIndex);
+  const inferred = createInferredDeviceRectFromTemplate(template, centerX, generationKey, rowIndex, inferredIndex, typeTemplate);
   inferred.y = (leftRect.y + rightRect.y) / 2;
   return inferred;
 }
@@ -538,6 +683,7 @@ function createInferredDeviceRectFromTemplate(
   generationKey: number,
   rowIndex: number,
   inferredIndex: number,
+  typeTemplate: Pick<ImageRect, "text" | "recognitionLabel" | "recognitionLabelDesc" | "deviceName"> = {},
 ): ImageRect {
   const w = Math.max(MIN_ANNOTATION_RECT_SIZE, template.w);
   const h = Math.max(MIN_ANNOTATION_RECT_SIZE, template.h);
@@ -552,6 +698,10 @@ function createInferredDeviceRectFromTemplate(
     confidence: undefined,
     saved: false,
     generationStatus: "generated",
+    text: typeTemplate.text || template.text,
+    recognitionLabel: typeTemplate.recognitionLabel || template.recognitionLabel,
+    recognitionLabelDesc: typeTemplate.recognitionLabelDesc || template.recognitionLabelDesc,
+    deviceName: typeTemplate.deviceName || template.deviceName,
   };
 }
 
@@ -590,8 +740,13 @@ function getAvgCenterSpacing(row: ImageRect[]): number {
   return average(normalSpacings.length ? normalSpacings : positiveSpacings);
 }
 
-function getRowFillSpacing(row: ImageRect[], targetCount: number): number {
+function getRowFillSpacing(row: ImageRect[], targetCount: number, labelRow: ImageRect[] = []): number {
   const sortedRow = sortRectsByCenterX(row);
+  const sortedLabels = sortRectsByCenterX(labelRow);
+  if (sortedLabels.length >= 2) {
+    const labelSpacing = getAvgCenterSpacing(sortedLabels);
+    if (labelSpacing > 0) return labelSpacing;
+  }
   const medianWidth = getMedianRectWidth(sortedRow);
   const avgSpacing = getAvgCenterSpacing(sortedRow);
   if (sortedRow.length >= 2 && targetCount > sortedRow.length) {
@@ -601,6 +756,18 @@ function getRowFillSpacing(row: ImageRect[], targetCount: number): number {
     if (spanSpacing > 0 && currentSpacingLooksLikeGap) return spanSpacing;
   }
   return avgSpacing || medianWidth * 1.25;
+}
+
+function getLabelColumnAlignmentScore(deviceRow: ImageRect[], labelRow: ImageRect[]): number {
+  if (!labelRow.length) return 0;
+  const sortedDevices = sortRectsByCenterX(deviceRow);
+  const sortedLabels = sortRectsByCenterX(labelRow);
+  const maxCount = Math.min(sortedDevices.length, sortedLabels.length);
+  let score = 0;
+  for (let index = 0; index < maxCount; index += 1) {
+    score += Math.abs(getRectCenterX(sortedDevices[index]) - getRectCenterX(sortedLabels[index]));
+  }
+  return score;
 }
 
 function getSpacingUniformityScore(row: ImageRect[], avgSpacing: number): number {
@@ -640,6 +807,11 @@ function average(values: number[]): number {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
+function clampNumber(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
 function median(values: number[]): number {
   if (!values.length) return 0;
   const sortedValues = [...values].sort((left, right) => left - right);
@@ -654,6 +826,9 @@ function buildRowsFromRecognizedLabels(
   deviceRects: ImageRect[],
   deviceTool: AnnotationTool = "deviceBox",
 ): CabinetPointRow[] {
+  if (deviceTool === "deviceBox") {
+    return buildSortedPointRowsForGroup(labelRects, deviceRects).rows;
+  }
   return labelRects.flatMap((labelRect) => {
     const relatedDeviceRects = findRelatedDeviceRectsForLabel(labelRect, deviceRects);
     if (!relatedDeviceRects.length) {
@@ -680,10 +855,12 @@ export function buildSortedPointRowsFromAnnotations(annotations: ComponentAnnota
     ...(hasUngroupedRects ? ["ungrouped"] : []),
   ];
   const rows: CabinetPointRow[] = [];
+  const groupDebugs: unknown[] = [];
   let unboundLabelCount = 0;
   let unboundDeviceCount = 0;
 
   for (const groupId of groupIds) {
+    const groupRect = annotations.standardPartRects.find((rect) => rect.id === groupId);
     const labels = sortRectsByPosition(
       groupId === "ungrouped" ? labelAssignments.unassigned : (labelAssignments.byGroup.get(groupId) || []),
     );
@@ -696,6 +873,18 @@ export function buildSortedPointRowsFromAnnotations(annotations: ComponentAnnota
     rows.push(...aligned.rows);
     unboundLabelCount += aligned.unboundLabelCount;
     unboundDeviceCount += aligned.unboundDeviceCount;
+    groupDebugs.push({
+      groupId,
+      groupRect: groupRect ? toDebugRect(groupRect) : null,
+      labels: labels.map(toDebugRect),
+      devices: devices.map(toDebugRect),
+      labelRows: splitRectRows(labels).map((row) => row.map(toDebugRect)),
+      deviceRows: splitRectRows(devices).map((row) => row.map(toDebugRect)),
+      resultRows: aligned.rows.map(toDebugPointRow),
+      emptyRows: aligned.rows.filter((row) => !row.name.trim()).map(toDebugPointRow),
+      unboundLabelCount: aligned.unboundLabelCount,
+      unboundDeviceCount: aligned.unboundDeviceCount,
+    });
   }
 
   const nextAnnotations: ComponentAnnotations = {
@@ -709,10 +898,29 @@ export function buildSortedPointRowsFromAnnotations(annotations: ComponentAnnota
     deviceLabelRects: labelAssignments.rects,
     deviceBoxRects: deviceAssignments.rects,
   };
+  const indexedRows = rows.map((row, index) => ({ ...row, index: index + 1 }));
+  console.info("[screen-verify] one-click sort grouping detail", {
+    inputCounts: {
+      standardPart: annotations.standardPartRects.length,
+      labels: annotations.deviceLabelRects.length,
+      devices: annotations.deviceBoxRects.length,
+      unassignedLabels: labelAssignments.unassigned.length,
+      unassignedDevices: deviceAssignments.unassigned.length,
+    },
+    groups: groupDebugs,
+    result: {
+      rowCount: indexedRows.length,
+      emptyNameCount: rows.filter((row) => !row.name.trim()).length,
+      unboundLabelCount,
+      unboundDeviceCount,
+      rows: indexedRows.map(toDebugPointRow),
+      emptyRows: indexedRows.filter((row) => !row.name.trim()).map(toDebugPointRow),
+    },
+  });
 
   return {
     annotations: nextAnnotations,
-    rows: rows.map((row, index) => ({ ...row, index: index + 1 })),
+    rows: indexedRows,
     emptyNameCount: rows.filter((row) => !row.name.trim()).length,
     unboundLabelCount,
     unboundDeviceCount,
@@ -724,8 +932,12 @@ function buildSortedPointRowsForGroup(labelRects: ImageRect[], deviceRects: Imag
   unboundLabelCount: number;
   unboundDeviceCount: number;
 } {
-  const labelRows = splitRectRows(labelRects);
   const deviceRows = splitRectRows(deviceRects);
+  const rawLabelRows = selectRelevantLabelRowsForDeviceRows(splitRectRows(labelRects), deviceRows);
+  const hasVisibleLabelText = rawLabelRows.some((row) => row.some((rect) => hasVisibleLabelTextRect(rect)));
+  const labelRows = hasVisibleLabelText
+    ? rawLabelRows.map((row) => row.filter(hasVisibleLabelTextRect)).filter((row) => row.length)
+    : rawLabelRows;
   const rows: CabinetPointRow[] = [];
   let unboundLabelCount = 0;
   let unboundDeviceCount = 0;
@@ -750,7 +962,7 @@ function buildSortedPointRowsForGroup(labelRects: ImageRect[], deviceRects: Imag
 
     for (const deviceRow of relatedDeviceRows) {
       const sortedDevices = sortRectsByCenterX(deviceRow);
-      const alignedRows = createAlignedRowsForLabelAndDeviceRow(sortedLabels, sortedDevices);
+      const alignedRows = createAlignedRowsForLabelAndDeviceRow(sortedLabels, sortedDevices, !hasVisibleLabelText);
       rows.push(...alignedRows.rows);
       alignedRows.usedDeviceIds.forEach((id) => usedDeviceIds.add(id));
       unboundLabelCount += alignedRows.unboundLabelCount;
@@ -760,35 +972,141 @@ function buildSortedPointRowsForGroup(labelRects: ImageRect[], deviceRects: Imag
 
   for (const deviceRect of deviceRows.flat()) {
     if (usedDeviceIds.has(deviceRect.id)) continue;
-    rows.push(createPointRowFromLabelAndDevice(createEmptyLabelRectForDevice(deviceRect), deviceRect, "deviceBox"));
     unboundDeviceCount += 1;
+    if (!hasVisibleLabelText) {
+      rows.push(createPointRowFromLabelAndDevice(createEmptyLabelRectForDevice(deviceRect), deviceRect, "deviceBox"));
+    }
   }
 
   return { rows, unboundLabelCount, unboundDeviceCount };
 }
 
-function createAlignedRowsForLabelAndDeviceRow(labelRow: ImageRect[], deviceRow: ImageRect[]): {
+function selectRelevantLabelRowsForDeviceRows(labelRows: ImageRect[][], deviceRows: ImageRect[][]): ImageRect[][] {
+  if (!labelRows.length || !deviceRows.length) return labelRows;
+  const visibleLabelRows = labelRows.filter((row) => row.some((rect) => hasVisibleLabelTextRect(rect)));
+  const candidateRows = visibleLabelRows.length ? visibleLabelRows : labelRows;
+  const filterThreshold = Math.max(2, deviceRows.length * 2);
+  if (candidateRows.length <= filterThreshold) return candidateRows;
+
+  const bestByDeviceRowKey = new Map<string, { labelRow: ImageRect[]; score: number }>();
+  for (const labelRow of candidateRows) {
+    const relatedRows = findRelatedDeviceRowsForLabelRow(labelRow, deviceRows);
+    for (const deviceRow of relatedRows) {
+      const key = getRectRowKey(deviceRow);
+      const score = getLabelRowSelectionScore(labelRow, deviceRow);
+      const current = bestByDeviceRowKey.get(key);
+      if (!current || score < current.score) {
+        bestByDeviceRowKey.set(key, { labelRow, score });
+      }
+    }
+  }
+
+  const selectedRows = uniqueRectRows([...bestByDeviceRowKey.values()].map((item) => item.labelRow));
+  return selectedRows.length ? sortRectRowsByPosition(selectedRows) : candidateRows;
+}
+
+function getLabelRowSelectionScore(labelRow: ImageRect[], deviceRow: ImageRect[]): number {
+  return getRowRelationScore(labelRow, deviceRow) + getLabelRowTextPenalty(labelRow);
+}
+
+function getLabelRowTextPenalty(labelRow: ImageRect[]): number {
+  const texts = labelRow.map((rect) => normalizeLabelTextForScoring(rect.text)).filter(Boolean);
+  if (!texts.length) return 120;
+
+  const combinedText = texts.join("");
+  const technicalHitCount = texts.filter((text) => (
+    /[#A-Z0-9]|换流|排油|油阀|电源|回路|指示|开关|合位|分位|全开|全关|闭锁|解锁/u.test(text)
+  )).length;
+  const shortStatusCount = texts.filter((text) => isShortStatusLabelText(text)).length;
+  const usefulLength = combinedText.replace(/[①②③④⑤⑥⑦⑧⑨⑩\s]/gu, "").length;
+  return Math.max(0, 8 - usefulLength) * 8
+    + Math.max(0, 2 - technicalHitCount) * 24
+    + shortStatusCount * 40;
+}
+
+function normalizeLabelTextForScoring(text: string | undefined): string {
+  return String(text || "").replace(/\s+/g, "").trim();
+}
+
+function isShortStatusLabelText(text: string): boolean {
+  return /^([①②③④⑤⑥⑦⑧⑨⑩\d]+[开停合断亮灭])+$/u.test(text)
+    || /^(阀门|开启|停止|关闭|解锁|闭锁|A相|B相|C相)$/u.test(text);
+}
+
+function createAlignedRowsForLabelAndDeviceRow(labelRow: ImageRect[], deviceRow: ImageRect[], allowDevicePlaceholders = false): {
   rows: CabinetPointRow[];
   usedDeviceIds: Set<string>;
   unboundLabelCount: number;
   unboundDeviceCount: number;
 } {
-  const maxCount = Math.max(labelRow.length, deviceRow.length);
   const rows: CabinetPointRow[] = [];
   const usedDeviceIds = new Set<string>();
+  const usedLabelIds = new Set<string>();
+  const sortedLabels = sortRectsByCenterX(labelRow);
+  const sortedDevices = sortRectsByCenterX(deviceRow);
   let unboundLabelCount = 0;
   let unboundDeviceCount = 0;
 
-  for (let index = 0; index < maxCount; index += 1) {
-    const labelRect = labelRow[index];
-    const deviceRect = deviceRow[index];
-    if (deviceRect) usedDeviceIds.add(deviceRect.id);
-    if (labelRect && !deviceRect) unboundLabelCount += 1;
-    if (!labelRect && deviceRect) unboundDeviceCount += 1;
-    rows.push(createPointRowFromLabelAndDevice(labelRect || createEmptyLabelRectForDevice(deviceRect), deviceRect || null, "deviceBox"));
+  if (sortedLabels.length === sortedDevices.length) {
+    sortedDevices.forEach((deviceRect, index) => {
+      usedDeviceIds.add(deviceRect.id);
+      usedLabelIds.add(sortedLabels[index].id);
+      rows.push(createPointRowFromLabelAndDevice(sortedLabels[index], deviceRect, "deviceBox"));
+    });
+    return { rows, usedDeviceIds, unboundLabelCount: 0, unboundDeviceCount: 0 };
+  }
+
+  for (const deviceRect of sortedDevices) {
+    const labelRect = findBestLabelForDeviceRect(deviceRect, sortedLabels, usedLabelIds);
+    if (!labelRect) {
+      unboundDeviceCount += 1;
+      if (allowDevicePlaceholders) {
+        rows.push(createPointRowFromLabelAndDevice(createEmptyLabelRectForDevice(deviceRect), deviceRect, "deviceBox"));
+      }
+      usedDeviceIds.add(deviceRect.id);
+      continue;
+    }
+
+    usedLabelIds.add(labelRect.id);
+    usedDeviceIds.add(deviceRect.id);
+    rows.push(createPointRowFromLabelAndDevice(labelRect, deviceRect, "deviceBox"));
+  }
+
+  for (const labelRect of sortedLabels) {
+    if (usedLabelIds.has(labelRect.id)) continue;
+    unboundLabelCount += 1;
+    rows.push(createPointRowFromLabelAndDevice(labelRect, null, "deviceBox"));
   }
 
   return { rows, usedDeviceIds, unboundLabelCount, unboundDeviceCount };
+}
+
+function hasVisibleLabelTextRect(rect: ImageRect): boolean {
+  return Boolean(normalizeLabelTextForScoring(rect.text));
+}
+
+function findBestLabelForDeviceRect(deviceRect: ImageRect, labelRow: ImageRect[], usedLabelIds: Set<string>): ImageRect | null {
+  const candidates = labelRow
+    .filter((labelRect) => !usedLabelIds.has(labelRect.id))
+    .map((labelRect) => ({
+      labelRect,
+      score: getLabelDeviceColumnScore(labelRect, deviceRect),
+    }))
+    .filter((item) => item.score != null) as { labelRect: ImageRect; score: number }[];
+  if (!candidates.length) return null;
+  return candidates.reduce((best, current) => (current.score < best.score ? current : best)).labelRect;
+}
+
+function getLabelDeviceColumnScore(labelRect: ImageRect, deviceRect: ImageRect): number | null {
+  const labelCenterX = getRectCenterX(labelRect);
+  const deviceCenterX = getRectCenterX(deviceRect);
+  const centerDistanceX = Math.abs(labelCenterX - deviceCenterX);
+  const overlapX = getAxisOverlap(labelRect.x, labelRect.x + labelRect.w, deviceRect.x, deviceRect.x + deviceRect.w);
+  const minWidth = Math.max(1, Math.min(labelRect.w, deviceRect.w));
+  const overlapRatio = overlapX / minWidth;
+  const maxCenterDistance = Math.max(labelRect.w, deviceRect.w) * 1.2 + MIN_ANNOTATION_RECT_SIZE * 2;
+  if (overlapRatio < 0.2 && centerDistanceX > maxCenterDistance) return null;
+  return centerDistanceX - overlapRatio * 16;
 }
 
 function findRelatedDeviceRowsForLabelRow(labelRow: ImageRect[], deviceRows: ImageRect[][]): ImageRect[][] {
@@ -937,6 +1255,7 @@ function createPointRowFromLabelAndDevice(
     relatedRectTool: deviceRect ? deviceTool : undefined,
     recognitionLabel: deviceRect?.recognitionLabel,
     recognitionLabelDesc: deviceRect?.recognitionLabelDesc,
+    deviceName: deviceRect?.deviceName,
   };
 }
 
@@ -1063,6 +1382,7 @@ export function findFirstEmptyNameSelection(
       boundRectTool: point.boundRectTool,
       recognitionLabel: point.recognitionLabel,
       recognitionLabelDesc: point.recognitionLabelDesc,
+      deviceName: point.deviceName,
     })),
   ];
   const emptyRow = sortTableRowsByAnnotationRows(rows, annotations).find((row) => !row.name.trim());
@@ -1298,53 +1618,113 @@ function mapOcrLabelsToImageRects(labels: CabinetOcrDetectedLabel[], sources: Ca
   return rects;
 }
 
-function mapRegionLabelsBySourceRect(labels: CabinetOcrDetectedLabel[], source: CabinetOcrSource): ImageRect[] {
-  const count = Math.max(labels.length, source.anchorRects?.length || 0);
-  const targetX = source.targetX ?? 0;
-  const targetY = source.targetY ?? 0;
-  const targetW = source.targetW ?? 0;
-  const targetH = source.targetH ?? 0;
-  if (count <= 0) return [];
+function selectRecognitionLabelRectsForDeviceRows(
+  labelRects: ImageRect[],
+  deviceRects: ImageRect[],
+  groups: Array<{ id: string; standardPartRect: ImageRect }>,
+): ImageRect[] {
+  if (!labelRects.length || !deviceRects.length) return labelRects;
 
-  if (source.anchorRects?.length) {
-    const anchoredRects = source.anchorRects.map((anchorRect, index) => {
-      const label = labels[index];
-      const fallbackW = targetW / count;
-      const boxW = Math.max(MIN_ANNOTATION_RECT_SIZE, Math.min(targetW, anchorRect.w || fallbackW));
-      const x = Math.min(Math.max(targetX, getRectCenterX(anchorRect) - boxW / 2), targetX + targetW - boxW);
-      return createOcrImageRect(label, source, index, {
-        x,
-        y: targetY,
-        w: boxW,
-        h: Math.max(MIN_ANNOTATION_RECT_SIZE, targetH),
-      });
-    });
-    if (labels.length <= anchoredRects.length) return anchoredRects;
+  const selected: ImageRect[] = [];
+  const handledLabelIds = new Set<string>();
+  for (const group of groups) {
+    const groupLabelRects = labelRects.filter((rect) => rect.groupId === group.id);
+    if (!groupLabelRects.length) continue;
+    groupLabelRects.forEach((rect) => handledLabelIds.add(rect.id));
 
-    const segmentW = targetW / labels.length;
-    const boxW = Math.max(MIN_ANNOTATION_RECT_SIZE, segmentW * 0.72);
-    return labels.slice(anchoredRects.length).reduce<ImageRect[]>((rects, label, extraIndex) => {
-      const index = anchoredRects.length + extraIndex;
-      const fallbackRect = createOcrImageRect(label, source, index, {
-        x: targetX + segmentW * index + (segmentW - boxW) / 2,
-        y: targetY,
-        w: boxW,
-        h: Math.max(MIN_ANNOTATION_RECT_SIZE, targetH),
-      });
-      return [...rects, fallbackRect];
-    }, anchoredRects);
+    const groupDeviceRows = splitRectRows(deviceRects.filter((rect) => rect.groupId === group.id));
+    if (!groupDeviceRows.length) {
+      selected.push(...groupLabelRects);
+      continue;
+    }
+
+    selected.push(...selectRelevantLabelRowsForDeviceRows(splitRectRows(groupLabelRects), groupDeviceRows).flat());
   }
 
-  const segmentW = targetW / count;
-  const boxW = Math.max(MIN_ANNOTATION_RECT_SIZE, segmentW * 0.72);
-  const boxH = Math.max(MIN_ANNOTATION_RECT_SIZE, targetH);
+  selected.push(...labelRects.filter((rect) => !handledLabelIds.has(rect.id)));
+  return sortRectsByPosition(selected);
+}
 
-  return labels.map((label, index) => createOcrImageRect(label, source, index, {
-    x: targetX + segmentW * index + (segmentW - boxW) / 2,
-    y: targetY,
-    w: boxW,
-    h: boxH,
-  }));
+function mapRegionLabelsBySourceRect(labels: CabinetOcrDetectedLabel[], source: CabinetOcrSource): ImageRect[] {
+  const bounds = getOcrSourceBounds(source);
+  const rects = labels.flatMap((label, index) => {
+    if (!label.bbox) return [];
+    const rect = normalizeDetectedLabelBboxToImageRect(label.bbox, source, bounds);
+    return rect ? [createOcrImageRect(label, source, index, rect)] : [];
+  });
+  return sortRectsByPosition(rects);
+}
+
+function getOcrSourceBounds(source: CabinetOcrSource): { x: number; y: number; w: number; h: number } {
+  return {
+    x: source.targetX ?? source.roi?.x ?? source.originX ?? 0,
+    y: source.targetY ?? source.roi?.y ?? source.originY ?? 0,
+    w: Math.max(1, source.targetW || source.roi?.w || source.width || 1),
+    h: Math.max(1, source.targetH || source.roi?.h || source.height || 1),
+  };
+}
+
+function normalizeDetectedLabelBboxToImageRect(
+  bbox: { x: number; y: number; w: number; h: number },
+  source: CabinetOcrSource,
+  bounds: { x: number; y: number; w: number; h: number },
+): { x: number; y: number; w: number; h: number } | null {
+  const values = [bbox.x, bbox.y, bbox.w, bbox.h];
+  if (!values.every(Number.isFinite) || bbox.w <= 0 || bbox.h <= 0) return null;
+
+  const normalizedRight = bbox.x + bbox.w;
+  const normalizedBottom = bbox.y + bbox.h;
+  const tolerance = 1;
+  if (
+    bbox.x < -tolerance
+    || bbox.y < -tolerance
+    || normalizedRight > CABINET_OCR_NORMALIZED_COORDINATE_MAX + tolerance
+    || normalizedBottom > CABINET_OCR_NORMALIZED_COORDINATE_MAX + tolerance
+  ) {
+    return null;
+  }
+
+  const imageBounds = {
+    x: source.originX,
+    y: source.originY,
+    w: Math.max(1, source.width || bounds.w),
+    h: Math.max(1, source.height || bounds.h),
+  };
+  const left = clampNumber(bbox.x, 0, CABINET_OCR_NORMALIZED_COORDINATE_MAX);
+  const top = clampNumber(bbox.y, 0, CABINET_OCR_NORMALIZED_COORDINATE_MAX);
+  const right = clampNumber(normalizedRight, 0, CABINET_OCR_NORMALIZED_COORDINATE_MAX);
+  const bottom = clampNumber(normalizedBottom, 0, CABINET_OCR_NORMALIZED_COORDINATE_MAX);
+  return clampRectToBounds({
+    x: imageBounds.x + (left / CABINET_OCR_NORMALIZED_COORDINATE_MAX) * imageBounds.w,
+    y: imageBounds.y + (top / CABINET_OCR_NORMALIZED_COORDINATE_MAX) * imageBounds.h,
+    w: ((right - left) / CABINET_OCR_NORMALIZED_COORDINATE_MAX) * imageBounds.w,
+    h: ((bottom - top) / CABINET_OCR_NORMALIZED_COORDINATE_MAX) * imageBounds.h,
+  }, bounds);
+}
+
+function clampRectToBounds(
+  rect: { x: number; y: number; w: number; h: number },
+  bounds: { x: number; y: number; w: number; h: number },
+): { x: number; y: number; w: number; h: number } | null {
+  const centerX = rect.x + rect.w / 2;
+  const centerY = rect.y + rect.h / 2;
+  if (
+    centerX < bounds.x
+    || centerX > bounds.x + bounds.w
+    || centerY < bounds.y
+    || centerY > bounds.y + bounds.h
+  ) {
+    return null;
+  }
+
+  const left = clampNumber(rect.x, bounds.x, bounds.x + bounds.w);
+  const top = clampNumber(rect.y, bounds.y, bounds.y + bounds.h);
+  const right = clampNumber(rect.x + rect.w, bounds.x, bounds.x + bounds.w);
+  const bottom = clampNumber(rect.y + rect.h, bounds.y, bounds.y + bounds.h);
+  const w = right - left;
+  const h = bottom - top;
+  if (w <= 0 || h <= 0) return null;
+  return { x: left, y: top, w, h };
 }
 
 function createOcrImageRect(
@@ -1369,35 +1749,6 @@ function createOcrImageRect(
   };
 }
 
-function buildLabelSplitAnchorRects(labelRect: ImageRect, deviceRects: ImageRect[]): ImageRect[] {
-  const alignedDeviceRects = deviceRects
-    .filter((deviceRect) => {
-      const overlapX = getAxisOverlap(labelRect.x, labelRect.x + labelRect.w, deviceRect.x, deviceRect.x + deviceRect.w);
-      const minWidth = Math.max(1, Math.min(labelRect.w, deviceRect.w));
-      const deviceCenterX = getRectCenterX(deviceRect);
-      const centerInsideLabelX = deviceCenterX >= labelRect.x - deviceRect.w * 0.5
-        && deviceCenterX <= labelRect.x + labelRect.w + deviceRect.w * 0.5;
-      return overlapX / minWidth >= 0.25 || centerInsideLabelX;
-    })
-    .sort((leftRect, rightRect) => getRectCenterX(leftRect) - getRectCenterX(rightRect));
-
-  const columns: ImageRect[] = [];
-  for (const deviceRect of alignedDeviceRects) {
-    const matchedColumn = columns.find((columnRect) => (
-      Math.abs(getRectCenterX(columnRect) - getRectCenterX(deviceRect)) <= Math.max(columnRect.w, deviceRect.w) * 0.6
-    ));
-    if (!matchedColumn) {
-      columns.push({ ...deviceRect });
-      continue;
-    }
-    const right = Math.max(matchedColumn.x + matchedColumn.w, deviceRect.x + deviceRect.w);
-    matchedColumn.x = Math.min(matchedColumn.x, deviceRect.x);
-    matchedColumn.w = right - matchedColumn.x;
-  }
-
-  return columns.sort((leftRect, rightRect) => getRectCenterX(leftRect) - getRectCenterX(rightRect));
-}
-
 function createOcrRectId(regionId: string, index: number): string {
   return `ocr:${regionId}:${Date.now()}:${index}:${Math.random().toString(16).slice(2)}`;
 }
@@ -1406,16 +1757,99 @@ export function createSinglePointId(): string {
   return `single-point:${Date.now()}:${Math.random().toString(16).slice(2)}`;
 }
 
+function getDebugImageSize(sources: CabinetOcrSource[]): { width?: number; height?: number } {
+  const firstSource = sources[0];
+  return {
+    width: firstSource?.width,
+    height: firstSource?.height,
+  };
+}
+
+function toDebugOcrSource(source: CabinetOcrSource) {
+  return {
+    regionId: source.regionId,
+    title: source.title,
+    masked: source.masked,
+    imageWidth: source.width,
+    imageHeight: source.height,
+    roi: source.roi,
+    roiBbox: source.roi
+      ? [
+        Math.round(source.roi.x),
+        Math.round(source.roi.y),
+        Math.round(source.roi.x + source.roi.w),
+        Math.round(source.roi.y + source.roi.h),
+      ]
+      : undefined,
+    targetRect: {
+      x: source.targetX,
+      y: source.targetY,
+      w: source.targetW,
+      h: source.targetH,
+    },
+    sourceRectId: source.sourceRectId,
+    groupId: source.groupId,
+    origin: {
+      x: source.originX,
+      y: source.originY,
+    },
+    sourceMode: source.sourceMode,
+    coordinateMode: source.coordinateMode,
+  };
+}
+
+function toDebugRect(rect: ImageRect) {
+  return {
+    id: rect.id,
+    x: rect.x,
+    y: rect.y,
+    w: rect.w,
+    h: rect.h,
+    bbox: [
+      Math.round(rect.x),
+      Math.round(rect.y),
+      Math.round(rect.x + rect.w),
+      Math.round(rect.y + rect.h),
+    ],
+    text: rect.text,
+    source: rect.source,
+    groupId: rect.groupId,
+    generatedFromRectId: rect.generatedFromRectId,
+    recognitionLabel: rect.recognitionLabel,
+    recognitionLabelDesc: rect.recognitionLabelDesc,
+    deviceName: rect.deviceName,
+  };
+}
+
+function toDebugPointRow(row: CabinetPointRow) {
+  return {
+    index: row.index,
+    key: row.key,
+    name: row.name,
+    type: row.type,
+    boundRectId: row.boundRectId,
+    boundRectTool: row.boundRectTool,
+    relatedRectId: row.relatedRectId,
+    relatedRectTool: row.relatedRectTool,
+    recognitionLabel: row.recognitionLabel,
+    recognitionLabelDesc: row.recognitionLabelDesc,
+    deviceName: row.deviceName,
+  };
+}
+
 async function buildDeviceLabelOcrSources(
   imageDataUrl: string,
   rects: ImageRect[],
   groupByRectId?: Map<string, string>,
-  deviceRects: ImageRect[] = [],
 ): Promise<CabinetOcrSource[]> {
   const validRects = rects.filter((rect) => rect.w >= MIN_ANNOTATION_RECT_SIZE && rect.h >= MIN_ANNOTATION_RECT_SIZE);
-  return Promise.all(validRects.map(async (rect, index) => {
+  if (!validRects.length) return [];
+
+  // 多个手工标签区域取一个共同外接矩形并只裁图一次，使 qwen3.5-ocr 一次请求即可识别全部区域。
+  const sharedBounds = mergeImageRectBounds(validRects);
+  const crop = await cropCabinetOcrImage(imageDataUrl, sharedBounds, 0);
+  return validRects.map((rect, index) => {
     const groupId = groupByRectId?.get(rect.id);
-    const crop = await cropCabinetOcrImage(imageDataUrl, rect);
     return {
       regionId: `region_${index + 1}`,
       title: `标签区域 ${index + 1}`,
@@ -1424,14 +1858,31 @@ async function buildDeviceLabelOcrSources(
       originY: crop.originY,
       width: crop.width,
       height: crop.height,
+      // roi 使用共享裁剪图内的局部坐标；target 则保留原图坐标，供结果映射回画布。
+      roi: {
+        x: rect.x - crop.originX,
+        y: rect.y - crop.originY,
+        w: rect.w,
+        h: rect.h,
+      },
       targetX: rect.x,
       targetY: rect.y,
       targetW: rect.w,
       targetH: rect.h,
       sourceRectId: rect.id,
       groupId,
-      anchorRects: buildLabelSplitAnchorRects(rect, deviceRects.filter((deviceRect) => deviceRect.groupId && deviceRect.groupId === groupId)),
+      masked: false,
+      sourceMode: "crop",
+      coordinateMode: "original",
     };
-  }));
+  });
+}
+
+function mergeImageRectBounds(rects: ImageRect[]): { x: number; y: number; w: number; h: number } {
+  const left = Math.min(...rects.map((rect) => rect.x));
+  const top = Math.min(...rects.map((rect) => rect.y));
+  const right = Math.max(...rects.map((rect) => rect.x + rect.w));
+  const bottom = Math.max(...rects.map((rect) => rect.y + rect.h));
+  return { x: left, y: top, w: right - left, h: bottom - top };
 }
 

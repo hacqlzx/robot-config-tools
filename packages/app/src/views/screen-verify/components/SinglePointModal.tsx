@@ -28,6 +28,7 @@ export function SinglePointModal({ open, initialValues, onCancel, onSubmit }: Si
       recognitionType: matchedType?.label || initialValues.recognitionType,
       recognitionLabel: matchedType?.value || initialValues.recognitionLabel,
       recognitionLabelDesc: matchedType?.label || initialValues.recognitionLabelDesc,
+      deviceName: matchedType?.deviceName || initialValues.deviceName,
     });
   }, [form, initialValues, open]);
 
@@ -52,6 +53,7 @@ export function SinglePointModal({ open, initialValues, onCancel, onSubmit }: Si
             recognitionType: (values.recognitionLabelDesc || values.recognitionType || "").trim(),
             recognitionLabel: values.recognitionLabel,
             recognitionLabelDesc: values.recognitionLabelDesc,
+            deviceName: values.deviceName,
           })}
         >
           <Form.Item
@@ -76,6 +78,9 @@ export function SinglePointModal({ open, initialValues, onCancel, onSubmit }: Si
           <Form.Item name="recognitionLabelDesc" hidden>
             <Input />
           </Form.Item>
+          <Form.Item name="deviceName" hidden>
+            <Input />
+          </Form.Item>
         </Form>
       </Modal>
 
@@ -88,6 +93,7 @@ export function SinglePointModal({ open, initialValues, onCancel, onSubmit }: Si
             recognitionType: option.label,
             recognitionLabel: option.value,
             recognitionLabelDesc: option.label,
+            deviceName: option.deviceName,
           });
           setTargetTypeModalOpen(false);
         }}

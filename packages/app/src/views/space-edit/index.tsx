@@ -97,8 +97,9 @@ export default function SpaceEdit() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [cabinetNameSequence, setCabinetNameSequence] = useState({ cabinetRowStart: 1, cabinetStart: 1 });
   const entitiesRef = useRef<Map<string, pc.Entity>>(new Map());
+  const panelResizeContainerRef = useRef<HTMLDivElement | null>(null);
   const { width: panelWidth, resizing, onMouseDown: onResizeStart } = useResizable({
-    containerRef: useRef(null),
+    containerRef: panelResizeContainerRef,
     initialWidth: 260,
     minWidth: 200,
     maxWidth: 520,

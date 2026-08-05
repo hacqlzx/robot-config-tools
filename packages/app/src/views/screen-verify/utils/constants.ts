@@ -21,9 +21,10 @@ export const ANNOTATION_COLORS = {
   standardPartRecognition: "#0050b3",
   deviceLabelManual: "#ffd43b",
   deviceLabelRecognition: "#d48806",
+  deviceLabelInferred: "#ffd43b",
   deviceBoxManual: "#22b8ff",
   deviceBoxRecognition: "#0050b3",
-  deviceBoxInferred: "#8c8c8c",
+  deviceBoxInferred: "#1677ff",
   appearance: "#52c41a",
 } as const;
 

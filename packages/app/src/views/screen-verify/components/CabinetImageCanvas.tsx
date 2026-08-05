@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { Button, Tooltip } from "antd";
 import { CompressOutlined, ZoomInOutlined, ZoomOutOutlined } from "@ant-design/icons";
 import {
@@ -267,16 +267,24 @@ export function CabinetImageCanvas({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [draw, onDeleteRect, onExitTool, onUndo]);
 
-  const handleWheel = (event: ReactWheelEvent<HTMLCanvasElement>) => {
+  useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !imageRef.current) return;
-    event.preventDefault();
+    if (!canvas) return;
 
-    const rect = canvas.getBoundingClientRect();
-    const pointerX = event.clientX - rect.left;
-    const pointerY = event.clientY - rect.top;
-    zoomAt(event.deltaY < 0 ? 1.12 : 1 / 1.12, pointerX, pointerY);
-  };
+    const handleWheel = (event: WheelEvent) => {
+      if (!imageRef.current) return;
+      event.preventDefault();
+
+      const rect = canvas.getBoundingClientRect();
+      const pointerX = event.clientX - rect.left;
+      const pointerY = event.clientY - rect.top;
+      zoomAt(event.deltaY < 0 ? 1.12 : 1 / 1.12, pointerX, pointerY);
+    };
+
+    canvas.addEventListener("wheel", handleWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", handleWheel);
+  }, [zoomAt]);
+
 
   const getImagePoint = useCallback((event: ReactMouseEvent<HTMLCanvasElement>, clampToImage = true) => {
     const canvas = canvasRef.current;
@@ -608,7 +616,6 @@ export function CabinetImageCanvas({
         className={`screen-verify-image-canvas${activeTool ? " is-drawing" : ""}`}
         title={title}
         tabIndex={0}
-        onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={stopDrag}
@@ -644,11 +651,11 @@ function drawAnnotationRects(
   selected: AnnotationSelection | null = null,
 ) {
   ctx.save();
-  ctx.lineWidth = draft ? 2 : 1.5;
   for (const rect of rects) {
     const selectedRect = "id" in rect && selected?.tool === tool && selected.id === rect.id;
     const color = getAnnotationStrokeColor(tool, rect);
     const inferred = "source" in rect && rect.source === "inferred";
+    ctx.lineWidth = draft ? 2 : inferred ? 2.5 : 1.5;
     ctx.strokeStyle = color;
     ctx.setLineDash(draft || inferred ? [6, 4] : []);
     const x = view.offsetX + rect.x * view.scale;
@@ -688,6 +695,7 @@ function getAnnotationStrokeColor(
     return recognized ? ANNOTATION_COLORS.standardPartRecognition : ANNOTATION_COLORS.standardPartManual;
   }
   if (tool === "deviceLabel") {
+    if (source === "inferred") return ANNOTATION_COLORS.deviceLabelInferred;
     return recognized ? ANNOTATION_COLORS.deviceLabelRecognition : ANNOTATION_COLORS.deviceLabelManual;
   }
   if (tool === "deviceBox") {

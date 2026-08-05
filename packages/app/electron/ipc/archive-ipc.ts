@@ -13,7 +13,7 @@ const SURVEY_DIR_NAME = "勘察数据";
 const CALIBRATION_FILE_NAME = "勘察数据.json";
 const CALIB_DEVICE_DIR_NAME = "calib_device";
 const CALIB_CABINET_DIR_NAME = "calib_cabinet";
-const POINT_CALIBRATION_FILE_NAME = "calibrationInfo.json";
+const POINT_CALIBRATION_FILE_NAME = "calibration.json";
 const MAP_DIR_NAME = "地图";
 const AREA_FILE_NAME = "description_file.json";
 const AREA_TYPE_DEVICE = "8";
@@ -292,7 +292,7 @@ export function registerArchiveIpc(): void {
       ensureCalibrationIds(safeProjectName, calibration, context);
       const points = readProjectPoints(safeProjectName);
       const timeStr = formatMinuteStamp(new Date());
-      const records = buildImageLabelRecords(calibration, context, points, timeStr);
+      const records = buildImageLabelRecords(calibration, context, points);
       const pointRecords = buildPointCalibrationRecords(calibration, context, points);
       if (records.length === 0) throw new Error("当前地图暂无可导出的图像标识");
 
@@ -1557,13 +1557,14 @@ function isCalibrationEntryForMap(entry: CalibrationEntry, context: SurveyContex
   return entry.mapCode === context.mapName;
 }
 
-function buildImageLabelRecords(calibration: CalibrationFileData, context: SurveyContext, points: any[], timeStr: string): ImageLabelRecord[] {
+function buildImageLabelRecords(calibration: CalibrationFileData, context: SurveyContext, points: any[]): ImageLabelRecord[] {
   const pointByCode = new Map<string, any>();
   for (const point of points) {
     const code = valueText(point.pointCode);
     if (code) pointByCode.set(code, point);
   }
   const records: ImageLabelRecord[] = [];
+  const usedFileNames = new Set<string>();
   let serial = 1;
 
   for (const entry of normalizeCalibrationEntries(calibration)) {
@@ -1577,8 +1578,7 @@ function buildImageLabelRecords(calibration: CalibrationFileData, context: Surve
         const pointName = String(point?.pointName || binding.pointName || binding.pointCode || "未命名点位");
         const pointCode = String(point?.pointCode || binding.pointCode || "");
         const robotData = buildRobotImageLabel(imageMeta, context, rect, point, pointName, pointCode);
-        const serialText = String(serial).padStart(3, "0");
-        const fileName = `${sanitizeFileName(context.mapCode)}_${sanitizeFileName(pointName)}_${timeStr}_${serialText}.json`;
+        const fileName = createPointCodeJsonFileName(pointCode, usedFileNames, serial);
         records.push({ fileName, data: robotData });
         serial++;
       }
@@ -1586,6 +1586,18 @@ function buildImageLabelRecords(calibration: CalibrationFileData, context: Surve
   }
 
   return records;
+}
+
+function createPointCodeJsonFileName(pointCode: string, usedFileNames: Set<string>, serial: number): string {
+  const baseName = sanitizeFileName(pointCode || `point_${String(serial).padStart(3, "0")}`);
+  let fileName = `${baseName}.json`;
+  let suffix = 2;
+  while (usedFileNames.has(fileName)) {
+    fileName = `${baseName}_${suffix}.json`;
+    suffix++;
+  }
+  usedFileNames.add(fileName);
+  return fileName;
 }
 
 function buildPointCalibrationRecords(calibration: CalibrationFileData, context: SurveyContext, points: any[]): PointCalibrationRecord[] {

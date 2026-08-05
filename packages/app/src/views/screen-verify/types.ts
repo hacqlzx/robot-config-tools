@@ -11,6 +11,7 @@ export interface CabinetPointRow {
   relatedRectTool?: AnnotationTool;
   recognitionLabel?: string;
   recognitionLabelDesc?: string;
+  deviceName?: string;
 }
 
 export interface CabinetTreeNode {
@@ -44,6 +45,7 @@ export interface ImageRect {
   generatedFromRectId?: string;
   recognitionLabel?: string;
   recognitionLabelDesc?: string;
+  deviceName?: string;
 }
 
 export interface ComponentAnnotations {
@@ -67,6 +69,7 @@ export interface CabinetSinglePoint {
   recognitionType: string;
   recognitionLabel?: string;
   recognitionLabelDesc?: string;
+  deviceName?: string;
   boundRectId: string;
   boundRectTool: AnnotationTool;
   rectSnapshot: ImageRect;
@@ -79,4 +82,5 @@ export interface SinglePointDraft {
   recognitionType: string;
   recognitionLabel?: string;
   recognitionLabelDesc?: string;
+  deviceName?: string;
 }

@@ -13,7 +13,7 @@ import { CabinetTreeTitle } from "./components/CabinetTreeTitle";
 import type { BatchRecognitionNodeStatus } from "./components/CabinetTreeTitle";
 import { SinglePointModal } from "./components/SinglePointModal";
 import { TargetTypeModal } from "./components/TargetTypeModal";
-import { cropCabinetOcrImage, recognizeCabinetName } from "./services/ocr-service";
+import { cropCabinetOcrImage, recognizeCabinetLabelTexts, recognizeCabinetName } from "./services/ocr-service";
 import { isRecognitionRequestCancelled, throwIfRecognitionCancelled } from "./services/recognition-request";
 import { annotationToolKey, cloneAnnotations, createEmptyAnnotations } from "./utils/annotation-utils";
 import { buildCabinetAnnotationParamsExport } from "./utils/annotation-params-export";
@@ -58,6 +58,7 @@ const EMPTY_SINGLE_POINT_DRAFT: SinglePointDraft = {
   recognitionType: "",
   recognitionLabel: "",
   recognitionLabelDesc: "",
+  deviceName: "",
 };
 
 function uniqueMainDeviceNameOverridePayloads(records: CabinetImagePackageRecord[], name: string) {
@@ -71,6 +72,105 @@ function uniqueMainDeviceNameOverridePayloads(records: CabinetImagePackageRecord
     });
   }
   return [...payloads.values()];
+}
+
+async function recognizeSupplementLabelTexts(
+  imageDataUrl: string,
+  labelRects: ImageRect[],
+  signal: AbortSignal,
+): Promise<Map<string, { text: string; confidence?: number }>> {
+  const sources = await Promise.all(labelRects.map(async (rect, index) => {
+    const crop = await cropCabinetOcrImage(imageDataUrl, rect, 4);
+    return {
+      rectId: rect.id,
+      regionId: `supplement_label_${index + 1}`,
+      title: `补充标签 ${index + 1}`,
+      dataUrl: crop.dataUrl,
+      width: crop.width,
+      height: crop.height,
+    };
+  }));
+  throwIfRecognitionCancelled(signal);
+
+  const result = await recognizeCabinetLabelTexts(sources.map(({ rectId: _rectId, ...source }) => source), { signal });
+  const regionById = new Map(result.regions.map((region) => [region.regionId, region]));
+  const recognized = new Map<string, { text: string; confidence?: number }>();
+  for (const source of sources) {
+    const label = regionById.get(source.regionId)?.labels[0];
+    const text = String(label?.text || "").trim();
+    if (!text) continue;
+    recognized.set(source.rectId, { text, confidence: label?.confidence });
+  }
+  console.info("[screen-verify] supplement label text OCR result", {
+    targetCount: labelRects.length,
+    recognizedCount: recognized.size,
+    labels: [...recognized.entries()],
+    rawText: result.rawText,
+  });
+  return recognized;
+}
+
+function toSortDebugRect(rect: ImageRect | undefined) {
+  if (!rect) return null;
+  return {
+    id: rect.id,
+    bbox: [
+      Math.round(rect.x),
+      Math.round(rect.y),
+      Math.round(rect.x + rect.w),
+      Math.round(rect.y + rect.h),
+    ],
+    x: rect.x,
+    y: rect.y,
+    w: rect.w,
+    h: rect.h,
+    text: rect.text,
+    source: rect.source,
+    groupId: rect.groupId,
+    generatedFromRectId: rect.generatedFromRectId,
+    recognitionLabel: rect.recognitionLabel,
+    recognitionLabelDesc: rect.recognitionLabelDesc,
+    deviceName: rect.deviceName,
+  };
+}
+
+function toSortDebugAnnotations(annotations: ComponentAnnotations) {
+  return {
+    standardPartRects: annotations.standardPartRects.map(toSortDebugRect),
+    deviceLabelRects: annotations.deviceLabelRects.map(toSortDebugRect),
+    deviceBoxRects: annotations.deviceBoxRects.map(toSortDebugRect),
+    appearanceRects: annotations.appearanceRects.map(toSortDebugRect),
+  };
+}
+
+function findAnnotationRectForDebug(annotations: ComponentAnnotations, tool: AnnotationTool | undefined, rectId: string | undefined) {
+  if (!tool || !rectId) return undefined;
+  const rects = tool === "standardPart"
+    ? annotations.standardPartRects
+    : tool === "deviceLabel"
+      ? annotations.deviceLabelRects
+      : tool === "deviceBox"
+        ? annotations.deviceBoxRects
+        : annotations.appearanceRects;
+  return rects.find((rect) => rect.id === rectId);
+}
+
+function toSortDebugPointRow(row: CabinetPointRow, annotations?: ComponentAnnotations) {
+  return {
+    index: row.index,
+    key: row.key,
+    name: row.name,
+    type: row.type,
+    boundRectId: row.boundRectId,
+    boundRectTool: row.boundRectTool,
+    boundRect: annotations ? toSortDebugRect(findAnnotationRectForDebug(annotations, row.boundRectTool, row.boundRectId)) : undefined,
+    relatedRectId: row.relatedRectId,
+    relatedRectTool: row.relatedRectTool,
+    relatedRect: annotations ? toSortDebugRect(findAnnotationRectForDebug(annotations, row.relatedRectTool, row.relatedRectId)) : undefined,
+    recognitionLabel: row.recognitionLabel,
+    recognitionLabelDesc: row.recognitionLabelDesc,
+    deviceName: row.deviceName,
+  };
 }
 
 export default function ScreenVerify() {
@@ -188,6 +288,7 @@ export default function ScreenVerify() {
         boundRectTool: point.boundRectTool,
         recognitionLabel: point.recognitionLabel,
         recognitionLabelDesc: point.recognitionLabelDesc,
+        deviceName: point.deviceName,
       })),
     ];
     return sortTableRowsByAnnotationRows(rows, selectedAnnotations).map((row, index) => ({ ...row, index: index + 1 }));
@@ -510,20 +611,126 @@ export default function ScreenVerify() {
     void runMultiPointGenerate("add");
   }, [runMultiPointGenerate]);
 
-  const handleSortPointRows = useCallback(() => {
+  const handleSortPointRows = useCallback(async () => {
+    if (ocrLoading) {
+      reportRecognitionBusy();
+      return;
+    }
     if (!selectedComponentCode) {
       message.warning("请先选择左侧部件");
       return;
     }
-    const annotations = annotationsByComponentRef.current[selectedComponentCode] || createEmptyAnnotations();
-    const result = buildSortedPointRowsFromAnnotations(annotations);
+    if (!selectedImageDataUrl) {
+      message.warning("请等待屏柜图片加载完成");
+      return;
+    }
+    let annotations = annotationsByComponentRef.current[selectedComponentCode] || createEmptyAnnotations();
+    const singlePointDeviceRectIds = new Set(
+      (singlePointsByComponentRef.current[selectedComponentCode] || [])
+        .filter((point) => point.boundRectTool === "deviceBox")
+        .map((point) => point.boundRectId),
+    );
+    const supplementLabelRects = annotations.deviceLabelRects.filter((rect) => (
+      (!rect.text || !rect.text.trim())
+      && (!rect.source || rect.source === "manual")
+      && rect.w > 0
+      && rect.h > 0
+    ));
+
+    const existingRows = ocrRowsByComponentRef.current[selectedComponentCode] || [];
+    const existingSinglePoints = singlePointsByComponentRef.current[selectedComponentCode] || [];
+    console.info("[screen-verify] one-click sort input", {
+      componentCode: selectedComponentCode,
+      existingRows: existingRows.map((row) => toSortDebugPointRow(row, annotations)),
+      existingSinglePoints: existingSinglePoints.map((point) => ({
+        id: point.id,
+        pointName: point.pointName,
+        recognitionType: point.recognitionType,
+        boundRectId: point.boundRectId,
+        boundRectTool: point.boundRectTool,
+        boundRect: toSortDebugRect(findAnnotationRectForDebug(annotations, point.boundRectTool, point.boundRectId)),
+      })),
+      singlePointDeviceRectIds: [...singlePointDeviceRectIds],
+      supplementLabelRects: supplementLabelRects.map(toSortDebugRect),
+      annotations: toSortDebugAnnotations(annotations),
+    });
+
+    let recognizedLabelCount = 0;
+    if (supplementLabelRects.length) {
+      singleRecognitionAbortRef.current?.abort();
+      const controller = new AbortController();
+      singleRecognitionAbortRef.current = controller;
+      setOcrLoading(true);
+      try {
+        const recognizedTexts = await recognizeSupplementLabelTexts(selectedImageDataUrl, supplementLabelRects, controller.signal);
+        throwIfRecognitionCancelled(controller.signal);
+        recognizedLabelCount = recognizedTexts.size;
+        annotations = {
+          ...annotations,
+          deviceLabelRects: annotations.deviceLabelRects.map((rect) => {
+            const recognized = recognizedTexts.get(rect.id);
+            if (!recognized) return rect;
+            return {
+              ...rect,
+              text: recognized.text,
+              confidence: recognized.confidence,
+              source: rect.source || "manual",
+              saved: false,
+              generationStatus: "generated",
+            };
+          }),
+        };
+      } catch (e: any) {
+        if (isRecognitionRequestCancelled(e)) {
+          message.info("识别已取消");
+          return;
+        }
+        message.warning(e?.message || "补充标签文字识别失败，已按现有名称排序");
+      } finally {
+        if (singleRecognitionAbortRef.current === controller) singleRecognitionAbortRef.current = null;
+        setOcrLoading(false);
+      }
+    }
+
+    const sortableAnnotations: ComponentAnnotations = {
+      ...annotations,
+      deviceBoxRects: annotations.deviceBoxRects.filter((rect) => !singlePointDeviceRectIds.has(rect.id)),
+    };
+    const result = buildSortedPointRowsFromAnnotations(sortableAnnotations);
+    console.info("[screen-verify] one-click sort output", {
+      componentCode: selectedComponentCode,
+      recognizedSupplementLabelCount: recognizedLabelCount,
+      resultSummary: {
+        rowCount: result.rows.length,
+        emptyNameCount: result.emptyNameCount,
+        unboundLabelCount: result.unboundLabelCount,
+        unboundDeviceCount: result.unboundDeviceCount,
+      },
+      sortableAnnotations: toSortDebugAnnotations(sortableAnnotations),
+      resultAnnotations: toSortDebugAnnotations(result.annotations),
+      rows: result.rows.map((row) => toSortDebugPointRow(row, result.annotations)),
+      emptyRows: result.rows
+        .filter((row) => !row.name.trim())
+        .map((row) => toSortDebugPointRow(row, result.annotations)),
+    });
     if (!result.rows.length) {
-      message.warning("当前图片没有可排序的标签框和设备框");
+      message.warning(singlePointDeviceRectIds.size
+        ? "当前图片没有可排序的多点数据，单点新增点位不参与一键排序"
+        : "当前图片没有可排序的标签框和设备框");
       return;
     }
 
+    const sortedDeviceRectById = new Map(result.annotations.deviceBoxRects.map((rect) => [rect.id, rect]));
+    const nextAnnotations: ComponentAnnotations = {
+      ...result.annotations,
+      deviceBoxRects: annotations.deviceBoxRects.map((rect) => (
+        singlePointDeviceRectIds.has(rect.id)
+          ? rect
+          : sortedDeviceRectById.get(rect.id) || rect
+      )),
+    };
     pushAnnotationHistory(selectedComponentCode);
-    updateComponentAnnotations(selectedComponentCode, () => result.annotations);
+    updateComponentAnnotations(selectedComponentCode, () => nextAnnotations);
     setOcrRowsByComponent((prev) => ({
       ...prev,
       [selectedComponentCode]: result.rows,
@@ -534,12 +741,23 @@ export default function ScreenVerify() {
     const messageText = result.emptyNameCount || result.unboundLabelCount || result.unboundDeviceCount
       ? `已重新排序 ${result.rows.length} 条点位，存在 ${result.unboundLabelCount} 个未绑定设备的标签、${result.unboundDeviceCount} 个未绑定标签的设备，请人工补框或补充名称`
       : `已重新排序 ${result.rows.length} 条点位`;
+    const finalMessageText = recognizedLabelCount
+      ? `${messageText}，识别补充标签 ${recognizedLabelCount} 个`
+      : messageText;
     if (result.emptyNameCount || result.unboundLabelCount || result.unboundDeviceCount) {
-      message.warning(messageText);
+      message.warning(finalMessageText);
     } else {
-      message.success(messageText);
+      message.success(finalMessageText);
     }
-  }, [message, pushAnnotationHistory, selectedComponentCode, updateComponentAnnotations]);
+  }, [
+    message,
+    ocrLoading,
+    pushAnnotationHistory,
+    reportRecognitionBusy,
+    selectedComponentCode,
+    selectedImageDataUrl,
+    updateComponentAnnotations,
+  ]);
 
   const handleSinglePointAddGenerate = useCallback(() => {
     if (ocrLoading) {
@@ -596,20 +814,37 @@ export default function ScreenVerify() {
     }
 
     pushAnnotationHistory(selectedComponentCode);
+    const recognitionType = values.recognitionLabelDesc || values.recognitionType;
+    const boundRect: ImageRect = {
+      ...singlePointTargetRect,
+      text: recognitionType,
+      recognitionLabel: values.recognitionLabel,
+      recognitionLabelDesc: recognitionType,
+      deviceName: values.deviceName,
+      saved: false,
+      generationStatus: singlePointTargetRect.source === "manual" || !singlePointTargetRect.source ? "pending" : "generated",
+    };
     const point: CabinetSinglePoint = {
       id: createSinglePointId(),
       componentCode: selectedComponentCode,
       pointName: values.pointName,
       recognitionType: values.recognitionType,
       recognitionLabel: values.recognitionLabel,
-      recognitionLabelDesc: values.recognitionLabelDesc || values.recognitionType,
-      boundRectId: singlePointTargetRect.id,
+      recognitionLabelDesc: recognitionType,
+      deviceName: values.deviceName,
+      boundRectId: boundRect.id,
       boundRectTool: "deviceBox",
-      rectSnapshot: { ...singlePointTargetRect },
+      rectSnapshot: { ...boundRect },
       createdAt: new Date().toISOString(),
       saved: false,
     };
 
+    updateComponentAnnotations(selectedComponentCode, (current) => ({
+      ...current,
+      deviceBoxRects: current.deviceBoxRects.map((rect) => (
+        rect.id === boundRect.id ? boundRect : rect
+      )),
+    }));
     setSinglePointsByComponent((prev) => ({
       ...prev,
       [selectedComponentCode]: [...(prev[selectedComponentCode] || []), point],
@@ -619,7 +854,7 @@ export default function ScreenVerify() {
     setSinglePointDrawing(false);
     setSinglePointCreatedRect(null);
     setActiveAnnotationTool(null);
-    setSelectedAnnotation({ tool: "deviceBox", id: singlePointTargetRect.id });
+    setSelectedAnnotation({ tool: "deviceBox", id: boundRect.id });
     setSinglePointDraft(EMPTY_SINGLE_POINT_DRAFT);
     message.success("单点已生成");
   }, [message, pushAnnotationHistory, selectedComponentCode, singlePointTargetRect]);
@@ -1056,6 +1291,20 @@ export default function ScreenVerify() {
       appearanceRects: tool === "appearance" ? [...current.appearanceRects, rect] : current.appearanceRects,
     }));
     setSelectedAnnotation({ tool, id: rect.id });
+    if (tool === "deviceBox" && !createSinglePoint) {
+      setEditingTargetTypeRow({
+        key: `manual-device:${rect.id}`,
+        index: 0,
+        name: "",
+        type: rect.recognitionLabelDesc || rect.recognitionLabel || "",
+        boundRectId: rect.id,
+        boundRectTool: "deviceBox",
+        recognitionLabel: rect.recognitionLabel,
+        recognitionLabelDesc: rect.recognitionLabelDesc,
+        deviceName: rect.deviceName,
+      });
+      setTargetTypeModalOpen(true);
+    }
     if (createSinglePoint) {
       setSinglePointDrawing(false);
       setActiveAnnotationTool(null);
@@ -1284,6 +1533,14 @@ export default function ScreenVerify() {
               recognitionType: option.label,
               recognitionLabel: option.value,
               recognitionLabelDesc: option.label,
+              deviceName: option.deviceName,
+              rectSnapshot: {
+                ...point.rectSnapshot,
+                text: option.label,
+                recognitionLabel: option.value,
+                recognitionLabelDesc: option.label,
+                deviceName: option.deviceName,
+              },
               saved: false,
             }
             : point
@@ -1299,6 +1556,7 @@ export default function ScreenVerify() {
               type: option.label,
               recognitionLabel: option.value,
               recognitionLabelDesc: option.label,
+              deviceName: option.deviceName,
             }
             : row
         )),
@@ -1320,6 +1578,7 @@ export default function ScreenVerify() {
               text: option.label,
               recognitionLabel: option.value,
               recognitionLabelDesc: option.label,
+              deviceName: option.deviceName,
               saved: false,
               generationStatus: rect.source === "manual" || !rect.source ? "pending" : "generated",
             }
