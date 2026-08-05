@@ -54,6 +54,10 @@ interface ImageDetectionApiResponse {
   results?: ImageDetectionApiResult[];
 }
 
+/**
+ * 调用算法服务识别整张屏柜图中的设备框。
+ * 后续会在 recognition-workflow 中按用户框选的标准部件区域过滤结果。
+ */
 export async function detectCabinetDevices(
   imageDataUrl: string,
   options: RecognitionRequestOptions = {},
@@ -70,6 +74,9 @@ export async function detectCabinetDevices(
   return { detections, issues };
 }
 
+/**
+ * 算法接口要求 multipart/form-data：image 是整图，taskid 表示当前设备识别任务。
+ */
 async function requestImageDetection(
   imageDataUrl: string,
   options: RecognitionRequestOptions,
@@ -99,6 +106,9 @@ async function requestImageDetection(
   return Array.isArray(payload.results) ? payload.results : [];
 }
 
+/**
+ * 将算法接口的 x1/y1/x2/y2 坐标归一成画布内部使用的 x/y/w/h。
+ */
 function normalizeDetectionResult(result: ImageDetectionApiResult): DeviceDetection | null {
   const box = result.box;
   const x1 = Number(box?.x1);

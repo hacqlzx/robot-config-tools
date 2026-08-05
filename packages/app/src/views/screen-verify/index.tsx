@@ -513,6 +513,10 @@ export default function ScreenVerify() {
     });
   }, [selectedComponentCode, updateComponentAnnotations]);
 
+  /**
+   * 单张图片的多点生成入口。
+   * whole 会重建当前图片的识别结果，add 只追加新框选区域的结果。
+   */
   const runMultiPointGenerate = useCallback(async (mode: MultiPointGenerateMode) => {
     if (ocrLoading) {
       reportRecognitionBusy();
@@ -611,6 +615,10 @@ export default function ScreenVerify() {
     void runMultiPointGenerate("add");
   }, [runMultiPointGenerate]);
 
+  /**
+   * 一键排序入口。
+   * 先对人工后补且没有文字的标签框做轻量 OCR，再按当前画布框关系重建右侧点位表。
+   */
   const handleSortPointRows = useCallback(async () => {
     if (ocrLoading) {
       reportRecognitionBusy();
@@ -692,6 +700,7 @@ export default function ScreenVerify() {
       }
     }
 
+    // 单点新增的设备框已经由单点记录独立管理，一键排序时不再参与批量绑定。
     const sortableAnnotations: ComponentAnnotations = {
       ...annotations,
       deviceBoxRects: annotations.deviceBoxRects.filter((rect) => !singlePointDeviceRectIds.has(rect.id)),
@@ -938,6 +947,10 @@ export default function ScreenVerify() {
     updateComponentAnnotations,
   ]);
 
+  /**
+   * 保存当前图片标注中间态。
+   * 保存允许空名称，方便批量识别后继续人工修正；导出标注参数时再强校验。
+   */
   const handleSaveCurrentImage = useCallback(async () => {
     if (!selectedComponentCode) {
       message.warning("请先选择左侧部件");
@@ -967,6 +980,9 @@ export default function ScreenVerify() {
     selectedComponentCode,
   ]);
 
+  /**
+   * 加载部件原图并做内存缓存，批量识别会复用这里避免重复 IPC 读取。
+   */
   const loadCabinetImageDataUrl = useCallback(async (record: CabinetImagePackageRecord): Promise<string> => {
     const cacheKey = buildCabinetImageCacheKey(record);
     const cached = imageCacheRef.current.get(cacheKey);
@@ -986,6 +1002,9 @@ export default function ScreenVerify() {
     return result.dataUrl;
   }, []);
 
+  /**
+   * 打开批量识别弹窗，只做项目和数据存在性校验。
+   */
   const handleOpenBatchRecognition = useCallback(() => {
     if (ocrLoading || batchProgress) {
       reportRecognitionBusy();
@@ -1014,6 +1033,10 @@ export default function ScreenVerify() {
     setBatchModalOpen(false);
   }, [batchCancelling, batchProgress]);
 
+  /**
+   * 批量识别串行执行。
+   * 每张图片先切到左侧部件节点、加载图片、校验是否具备识别框，再复用单张识别流程并立即保存中间态。
+   */
   const handleStartBatchRecognition = useCallback(async () => {
     if (ocrLoading || batchProgress) {
       reportRecognitionBusy();
@@ -1168,6 +1191,9 @@ export default function ScreenVerify() {
     updateComponentAnnotations,
   ]);
 
+  /**
+   * 屏柜名称 OCR：用户框选名称区域后裁图识别，再弹窗确认是否覆盖左侧主设备名称。
+   */
   const runCabinetNameRecognition = useCallback(async (rect: ImageRect) => {
     if (!selectedComponentCode || !selectedImageDataUrl) return;
 
@@ -1274,6 +1300,10 @@ export default function ScreenVerify() {
     setActiveAnnotationTool((current) => (current === tool ? null : tool));
   }, [message, selectedComponent]);
 
+  /**
+   * 画布新建框后的统一入口。
+   * 普通设备框会弹出类型选择，单点新增会弹出点位表单，屏柜名称框会立即进入 OCR。
+   */
   const handleCreateAnnotationRect = useCallback((tool: AnnotationTool, rect: ImageRect) => {
     if (!selectedComponentCode) return;
     const createSinglePoint = singlePointDrawing && tool === "deviceBox";
@@ -1322,6 +1352,9 @@ export default function ScreenVerify() {
     updateComponentAnnotations,
   ]);
 
+  /**
+   * 更新标注框坐标，并同步刷新绑定到该设备框的单点快照。
+   */
   const handleUpdateAnnotationRect = useCallback((tool: AnnotationTool, rect: ImageRect) => {
     if (!selectedComponentCode) return;
     pushAnnotationHistory(selectedComponentCode);
@@ -1354,6 +1387,9 @@ export default function ScreenVerify() {
     setSelectedAnnotation({ tool, id: rect.id });
   }, [pushAnnotationHistory, selectedComponentCode, updateComponentAnnotations]);
 
+  /**
+   * 删除标注框时同步清理右侧点位表和单点记录中的绑定关系。
+   */
   const handleDeleteAnnotationRect = useCallback((selection: AnnotationSelection) => {
     if (!selectedComponentCode) return;
     pushAnnotationHistory(selectedComponentCode);
@@ -1805,6 +1841,10 @@ export default function ScreenVerify() {
     };
   }, [selectedComponent]);
 
+  /**
+   * 导入屏柜图像包。
+   * 主进程会根据机器人编码决定新增目录还是全量替换同编码目录。
+   */
   const handleImportCabinetImages = async () => {
     if (!window.electronAPI?.selectZipFile || !window.electronAPI?.importCabinetImagePackage) {
       message.warning("仅 Electron 环境支持导入屏柜图像压缩包");
@@ -1835,6 +1875,9 @@ export default function ScreenVerify() {
     }
   };
 
+  /**
+   * 导出屏柜点表，数据来源包括原始部件 Excel 和当前保存的识别/人工点位。
+   */
   const handleExportCabinetPointTable = useCallback(async () => {
     if (!selectedProject) {
       message.warning("请先选择项目");
@@ -1864,6 +1907,10 @@ export default function ScreenVerify() {
     }
   }, [components.length, message, selectedProject]);
 
+  /**
+   * 导出 detector.json 标注参数。
+   * 这里会先做强校验，确保名称、类型、目标框和标定 id 都完整。
+   */
   const handleExportAnnotationParams = useCallback(async () => {
     if (!selectedProject) {
       message.warning("请先选择项目");

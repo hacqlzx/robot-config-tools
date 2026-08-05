@@ -18,6 +18,10 @@ interface ValidateAnnotationGroupsOptions {
   requiredStandardPartIds?: Set<string>;
 }
 
+/**
+ * 校验本次识别的标准部件框和标签框关系。
+ * 标签必须完整落在且只能落在一个标准部件框内，后续识别和排序都以这个标准部件框作为分组边界。
+ */
 export function validateAnnotationGroups(
   annotations: ComponentAnnotations,
   options: ValidateAnnotationGroupsOptions,
@@ -67,6 +71,9 @@ export function validateAnnotationGroups(
   return { groups: sortGroups(groups), issues: unique(issues) };
 }
 
+/**
+ * 标准部件组按画布上的从上到下、从左到右排序。
+ */
 export function sortGroups(groups: AnnotationGroup[]): AnnotationGroup[] {
   return [...groups].sort((left, right) => (
     left.standardPartRect.y - right.standardPartRect.y

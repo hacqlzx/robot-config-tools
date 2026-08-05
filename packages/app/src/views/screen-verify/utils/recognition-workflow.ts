@@ -60,6 +60,13 @@ interface RecognizeComponentImageOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * 屏柜部件的多点识别主流程。
+ *
+ * 整图模式只保留用户手工输入的框作为识别条件，新增模式只处理未生成过的手工框。
+ * 常规场景会先调用设备检测识别设备类型，再对用户框选的标签区域做 OCR，
+ * 最后把标签框、设备框按空间关系组合成右侧点位表。
+ */
 export async function recognizeComponentImage(options: RecognizeComponentImageOptions): Promise<ComponentRecognitionResult> {
   const { imageDataUrl, annotations, existingRows, existingSinglePoints, mode, signal } = options;
   throwIfRecognitionCancelled(signal);
@@ -87,6 +94,7 @@ export async function recognizeComponentImage(options: RecognizeComponentImageOp
   const validation = validateAnnotationGroups(working, { targetLabelIds, requiredStandardPartIds });
   if (validation.issues.length) throw new Error(validation.issues[0]);
 
+  // 设备检测按整图返回，后续只保留落在本次标准部件框内的设备框。
   const preDetectionGroups = validation.groups.map((group) => ({
     ...group,
     deviceRects: [] as ImageRect[],
@@ -102,6 +110,7 @@ export async function recognizeComponentImage(options: RecognizeComponentImageOp
   for (const group of validation.groups) {
     for (const label of group.labelRects) groupByInputLabelId.set(label.id, group.id);
   }
+  // 标签 OCR 会传入用户框选区域对应的 ROI，回包再映射回原图坐标。
   const sources = await buildDeviceLabelOcrSources(imageDataUrl, targetLabels, groupByInputLabelId);
   throwIfRecognitionCancelled(signal);
   console.info("[screen-verify] label OCR request params", {
@@ -123,6 +132,7 @@ export async function recognizeComponentImage(options: RecognizeComponentImageOp
   })), { signal });
   const mappedLabelRects = mapOcrLabelsToImageRects(ocrResult.labels, sources);
   const recognizedLabelRects = selectRecognitionLabelRectsForDeviceRows(mappedLabelRects, aiDeviceRects, validation.groups);
+  // 设备漏识别时，用已识别标签行的列信息自动补充设备框。
   const generatedDeviceRects = completeDeviceBoxesByOcrRows(aiDeviceRects, recognizedLabelRects, validation.groups, generationKey);
   console.info("[screen-verify] label OCR response params", {
     mode,
@@ -193,6 +203,10 @@ export async function recognizeComponentImage(options: RecognizeComponentImageOp
   };
 }
 
+/**
+ * 外观识别场景：用户框选外观框和名称标签框，不走设备检测，
+ * 直接把外观框当成一个设备目标，再用 OCR 识别名称。
+ */
 async function recognizeFacadeComponentImage(options: {
   imageDataUrl: string;
   working: ComponentAnnotations;
@@ -278,6 +292,9 @@ async function recognizeFacadeComponentImage(options: {
   };
 }
 
+/**
+ * 整图重新识别时只保留可作为输入条件的手工框，避免旧 AI/OCR 结果重复参与识别。
+ */
 function retainRecognitionInputAnnotations(annotations: ComponentAnnotations): ComponentAnnotations {
   return {
     standardPartRects: annotations.standardPartRects.filter(isManualInputRect),
@@ -287,6 +304,9 @@ function retainRecognitionInputAnnotations(annotations: ComponentAnnotations): C
   };
 }
 
+/**
+ * 根据识别模式筛选本次需要处理的目标框。
+ */
 function getRecognitionTargetRects(
   rects: ImageRect[],
   mode: MultiPointGenerateMode,
@@ -303,6 +323,9 @@ function isWholeRecognitionLabelRect(rect: ImageRect): boolean {
   return isManualInputRect(rect) || rect.source === "ocr";
 }
 
+/**
+ * 给按钮状态使用的轻量校验，只判断是否具备发起识别的必要框。
+ */
 export function getRecognitionReadiness(
   annotations: ComponentAnnotations,
   mode: MultiPointGenerateMode,
@@ -362,6 +385,9 @@ function createFacadeDeviceRect(rect: ImageRect, groupId: string): ImageRect {
   };
 }
 
+/**
+ * 把算法返回的设备检测结果转换为画布框，并匹配到当前标准部件组。
+ */
 function mapDeviceDetectionsToImageRects(
   detections: DeviceDetection[],
   groups: Array<{ id: string; standardPartRect: ImageRect }>,
@@ -393,6 +419,12 @@ function mapDeviceDetectionsToImageRects(
   return rects;
 }
 
+/**
+ * 根据标签行补齐设备框。
+ *
+ * 只有同组内标签和设备数量、行关系不一致时才补框；
+ * 补出来的设备框会继承同一行已有设备的类型，用虚线展示。
+ */
 function completeDeviceBoxesByOcrRows(
   deviceRects: ImageRect[],
   labelRects: ImageRect[],
@@ -424,6 +456,10 @@ function completeDeviceBoxesByOcrRows(
   return sortRectsByPosition(result);
 }
 
+/**
+ * 判断标签行和设备行是否存在数量或关系不一致。
+ * 支持“一排标签对应上下两排设备”的情况，因此会把相关设备行合并计数。
+ */
 function hasDeviceLabelCountMismatch(labelRows: ImageRect[][], deviceRows: ImageRect[][]): boolean {
   if (!labelRows.length || !deviceRows.length) return false;
   const deviceRowsById = new Map(deviceRows.map((row) => [getRectRowKey(row), row]));
@@ -441,6 +477,9 @@ function hasDeviceLabelCountMismatch(labelRows: ImageRect[][], deviceRows: Image
   return [...deviceRowsById.keys()].some((key) => !usedDeviceRowKeys.has(key));
 }
 
+/**
+ * 逐行补齐设备框，使每个相关设备行尽量和标签列一一对应。
+ */
 function completeDeviceRowsByLabelRows(
   labelRows: ImageRect[][],
   deviceRows: ImageRect[][],
@@ -502,6 +541,9 @@ function getRowDeviceTypeTemplate(row: ImageRect[]): Pick<ImageRect, "text" | "r
   };
 }
 
+/**
+ * 单行补框入口：先处理中间大空洞，再处理首尾或剩余缺口。
+ */
 function fillRowToMatchLabels(
   row: ImageRect[],
   labelRow: ImageRect[],
@@ -523,6 +565,10 @@ function fillRowToMatchLabels(
   );
 }
 
+/**
+ * 处理两侧已有框、中间漏识别的情况。
+ * 平均列距会过滤异常大间隔，所以 currentSpacing 远大于平均列距时可认为中间缺框。
+ */
 function fillLargeGapsInRow(
   row: ImageRect[],
   generationKey: number,
@@ -571,6 +617,9 @@ function fillLargeGapsInRow(
   return sortRectsByCenterX(result);
 }
 
+/**
+ * 大间隔处理后数量仍不足时，枚举最左、最右和中间候选位置，按评分选择最佳插入点。
+ */
 function fillRowToTargetCount(
   row: ImageRect[],
   targetCount: number,
@@ -600,6 +649,9 @@ function fillRowToTargetCount(
   return result;
 }
 
+/**
+ * 为补框候选位置打分：列距越均匀、越贴近标签列，分数越低。
+ */
 function findBestDeviceInsertion(
   row: ImageRect[],
   avgSpacing: number,
@@ -705,6 +757,9 @@ function createInferredDeviceRectFromTemplate(
   };
 }
 
+/**
+ * 按纵向中心把框拆成多行。屏柜设备通常按水平行排列，后续补框和排序都以行为基本单位。
+ */
 function splitRectRows(rects: ImageRect[]): ImageRect[][] {
   const sortedRects = sortRectsByPosition(rects);
   const rows: ImageRect[][] = [];
@@ -726,6 +781,9 @@ function isSameRectRow(row: ImageRect[], rect: ImageRect): boolean {
   return Math.abs(getRectCenterY(rect) - rowCenterY) <= threshold;
 }
 
+/**
+ * 计算同一行的平均列间距，并过滤疑似漏框造成的异常大间距。
+ */
 function getAvgCenterSpacing(row: ImageRect[]): number {
   const sortedRow = sortRectsByCenterX(row);
   if (sortedRow.length < 2) return 0;
@@ -821,6 +879,9 @@ function median(values: number[]): number {
     : (sortedValues[middle - 1] + sortedValues[middle]) / 2;
 }
 
+/**
+ * 根据识别出的标签框和设备框生成右侧点位行。
+ */
 function buildRowsFromRecognizedLabels(
   labelRects: ImageRect[],
   deviceRects: ImageRect[],
@@ -846,6 +907,9 @@ export interface SortedPointRowsResult {
   unboundDeviceCount: number;
 }
 
+/**
+ * 一键排序入口：先按标准部件框分组，再在组内按行列建立标签和设备的绑定关系。
+ */
 export function buildSortedPointRowsFromAnnotations(annotations: ComponentAnnotations): SortedPointRowsResult {
   const labelAssignments = assignRectsToStandardPartGroups(annotations.deviceLabelRects, annotations.standardPartRects);
   const deviceAssignments = assignRectsToStandardPartGroups(annotations.deviceBoxRects, annotations.standardPartRects);
@@ -927,6 +991,11 @@ export function buildSortedPointRowsFromAnnotations(annotations: ComponentAnnota
   };
 }
 
+/**
+ * 组内点位生成逻辑。
+ *
+ * 支持 1:1、一排标签对应上下两排设备、单标签对应多个设备等场景。
+ */
 function buildSortedPointRowsForGroup(labelRects: ImageRect[], deviceRects: ImageRect[]): {
   rows: CabinetPointRow[];
   unboundLabelCount: number;
@@ -981,6 +1050,9 @@ function buildSortedPointRowsForGroup(labelRects: ImageRect[], deviceRects: Imag
   return { rows, unboundLabelCount, unboundDeviceCount };
 }
 
+/**
+ * 标签识别可能返回无关行；这里根据设备行的空间关系和文字质量选出真正参与点位绑定的标签行。
+ */
 function selectRelevantLabelRowsForDeviceRows(labelRows: ImageRect[][], deviceRows: ImageRect[][]): ImageRect[][] {
   if (!labelRows.length || !deviceRows.length) return labelRows;
   const visibleLabelRows = labelRows.filter((row) => row.some((rect) => hasVisibleLabelTextRect(rect)));
@@ -1033,6 +1105,10 @@ function isShortStatusLabelText(text: string): boolean {
     || /^(阀门|开启|停止|关闭|解锁|闭锁|A相|B相|C相)$/u.test(text);
 }
 
+/**
+ * 单个标签行和单个设备行的绑定。
+ * 数量一致时直接按列绑定；数量不一致时先判断单标签多设备，再按最近列匹配。
+ */
 function createAlignedRowsForLabelAndDeviceRow(labelRow: ImageRect[], deviceRow: ImageRect[], allowDevicePlaceholders = false): {
   rows: CabinetPointRow[];
   usedDeviceIds: Set<string>;
@@ -1090,6 +1166,12 @@ function createAlignedRowsForLabelAndDeviceRow(labelRow: ImageRect[], deviceRow:
   return { rows, usedDeviceIds, unboundLabelCount, unboundDeviceCount };
 }
 
+/**
+ * 识别单标签对应多个设备的特殊场景。
+ *
+ * 典型例子是一个铭牌描述同一个局部区域，下面或旁边同时有指示灯、旋钮等多个设备。
+ * 判断时要求设备簇足够紧凑，并且和标签在水平、垂直方向都保持局部关联。
+ */
 function shouldUseSingleLabelForMultipleDevices(labelRow: ImageRect[], deviceRow: ImageRect[]): boolean {
   if (labelRow.length !== 1 || deviceRow.length <= 1) return false;
   const labelRect = labelRow[0];
@@ -1146,6 +1228,10 @@ function getLabelDeviceColumnScore(labelRect: ImageRect, deviceRect: ImageRect):
   return centerDistanceX - overlapRatio * 16;
 }
 
+/**
+ * 为某个标签行寻找相关设备行。
+ * 这里允许返回上下两排设备，用于处理中间标签共享上下设备的场景。
+ */
 function findRelatedDeviceRowsForLabelRow(labelRow: ImageRect[], deviceRows: ImageRect[][]): ImageRect[][] {
   if (!deviceRows.length) return [];
   const labelCenterY = median(labelRow.map(getRectCenterY));
@@ -1309,6 +1395,10 @@ interface TableRowSortItem {
   rowX: number;
 }
 
+/**
+ * 表格展示和导出前的统一排序。
+ * 优先按标准部件组排序，再按目标框所在行列排序，保证右侧表格顺序和画布空间顺序一致。
+ */
 export function sortTableRowsByAnnotationRows(rows: CabinetPointRow[], annotations: ComponentAnnotations): CabinetPointRow[] {
   const sortedStandardParts = sortRectsByPosition(annotations.standardPartRects);
   const items = rows.map((row, order) => createTableRowSortItem(row, order, annotations, sortedStandardParts));
@@ -1386,6 +1476,9 @@ function fillTableRowBucketIndexes(items: TableRowSortItem[]): void {
   }
 }
 
+/**
+ * 每条点位优先使用设备框/外观框作为排序锚点，找不到时回退到标签框。
+ */
 function findTableRowAnchorRect(row: CabinetPointRow, annotations: ComponentAnnotations): ImageRect | null {
   if (row.relatedRectId && row.relatedRectTool) {
     const relatedRect = findSelectedAnnotation(annotations, { tool: row.relatedRectTool, id: row.relatedRectId });
@@ -1441,6 +1534,10 @@ export function findTableRowSelection(row: CabinetPointRow, annotations: Compone
   return null;
 }
 
+/**
+ * 外观框或其他非设备框绑定时使用的兜底关系查找。
+ * 常规设备框绑定主要走 buildSortedPointRowsForGroup。
+ */
 function findRelatedDeviceRectsForLabel(labelRect: ImageRect, deviceRects: ImageRect[]): ImageRect[] {
   const sameGroupDeviceRects = deviceRects.filter((rect) => rect.groupId && rect.groupId === labelRect.groupId);
   if (!sameGroupDeviceRects.length) return [];

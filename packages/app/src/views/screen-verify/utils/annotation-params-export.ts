@@ -72,6 +72,12 @@ interface RectBox {
   h: number;
 }
 
+/**
+ * 生成屏柜标注参数 detector.json。
+ *
+ * 输出结构和后台约定保持一致：detTypeInfo 写巡检点和算法类型，
+ * detectInfo 暂时置空，matchInfo 按图片、标准部件组、设备行聚合生成对位参数。
+ */
 export function buildCabinetAnnotationParamsExport(input: CabinetAnnotationParamsExportInput): CabinetAnnotationParamsExportResult {
   const errors: string[] = [];
   const points = collectExportPointItems(input, errors);
@@ -96,6 +102,10 @@ export function buildCabinetAnnotationParamsExport(input: CabinetAnnotationParam
   };
 }
 
+/**
+ * 收集所有可导出的点位。
+ * 保存中的中间态允许存在空名称，但导出时会在这里做强校验。
+ */
 function collectExportPointItems(input: CabinetAnnotationParamsExportInput, errors: string[]): ExportPointItem[] {
   const points: ExportPointItem[] = [];
   input.records.forEach((record, recordIndex) => {
@@ -148,6 +158,10 @@ function collectExportPointItems(input: CabinetAnnotationParamsExportInput, erro
   return points;
 }
 
+/**
+ * 把右侧点位表行转换成导出点位项。
+ * 这里会解析算法类型、查找目标框，并记录生成 detector.json 所需的排序上下文。
+ */
 function buildExportPointItem(options: {
   record: CabinetImagePackageRecord;
   recordKey: string;
@@ -193,6 +207,10 @@ function buildExportPointItem(options: {
   };
 }
 
+/**
+ * 根据标定 assId 生成巡检点 ID。
+ * 同一张图片内按空间排序追加 4 位序号，最终格式类似 85540001_2_6。
+ */
 function assignCruiseIds(points: ExportPointItem[], errors: string[]): void {
   const assCounters = new Map<string, number>();
   const cruiseIds = new Set<string>();
@@ -207,6 +225,9 @@ function assignCruiseIds(points: ExportPointItem[], errors: string[]): void {
   }
 }
 
+/**
+ * 按图片、标准部件组和 match_type 分组，再按目标框所在行拆分 matchInfo。
+ */
 function buildExportPointGroups(points: ExportPointItem[]): ExportPointGroup[] {
   const contextMap = new Map<string, ExportPointItem[]>();
   for (const point of points) {
@@ -232,6 +253,11 @@ function buildExportPointGroups(points: ExportPointItem[]): ExportPointGroup[] {
   return groups.sort((left, right) => left.order - right.order);
 }
 
+/**
+ * 生成单个 matchInfo。
+ * match_type=2057 时 rect 是整行外接框，rect_loc_classes 使用相对该外接框的坐标。
+ * match_type=0 时只需要带 100 像素偏移的目标区域，不输出 classid_roi。
+ */
 function buildMatchInfo(group: ExportPointGroup): CabinetAnnotationMatchInfo {
   const cruiseIds = group.items.map((item) => item.cruiseId);
   const info: CabinetAnnotationMatchInfo = {
@@ -257,6 +283,9 @@ function buildMatchInfo(group: ExportPointGroup): CabinetAnnotationMatchInfo {
   return info;
 }
 
+/**
+ * 点位导出优先使用绑定的设备框或外观框；只有单点历史数据才回退到快照框。
+ */
 function findPointTargetRect(
   row: CabinetPointRow,
   annotations: ComponentAnnotations,
@@ -273,6 +302,9 @@ function findPointTargetRect(
   return singlePoint?.rectSnapshot || null;
 }
 
+/**
+ * 对位参数按标准部件组聚合，找不到容器时归入 ungrouped。
+ */
 function getPointGroupKey(rect: ImageRect, annotations: ComponentAnnotations): string {
   if (rect.groupId) return `group:${rect.groupId}`;
   const container = annotations.standardPartRects.find((standardPart) => containsRect(standardPart, rect) || isRectCenterInside(rect, standardPart));
@@ -280,6 +312,9 @@ function getPointGroupKey(rect: ImageRect, annotations: ComponentAnnotations): s
   return "ungrouped";
 }
 
+/**
+ * 同一个 matchInfo 内继续按设备所在行拆分，避免上下两排设备被合并到一个对位框。
+ */
 function splitPointRows(points: ExportPointItem[]): ExportPointItem[][] {
   const sortedPoints = sortPointsByPosition(points);
   const rows: ExportPointItem[][] = [];
@@ -306,6 +341,9 @@ function sortPointsByPosition(points: ExportPointItem[]): ExportPointItem[] {
   ));
 }
 
+/**
+ * 计算对位外接框；表计、小灯、外观等 match_type=0 的场景会额外扩 100 像素。
+ */
 function getBoundingRect(rects: ImageRect[], offset: number): RectBox {
   const left = Math.min(...rects.map((rect) => rect.x));
   const top = Math.min(...rects.map((rect) => rect.y));
@@ -344,6 +382,9 @@ function formatRect(rect: RectBox | ImageRect): string {
   return [rect.x, rect.y, rect.w, rect.h].map((value) => String(Math.round(Number(value) || 0))).join(",");
 }
 
+/**
+ * 根据算法类型决定对位方式：表计/小灯/外观走 0，其他室内目标检测走 2057。
+ */
 function getMatchType(algorithmType: number): number {
   return MATCH_TYPE_ZERO_ALGORITHM_TYPES.has(algorithmType) ? 0 : 2057;
 }

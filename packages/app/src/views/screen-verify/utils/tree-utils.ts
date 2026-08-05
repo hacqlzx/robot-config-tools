@@ -1,6 +1,10 @@
 import type { Key } from "react";
 import type { CabinetTreeNode } from "../types";
 
+/**
+ * 构建屏柜图像左侧树。
+ * 默认展示厂站、区域、间隔、屏柜、部件完整层级；搜索或状态筛选时压缩为屏柜和部件两层。
+ */
 export function buildCabinetTree(
   records: CabinetImagePackageRecord[],
   filterText: string,
@@ -71,10 +75,16 @@ export function buildCabinetTree(
   return { treeData, allExpandableKeys };
 }
 
+/**
+ * 主设备节点 key 必须稳定，否则 OCR 修改主设备名称后会导致树节点丢失展开状态。
+ */
 export function buildMainDeviceKey(record: CabinetImagePackageRecord): string {
   return `${buildBayKey(record)}/main:${record.mainDeviceCode || record.mainDeviceName || "default"}`;
 }
 
+/**
+ * 主设备名称覆盖使用机器人和设备层级联合定位，不直接依赖显示名称。
+ */
 export function buildMainDeviceOverrideKey(record: CabinetImagePackageRecord): string {
   return [
     record.robotCode || "default",
@@ -124,6 +134,9 @@ function ensureChildNode(parent: CabinetTreeNode, key: string, title: string, no
   return node;
 }
 
+/**
+ * 从叶子部件向上汇总点位数，供后续已标注/未标注状态判断使用。
+ */
 function fillTreePointCounts(nodes: CabinetTreeNode[]): number {
   let total = 0;
   for (const node of nodes) {

@@ -53,6 +53,15 @@ interface CabinetImageCanvasProps {
   onLoadError?: (message: string) => void;
 }
 
+/**
+ * 屏柜图像标注画布。
+ *
+ * 交互规则：
+ * 1. 空白拖动平移整张图片。
+ * 2. 单击框体只选中，不立即移动，避免误拖图片时带动框。
+ * 3. 已选中的框再次按住才进入移动，拖拽控制点进入缩放。
+ * 4. 当前绘制工具激活时，只允许选择/编辑同类型框，空白处开始新建框。
+ */
 export function CabinetImageCanvas({
   imageDataUrl,
   title,
@@ -138,6 +147,7 @@ export function CabinetImageCanvas({
     const appearanceRects = currentDrag?.tool === "appearance"
       ? currentAppearanceRects.map((rect) => (rect.id === currentDrag.id ? currentDrag.currentRect : rect))
       : currentAppearanceRects;
+    // 绘制顺序让标签框最后覆盖在设备框上，便于人工校对名称位置。
     drawAnnotationRects(ctx, appearanceRects, "appearance", viewRef.current, false, selectedAnnotationRef.current);
     drawAnnotationRects(ctx, standardPartRects, "standardPart", viewRef.current, false, selectedAnnotationRef.current);
     drawAnnotationRects(ctx, deviceBoxRects, "deviceBox", viewRef.current, false, selectedAnnotationRef.current);
@@ -337,6 +347,7 @@ export function CabinetImageCanvas({
       const selectedHandle = selectedHit && canvasPoint
         ? findRectHandleAtCanvasPoint(selectedHit, viewRef.current, canvasPoint.x, canvasPoint.y)
         : null;
+      // 当前工具下，已选中的同类型框可以直接拖拽控制点缩放。
       if (selectedHit && selectedHandle) {
         rectDragRef.current = {
           ...selectedAnnotationRef.current!,
@@ -357,6 +368,7 @@ export function CabinetImageCanvas({
       if (hit) {
         const selection: AnnotationSelection = { tool: hit.tool, id: hit.rect.id };
         if (isSameSelection(selection, selectedAnnotationRef.current)) {
+          // 第二次按住已选框才移动框体，第一次点击只负责选中。
           rectDragRef.current = {
             ...selection,
             mode: "move",
@@ -371,6 +383,7 @@ export function CabinetImageCanvas({
           return;
         }
 
+        // 点击未选中的框时先延迟选中；如果用户继续拖动，则当作图片平移。
         const current = viewRef.current;
         dragRef.current = {
           x: event.clientX,
@@ -384,6 +397,7 @@ export function CabinetImageCanvas({
         return;
       }
 
+      // 绘制工具激活且没有命中已有框时，开始创建新标注框。
       const drawPoint = getImagePoint(event);
       if (!drawPoint) return;
       selectedAnnotationRef.current = null;
@@ -406,6 +420,7 @@ export function CabinetImageCanvas({
     const selectedHandle = selectedHit && canvasPoint
       ? findRectHandleAtCanvasPoint(selectedHit, viewRef.current, canvasPoint.x, canvasPoint.y)
       : null;
+    // 非绘制模式下，已选框控制点仍可缩放。
     if (selectedHit && selectedHandle && point) {
       rectDragRef.current = {
         ...selectedAnnotationRef.current!,
@@ -427,6 +442,7 @@ export function CabinetImageCanvas({
       if (hit) {
         const selection: AnnotationSelection = { tool: hit.tool, id: hit.rect.id };
         if (isSameSelection(selection, selectedAnnotationRef.current)) {
+          // 普通模式同样采用“先选中、再拖动”的移动规则。
           rectDragRef.current = {
             ...selection,
             mode: "move",
@@ -440,6 +456,7 @@ export function CabinetImageCanvas({
           draw();
           return;
         }
+        // 未选中的框被点击时先作为 pendingSelection，鼠标抬起且未移动才真正选中。
         const current = viewRef.current;
         dragRef.current = {
           x: event.clientX,
@@ -454,6 +471,7 @@ export function CabinetImageCanvas({
       }
     }
 
+    // 点击空白区域清空选中，拖动时平移图片视图。
     selectedAnnotationRef.current = null;
     onSelectRect(null);
     const current = viewRef.current;
@@ -642,6 +660,10 @@ function normalizeRect(x1: number, y1: number, x2: number, y2: number): Omit<Ima
   };
 }
 
+/**
+ * 统一绘制标注框。
+ * source=inferred 的自动补框使用虚线，人工框和识别框用颜色区分来源。
+ */
 function drawAnnotationRects(
   ctx: CanvasRenderingContext2D,
   rects: (ImageRect | Omit<ImageRect, "id">)[],
@@ -685,6 +707,9 @@ function drawAnnotationRects(
   ctx.restore();
 }
 
+/**
+ * 根据工具类型和识别来源返回框颜色。
+ */
 function getAnnotationStrokeColor(
   tool: AnnotationTool,
   rect: ImageRect | Omit<ImageRect, "id">,
@@ -729,6 +754,9 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+/**
+ * 查找鼠标命中的最小面积框，解决大框套小框时优先选中内部框的问题。
+ */
 function findAnnotationAtPoint(
   annotations: ComponentAnnotations,
   x: number,
@@ -781,6 +809,9 @@ function getRectHandleCursor(handle: RectHandle): string {
   return handle === "nw" || handle === "se" ? "nwse-resize" : "nesw-resize";
 }
 
+/**
+ * 按控制点缩放标注框；按住 Shift 时保持原始宽高比。
+ */
 function resizeRectFromHandle(
   startRect: ImageRect,
   handle: RectHandle,

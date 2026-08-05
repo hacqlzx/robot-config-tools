@@ -448,6 +448,10 @@ export function registerArchiveIpc(): void {
   });
 }
 
+/**
+ * 导入屏柜图像包到项目本地目录。
+ * 数据统一落到“总览图/屏柜图像/{机器人编码}”，相同机器人编码采用全量替换。
+ */
 function importCabinetImagePackageToLocal(projectName: string, sourcePath: string, sourceType: "zip" | "directory"): { importDir: string; robotCode: string } {
   const safeProjectName = String(projectName || "").trim();
   if (!safeProjectName) throw new Error("请先选择项目");
@@ -492,6 +496,9 @@ function importCabinetImagePackageToLocal(projectName: string, sourcePath: strin
   }
 }
 
+/**
+ * 从 ZIP 中读取屏柜部件表和 img 图片，先不落盘，供导入预解析使用。
+ */
 function readCabinetImagePackageFromZip(zipPath: string): { records: CabinetImagePackageRecord[]; warnings: string[] } {
   if (path.extname(zipPath).toLowerCase() !== ".zip") throw new Error("请选择 ZIP 压缩包");
   const zip = new AdmZip(zipPath);
@@ -530,6 +537,10 @@ function readCabinetImagePackageFromZip(zipPath: string): { records: CabinetImag
   return attachCabinetImages(rows, imageMap);
 }
 
+/**
+ * 从已解压目录读取屏柜部件表和图片。
+ * 目录中存在 img 子目录时优先从 img 下按部件编码匹配图片。
+ */
 function readCabinetImagePackageFromDir(dirPath: string): { records: CabinetImagePackageRecord[]; warnings: string[] } {
   const workbookPath = findCabinetComponentWorkbookPath(dirPath);
   if (!workbookPath) throw new Error("目录内未找到屏柜部件表 Excel");
@@ -558,6 +569,10 @@ function readCabinetImagePackageFromDir(dirPath: string): { records: CabinetImag
   return attachCabinetImages(rows, imageMap);
 }
 
+/**
+ * 解析屏柜部件表 Excel。
+ * 左侧树和后续点表导出都以这里的机器人编码、层级编码、标定 id 为基础。
+ */
 function parseCabinetComponentRows(xlsxBuffer: Buffer): Omit<CabinetImagePackageRecord, "imageName" | "imageSource" | "imageDataUrl">[] {
   const wb = XLSX.read(xlsxBuffer, { type: "buffer" });
   for (const sheetName of wb.SheetNames) {
@@ -589,6 +604,9 @@ function parseCabinetComponentRows(xlsxBuffer: Buffer): Omit<CabinetImagePackage
   throw new Error("Excel 中未找到有效的部件编码");
 }
 
+/**
+ * 将 Excel 中的部件记录和本地图片按部件编码关联。
+ */
 function attachCabinetImages(
   rows: Omit<CabinetImagePackageRecord, "imageName" | "imageSource" | "imageDataUrl">[],
   imageMap: Map<string, { name: string; source: CabinetImageSource }>,
@@ -607,6 +625,10 @@ function attachCabinetImages(
   return { records, warnings };
 }
 
+/**
+ * 读取整个项目的屏柜图像工作区。
+ * 会扫描各机器人目录，并把 annotation.json 中仍然有效的标注、点位和单点记录回填给前端。
+ */
 function readCabinetImageWorkspace(projectName: string): {
   records: CabinetImagePackageRecord[];
   warnings: string[];
@@ -693,6 +715,9 @@ function readCabinetImageWorkspace(projectName: string): {
   return { records, warnings, annotationsByComponent, ocrRowsByComponent, singlePointsByComponent, robots };
 }
 
+/**
+ * 导入同一机器人编码时全量替换旧索引、旧标注和旧主设备名称覆盖。
+ */
 function replaceCabinetImageRobotIndex(projectName: string, robotCode: string, targetDir: string, packageName: string): void {
   const cabinetRoot = resolveProjectPath(projectName, OVERVIEW_DIR_NAME, CABINET_IMAGE_DIR_NAME);
   const data = readCabinetImageWorkspaceData(cabinetRoot);
@@ -724,6 +749,10 @@ function replaceCabinetImageRobotIndex(projectName: string, robotCode: string, t
   });
 }
 
+/**
+ * 保存单个部件的标注中间态。
+ * 允许空名称等未完成数据保存；导出时再做强校验。
+ */
 function saveCabinetImageAnnotations(projectName: string, payload: any): { saved: boolean; deleted: boolean } {
   const safeProjectName = String(projectName || "").trim();
   if (!safeProjectName) throw new Error("请先选择项目");
@@ -762,6 +791,9 @@ function saveCabinetImageAnnotations(projectName: string, payload: any): { saved
   return { saved: hasData, deleted: !hasData };
 }
 
+/**
+ * 保存 OCR 识别后的主设备名称覆盖，不回写原始 Excel，避免破坏导入源数据。
+ */
 function saveCabinetMainDeviceNameOverride(projectName: string, payload: any): { saved: boolean; key: string; name: string } {
   const safeProjectName = String(projectName || "").trim();
   if (!safeProjectName) throw new Error("请先选择项目");
@@ -787,6 +819,9 @@ function saveCabinetMainDeviceNameOverride(projectName: string, payload: any): {
   return { saved: true, key, name };
 }
 
+/**
+ * 将前端生成的 detector.json 写入用户选择的导出目录。
+ */
 function exportCabinetAnnotationParams(projectName: string, destDir: string, data: any): { filePath: string; fileName: string; pointCount: number; matchCount: number } {
   const safeProjectName = String(projectName || "").trim();
   if (!safeProjectName) throw new Error("请先选择项目");
@@ -808,6 +843,9 @@ function exportCabinetAnnotationParams(projectName: string, destDir: string, dat
   };
 }
 
+/**
+ * 汇总屏柜导入 Excel 和后续生成的点位，导出屏柜点表。
+ */
 function exportCabinetPointTable(projectName: string, destDir: string): { filePath: string; fileName: string; rowCount: number; pointCount: number; componentCount: number } {
   const safeProjectName = String(projectName || "").trim();
   if (!safeProjectName) throw new Error("请先选择项目");
@@ -843,6 +881,9 @@ function exportCabinetPointTable(projectName: string, destDir: string): { filePa
   };
 }
 
+/**
+ * 收集数据库和屏柜工作区中已经占用的点位编码，避免导出时生成重复编码。
+ */
 function collectExistingPointCodes(projectName: string, workspace: ReturnType<typeof readCabinetImageWorkspace>): Set<string> {
   const codes = new Set<string>();
   try {
@@ -871,6 +912,10 @@ function collectExistingPointCodes(projectName: string, workspace: ReturnType<ty
   return codes;
 }
 
+/**
+ * 构建屏柜点表导出行。
+ * 每个部件会先输出原始部件行，再追加人工/识别生成的点位行。
+ */
 function buildCabinetPointTableRows(
   workspace: ReturnType<typeof readCabinetImageWorkspace>,
   usedPointCodes: Set<string>,
@@ -918,6 +963,9 @@ function cabinetComponentExportRow(record: CabinetImagePackageRecord): PointExce
   };
 }
 
+/**
+ * 将单个部件下已保存的识别点位转换为点表行。
+ */
 function cabinetGeneratedPointRows(
   record: CabinetImagePackageRecord,
   ocrRows: any[],
@@ -948,6 +996,9 @@ function cabinetGeneratedPointRows(
   return rows;
 }
 
+/**
+ * 生成单条屏柜点位行，并根据识别类型补齐点表中的识别方式字段。
+ */
 function cabinetPointExportRow(
   baseRow: PointExcelExportRow,
   point: { name: string; pointCode: string; label: string; labelDesc: string },
@@ -1031,6 +1082,9 @@ function reserveCabinetPointCode(pointCode: string, usedPointCodes: Set<string>)
   return generateCabinetPointCode(usedPointCodes);
 }
 
+/**
+ * 屏柜点位编码生成规则：9 位数字，按已有最大值递增，确保本次导出内不重复。
+ */
 function generateCabinetPointCode(usedPointCodes: Set<string>): string {
   while (true) {
     let code = "P";
@@ -1060,6 +1114,9 @@ function formatCabinetExportTime(date: Date): string {
   return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
 }
 
+/**
+ * 读取屏柜图像工作区的持久化 JSON；不存在或损坏时返回空结构，保证页面可继续打开。
+ */
 function readCabinetImageWorkspaceData(cabinetRoot: string): CabinetImageWorkspaceData {
   const filePath = path.join(cabinetRoot, CABINET_IMAGE_DATA_FILE_NAME);
   if (!fs.existsSync(filePath)) {
@@ -1081,6 +1138,9 @@ function readCabinetImageWorkspaceData(cabinetRoot: string): CabinetImageWorkspa
   }
 }
 
+/**
+ * 写入屏柜图像工作区持久化 JSON。
+ */
 function writeCabinetImageWorkspaceData(cabinetRoot: string, data: CabinetImageWorkspaceData): void {
   fs.mkdirSync(cabinetRoot, { recursive: true });
   fs.writeFileSync(path.join(cabinetRoot, CABINET_IMAGE_DATA_FILE_NAME), `${JSON.stringify(data, null, 2)}\n`, "utf-8");
@@ -1138,6 +1198,9 @@ function buildCabinetRecordKey(robotCode: string, componentCode: string): string
   return `${valueText(robotCode) || "default"}::${valueText(componentCode)}`;
 }
 
+/**
+ * 标注 JSON 兼容修正，避免旧版本缺少某类框数组导致前端读取报错。
+ */
 function normalizeCabinetAnnotationData(annotations: any): any {
   return {
     standardPartRects: Array.isArray(annotations?.standardPartRects) ? annotations.standardPartRects : [],

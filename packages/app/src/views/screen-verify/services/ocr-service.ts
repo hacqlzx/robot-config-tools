@@ -156,6 +156,10 @@ export const CABINET_NAME_OCR_PROMPT = [
   "JSON 格式：{\"name\":\"屏柜名称\",\"confidence\":0.9}。",
 ].join("\n");
 
+/**
+ * 识别普通设备标签。
+ * 优先使用 Qwen-OCR 获取文字和位置，必要时再用通用视觉模型补文本。
+ */
 export async function recognizeCabinetLabels(
   sources: CabinetOcrImageSource | CabinetOcrImageSource[],
   requestOptions: RecognitionRequestOptions = {},
@@ -168,6 +172,10 @@ export async function recognizeCabinetLabels(
   );
 }
 
+/**
+ * 识别外观框对应的设备名称。
+ * 外观场景通常一个 ROI 只需要一个名称，因此结果会按 region 合并。
+ */
 export async function recognizeCabinetFacadeLabels(
   sources: CabinetOcrImageSource | CabinetOcrImageSource[],
   requestOptions: RecognitionRequestOptions = {},
@@ -180,6 +188,10 @@ export async function recognizeCabinetFacadeLabels(
   );
 }
 
+/**
+ * 对人工后补的标签小框做纯文字识别。
+ * 该入口不依赖坐标，主要服务一键排序前的补充标签名称。
+ */
 export async function recognizeCabinetLabelTexts(
   sources: CabinetOcrImageSource | CabinetOcrImageSource[],
   requestOptions: RecognitionRequestOptions = {},
@@ -192,6 +204,10 @@ export async function recognizeCabinetLabelTexts(
   );
 }
 
+/**
+ * 带位置的标签识别入口。
+ * Qwen-OCR 提供更稳定的 bbox，文本质量异常时再调用 Qwen3.7-Plus 只修正文案。
+ */
 async function recognizeCabinetLabelsWithStructuredLocations(
   sources: CabinetOcrImageSource | CabinetOcrImageSource[],
   textPrompt: string,
@@ -217,6 +233,9 @@ async function recognizeCabinetLabelsWithStructuredLocations(
   return textResult ? mergeLocatedAndRecognizedOcrResults(locatedResult, textResult) : locatedResult;
 }
 
+/**
+ * 调用 DashScope Qwen-OCR，按 ROI 把结构化 words_info 重新分配到每个标签区域。
+ */
 async function recognizeCabinetLabelsWithQwenOcr(
   sources: CabinetOcrImageSource[],
   options: { mergeLabelsPerRegion?: boolean },
@@ -310,6 +329,9 @@ function groupOcrSourcesByImage<T extends CabinetOcrImageSource>(sources: T[]): 
   return [...groups.values()];
 }
 
+/**
+ * 多个 ROI 共享一张原图时，按文字框中心点把 OCR words_info 分配回对应 ROI。
+ */
 function assignStructuredOcrWordsToSources(
   sources: (CabinetOcrImageSource & { width: number; height: number })[],
   words: DashScopeOcrWord[],
@@ -343,6 +365,9 @@ function getCropRectArea(rect: CabinetOcrCropRect): number {
   return Math.max(0, rect.w) * Math.max(0, rect.h);
 }
 
+/**
+ * 通用视觉模型兜底识别，只要求模型返回标签文字，不依赖返回坐标。
+ */
 async function recognizeCabinetLabelsWithPrompt(
   sources: CabinetOcrImageSource | CabinetOcrImageSource[],
   prompt: string,
@@ -405,6 +430,9 @@ function extractStructuredOcrWords(payload: DashScopeOcrResponse | null): DashSc
   return contents.flatMap((content) => content.ocr_result?.words_info || []);
 }
 
+/**
+ * 把 Qwen-OCR 的单字/短词结果按行合并成业务标签。
+ */
 function groupStructuredOcrWords(
   source: CabinetOcrImageSource & { width: number; height: number },
   words: DashScopeOcrWord[],
@@ -582,6 +610,10 @@ function toNormalizedOcrBbox(
   };
 }
 
+/**
+ * Qwen-OCR 返回的 bbox 多数是文字框，这里用像素边缘把它扩展成物理标签牌框。
+ * 如果边缘检测失败，保留原文字框，保证识别流程不中断。
+ */
 async function replaceTextBboxesWithPlateBboxes(
   source: CabinetOcrImageSource & { width: number; height: number },
   labels: CabinetOcrDetectedLabel[],
@@ -628,6 +660,10 @@ function fromNormalizedOcrBbox(
   };
 }
 
+/**
+ * 位置模型负责 bbox，文本模型只替换文字内容。
+ * 两边数量不一致时不强行合并，避免坐标和文字错配。
+ */
 function mergeLocatedAndRecognizedOcrResults(
   locatedResult: CabinetOcrResult,
   textResult: CabinetOcrResult,
@@ -680,6 +716,9 @@ function getAxisGap(leftStart: number, leftEnd: number, rightStart: number, righ
   return Math.max(0, Math.max(leftStart, rightStart) - Math.min(leftEnd, rightEnd));
 }
 
+/**
+ * 识别屏柜/主设备名称，用于框选名称后同步更新左侧主设备名称。
+ */
 export async function recognizeCabinetName(
   source: CabinetOcrImageSource,
   requestOptions: RecognitionRequestOptions = {},
@@ -717,6 +756,9 @@ export async function recognizeCabinetName(
   return normalizeCabinetNameOcrResult(rawText);
 }
 
+/**
+ * 按原图坐标裁剪 ROI，并返回裁剪图相对原图的偏移量。
+ */
 export async function cropCabinetOcrImage(imageDataUrl: string, rect: CabinetOcrCropRect, padding = 0): Promise<CabinetOcrCropResult> {
   const image = await loadImage(imageDataUrl);
   const x = Math.max(0, Math.floor(rect.x - padding));
@@ -743,6 +785,10 @@ export async function cropCabinetOcrImage(imageDataUrl: string, rect: CabinetOcr
   };
 }
 
+/**
+ * 组装视觉模型请求内容。
+ * 多个 ROI 来自同一原图时优先只上传一张图，减少请求体和模型干扰。
+ */
 function buildCabinetOcrContent(sources: CabinetOcrImageSource[], prompt: string) {
   if (shouldUseSingleImageRoiPrompt(sources)) {
     return buildSingleImageRoiContent(sources, prompt);
@@ -866,6 +912,9 @@ function loadImage(imageDataUrl: string): Promise<HTMLImageElement> {
   });
 }
 
+/**
+ * 兼容模型可能返回的 Markdown 包裹、labels、label_boxes 等不同 JSON 字段。
+ */
 function normalizeCabinetOcrResult(
   rawText: string,
   sources: CabinetOcrImageSource[],
@@ -944,6 +993,9 @@ function normalizeCabinetNameOcrResult(rawText: string): CabinetNameOcrResult {
   };
 }
 
+/**
+ * 把字符串或对象形式的标签结果统一成内部结构。
+ */
 function normalizeDetectedLabel(regionId: string, value: any): CabinetOcrDetectedLabel | null {
   const text = typeof value === "string"
     ? value.trim()
