@@ -385,6 +385,20 @@
   user-select: none;
 }
 
+.image-canvas-locate-btn {
+  position: absolute;
+  z-index: 3;
+  padding: 0;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+  transition: none !important;
+  animation: none !important;
+
+  .anticon {
+    font-size: 14px;
+  }
+}
+
 .image-edit-point-filters {
   padding: 8px 12px;
   flex-shrink: 0;

@@ -1,6 +1,6 @@
-import { useRef, useEffect, useState, useCallback } from "react";
+import { useRef, useEffect, useState, useCallback, type CSSProperties } from "react";
 import { Button, Tooltip } from "antd";
-import { CompressOutlined, ZoomInOutlined, ZoomOutOutlined } from "@ant-design/icons";
+import { AimOutlined, CompressOutlined, ZoomInOutlined, ZoomOutOutlined } from "@ant-design/icons";
 
 export interface ImageItem {
   /** 已解码的图片对象；缩略图总览通常懒加载，双击原图时会补齐。 */
@@ -44,8 +44,16 @@ interface Props {
   visible?: boolean;
   /** 双击缩略图进入原图标定。 */
   onImageDoubleClick?: (item: ImageItem) => void | Promise<void>;
+  /** 单击缩略图选中；父组件负责保证同一时间只有一个选中项。 */
+  onImageClick?: (item: ImageItem) => void;
   /** hover 图片时通知 3D 地图显示对应相机射线。 */
   onImageHover?: (item: ImageItem | null) => void;
+  /** 点击缩略图右上角定位按钮时，把左侧地图聚焦到该图片对应停靠点。 */
+  onImageLocate?: (item: ImageItem) => void;
+  /** 当前固定选中的图片 key。 */
+  selectedImageKey?: string;
+  /** 业务层自定义图片 key；默认使用 id + imagePath。 */
+  getImageSelectionKey?: (item: ImageItem) => string;
   /** 已保存标定框，key 为 imageId，value 为原图坐标矩形数组。 */
   calibrationRects?: Map<number, { x: number; y: number; w: number; h: number }[]>;
 }
@@ -71,14 +79,30 @@ const CALIBRATION_BOX_HALO_WIDTH = 7;
 const MIN_SCALE = 0.02;
 const MAX_SCALE = 5;
 const ZOOM_STEP = 1.2;
+const LOCATE_BUTTON_SIZE = 26;
+const LOCATE_BUTTON_MARGIN = 8;
+const CLICK_MOVE_THRESHOLD = 4;
 
 /** 图片画布：缩放/平移，rAF 驱动渲染，懒加载缩略图缓存，视口裁剪 */
-export default function ImageCanvas({ canvasRef, containerRef, images, visible = true, onImageDoubleClick, onImageHover, calibrationRects }: Props) {
+export default function ImageCanvas({
+  canvasRef,
+  containerRef,
+  images,
+  visible = true,
+  onImageDoubleClick,
+  onImageClick,
+  onImageHover,
+  onImageLocate,
+  selectedImageKey,
+  getImageSelectionKey,
+  calibrationRects,
+}: Props) {
   const [displayScale, setDisplayScale] = useState(1);
+  const [hoverButtonStyle, setHoverButtonStyle] = useState<CSSProperties | null>(null);
   const [, setCacheVersion] = useState(0);
   const panRef = useRef({ x: 0, y: 0 });
   const scaleRef = useRef(1);
-  const dragRef = useRef<{ mx: number; my: number; sx: number; sy: number } | null>(null);
+  const dragRef = useRef<{ mx: number; my: number; sx: number; sy: number; hit: ImageItem | null; moved: boolean } | null>(null);
   const rafIdRef = useRef(0);
   const imagesRef = useRef(images);
   imagesRef.current = images;
@@ -91,17 +115,46 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
   const activeLoadsRef = useRef(0);
   const generationRef = useRef(0);
   const hoverImageRef = useRef<ImageItem | null>(null);
+  const hoverButtonImageRef = useRef<ImageItem | null>(null);
+  const selectedImageKeyRef = useRef(selectedImageKey || "");
   const onImageHoverRef = useRef(onImageHover);
+  const onImageClickRef = useRef(onImageClick);
+  const onImageLocateRef = useRef(onImageLocate);
+  const getImageSelectionKeyRef = useRef(getImageSelectionKey);
   onImageHoverRef.current = onImageHover;
+  onImageClickRef.current = onImageClick;
+  onImageLocateRef.current = onImageLocate;
+  selectedImageKeyRef.current = selectedImageKey || "";
+  getImageSelectionKeyRef.current = getImageSelectionKey;
 
   const imageKey = (item: ImageItem) => item.imagePath || String(item.id);
 
   const imageIdentity = (item: ImageItem | null) => item ? `${item.id}:${item.imagePath || item.visName}` : "";
 
+  const imageSelectionKey = (item: ImageItem) => getImageSelectionKeyRef.current?.(item) || imageIdentity(item);
+
   const emitImageHover = useCallback((item: ImageItem | null) => {
     if (imageIdentity(hoverImageRef.current) === imageIdentity(item)) return;
     hoverImageRef.current = item;
     onImageHoverRef.current?.(item);
+  }, []);
+
+  const updateHoverButton = useCallback((item: ImageItem | null) => {
+    hoverButtonImageRef.current = item;
+    if (!item) {
+      setHoverButtonStyle(null);
+      return;
+    }
+    const s = scaleRef.current;
+    const p = panRef.current;
+    const left = p.x + (item.x + item.w) * s - LOCATE_BUTTON_SIZE - LOCATE_BUTTON_MARGIN;
+    const top = p.y + item.y * s + LOCATE_BUTTON_MARGIN;
+    setHoverButtonStyle({
+      left,
+      top,
+      width: LOCATE_BUTTON_SIZE,
+      height: LOCATE_BUTTON_SIZE,
+    });
   }, []);
 
   const hitTestImage = useCallback((clientX: number, clientY: number): ImageItem | null => {
@@ -252,7 +305,7 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
 
   useEffect(() => {
     scheduleDraw();
-  }, [calibrationRects, scheduleDraw]);
+  }, [calibrationRects, selectedImageKey, scheduleDraw]);
 
   // 绘制：从 ref 读取 pan/scale，缩略图 + 视口裁剪
   const draw = useCallback(() => {
@@ -302,6 +355,8 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
       if (item.x + item.w < vpLeft || item.x > vpRight) continue;
       if (item.y + item.h < vpTop || item.y > vpBottom) continue;
 
+      const isHovered = imageIdentity(hoverImageRef.current) === imageIdentity(item);
+      const isSelected = selectedImageKeyRef.current === imageSelectionKey(item);
       const key = imageKey(item);
       const entry = cache.get(key);
       if (entry) {
@@ -349,10 +404,24 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
           ctx.strokeRect(x, y, w, h);
         }
       }
+
+      if (isSelected || isHovered) {
+        const strokeColor = isSelected ? "#0958d9" : "#1677ff";
+        const fillColor = isSelected ? "rgba(22, 119, 255, 0.14)" : "rgba(22, 119, 255, 0.08)";
+        ctx.fillStyle = fillColor;
+        ctx.fillRect(item.x, item.y, item.w, item.h);
+        ctx.strokeStyle = "rgba(255,255,255,0.95)";
+        ctx.lineWidth = (isSelected ? 7 : 5) / s;
+        ctx.strokeRect(item.x, item.y, item.w, item.h);
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = (isSelected ? 4 : 3) / s;
+        ctx.strokeRect(item.x, item.y, item.w, item.h);
+      }
     }
     ctx.restore();
+    updateHoverButton(hoverImageRef.current);
 
-  }, [canvasRef, requestThumbnail]);
+  }, [canvasRef, requestThumbnail, updateHoverButton]);
 
   // 计算内容范围并适配容器
   const fitToContent = useCallback(() => {
@@ -483,29 +552,82 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
 
   // 拖拽：只更新 ref + 调度绘制，不经过 React state
   const onMouseDown = (e: React.MouseEvent) => {
-    emitImageHover(null);
-    dragRef.current = { mx: e.clientX, my: e.clientY, sx: panRef.current.x, sy: panRef.current.y };
+    const hit = hitTestImage(e.clientX, e.clientY);
+    if (hit) {
+      emitImageHover(hit);
+      updateHoverButton(hit);
+    } else {
+      emitImageHover(null);
+      updateHoverButton(null);
+    }
+    dragRef.current = { mx: e.clientX, my: e.clientY, sx: panRef.current.x, sy: panRef.current.y, hit, moved: false };
+    scheduleDraw();
   };
   const onMouseMove = (e: React.MouseEvent) => {
     if (dragRef.current) {
+      const dx = e.clientX - dragRef.current.mx;
+      const dy = e.clientY - dragRef.current.my;
+      if (Math.hypot(dx, dy) > CLICK_MOVE_THRESHOLD) {
+        dragRef.current.moved = true;
+      }
       panRef.current = {
-        x: dragRef.current.sx + e.clientX - dragRef.current.mx,
-        y: dragRef.current.sy + e.clientY - dragRef.current.my,
+        x: dragRef.current.sx + dx,
+        y: dragRef.current.sy + dy,
       };
       scheduleDraw();
       return;
     }
-    emitImageHover(hitTestImage(e.clientX, e.clientY));
+    const hit = hitTestImage(e.clientX, e.clientY);
+    emitImageHover(hit);
+    updateHoverButton(hit);
+    scheduleDraw();
   };
-  const onMouseUp = () => { dragRef.current = null; };
+  const onMouseUp = (e: React.MouseEvent) => {
+    const drag = dragRef.current;
+    dragRef.current = null;
+    if (!drag || drag.moved || !drag.hit) return;
+    const hit = hitTestImage(e.clientX, e.clientY);
+    if (hit && imageIdentity(hit) === imageIdentity(drag.hit)) {
+      onImageClickRef.current?.(hit);
+      emitImageHover(hit);
+      updateHoverButton(hit);
+      scheduleDraw();
+    }
+  };
   const onMouseLeave = () => {
-    onMouseUp();
+    dragRef.current = null;
     emitImageHover(null);
+    updateHoverButton(null);
+    scheduleDraw();
+  };
+
+  const handleLocateClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const item = hoverButtonImageRef.current;
+    if (item) onImageLocateRef.current?.(item);
   };
 
   return (
-    <div ref={containerRef} style={{ display: visible ? "flex" : "none", flex: 1, position: "relative", overflow: "hidden", cursor: dragRef.current ? "grabbing" : "grab" }}>
-      <div className="image-canvas-toolbar" onMouseDown={(event) => event.stopPropagation()}>
+    <div
+      ref={containerRef}
+      style={{
+        display: visible ? "flex" : "none",
+        flex: 1,
+        position: "relative",
+        overflow: "hidden",
+        cursor: hoverImageRef.current ? "pointer" : dragRef.current ? "grabbing" : "grab",
+      }}
+      onMouseDown={onMouseDown}
+      onMouseMove={onMouseMove}
+      onMouseUp={onMouseUp}
+      onMouseLeave={onMouseLeave}
+    >
+      <div
+        className="image-canvas-toolbar"
+        onMouseDown={(event) => event.stopPropagation()}
+        onMouseMove={(event) => event.stopPropagation()}
+      >
         <Tooltip title="缩小">
           <Button type="text" size="small" aria-label="缩小" icon={<ZoomOutOutlined />} onClick={() => zoomAtCenter(1 / ZOOM_STEP)} />
         </Tooltip>
@@ -520,11 +642,23 @@ export default function ImageCanvas({ canvasRef, containerRef, images, visible =
       <canvas
         ref={canvasRef}
         style={{ width: "100%", height: "100%", display: "block" }}
-        onMouseDown={onMouseDown}
-        onMouseMove={onMouseMove}
-        onMouseUp={onMouseUp}
-        onMouseLeave={onMouseLeave}
       />
+      {hoverButtonStyle && onImageLocate && (
+        <Tooltip title="定位到地图">
+          <Button
+            className="image-canvas-locate-btn"
+            type="primary"
+            size="small"
+            aria-label="定位到地图"
+            icon={<AimOutlined />}
+            style={hoverButtonStyle}
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+            onMouseMove={(e) => { e.stopPropagation(); }}
+            onMouseUp={(e) => { e.stopPropagation(); }}
+            onClick={handleLocateClick}
+          />
+        </Tooltip>
+      )}
     </div>
   );
 }

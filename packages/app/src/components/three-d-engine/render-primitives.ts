@@ -23,19 +23,46 @@ export function updateLineEntity(line: pc.Entity, from: pc.Vec3, to: pc.Vec3, th
   }
 }
 
-function createSolidMaterial(color: pc.Color): pc.StandardMaterial {
+export interface PrimitiveRenderOptions {
+  /** 勘察射线等辅助标记需要穿透点云/模型显示，避免被深度缓冲遮挡。 */
+  alwaysOnTop?: boolean;
+}
+
+const ALWAYS_ON_TOP_DRAW_ORDER = 100000;
+
+function createSolidMaterial(color: pc.Color, options: PrimitiveRenderOptions = {}): pc.StandardMaterial {
   const material = new pc.StandardMaterial();
   material.diffuse = color;
   material.emissive = color;
   material.useLighting = false;
+  if (options.alwaysOnTop) {
+    material.opacity = color.a;
+    material.blendType = pc.BLEND_NORMAL;
+    material.depthTest = false;
+    material.depthWrite = false;
+  }
   material.update();
   return material;
 }
 
+function applyPrimitiveRenderOptions(entity: pc.Entity, options: PrimitiveRenderOptions = {}) {
+  if (!options.alwaysOnTop) return;
+  for (const meshInstance of entity.render?.meshInstances || []) {
+    meshInstance.drawOrder = ALWAYS_ON_TOP_DRAW_ORDER;
+  }
+}
+
 /** 创建顶点/路径点标记。材质不受光照影响，保证在深色点云上仍可见。 */
-export function createSphere(app: pc.Application, pos: pc.Vec3, color: pc.Color, scale = 0.15): pc.Entity {
+export function createSphere(
+  app: pc.Application,
+  pos: pc.Vec3,
+  color: pc.Color,
+  scale = 0.15,
+  options: PrimitiveRenderOptions = {},
+): pc.Entity {
   const sphere = new pc.Entity("draw-pt");
-  sphere.addComponent("render", { type: "sphere", material: createSolidMaterial(color) });
+  sphere.addComponent("render", { type: "sphere", material: createSolidMaterial(color, options) });
+  applyPrimitiveRenderOptions(sphere, options);
   sphere.setLocalScale(scale, scale, scale);
   sphere.setLocalPosition(pos);
   app.root.addChild(sphere);
@@ -43,9 +70,17 @@ export function createSphere(app: pc.Application, pos: pc.Vec3, color: pc.Color,
 }
 
 /** 创建世界空间线段，并立即加入 app.root；调用方负责在 clear/destroy 时销毁实体。 */
-export function createLine(app: pc.Application, from: pc.Vec3, to: pc.Vec3, color: pc.Color, thickness = 0.05): pc.Entity {
+export function createLine(
+  app: pc.Application,
+  from: pc.Vec3,
+  to: pc.Vec3,
+  color: pc.Color,
+  thickness = 0.05,
+  options: PrimitiveRenderOptions = {},
+): pc.Entity {
   const line = new pc.Entity("draw-line");
-  line.addComponent("render", { type: "box", material: createSolidMaterial(color) });
+  line.addComponent("render", { type: "box", material: createSolidMaterial(color, options) });
+  applyPrimitiveRenderOptions(line, options);
   updateLineEntity(line, from, to, thickness);
   app.root.addChild(line);
   return line;

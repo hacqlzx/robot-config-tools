@@ -58,6 +58,7 @@ const RAY_DEFAULT_LENGTH = 4;
 const RAY_THICKNESS = 0.025;
 const RAY_ORIGIN_SCALE = 0.09;
 const RAY_END_SCALE = 0.05;
+const RAY_RENDER_OPTIONS = { alwaysOnTop: true } as const;
 
 const RED_EDGES: [number, number][] = [[0, 1], [1, 2], [2, 6]];
 const GREEN_EDGES: [number, number][] = [
@@ -470,9 +471,9 @@ export class DrawingRenderer {
       : RAY_DEFAULT_LENGTH;
     const end = origin.clone().add(dir.clone().mulScalar(length));
     const entities = [
-      createSphere(this.app, origin, RAY_COLOR, RAY_ORIGIN_SCALE),
-      createLine(this.app, origin, end, RAY_COLOR, RAY_THICKNESS),
-      createSphere(this.app, end, RAY_COLOR, RAY_END_SCALE),
+      createSphere(this.app, origin, RAY_COLOR, RAY_ORIGIN_SCALE, RAY_RENDER_OPTIONS),
+      createLine(this.app, origin, end, RAY_COLOR, RAY_THICKNESS, RAY_RENDER_OPTIONS),
+      createSphere(this.app, end, RAY_COLOR, RAY_END_SCALE, RAY_RENDER_OPTIONS),
     ];
 
     if (ray.name) {

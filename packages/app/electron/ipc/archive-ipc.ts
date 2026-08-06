@@ -209,9 +209,10 @@ export function registerArchiveIpc(): void {
       if (!fs.existsSync(projectDir)) throw new Error(`项目 "${safeProjectName}" 不存在`);
       if (safeMapName === CALIBRATION_FILE_NAME) throw new Error("地图名称不能与勘察数据文件同名");
 
-      const surveyDir = assertInside(projectDir, path.join(projectDir, SURVEY_DIR_NAME, safeMapName), "导入勘察数据");
+      const surveyRoot = assertInside(projectDir, path.join(projectDir, SURVEY_DIR_NAME), "导入勘察数据");
+      const surveyDir = assertInside(projectDir, path.join(surveyRoot, safeMapName), "导入勘察数据");
 
-      // 全量更新当前地图的机器人图片数据；项目级 勘察数据/勘察数据.json 是人工绑定结果，不能删。
+      // 全量更新当前地图的机器人图片数据；新包的图片集合可能已经变化，旧标定结果需要同步失效。
       fs.rmSync(surveyDir, { recursive: true, force: true });
       fs.mkdirSync(surveyDir, { recursive: true });
 
@@ -224,8 +225,9 @@ export function registerArchiveIpc(): void {
         throw new Error("未找到设备区 json_list.json，请确认压缩包包含 device/json_list.json、json_list.json 或 勘察数据/device/json_list.json");
       }
       const importedSpIds = readImportedSpIds(deviceDir);
+      const calibrationCleanup = clearSurveyCalibrationForMap(safeProjectName, surveyRoot, safeMapName);
 
-      console.log("[import-survey-data] 导入完成:", surveyDir, "deviceDir:", deviceDir, "sp:", importedSpIds);
+      console.log("[import-survey-data] 导入完成:", surveyDir, "deviceDir:", deviceDir, "sp:", importedSpIds, "calibrationCleanup:", calibrationCleanup);
       return { success: true, surveyDir, deviceDir, importedSpIds };
     } catch (e: any) {
       console.error("[import-survey-data] 导入失败:", e.message);
@@ -1468,6 +1470,70 @@ function readCalibrationFile(filePath: string): CalibrationFileData {
     mapCode: parsed.mapCode,
     data: normalizeCalibrationEntries(parsed),
   };
+}
+
+function collectCalibrationPointCodes(entries: CalibrationEntry[]): Set<string> {
+  const codes = new Set<string>();
+  for (const entry of entries) {
+    for (const rect of entry.rects || []) {
+      for (const binding of rect.bindings || []) {
+        const pointCode = valueText(binding.pointCode);
+        if (pointCode) codes.add(pointCode);
+      }
+    }
+  }
+  return codes;
+}
+
+function clearSurveyCalibrationForMap(
+  projectName: string,
+  surveyRoot: string,
+  mapName: string,
+): { changed: boolean; deleted: boolean; removedEntries: number; clearedPointCodes: number } {
+  const calibrationPath = path.join(surveyRoot, CALIBRATION_FILE_NAME);
+  if (!fs.existsSync(calibrationPath)) {
+    return { changed: false, deleted: false, removedEntries: 0, clearedPointCodes: 0 };
+  }
+
+  try {
+    const existing = readCalibrationFile(calibrationPath);
+    const entries = normalizeCalibrationEntries(existing);
+    const removed = entries.filter((entry) => valueText(entry.mapCode) === mapName);
+    const remaining = entries.filter((entry) => valueText(entry.mapCode) !== mapName);
+    const rootMapChanged = valueText(existing.mapCode) === mapName;
+    const shouldDeleteFile = remaining.length === 0 && (removed.length > 0 || rootMapChanged);
+    if (removed.length === 0 && !rootMapChanged) {
+      return { changed: false, deleted: false, removedEntries: 0, clearedPointCodes: 0 };
+    }
+
+    const removedCodes = collectCalibrationPointCodes(removed);
+    const remainingCodes = collectCalibrationPointCodes(remaining);
+    const pointCodesToClear = [...removedCodes].filter((pointCode) => !remainingCodes.has(pointCode));
+    let clearedPointCodes = 0;
+    if (pointCodesToClear.length > 0) {
+      try {
+        clearedPointCodes = new DevicePointRepo(getDatabase()).clearCalibrationIds(pointCodesToClear, projectName);
+      } catch (error) {
+        console.warn("[import-survey-data] 清理点位标定 ID 失败:", { projectName, mapName, pointCodesToClear, error });
+      }
+    }
+
+    if (shouldDeleteFile) {
+      fs.rmSync(calibrationPath, { force: true });
+      return { changed: true, deleted: true, removedEntries: removed.length, clearedPointCodes };
+    }
+
+    const next: CalibrationFileData = {
+      version: Math.max(2, Number(existing.version) || 2),
+      mapCode: remaining[0]?.mapCode || "",
+      data: remaining,
+    };
+    fs.writeFileSync(calibrationPath, `${JSON.stringify(next, null, 2)}\n`, "utf-8");
+    return { changed: true, deleted: false, removedEntries: removed.length, clearedPointCodes };
+  } catch (error) {
+    console.warn("[import-survey-data] 清理旧勘察标定 JSON 失败:", { projectName, mapName, calibrationPath, error });
+    return { changed: false, deleted: false, removedEntries: 0, clearedPointCodes: 0 };
+  }
 }
 
 function normalizeCalibrationEntries(file: CalibrationFileData): CalibrationEntry[] {

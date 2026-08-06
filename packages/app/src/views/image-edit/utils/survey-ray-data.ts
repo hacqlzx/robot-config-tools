@@ -96,6 +96,16 @@ function normalizeDirection(direction: [number, number, number]): [number, numbe
   return [direction[0] / len, direction[1] / len, direction[2] / len];
 }
 
+function normalizePose(pose: TaskSPPose | StopPointPose | undefined): StopPointPose | null {
+  if (!pose) return null;
+  const x = asFiniteNumber(pose.x);
+  const y = asFiniteNumber(pose.y);
+  const z = asFiniteNumber(pose.z) ?? 0;
+  const yaw = asFiniteNumber(pose.yaw);
+  if (x == null || y == null || yaw == null) return null;
+  return { x, y, z, yaw };
+}
+
 function parseStopPointPose(record: Record<string, unknown>): { id: string; pose: StopPointPose } | null {
   const id = valueText(record.id);
   const x = asFiniteNumber(record.pose_x);
@@ -126,15 +136,16 @@ function buildRay(
   image: TaskImageConfig,
   options: { length: number; name?: string },
 ): RayRenderItem | null {
-  if (!pose) return null;
-  const { x, y, z, yaw } = pose;
-  if (!finiteNumber(x) || !finiteNumber(y) || !finiteNumber(z) || !finiteNumber(yaw)) return null;
+  const normalizedPose = normalizePose(pose);
+  if (!normalizedPose) return null;
+  const { x, y, z, yaw } = normalizedPose;
 
-  const height = finiteNumber(image.height) ? image.height : 0;
-  const pan = finiteNumber(image.pan) ? image.pan : 0;
-  const tilt = finiteNumber(image.tilt) ? image.tilt : 0;
-  // 射线方向 = 停靠点 yaw + 云台 pan，再叠加 tilt 作为俯仰角。
-  const heading = yawToRadians(yaw) + degreesToRadians(pan);
+  const height = asFiniteNumber(image.height) ?? 0;
+  const pan = asFiniteNumber(image.pan) ?? 0;
+  const tilt = asFiniteNumber(image.tilt) ?? 0;
+  // 机器人云台 pan 以顺时针为正；数学坐标中的 yaw 以逆时针为正。
+  // 因此组合水平角时需要用 yaw - pan，否则左右云台的射线会反向。
+  const heading = yawToRadians(yaw) - degreesToRadians(pan);
   const pitch = degreesToRadians(tilt);
   const horizontal = Math.cos(pitch);
   const direction = normalizeDirection([
@@ -191,7 +202,8 @@ export async function loadSurveyRayDrawingData({
       const stopPointPose = stopPointPoses.get(String(spId))
         ?? stopPointPoses.get(String(stopPointId))
         ?? (Number.isFinite(cpId) && cpId > 0 ? stopPointPoses.get(String(cpId)) : undefined);
-      const basePose = stopPointPose ?? spConfig.sp_pose;
+      // sp_pose 是本次勘察采集时的实际位姿；stop_points.json 是规划停靠点，只在任务位姿缺失时兜底。
+      const basePose = normalizePose(spConfig.sp_pose) ?? stopPointPose;
       const images = Object.entries(spConfig.images || {}).sort(([keyA, a], [keyB, b]) => {
         const locA = Array.isArray(a.pic_loc) ? a.pic_loc : [0, 0];
         const locB = Array.isArray(b.pic_loc) ? b.pic_loc : [0, 0];

@@ -206,7 +206,7 @@ export default function SurveyImageLoad({ open, onClose, onImport, onTaskImport 
         >
           <p className="ant-upload-drag-icon"><InboxOutlined /></p>
           <p className="ant-upload-text">点击或拖拽 ZIP 压缩包到此区域</p>
-          <p className="ant-upload-hint">导入后会全量覆盖勘察数据/{selectedMap || "所选地图"}，保留点表绑定结果</p>
+          <p className="ant-upload-hint">导入后会全量覆盖勘察数据/{selectedMap || "所选地图"}</p>
         </Dragger>
       </Form>
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
