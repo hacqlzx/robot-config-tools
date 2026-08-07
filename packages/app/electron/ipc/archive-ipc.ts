@@ -8,6 +8,7 @@ import { DevicePointRepo, getDatabase } from "@robot/database";
 import { generatePointExcelFromRows, type PointExcelExportRow } from "../export-points";
 import { getProjectRoot } from "../project-core/project-root";
 import { resolveProjectDir, resolveProjectPath } from "../project-core/project-paths";
+import { buildCabinetGeneratedPointName, resolveCabinetPointExcelColumns } from "../../src/shared/cabinet-detection";
 
 const SURVEY_DIR_NAME = "勘察数据";
 const CALIBRATION_FILE_NAME = "勘察数据.json";
@@ -135,6 +136,7 @@ interface CabinetImageAnnotationIndex {
   robotCode: string;
   componentCode: string;
   updatedAt: string;
+  pointVerified?: boolean;
   annotations: any;
   ocrRows: any[];
   singlePoints: any[];
@@ -153,6 +155,28 @@ interface CabinetImageWorkspaceData {
   robots: CabinetImageRobotIndex[];
   annotations: Record<string, CabinetImageAnnotationIndex>;
   mainDeviceNameOverrides: Record<string, CabinetMainDeviceNameOverride>;
+}
+
+type CabinetAnnotationTool = "standardPart" | "deviceLabel" | "deviceBox" | "appearance";
+
+interface CabinetExportRect {
+  id?: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  groupId?: string;
+}
+
+interface CabinetExportPoint {
+  name: string;
+  pointCode: string;
+  label: string;
+  labelDesc: string;
+  boundRectId?: string;
+  boundRectTool?: CabinetAnnotationTool;
+  relatedRectId?: string;
+  relatedRectTool?: CabinetAnnotationTool;
 }
 
 const cabinetImageSources = new Map<string, CabinetImageSourceRef>();
@@ -581,11 +605,11 @@ function parseCabinetComponentRows(xlsxBuffer: Buffer): Omit<CabinetImagePackage
     const ws = wb.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
     const parsed = rows
-      .map((row) => {
+      .map((row, index) => {
         const robotCode = valueText(row["机器人编码"]);
         const componentCode = valueText(row["部件编码"]);
-        return {
-          recordKey: buildCabinetRecordKey(robotCode, componentCode),
+        const parsedRow = {
+          recordKey: "",
           robotCode,
           stationName: valueText(row["厂站名称"]),
           stationCode: valueText(row["厂站编码"]),
@@ -598,6 +622,10 @@ function parseCabinetComponentRows(xlsxBuffer: Buffer): Omit<CabinetImagePackage
           componentName: valueText(row["部件名称"]),
           componentCode,
           calibrationId: valueText(row["标定id"]),
+        };
+        return {
+          ...parsedRow,
+          recordKey: buildCabinetRecordKey(parsedRow, index),
         };
       })
       .filter((row) => row.componentCode);
@@ -614,17 +642,21 @@ function attachCabinetImages(
   imageMap: Map<string, { name: string; source: CabinetImageSource }>,
 ): { records: CabinetImagePackageRecord[]; warnings: string[] } {
   const warnings: string[] = [];
-  const records = rows.map((row) => {
+  const records = rows.map((row, index) => {
     const image = imageMap.get(row.componentCode);
     if (!image) warnings.push(`未找到部件图片：${row.componentName || row.componentCode}`);
-    return {
+    const record = {
       ...row,
       imageName: image?.name || "",
       imageSource: image?.source,
       imageDataUrl: "",
     };
+    return {
+      ...record,
+      recordKey: buildCabinetRecordKey(record, index),
+    };
   });
-  return { records, warnings };
+  return { records: ensureUniqueCabinetRecordKeys(records), warnings };
 }
 
 /**
@@ -637,6 +669,7 @@ function readCabinetImageWorkspace(projectName: string): {
   annotationsByComponent: Record<string, any>;
   ocrRowsByComponent: Record<string, any[]>;
   singlePointsByComponent: Record<string, any[]>;
+  pointVerifiedByComponent: Record<string, boolean>;
   robots: CabinetImageRobotIndex[];
 } {
   const safeProjectName = String(projectName || "").trim();
@@ -655,6 +688,7 @@ function readCabinetImageWorkspace(projectName: string): {
       annotationsByComponent: {},
       ocrRowsByComponent: {},
       singlePointsByComponent: {},
+      pointVerifiedByComponent: {},
       robots: [],
     };
   }
@@ -687,19 +721,28 @@ function readCabinetImageWorkspace(projectName: string): {
     }
   }
 
-  const recordKeys = new Set(records.map((record) => record.recordKey));
   const annotationsByComponent: Record<string, any> = {};
   const ocrRowsByComponent: Record<string, any[]> = {};
   const singlePointsByComponent: Record<string, any[]> = {};
+  const pointVerifiedByComponent: Record<string, boolean> = {};
   const nextAnnotations: Record<string, CabinetImageAnnotationIndex> = {};
-  for (const [recordKey, entry] of Object.entries(data.annotations || {})) {
-    if (!recordKeys.has(recordKey)) continue;
+  const consumedAnnotationKeys = new Set<string>();
+  for (const record of records) {
+    const recordKey = valueText(record.recordKey) || buildCabinetRecordKey(record);
+    const matchedAnnotation = findCabinetAnnotationEntryForRecord(data.annotations || {}, record, consumedAnnotationKeys);
+    if (!matchedAnnotation) continue;
+    const { entry } = matchedAnnotation;
     const annotations = normalizeCabinetAnnotationData(entry.annotations);
     annotationsByComponent[recordKey] = annotations;
     ocrRowsByComponent[recordKey] = Array.isArray(entry.ocrRows) ? entry.ocrRows : [];
     singlePointsByComponent[recordKey] = Array.isArray(entry.singlePoints) ? entry.singlePoints : [];
+    pointVerifiedByComponent[recordKey] = Boolean(entry.pointVerified);
     nextAnnotations[recordKey] = {
       ...entry,
+      recordKey,
+      robotCode: valueText(entry.robotCode) || valueText(record.robotCode),
+      componentCode: valueText(entry.componentCode) || valueText(record.componentCode),
+      pointVerified: Boolean(entry.pointVerified),
       annotations,
       ocrRows: ocrRowsByComponent[recordKey],
       singlePoints: singlePointsByComponent[recordKey],
@@ -714,7 +757,7 @@ function readCabinetImageWorkspace(projectName: string): {
     mainDeviceNameOverrides: data.mainDeviceNameOverrides || {},
   });
 
-  return { records, warnings, annotationsByComponent, ocrRowsByComponent, singlePointsByComponent, robots };
+  return { records, warnings, annotationsByComponent, ocrRowsByComponent, singlePointsByComponent, pointVerifiedByComponent, robots };
 }
 
 /**
@@ -773,6 +816,9 @@ function saveCabinetImageAnnotations(projectName: string, payload: any): { saved
   const ocrRows = Array.isArray(payload?.ocrRows) ? payload.ocrRows : [];
   const singlePoints = Array.isArray(payload?.singlePoints) ? payload.singlePoints : [];
   const hasData = hasCabinetAnnotationData(annotations, ocrRows, singlePoints);
+  const pointVerified = typeof payload?.pointVerified === "boolean"
+    ? payload.pointVerified
+    : Boolean(data.annotations[recordKey]?.pointVerified);
   const now = new Date().toISOString();
 
   if (hasData) {
@@ -781,6 +827,7 @@ function saveCabinetImageAnnotations(projectName: string, payload: any): { saved
       robotCode,
       componentCode,
       updatedAt: now,
+      pointVerified,
       annotations,
       ocrRows,
       singlePoints,
@@ -862,7 +909,7 @@ function exportCabinetPointTable(projectName: string, destDir: string): { filePa
 
   const usedPointCodes = collectExistingPointCodes(safeProjectName, workspace);
   const exportData = buildCabinetPointTableRows(workspace, usedPointCodes);
-  if (!exportData.rows.length) throw new Error("暂无可导出的屏柜点表数据");
+  if (!exportData.rows.length) throw new Error("暂无已核查的屏柜点表数据");
 
   const fileName = uniqueCabinetExportFileName(
     targetDir,
@@ -916,7 +963,7 @@ function collectExistingPointCodes(projectName: string, workspace: ReturnType<ty
 
 /**
  * 构建屏柜点表导出行。
- * 每个部件会先输出原始部件行，再追加人工/识别生成的点位行。
+ * 只导出已生成的点位行；没有点位的部件不再单独输出。
  */
 function buildCabinetPointTableRows(
   workspace: ReturnType<typeof readCabinetImageWorkspace>,
@@ -927,10 +974,11 @@ function buildCabinetPointTableRows(
   let componentCount = 0;
 
   for (const record of workspace.records) {
-    const recordKey = valueText(record.recordKey) || buildCabinetRecordKey(record.robotCode, record.componentCode);
-    const baseRow = cabinetComponentExportRow(record);
+    const recordKey = valueText(record.recordKey) || buildCabinetRecordKey(record);
+    if (!workspace.pointVerifiedByComponent[recordKey]) continue;
     const generatedRows = cabinetGeneratedPointRows(
       record,
+      workspace.annotationsByComponent[recordKey],
       workspace.ocrRowsByComponent[recordKey] || [],
       workspace.singlePointsByComponent[recordKey] || [],
       usedPointCodes,
@@ -939,8 +987,6 @@ function buildCabinetPointTableRows(
     if (generatedRows.length > 0) {
       rows.push(...generatedRows);
       pointCount += generatedRows.length;
-    } else {
-      rows.push(baseRow);
       componentCount += 1;
     }
   }
@@ -970,29 +1016,36 @@ function cabinetComponentExportRow(record: CabinetImagePackageRecord): PointExce
  */
 function cabinetGeneratedPointRows(
   record: CabinetImagePackageRecord,
+  annotations: any,
   ocrRows: any[],
   singlePoints: any[],
   usedPointCodes: Set<string>,
 ): PointExcelExportRow[] {
   const baseRow = cabinetComponentExportRow(record);
   const rows: PointExcelExportRow[] = [];
-
-  for (const row of ocrRows || []) {
-    rows.push(cabinetPointExportRow(baseRow, {
+  const points: CabinetExportPoint[] = [
+    ...(ocrRows || []).map((row) => ({
       name: valueText(row?.name),
       pointCode: valueText(row?.pointCode),
       label: valueText(row?.recognitionLabel),
       labelDesc: valueText(row?.recognitionLabelDesc) || valueText(row?.type),
-    }, usedPointCodes));
-  }
-
-  for (const point of singlePoints || []) {
-    rows.push(cabinetPointExportRow(baseRow, {
+      boundRectId: valueText(row?.boundRectId) || undefined,
+      boundRectTool: toCabinetAnnotationTool(row?.boundRectTool),
+      relatedRectId: valueText(row?.relatedRectId) || undefined,
+      relatedRectTool: toCabinetAnnotationTool(row?.relatedRectTool),
+    })),
+    ...(singlePoints || []).map((point) => ({
       name: valueText(point?.pointName),
       pointCode: valueText(point?.pointCode),
       label: valueText(point?.recognitionLabel),
       labelDesc: valueText(point?.recognitionLabelDesc) || valueText(point?.recognitionType),
-    }, usedPointCodes));
+      boundRectId: valueText(point?.boundRectId) || undefined,
+      boundRectTool: toCabinetAnnotationTool(point?.boundRectTool),
+    })),
+  ];
+
+  for (const point of sortCabinetExportPoints(points, annotations)) {
+    rows.push(cabinetPointExportRow(baseRow, point, usedPointCodes, rows.length + 1));
   }
 
   return rows;
@@ -1005,74 +1058,232 @@ function cabinetPointExportRow(
   baseRow: PointExcelExportRow,
   point: { name: string; pointCode: string; label: string; labelDesc: string },
   usedPointCodes: Set<string>,
+  recNum: number,
 ): PointExcelExportRow {
-  const recognition = resolveCabinetPointRecognitionColumns(point.label, point.labelDesc);
+  const recognition = resolveCabinetPointExcelColumns(point.label, point.labelDesc);
   const pointCode = reserveCabinetPointCode(point.pointCode, usedPointCodes);
   return {
     ...baseRow,
-    "*点位名称": point.name,
+    "*点位名称": buildCabinetGeneratedPointName(point.name, point.label, point.labelDesc, recNum),
     "点位编码": pointCode,
     ...recognition,
   };
 }
 
-function resolveCabinetPointRecognitionColumns(label: string, labelDesc: string): PointExcelExportRow {
-  const normalizedLabel = valueText(label);
-  const normalizedDesc = valueText(labelDesc);
-  const columns: PointExcelExportRow = {
-    "采集类型": "可见光图片",
+function toCabinetAnnotationTool(value: unknown): CabinetAnnotationTool | undefined {
+  const normalized = valueText(value);
+  if (normalized === "standardPart" || normalized === "deviceLabel" || normalized === "deviceBox" || normalized === "appearance") {
+    return normalized;
+  }
+  return undefined;
+}
+
+interface CabinetExportSortItem {
+  point: CabinetExportPoint;
+  order: number;
+  anchorRect: CabinetExportRect | null;
+  groupKey: string;
+  groupIndex: number;
+  groupY: number;
+  rowIndex: number;
+  rowY: number;
+  rowX: number;
+}
+
+/**
+ * 屏柜点表导出顺序和右侧表格保持一致：标准部件组优先，组内按设备/外观框所在行列排序。
+ */
+function sortCabinetExportPoints(points: CabinetExportPoint[], annotations: any): CabinetExportPoint[] {
+  const normalizedAnnotations = normalizeCabinetAnnotationData(annotations);
+  const standardPartRects = sortCabinetRectsByPosition(normalizedAnnotations.standardPartRects);
+  const items = points.map((point, order) => createCabinetExportSortItem(point, order, normalizedAnnotations, standardPartRects));
+  fillCabinetExportRowIndexes(items);
+  return items
+    .sort((left, right) => (
+      left.groupIndex - right.groupIndex
+      || left.groupY - right.groupY
+      || left.rowIndex - right.rowIndex
+      || left.rowY - right.rowY
+      || left.rowX - right.rowX
+      || left.order - right.order
+    ))
+    .map((item) => item.point);
+}
+
+function createCabinetExportSortItem(
+  point: CabinetExportPoint,
+  order: number,
+  annotations: any,
+  standardPartRects: CabinetExportRect[],
+): CabinetExportSortItem {
+  const anchorRect = findCabinetExportPointAnchorRect(point, annotations);
+  if (!anchorRect) {
+    return {
+      point,
+      order,
+      anchorRect: null,
+      groupKey: "unbound",
+      groupIndex: Number.MAX_SAFE_INTEGER,
+      groupY: Number.MAX_SAFE_INTEGER,
+      rowIndex: Number.MAX_SAFE_INTEGER,
+      rowY: Number.MAX_SAFE_INTEGER,
+      rowX: Number.MAX_SAFE_INTEGER,
+    };
+  }
+
+  const groupRect = anchorRect.groupId
+    ? standardPartRects.find((rect) => rect.id === anchorRect.groupId) || findCabinetContainerRect(anchorRect, standardPartRects)
+    : findCabinetContainerRect(anchorRect, standardPartRects);
+  const groupIndex = groupRect?.id
+    ? standardPartRects.findIndex((rect) => rect.id === groupRect.id)
+    : standardPartRects.length;
+
+  return {
+    point,
+    order,
+    anchorRect,
+    groupKey: groupRect?.id ? `group:${groupRect.id}` : "ungrouped",
+    groupIndex,
+    groupY: groupRect ? groupRect.y : anchorRect.y,
+    rowIndex: Number.MAX_SAFE_INTEGER,
+    rowY: getCabinetRectCenterY(anchorRect),
+    rowX: getCabinetRectCenterX(anchorRect),
   };
-
-  if (normalizedLabel === "infrared" || normalizedDesc.includes("红外")) {
-    return {
-      ...columns,
-      "*识别类型1": "红外测温",
-      "采集类型": "红外图谱",
-    };
-  }
-
-  if (isCabinetMeterLabel(normalizedLabel, normalizedDesc)) {
-    return {
-      ...columns,
-      "*识别类型1": "表计读取",
-      "表计类型": cabinetMeterType(normalizedLabel, normalizedDesc),
-    };
-  }
-
-  if (isCabinetAppearanceLabel(normalizedLabel, normalizedDesc)) {
-    return {
-      ...columns,
-      "*识别类型1": "设备外观查看",
-    };
-  }
-
-  if (normalizedLabel || normalizedDesc) {
-    return {
-      ...columns,
-      "*识别类型1": "位置状态识别",
-    };
-  }
-
-  return columns;
 }
 
-function isCabinetMeterLabel(label: string, desc: string): boolean {
-  return ["meter_sf6", "zzb", "num_led"].includes(label)
-    || desc.includes("表")
-    || desc.includes("仪表");
+function fillCabinetExportRowIndexes(items: CabinetExportSortItem[]): void {
+  const itemsByGroup = new Map<string, CabinetExportSortItem[]>();
+  for (const item of items) {
+    if (!item.anchorRect) continue;
+    itemsByGroup.set(item.groupKey, [...(itemsByGroup.get(item.groupKey) || []), item]);
+  }
+
+  for (const groupItems of itemsByGroup.values()) {
+    const rowBuckets = splitCabinetRectRows(groupItems.map((item) => item.anchorRect).filter(Boolean) as CabinetExportRect[]);
+    groupItems.forEach((item) => {
+      if (!item.anchorRect) return;
+      const rowIndex = rowBuckets.findIndex((bucket) => bucket.includes(item.anchorRect as CabinetExportRect));
+      if (rowIndex < 0) return;
+      item.rowIndex = rowIndex;
+      item.rowY = medianCabinetNumber(rowBuckets[rowIndex].map(getCabinetRectCenterY));
+    });
+  }
 }
 
-function cabinetMeterType(label: string, desc: string): string {
-  if (label === "meter_sf6" || desc.includes("SF6")) return "SF6压力表";
-  return "";
+function findCabinetExportPointAnchorRect(point: CabinetExportPoint, annotations: any): CabinetExportRect | null {
+  if (point.relatedRectId && point.relatedRectTool) {
+    const relatedRect = findCabinetAnnotationRect(annotations, point.relatedRectTool, point.relatedRectId);
+    if (relatedRect) return relatedRect;
+  }
+  if (point.boundRectId && point.boundRectTool) {
+    return findCabinetAnnotationRect(annotations, point.boundRectTool, point.boundRectId);
+  }
+  return null;
 }
 
-function isCabinetAppearanceLabel(label: string, desc: string): boolean {
-  return ["facade", "little_light", "show_off", "show_on", "ybzz"].includes(label)
-    || desc.includes("外观")
-    || desc.includes("显示屏")
-    || desc.includes("小灯")
-    || desc.includes("仪表装置");
+function findCabinetAnnotationRect(annotations: any, tool: CabinetAnnotationTool, id: string): CabinetExportRect | null {
+  const rects = tool === "standardPart"
+    ? annotations.standardPartRects
+    : tool === "deviceBox"
+      ? annotations.deviceBoxRects
+      : tool === "appearance"
+        ? annotations.appearanceRects
+        : annotations.deviceLabelRects;
+  return normalizeCabinetExportRect((rects || []).find((rect: any) => valueText(rect?.id) === id));
+}
+
+function splitCabinetRectRows(rects: CabinetExportRect[]): CabinetExportRect[][] {
+  const sortedRects = [...rects].sort((leftRect, rightRect) => leftRect.y - rightRect.y || leftRect.x - rightRect.x);
+  const rows: CabinetExportRect[][] = [];
+  for (const rect of sortedRects) {
+    const row = rows.find((currentRow) => isSameCabinetRectRow(currentRow, rect));
+    if (row) {
+      row.push(rect);
+    } else {
+      rows.push([rect]);
+    }
+  }
+  return rows.map(sortCabinetRectsByCenterX);
+}
+
+function isSameCabinetRectRow(row: CabinetExportRect[], rect: CabinetExportRect): boolean {
+  const rowCenterY = medianCabinetNumber(row.map(getCabinetRectCenterY));
+  const rowHeight = medianCabinetNumber(row.map((item) => item.h));
+  const threshold = Math.max(8, Math.min(rowHeight || rect.h, rect.h) * 0.65);
+  return Math.abs(getCabinetRectCenterY(rect) - rowCenterY) <= threshold;
+}
+
+function sortCabinetRectsByPosition(rects: any[]): CabinetExportRect[] {
+  return rects
+    .map(normalizeCabinetExportRect)
+    .filter((rect): rect is CabinetExportRect => Boolean(rect))
+    .sort((leftRect, rightRect) => leftRect.y - rightRect.y || leftRect.x - rightRect.x);
+}
+
+function sortCabinetRectsByCenterX(rects: CabinetExportRect[]): CabinetExportRect[] {
+  return [...rects].sort((leftRect, rightRect) => getCabinetRectCenterX(leftRect) - getCabinetRectCenterX(rightRect));
+}
+
+function findCabinetContainerRect(rect: CabinetExportRect, containers: CabinetExportRect[]): CabinetExportRect | null {
+  const matchedContainers = containers
+    .filter((container) => containsCabinetRect(container, rect) || isCabinetRectCenterInside(rect, container))
+    .sort((left, right) => getCabinetRectArea(left) - getCabinetRectArea(right));
+  return matchedContainers[0] || null;
+}
+
+function normalizeCabinetExportRect(rect: any): CabinetExportRect | null {
+  if (!rect) return null;
+  const x = Number(rect.x);
+  const y = Number(rect.y);
+  const w = Number(rect.w);
+  const h = Number(rect.h);
+  if (![x, y, w, h].every(Number.isFinite)) return null;
+  return {
+    id: valueText(rect.id) || undefined,
+    x,
+    y,
+    w,
+    h,
+    groupId: valueText(rect.groupId) || undefined,
+  };
+}
+
+function containsCabinetRect(outer: CabinetExportRect, inner: CabinetExportRect): boolean {
+  const tolerance = 0.5;
+  return inner.x >= outer.x - tolerance
+    && inner.y >= outer.y - tolerance
+    && inner.x + inner.w <= outer.x + outer.w + tolerance
+    && inner.y + inner.h <= outer.y + outer.h + tolerance;
+}
+
+function isCabinetRectCenterInside(rect: CabinetExportRect, container: CabinetExportRect): boolean {
+  const centerX = getCabinetRectCenterX(rect);
+  const centerY = getCabinetRectCenterY(rect);
+  return centerX >= container.x
+    && centerX <= container.x + container.w
+    && centerY >= container.y
+    && centerY <= container.y + container.h;
+}
+
+function getCabinetRectCenterX(rect: CabinetExportRect): number {
+  return rect.x + rect.w / 2;
+}
+
+function getCabinetRectCenterY(rect: CabinetExportRect): number {
+  return rect.y + rect.h / 2;
+}
+
+function getCabinetRectArea(rect: CabinetExportRect): number {
+  return Math.max(0, rect.w) * Math.max(0, rect.h);
+}
+
+function medianCabinetNumber(values: number[]): number {
+  if (!values.length) return 0;
+  const sortedValues = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sortedValues.length / 2);
+  return sortedValues.length % 2
+    ? sortedValues[middle]
+    : (sortedValues[middle - 1] + sortedValues[middle]) / 2;
 }
 
 function reserveCabinetPointCode(pointCode: string, usedPointCodes: Set<string>): string {
@@ -1178,10 +1389,12 @@ function normalizeCabinetComponentRows(
   rows: Omit<CabinetImagePackageRecord, "imageName" | "imageSource" | "imageDataUrl">[],
 ): Omit<CabinetImagePackageRecord, "imageName" | "imageSource" | "imageDataUrl">[] {
   const robotCode = resolveCabinetRobotCode(rows);
-  return rows.map((row) => ({
-    ...row,
-    robotCode,
-    recordKey: buildCabinetRecordKey(robotCode, row.componentCode),
+  return ensureUniqueCabinetRecordKeys(rows.map((row, index) => {
+    const nextRow = { ...row, robotCode };
+    return {
+      ...nextRow,
+      recordKey: buildCabinetRecordKey(nextRow, index),
+    };
   }));
 }
 
@@ -1196,8 +1409,51 @@ function resolveCabinetRobotCode(
   return robotCode;
 }
 
-function buildCabinetRecordKey(robotCode: string, componentCode: string): string {
-  return `${valueText(robotCode) || "default"}::${valueText(componentCode)}`;
+function buildCabinetRecordKey(record: Partial<CabinetImagePackageRecord>, index?: number): string {
+  return [
+    valueText(record.robotCode) || "default",
+    valueText(record.stationCode) || valueText(record.stationName) || "default",
+    valueText(record.areaCode) || valueText(record.areaName) || "default",
+    valueText(record.bayCode) || valueText(record.bayName) || "default",
+    valueText(record.mainDeviceCode) || "default",
+    valueText(record.componentCode) || "default",
+    valueText(record.calibrationId) || valueText(record.imageName) || (typeof index === "number" ? `row${index + 1}` : "default"),
+  ].join("::");
+}
+
+function buildLegacyCabinetRecordKey(record: Partial<CabinetImagePackageRecord>): string {
+  return `${valueText(record.robotCode) || "default"}::${valueText(record.componentCode)}`;
+}
+
+function ensureUniqueCabinetRecordKeys<T extends { recordKey: string }>(records: T[]): T[] {
+  const seen = new Map<string, number>();
+  return records.map((record) => {
+    const baseKey = valueText(record.recordKey) || "default";
+    const count = seen.get(baseKey) || 0;
+    seen.set(baseKey, count + 1);
+    if (count === 0) return record;
+    return { ...record, recordKey: `${baseKey}::${count + 1}` };
+  });
+}
+
+function findCabinetAnnotationEntryForRecord(
+  annotations: Record<string, CabinetImageAnnotationIndex>,
+  record: CabinetImagePackageRecord,
+  consumedKeys: Set<string>,
+): { key: string; entry: CabinetImageAnnotationIndex } | null {
+  const candidateKeys = [
+    valueText(record.recordKey),
+    buildCabinetRecordKey(record),
+    buildLegacyCabinetRecordKey(record),
+  ].filter(Boolean);
+  for (const key of [...new Set(candidateKeys)]) {
+    if (consumedKeys.has(key)) continue;
+    const entry = annotations[key];
+    if (!entry) continue;
+    consumedKeys.add(key);
+    return { key, entry };
+  }
+  return null;
 }
 
 /**

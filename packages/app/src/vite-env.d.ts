@@ -88,6 +88,7 @@ declare global {
     annotationsByComponent?: Record<string, any>;
     ocrRowsByComponent?: Record<string, any[]>;
     singlePointsByComponent?: Record<string, any[]>;
+    pointVerifiedByComponent?: Record<string, boolean>;
   }
 
   interface CabinetImageLoadResult {
@@ -288,6 +289,7 @@ declare global {
           annotations: any;
           ocrRows: any[];
           singlePoints: any[];
+          pointVerified?: boolean;
         },
       ) => Promise<CabinetImageAnnotationSaveResult>;
       saveCabinetMainDeviceNameOverride: (

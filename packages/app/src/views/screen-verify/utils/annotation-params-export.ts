@@ -14,6 +14,7 @@ export interface CabinetAnnotationParamsExportInput {
   annotationsByComponent: Record<string, ComponentAnnotations>;
   ocrRowsByComponent: Record<string, CabinetPointRow[]>;
   singlePointsByComponent: Record<string, CabinetSinglePoint[]>;
+  pointVerifiedByComponent: Record<string, boolean>;
 }
 
 export interface CabinetAnnotationParamsExportResult {
@@ -110,6 +111,7 @@ function collectExportPointItems(input: CabinetAnnotationParamsExportInput, erro
   const points: ExportPointItem[] = [];
   input.records.forEach((record, recordIndex) => {
     const recordKey = getCabinetRecordKey(record);
+    if (!input.pointVerifiedByComponent[recordKey]) return;
     const annotations = input.annotationsByComponent[recordKey] || emptyAnnotations();
     const ocrRows = input.ocrRowsByComponent[recordKey] || [];
     const singlePoints = input.singlePointsByComponent[recordKey] || [];

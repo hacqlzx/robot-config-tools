@@ -100,7 +100,15 @@ export function buildInitialExpandedKeys(records: CabinetImagePackageRecord[]): 
 }
 
 export function getCabinetRecordKey(record: CabinetImagePackageRecord): string {
-  return record.recordKey || `${record.robotCode || "default"}::${record.componentCode}`;
+  return record.recordKey || [
+    record.robotCode || "default",
+    record.stationCode || record.stationName || "default",
+    record.areaCode || record.areaName || "default",
+    record.bayCode || record.bayName || "default",
+    record.mainDeviceCode || "default",
+    record.componentCode || "default",
+    record.calibrationId || record.imageName || "default",
+  ].join("::");
 }
 
 function buildStationKey(record: CabinetImagePackageRecord): string {

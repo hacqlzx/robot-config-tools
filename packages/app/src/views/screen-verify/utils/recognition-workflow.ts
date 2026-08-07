@@ -8,6 +8,7 @@ import {
 } from "../services/ocr-service";
 import type { CabinetOcrDetectedLabel } from "../services/ocr-service";
 import { throwIfRecognitionCancelled } from "../services/recognition-request";
+import { buildCabinetGeneratedPointName } from "@/shared/cabinet-detection";
 import { validateAnnotationGroups } from "./annotation-group-utils";
 import { cloneAnnotations, findSelectedAnnotation } from "./annotation-utils";
 import { FACADE_TARGET_TYPE, findTargetTypeOption, MIN_ANNOTATION_RECT_SIZE } from "./constants";
@@ -42,7 +43,18 @@ export interface ComponentRecognitionResult {
   singlePoints: CabinetSinglePoint[];
   labelCount: number;
   deviceCount: number;
+  emptyNameCount: number;
+  unboundLabelCount: number;
+  unboundDeviceCount: number;
+  inferredLabelCount: number;
   warning?: string;
+}
+
+interface PointRowsWithDiagnostics {
+  rows: CabinetPointRow[];
+  emptyNameCount: number;
+  unboundLabelCount: number;
+  unboundDeviceCount: number;
 }
 function isPendingManualRect(rect: ImageRect): boolean {
   return (!rect.source || rect.source === "manual")
@@ -134,6 +146,13 @@ export async function recognizeComponentImage(options: RecognizeComponentImageOp
   const recognizedLabelRects = selectRecognitionLabelRectsForDeviceRows(mappedLabelRects, aiDeviceRects, validation.groups);
   // 设备漏识别时，用已识别标签行的列信息自动补充设备框。
   const generatedDeviceRects = completeDeviceBoxesByOcrRows(aiDeviceRects, recognizedLabelRects, validation.groups, generationKey);
+  // 标签漏识别时，反向使用设备列补充空标签框，保证每个设备都有对应点位。
+  const completedLabelRects = completeLabelBoxesByDeviceRows(
+    recognizedLabelRects,
+    generatedDeviceRects,
+    validation.groups,
+    generationKey,
+  );
   console.info("[screen-verify] label OCR response params", {
     mode,
     imageSize: getDebugImageSize(sources),
@@ -149,7 +168,7 @@ export async function recognizeComponentImage(options: RecognizeComponentImageOp
   const recognizedGroups = validation.groups
     .map((group) => ({
       ...group,
-      labelRects: recognizedLabelRects.filter((rect) => rect.groupId === group.id),
+      labelRects: completedLabelRects.filter((rect) => rect.groupId === group.id),
       deviceRects: [] as ImageRect[],
     }))
     .filter((group) => group.labelRects.length > 0);
@@ -164,6 +183,8 @@ export async function recognizeComponentImage(options: RecognizeComponentImageOp
     matchedRects: aiDeviceRects,
     completedRects: generatedDeviceRects,
     inferredRects: generatedDeviceRects.filter((rect) => rect.source === "inferred").map(toDebugRect),
+    completedLabels: completedLabelRects.map(toDebugRect),
+    inferredLabels: completedLabelRects.filter((rect) => rect.source === "inferred").map(toDebugRect),
     groups: recognizedGroups.map((group) => ({
       id: group.id,
       standardPartRect: group.standardPartRect,
@@ -180,15 +201,16 @@ export async function recognizeComponentImage(options: RecognizeComponentImageOp
     )),
     deviceLabelRects: [
       ...working.deviceLabelRects.filter((rect) => !recognizedSourceRectIds.has(rect.id)),
-      ...recognizedLabelRects,
+      ...completedLabelRects,
     ],
     deviceBoxRects: [
       ...working.deviceBoxRects,
       ...generatedDeviceRects,
     ],
   };
-  const recognizedRows = buildRowsFromRecognizedLabels(recognizedLabelRects, generatedDeviceRects);
-  const nextRows = mode === "whole" ? recognizedRows : [...existingRows, ...recognizedRows];
+  const recognizedPointRows = buildRowsFromRecognizedLabels(completedLabelRects, generatedDeviceRects);
+  const recognizedRows = recognizedPointRows.rows;
+  const nextRows = applyCabinetGeneratedPointNames(mode === "whole" ? recognizedRows : [...existingRows, ...recognizedRows]);
   const nextSinglePoints = mode === "whole" ? [] : existingSinglePoints;
 
   return {
@@ -197,6 +219,10 @@ export async function recognizeComponentImage(options: RecognizeComponentImageOp
     singlePoints: nextSinglePoints,
     labelCount: recognizedLabelRects.length,
     deviceCount: generatedDeviceRects.length,
+    emptyNameCount: recognizedPointRows.emptyNameCount,
+    unboundLabelCount: recognizedPointRows.unboundLabelCount,
+    unboundDeviceCount: recognizedPointRows.unboundDeviceCount,
+    inferredLabelCount: completedLabelRects.filter((rect) => rect.source === "inferred").length,
     warning: generatedDeviceRects.length
       ? undefined
       : `已识别 ${recognizedLabelRects.length} 个标签，未识别到部件框`,
@@ -251,6 +277,12 @@ async function recognizeFacadeComponentImage(options: {
     coordinateMode: source.coordinateMode,
   })), { signal });
   const recognizedLabelRects = mapOcrLabelsToImageRects(ocrResult.labels, sources);
+  const completedLabelRects = completeLabelBoxesByDeviceRows(
+    recognizedLabelRects,
+    facadeDeviceRects,
+    [{ id: groupId }],
+    generationKey,
+  );
   console.info("[screen-verify] facade label OCR response params", {
     mode,
     imageSize: getDebugImageSize(sources),
@@ -259,19 +291,20 @@ async function recognizeFacadeComponentImage(options: {
     regions: ocrResult.regions,
     labels: ocrResult.labels,
     mappedRects: recognizedLabelRects,
+    completedLabelRects,
     facadeDeviceRects,
   });
-  if (!recognizedLabelRects.length) throw new Error("未识别到标签");
+  if (!completedLabelRects.length) throw new Error("未识别到标签");
 
   const recognizedSourceRectIds = new Set(
-    recognizedLabelRects.map((rect) => rect.generatedFromRectId).filter(Boolean) as string[],
+    completedLabelRects.map((rect) => rect.generatedFromRectId).filter(Boolean) as string[],
   );
   const facadeRectIds = new Set(facadeDeviceRects.map((rect) => rect.id));
   const nextAnnotations: ComponentAnnotations = {
     ...working,
     deviceLabelRects: [
       ...working.deviceLabelRects.filter((rect) => !recognizedSourceRectIds.has(rect.id)),
-      ...recognizedLabelRects,
+      ...completedLabelRects,
     ],
     appearanceRects: working.appearanceRects.map((rect) => (
       facadeRectIds.has(rect.id)
@@ -279,8 +312,9 @@ async function recognizeFacadeComponentImage(options: {
         : rect
     )),
   };
-  const recognizedRows = buildRowsFromRecognizedLabels(recognizedLabelRects, facadeDeviceRects, "appearance");
-  const nextRows = mode === "whole" ? recognizedRows : [...existingRows, ...recognizedRows];
+  const recognizedPointRows = buildRowsFromRecognizedLabels(completedLabelRects, facadeDeviceRects, "appearance");
+  const recognizedRows = recognizedPointRows.rows;
+  const nextRows = applyCabinetGeneratedPointNames(mode === "whole" ? recognizedRows : [...existingRows, ...recognizedRows]);
   const nextSinglePoints = mode === "whole" ? [] : existingSinglePoints;
 
   return {
@@ -289,6 +323,10 @@ async function recognizeFacadeComponentImage(options: {
     singlePoints: nextSinglePoints,
     labelCount: recognizedLabelRects.length,
     deviceCount: facadeDeviceRects.length,
+    emptyNameCount: recognizedPointRows.emptyNameCount,
+    unboundLabelCount: recognizedPointRows.unboundLabelCount,
+    unboundDeviceCount: recognizedPointRows.unboundDeviceCount,
+    inferredLabelCount: completedLabelRects.filter((rect) => rect.source === "inferred").length,
   };
 }
 
@@ -457,6 +495,217 @@ function completeDeviceBoxesByOcrRows(
 }
 
 /**
+ * 根据设备列反向补齐标签框。
+ *
+ * 当标签少于设备时，优先按“相关设备行中的最大列数”作为目标数量。
+ * 一排标签同时对应上下两排设备时，只补一套共享标签列，后续绑定时复用到上下两排。
+ */
+function completeLabelBoxesByDeviceRows(
+  labelRects: ImageRect[],
+  deviceRects: ImageRect[],
+  groups: Array<{ id: string; standardPartRect?: ImageRect }>,
+  generationKey: number,
+): ImageRect[] {
+  let result = [...labelRects];
+  const groupEntries = [
+    ...groups,
+    { id: "ungrouped", standardPartRect: undefined },
+  ];
+  let inferredRowIndex = 0;
+
+  for (const group of groupEntries) {
+    const groupLabels = result.filter((rect) => (
+      group.id === "ungrouped" ? !rect.groupId : rect.groupId === group.id
+    ));
+    const groupDevices = deviceRects.filter((rect) => (
+      group.id === "ungrouped" ? !rect.groupId : rect.groupId === group.id
+    ));
+    if (!groupLabels.length || !groupDevices.length) continue;
+
+    const deviceRows = splitRectRows(groupDevices);
+    const candidateLabelRows = selectRelevantLabelRowsForDeviceRows(splitRectRows(groupLabels), deviceRows);
+    const selectedLabelIds = new Set(candidateLabelRows.flat().map((rect) => rect.id));
+    const completedLabelRows: ImageRect[][] = [];
+
+    for (const labelRow of candidateLabelRows) {
+      const sortedLabels = sortRectsByCenterX(labelRow);
+      const relatedRows = uniqueRectRows(findRelatedDeviceRowsForLabelRow(sortedLabels, deviceRows));
+      // 一个真实标签可能同时描述同一部件框内的多个设备。
+      // 这种情况下标签应被多个设备共享，不能因为数量少于设备框而生成虚线补标签。
+      if (shouldShareLabelAcrossDeviceRows(sortedLabels, relatedRows)) {
+        console.info("[screen-verify] shared label matched multiple devices", {
+          labelRects: sortedLabels.map(toDebugRect),
+          deviceRows: relatedRows.map((row) => row.map(toDebugRect)),
+        });
+        completedLabelRows.push(sortedLabels);
+        continue;
+      }
+      const targetCount = relatedRows.reduce((maxCount, row) => Math.max(maxCount, row.length), 0);
+      if (!relatedRows.length || targetCount <= sortedLabels.length) {
+        completedLabelRows.push(sortedLabels);
+        continue;
+      }
+
+      completedLabelRows.push(fillLabelRowToDeviceColumns(
+        sortedLabels,
+        relatedRows,
+        group.standardPartRect,
+        generationKey,
+        inferredRowIndex,
+      ));
+      inferredRowIndex += 1;
+    }
+
+    if (!completedLabelRows.length) continue;
+    result = [
+      ...result.filter((rect) => !selectedLabelIds.has(rect.id)),
+      ...completedLabelRows.flat(),
+    ];
+  }
+
+  return sortRectsByPosition(result);
+}
+
+/**
+ * 将已有标签列和设备列做保序匹配，未匹配到的设备列生成空标签框。
+ */
+function fillLabelRowToDeviceColumns(
+  labelRow: ImageRect[],
+  relatedDeviceRows: ImageRect[][],
+  container: ImageRect | undefined,
+  generationKey: number,
+  rowIndex: number,
+): ImageRect[] {
+  const sortedLabels = sortRectsByCenterX(labelRow);
+  const targetCenters = getDeviceColumnCenters(relatedDeviceRows);
+  if (!targetCenters.length || targetCenters.length <= sortedLabels.length) return sortedLabels;
+
+  const matchedColumnIndexes = matchLabelColumnsToTargetCenters(sortedLabels, targetCenters);
+  const matchedColumns = new Set(matchedColumnIndexes);
+  const template = sortedLabels.length
+    ? sortedLabels[Math.floor(sortedLabels.length / 2)]
+    : sortRectsByCenterX(relatedDeviceRows.flat())[Math.floor(relatedDeviceRows.flat().length / 2)];
+  if (!template) return sortedLabels;
+
+  const inferredLabels = targetCenters
+    .map((centerX, columnIndex) => {
+      if (matchedColumns.has(columnIndex)) return null;
+      return createInferredLabelRectAtCenter(
+        template,
+        centerX,
+        container,
+        generationKey,
+        rowIndex,
+        columnIndex,
+      );
+    })
+    .filter((rect): rect is ImageRect => Boolean(rect));
+
+  return sortRectsByCenterX([...sortedLabels, ...inferredLabels]);
+}
+
+function getDeviceColumnCenters(deviceRows: ImageRect[][]): number[] {
+  const sortedRows = deviceRows
+    .map(sortRectsByCenterX)
+    .filter((row) => row.length > 0);
+  if (!sortedRows.length) return [];
+
+  const targetCount = Math.max(...sortedRows.map((row) => row.length));
+  const referenceRows = sortedRows.filter((row) => row.length === targetCount);
+  return Array.from({ length: targetCount }, (_, columnIndex) => {
+    const centers = referenceRows
+      .map((row) => row[columnIndex])
+      .filter(Boolean)
+      .map(getRectCenterX);
+    return median(centers);
+  });
+}
+
+/**
+ * 动态规划寻找最小列偏移的保序匹配，能识别首部、中间和尾部漏标签。
+ */
+function matchLabelColumnsToTargetCenters(labelRow: ImageRect[], targetCenters: number[]): number[] {
+  const labels = sortRectsByCenterX(labelRow);
+  const labelCount = labels.length;
+  const targetCount = targetCenters.length;
+  if (!labelCount || !targetCount) return [];
+  if (labelCount >= targetCount) return Array.from({ length: targetCount }, (_, index) => index);
+
+  const costs = Array.from({ length: labelCount + 1 }, () => (
+    Array<number>(targetCount + 1).fill(Number.POSITIVE_INFINITY)
+  ));
+  const choices = Array.from({ length: labelCount + 1 }, () => (
+    Array<"skip" | "match" | ""> (targetCount + 1).fill("")
+  ));
+  for (let columnIndex = 0; columnIndex <= targetCount; columnIndex += 1) {
+    costs[0][columnIndex] = 0;
+  }
+
+  for (let labelIndex = 1; labelIndex <= labelCount; labelIndex += 1) {
+    for (let columnIndex = 1; columnIndex <= targetCount; columnIndex += 1) {
+      const skipCost = costs[labelIndex][columnIndex - 1];
+      const matchCost = costs[labelIndex - 1][columnIndex - 1]
+        + Math.abs(getRectCenterX(labels[labelIndex - 1]) - targetCenters[columnIndex - 1]);
+      if (skipCost <= matchCost) {
+        costs[labelIndex][columnIndex] = skipCost;
+        choices[labelIndex][columnIndex] = "skip";
+      } else {
+        costs[labelIndex][columnIndex] = matchCost;
+        choices[labelIndex][columnIndex] = "match";
+      }
+    }
+  }
+
+  const matched: number[] = [];
+  let labelIndex = labelCount;
+  let columnIndex = targetCount;
+  while (labelIndex > 0 && columnIndex > 0) {
+    if (choices[labelIndex][columnIndex] === "match") {
+      matched.unshift(columnIndex - 1);
+      labelIndex -= 1;
+      columnIndex -= 1;
+    } else {
+      columnIndex -= 1;
+    }
+  }
+  return matched;
+}
+
+function createInferredLabelRectAtCenter(
+  template: ImageRect,
+  centerX: number,
+  container: ImageRect | undefined,
+  generationKey: number,
+  rowIndex: number,
+  columnIndex: number,
+): ImageRect {
+  const width = Math.max(MIN_ANNOTATION_RECT_SIZE, template.w);
+  const height = Math.max(MIN_ANNOTATION_RECT_SIZE, template.h);
+  const boundedCenterX = container
+    ? clampNumber(
+      centerX,
+      container.x + width / 2,
+      container.x + container.w - width / 2,
+    )
+    : centerX;
+  return {
+    ...template,
+    id: `inferred-label:${generationKey}:${rowIndex}:${columnIndex}:${Math.random().toString(16).slice(2)}`,
+    x: boundedCenterX - width / 2,
+    y: template.y,
+    w: width,
+    h: height,
+    text: "",
+    confidence: undefined,
+    source: "inferred",
+    saved: false,
+    generationStatus: "generated",
+    groupId: template.groupId,
+    generatedFromRectId: undefined,
+  };
+}
+
+/**
  * 判断标签行和设备行是否存在数量或关系不一致。
  * 支持“一排标签对应上下两排设备”的情况，因此会把相关设备行合并计数。
  */
@@ -469,6 +718,10 @@ function hasDeviceLabelCountMismatch(labelRows: ImageRect[][], deviceRows: Image
     const relatedRows = findRelatedDeviceRowsForLabelRow(labelRow, deviceRows);
     if (!relatedRows.length) return true;
     const uniqueRelatedRows = uniqueRectRows(relatedRows);
+    if (shouldShareLabelAcrossDeviceRows(labelRow, uniqueRelatedRows)) {
+      uniqueRelatedRows.forEach((row) => usedDeviceRowKeys.add(getRectRowKey(row)));
+      continue;
+    }
     const relatedDeviceCount = uniqueRelatedRows.reduce((sum, row) => sum + row.length, 0);
     if (relatedDeviceCount !== labelRow.length * uniqueRelatedRows.length) return true;
     uniqueRelatedRows.forEach((row) => usedDeviceRowKeys.add(getRectRowKey(row)));
@@ -886,17 +1139,45 @@ function buildRowsFromRecognizedLabels(
   labelRects: ImageRect[],
   deviceRects: ImageRect[],
   deviceTool: AnnotationTool = "deviceBox",
-): CabinetPointRow[] {
+): PointRowsWithDiagnostics {
   if (deviceTool === "deviceBox") {
-    return buildSortedPointRowsForGroup(labelRects, deviceRects).rows;
+    const result = buildSortedPointRowsForGroup(labelRects, deviceRects);
+    return {
+      ...result,
+      emptyNameCount: result.rows.filter((row) => !row.name.trim()).length,
+    };
   }
-  return labelRects.flatMap((labelRect) => {
-    const relatedDeviceRects = findRelatedDeviceRectsForLabel(labelRect, deviceRects);
+
+  const rows: CabinetPointRow[] = [];
+  const usedDeviceIds = new Set<string>();
+  let unboundLabelCount = 0;
+  let unboundDeviceCount = 0;
+  for (const labelRect of labelRects) {
+    const relatedDeviceRects = findRelatedDeviceRectsForLabel(labelRect, deviceRects)
+      .filter((deviceRect) => !usedDeviceIds.has(deviceRect.id));
     if (!relatedDeviceRects.length) {
-      return [createPointRowFromLabelAndDevice(labelRect, null, deviceTool)];
+      unboundLabelCount += 1;
+      continue;
     }
-    return relatedDeviceRects.map((deviceRect) => createPointRowFromLabelAndDevice(labelRect, deviceRect, deviceTool));
-  });
+    relatedDeviceRects.forEach((deviceRect) => {
+      usedDeviceIds.add(deviceRect.id);
+      rows.push(createPointRowFromLabelAndDevice(labelRect, deviceRect, deviceTool));
+    });
+  }
+
+  for (const deviceRect of deviceRects) {
+    if (usedDeviceIds.has(deviceRect.id)) continue;
+    usedDeviceIds.add(deviceRect.id);
+    unboundDeviceCount += 1;
+    rows.push(createPointRowFromLabelAndDevice(createEmptyLabelRectForDevice(deviceRect), deviceRect, deviceTool));
+  }
+
+  return {
+    rows,
+    emptyNameCount: rows.filter((row) => !row.name.trim()).length,
+    unboundLabelCount,
+    unboundDeviceCount,
+  };
 }
 
 export interface SortedPointRowsResult {
@@ -911,8 +1192,21 @@ export interface SortedPointRowsResult {
  * 一键排序入口：先按标准部件框分组，再在组内按行列建立标签和设备的绑定关系。
  */
 export function buildSortedPointRowsFromAnnotations(annotations: ComponentAnnotations): SortedPointRowsResult {
-  const labelAssignments = assignRectsToStandardPartGroups(annotations.deviceLabelRects, annotations.standardPartRects);
+  const reusableLabelRects = annotations.deviceLabelRects.filter((rect) => (
+    rect.source !== "inferred" || hasVisibleLabelTextRect(rect)
+  ));
   const deviceAssignments = assignRectsToStandardPartGroups(annotations.deviceBoxRects, annotations.standardPartRects);
+  const initialLabelAssignments = assignRectsToStandardPartGroups(reusableLabelRects, annotations.standardPartRects);
+  const completedLabelRects = completeLabelBoxesByDeviceRows(
+    initialLabelAssignments.rects,
+    deviceAssignments.rects,
+    annotations.standardPartRects.map((rect) => ({
+      id: rect.id,
+      standardPartRect: rect,
+    })),
+    Date.now(),
+  );
+  const labelAssignments = assignRectsToStandardPartGroups(completedLabelRects, annotations.standardPartRects);
   const hasUngroupedRects = labelAssignments.unassigned.length > 0 || deviceAssignments.unassigned.length > 0;
   const groupIds = [
     ...annotations.standardPartRects.map((rect) => rect.id),
@@ -962,11 +1256,12 @@ export function buildSortedPointRowsFromAnnotations(annotations: ComponentAnnota
     deviceLabelRects: labelAssignments.rects,
     deviceBoxRects: deviceAssignments.rects,
   };
-  const indexedRows = rows.map((row, index) => ({ ...row, index: index + 1 }));
+  const indexedRows = applyCabinetGeneratedPointNames(rows);
   console.info("[screen-verify] one-click sort grouping detail", {
     inputCounts: {
       standardPart: annotations.standardPartRects.length,
       labels: annotations.deviceLabelRects.length,
+      completedLabels: labelAssignments.rects.length,
       devices: annotations.deviceBoxRects.length,
       unassignedLabels: labelAssignments.unassigned.length,
       unassignedDevices: deviceAssignments.unassigned.length,
@@ -1005,11 +1300,19 @@ function buildSortedPointRowsForGroup(labelRects: ImageRect[], deviceRects: Imag
   const rawLabelRows = selectRelevantLabelRowsForDeviceRows(splitRectRows(labelRects), deviceRows);
   const hasVisibleLabelText = rawLabelRows.some((row) => row.some((rect) => hasVisibleLabelTextRect(rect)));
   const labelRows = hasVisibleLabelText
-    ? rawLabelRows.map((row) => row.filter(hasVisibleLabelTextRect)).filter((row) => row.length)
+    ? rawLabelRows.map((row) => row.filter(isUsableLabelRectForAlignment)).filter((row) => row.length)
     : rawLabelRows;
   const rows: CabinetPointRow[] = [];
   let unboundLabelCount = 0;
   let unboundDeviceCount = 0;
+
+  if (!deviceRows.length) {
+    return {
+      rows,
+      unboundLabelCount: labelRows.reduce((count, row) => count + row.length, 0),
+      unboundDeviceCount: 0,
+    };
+  }
 
   if (!labelRows.length) {
     return {
@@ -1030,8 +1333,9 @@ function buildSortedPointRowsForGroup(labelRects: ImageRect[], deviceRects: Imag
     }
 
     for (const deviceRow of relatedDeviceRows) {
-      const sortedDevices = sortRectsByCenterX(deviceRow);
-      const alignedRows = createAlignedRowsForLabelAndDeviceRow(sortedLabels, sortedDevices, !hasVisibleLabelText);
+      const sortedDevices = sortRectsByCenterX(deviceRow).filter((deviceRect) => !usedDeviceIds.has(deviceRect.id));
+      if (!sortedDevices.length) continue;
+      const alignedRows = createAlignedRowsForLabelAndDeviceRow(sortedLabels, sortedDevices);
       rows.push(...alignedRows.rows);
       alignedRows.usedDeviceIds.forEach((id) => usedDeviceIds.add(id));
       unboundLabelCount += alignedRows.unboundLabelCount;
@@ -1042,12 +1346,14 @@ function buildSortedPointRowsForGroup(labelRects: ImageRect[], deviceRects: Imag
   for (const deviceRect of deviceRows.flat()) {
     if (usedDeviceIds.has(deviceRect.id)) continue;
     unboundDeviceCount += 1;
-    if (!hasVisibleLabelText) {
-      rows.push(createPointRowFromLabelAndDevice(createEmptyLabelRectForDevice(deviceRect), deviceRect, "deviceBox"));
-    }
+    rows.push(createPointRowFromLabelAndDevice(createEmptyLabelRectForDevice(deviceRect), deviceRect, "deviceBox"));
   }
 
   return { rows, unboundLabelCount, unboundDeviceCount };
+}
+
+function isUsableLabelRectForAlignment(rect: ImageRect): boolean {
+  return hasVisibleLabelTextRect(rect) || rect.source === "inferred";
 }
 
 /**
@@ -1109,7 +1415,7 @@ function isShortStatusLabelText(text: string): boolean {
  * 单个标签行和单个设备行的绑定。
  * 数量一致时直接按列绑定；数量不一致时先判断单标签多设备，再按最近列匹配。
  */
-function createAlignedRowsForLabelAndDeviceRow(labelRow: ImageRect[], deviceRow: ImageRect[], allowDevicePlaceholders = false): {
+function createAlignedRowsForLabelAndDeviceRow(labelRow: ImageRect[], deviceRow: ImageRect[]): {
   rows: CabinetPointRow[];
   usedDeviceIds: Set<string>;
   unboundLabelCount: number;
@@ -1145,9 +1451,7 @@ function createAlignedRowsForLabelAndDeviceRow(labelRow: ImageRect[], deviceRow:
     const labelRect = findBestLabelForDeviceRect(deviceRect, sortedLabels, usedLabelIds);
     if (!labelRect) {
       unboundDeviceCount += 1;
-      if (allowDevicePlaceholders) {
-        rows.push(createPointRowFromLabelAndDevice(createEmptyLabelRectForDevice(deviceRect), deviceRect, "deviceBox"));
-      }
+      rows.push(createPointRowFromLabelAndDevice(createEmptyLabelRectForDevice(deviceRect), deviceRect, "deviceBox"));
       usedDeviceIds.add(deviceRect.id);
       continue;
     }
@@ -1198,6 +1502,16 @@ function shouldUseSingleLabelForMultipleDevices(labelRow: ImageRect[], deviceRow
 
   const maxVerticalDistance = Math.max(labelRect.h * 8, medianDeviceHeight * 4, MIN_ANNOTATION_RECT_SIZE * 8);
   return Math.abs(deviceCenterY - labelCenterY) <= maxVerticalDistance;
+}
+
+/**
+ * 判断标签行是否应当在多排设备之间共享。
+ *
+ * 目前主要覆盖“一张标签对应同一部件框内多个设备”的场景；
+ * 也兼容一张标签位于上下两排设备之间、分别关联多排设备的场景。
+ */
+function shouldShareLabelAcrossDeviceRows(labelRow: ImageRect[], deviceRows: ImageRect[][]): boolean {
+  return deviceRows.some((deviceRow) => shouldUseSingleLabelForMultipleDevices(labelRow, deviceRow));
 }
 
 function hasVisibleLabelTextRect(rect: ImageRect): boolean {
@@ -1380,6 +1694,17 @@ function createPointRowFromLabelAndDevice(
     recognitionLabelDesc: deviceRect?.recognitionLabelDesc,
     deviceName: deviceRect?.deviceName,
   };
+}
+
+function applyCabinetGeneratedPointNames(rows: CabinetPointRow[]): CabinetPointRow[] {
+  return rows.map((row, index) => {
+    const recNum = index + 1;
+    return {
+      ...row,
+      index: recNum,
+      name: buildCabinetGeneratedPointName(row.name, row.recognitionLabel, row.recognitionLabelDesc || row.type, recNum),
+    };
+  });
 }
 
 interface TableRowSortItem {

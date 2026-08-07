@@ -498,7 +498,7 @@ function isAuxiliaryStructuredOcrText(text: string): boolean {
   if (/^([①②③④⑤⑥⑦⑧⑨⑩\d]+[开停合断亮灭])+$/u.test(normalizedText)) return true;
   if (/^(A相|B相|C相|阀门|开启|停止|关闭|解锁|闭锁)$/u.test(normalizedText)) return true;
   if (/^(阀门开启|阀门停止|阀门关闭|关闭阀门|停止停止|关闭关闭)$/u.test(normalizedText)) return true;
-  if (/^[A-Z]{1,3}\d{0,3}$/u.test(normalizedText)) return true;
+  // Q139、LP1 等字母数字组合通常是标签牌编号，需与同牌的名称文字合并保留。
   return false;
 }
 

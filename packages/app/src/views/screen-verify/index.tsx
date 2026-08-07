@@ -5,6 +5,7 @@ import { DownOutlined } from "@ant-design/icons";
 import { App as AntdApp, Button, Checkbox, Dropdown, Empty, Input, Modal, Select, Space, Spin, Table, Tree } from "antd";
 import type { MenuProps } from "antd";
 import { useResizable } from "@/components/useResizable";
+import { buildCabinetGeneratedPointName } from "@/shared/cabinet-detection";
 import { useSelectedProject } from "@/stores/appContextStore";
 import { BatchRecognitionModal } from "./components/BatchRecognitionModal";
 import type { BatchRecognitionMode, BatchRecognitionProgress } from "./components/BatchRecognitionModal";
@@ -173,6 +174,63 @@ function toSortDebugPointRow(row: CabinetPointRow, annotations?: ComponentAnnota
   };
 }
 
+function getCabinetPointRowDisplayType(row: CabinetPointRow): string {
+  return String(row.type || row.recognitionLabelDesc || row.recognitionLabel || "").trim();
+}
+
+function validateCabinetPointVerification(rows: CabinetPointRow[]): { valid: boolean; message?: string } {
+  if (!rows.length) {
+    return { valid: false, message: "当前图片暂无点位，不能勾选核查完成" };
+  }
+
+  const emptyNameCount = rows.filter((row) => !String(row.name || "").trim()).length;
+  const emptyTypeCount = rows.filter((row) => !getCabinetPointRowDisplayType(row)).length;
+  const issues = [
+    emptyNameCount ? `${emptyNameCount} 条名称为空` : "",
+    emptyTypeCount ? `${emptyTypeCount} 条类型为空` : "",
+  ].filter(Boolean);
+
+  return issues.length
+    ? { valid: false, message: `点位信息不完整：${issues.join("、")}` }
+    : { valid: true };
+}
+
+function buildCabinetPointExportSummary(
+  records: CabinetImagePackageRecord[],
+  ocrRowsByComponent: Record<string, CabinetPointRow[]>,
+  singlePointsByComponent: Record<string, CabinetSinglePoint[]>,
+  pointVerifiedByComponent: Record<string, boolean>,
+): {
+  totalComponents: number;
+  verifiedComponents: number;
+  totalPoints: number;
+  verifiedPoints: number;
+} {
+  let totalComponents = 0;
+  let verifiedComponents = 0;
+  let totalPoints = 0;
+  let verifiedPoints = 0;
+
+  for (const record of records) {
+    const recordKey = getCabinetRecordKey(record);
+    const pointCount = (ocrRowsByComponent[recordKey]?.length || 0) + (singlePointsByComponent[recordKey]?.length || 0);
+    if (!pointCount) continue;
+    totalComponents += 1;
+    totalPoints += pointCount;
+    if (pointVerifiedByComponent[recordKey]) {
+      verifiedComponents += 1;
+      verifiedPoints += pointCount;
+    }
+  }
+
+  return {
+    totalComponents,
+    verifiedComponents,
+    totalPoints,
+    verifiedPoints,
+  };
+}
+
 export default function ScreenVerify() {
   const { message, modal } = AntdApp.useApp();
   const selectedProject = useSelectedProject();
@@ -196,6 +254,7 @@ export default function ScreenVerify() {
   const [selectedAnnotation, setSelectedAnnotation] = useState<AnnotationSelection | null>(null);
   const [ocrRowsByComponent, setOcrRowsByComponent] = useState<Record<string, CabinetPointRow[]>>({});
   const [singlePointsByComponent, setSinglePointsByComponent] = useState<Record<string, CabinetSinglePoint[]>>({});
+  const [pointVerifiedByComponent, setPointVerifiedByComponentState] = useState<Record<string, boolean>>({});
   const [singlePointModalOpen, setSinglePointModalOpen] = useState(false);
   const [singlePointDraft, setSinglePointDraft] = useState<SinglePointDraft>(EMPTY_SINGLE_POINT_DRAFT);
   const [singlePointTargetRect, setSinglePointTargetRect] = useState<ImageRect | null>(null);
@@ -222,6 +281,7 @@ export default function ScreenVerify() {
   const annotationsByComponentRef = useRef<Record<string, ComponentAnnotations>>({});
   const ocrRowsByComponentRef = useRef<Record<string, CabinetPointRow[]>>({});
   const singlePointsByComponentRef = useRef<Record<string, CabinetSinglePoint[]>>({});
+  const pointVerifiedByComponentRef = useRef<Record<string, boolean>>({});
   const annotationHistoryRef = useRef<AnnotationHistoryEntry[]>([]);
   const persistedAnnotationKeysRef = useRef(new Set<string>());
   const treeFilterActiveRef = useRef(false);
@@ -273,6 +333,11 @@ export default function ScreenVerify() {
   const selectedSinglePoints = useMemo(
     () => singlePointsByComponent[selectedComponentCode] || [],
     [selectedComponentCode, singlePointsByComponent],
+  );
+
+  const selectedPointVerified = useMemo(
+    () => Boolean(pointVerifiedByComponent[selectedComponentCode]),
+    [pointVerifiedByComponent, selectedComponentCode],
   );
 
   const selectedTableRows = useMemo(() => {
@@ -346,6 +411,10 @@ export default function ScreenVerify() {
   useEffect(() => {
     singlePointsByComponentRef.current = singlePointsByComponent;
   }, [singlePointsByComponent]);
+
+  useEffect(() => {
+    pointVerifiedByComponentRef.current = pointVerifiedByComponent;
+  }, [pointVerifiedByComponent]);
 
   useEffect(() => {
     setSelectedAnnotation(null);
@@ -471,7 +540,19 @@ export default function ScreenVerify() {
     });
   }, []);
 
-  const updateComponentAnnotations = useCallback((componentCode: string, updater: (current: ComponentAnnotations) => ComponentAnnotations) => {
+  const resetComponentPointVerification = useCallback((componentCode: string) => {
+    if (!componentCode || !pointVerifiedByComponentRef.current[componentCode]) return;
+    const next = { ...pointVerifiedByComponentRef.current };
+    delete next[componentCode];
+    pointVerifiedByComponentRef.current = next;
+    setPointVerifiedByComponentState(next);
+  }, []);
+
+  const updateComponentAnnotations = useCallback((
+    componentCode: string,
+    updater: (current: ComponentAnnotations) => ComponentAnnotations,
+    options: { preservePointVerification?: boolean } = {},
+  ) => {
     if (!componentCode) return;
     const currentState = annotationsByComponentRef.current;
     const current = currentState[componentCode] || createEmptyAnnotations();
@@ -481,25 +562,48 @@ export default function ScreenVerify() {
     };
     annotationsByComponentRef.current = next;
     setAnnotationsByComponent(next);
-  }, []);
+    if (!options.preservePointVerification) resetComponentPointVerification(componentCode);
+  }, [resetComponentPointVerification]);
 
-  const setComponentOcrRows = useCallback((componentCode: string, rows: CabinetPointRow[]) => {
+  const setComponentOcrRows = useCallback((
+    componentCode: string,
+    rows: CabinetPointRow[],
+    options: { preservePointVerification?: boolean } = {},
+  ) => {
     const next = {
       ...ocrRowsByComponentRef.current,
       [componentCode]: rows,
     };
     ocrRowsByComponentRef.current = next;
     setOcrRowsByComponent(next);
-  }, []);
+    if (!options.preservePointVerification) resetComponentPointVerification(componentCode);
+  }, [resetComponentPointVerification]);
 
-  const setComponentSinglePoints = useCallback((componentCode: string, points: CabinetSinglePoint[]) => {
+  const setComponentSinglePoints = useCallback((
+    componentCode: string,
+    points: CabinetSinglePoint[],
+    options: { preservePointVerification?: boolean } = {},
+  ) => {
     const next = {
       ...singlePointsByComponentRef.current,
       [componentCode]: points,
     };
     singlePointsByComponentRef.current = next;
     setSinglePointsByComponent(next);
-  }, []);
+    if (!options.preservePointVerification) resetComponentPointVerification(componentCode);
+  }, [resetComponentPointVerification]);
+
+  const setComponentPointVerified = useCallback((componentCode: string, verified: boolean) => {
+    if (!componentCode) return;
+    if (!verified) {
+      resetComponentPointVerification(componentCode);
+      return;
+    }
+    const next = { ...pointVerifiedByComponentRef.current };
+    next[componentCode] = true;
+    pointVerifiedByComponentRef.current = next;
+    setPointVerifiedByComponentState(next);
+  }, [resetComponentPointVerification]);
 
   useEffect(() => {
     setSinglePointCreatedRect((created) => {
@@ -558,7 +662,15 @@ export default function ScreenVerify() {
       if (result.warning) {
         message.warning(result.warning);
       } else {
-        message.success(`已识别 ${result.labelCount} 个标签，生成 ${result.deviceCount} 个部件框和 ${result.rows.length} 条点位`);
+        const issueDetails = [
+          result.inferredLabelCount ? `自动补充 ${result.inferredLabelCount} 个标签框` : "",
+          result.emptyNameCount ? `${result.emptyNameCount} 个名称为空` : "",
+          result.unboundLabelCount ? `${result.unboundLabelCount} 个标签未绑定设备` : "",
+          result.unboundDeviceCount ? `${result.unboundDeviceCount} 个设备未绑定标签` : "",
+        ].filter(Boolean);
+        if (issueDetails.length) {
+          message.warning(`已识别 ${result.labelCount} 个标签，生成 ${result.deviceCount} 个部件框和 ${result.rows.length} 条点位，${issueDetails.join("、")}`);
+        }
       }
     } catch (e: any) {
       if (isRecognitionRequestCancelled(e)) message.info("识别已取消");
@@ -740,23 +852,23 @@ export default function ScreenVerify() {
     };
     pushAnnotationHistory(selectedComponentCode);
     updateComponentAnnotations(selectedComponentCode, () => nextAnnotations);
-    setOcrRowsByComponent((prev) => ({
-      ...prev,
-      [selectedComponentCode]: result.rows,
-    }));
+    setComponentOcrRows(selectedComponentCode, result.rows);
     setSelectedAnnotation(null);
     setActiveAnnotationTool(null);
 
-    const messageText = result.emptyNameCount || result.unboundLabelCount || result.unboundDeviceCount
-      ? `已重新排序 ${result.rows.length} 条点位，存在 ${result.unboundLabelCount} 个未绑定设备的标签、${result.unboundDeviceCount} 个未绑定标签的设备，请人工补框或补充名称`
+    const issueDetails = [
+      result.emptyNameCount ? `${result.emptyNameCount} 个名称为空` : "",
+      result.unboundLabelCount ? `${result.unboundLabelCount} 个标签未绑定设备` : "",
+      result.unboundDeviceCount ? `${result.unboundDeviceCount} 个设备未绑定标签` : "",
+    ].filter(Boolean);
+    const messageText = issueDetails.length
+      ? `已重新排序 ${result.rows.length} 条点位，${issueDetails.join("、")}，请人工补框或补充名称`
       : `已重新排序 ${result.rows.length} 条点位`;
     const finalMessageText = recognizedLabelCount
       ? `${messageText}，识别补充标签 ${recognizedLabelCount} 个`
       : messageText;
     if (result.emptyNameCount || result.unboundLabelCount || result.unboundDeviceCount) {
       message.warning(finalMessageText);
-    } else {
-      message.success(finalMessageText);
     }
   }, [
     message,
@@ -765,6 +877,7 @@ export default function ScreenVerify() {
     reportRecognitionBusy,
     selectedComponentCode,
     selectedImageDataUrl,
+    setComponentOcrRows,
     updateComponentAnnotations,
   ]);
 
@@ -824,6 +937,8 @@ export default function ScreenVerify() {
 
     pushAnnotationHistory(selectedComponentCode);
     const recognitionType = values.recognitionLabelDesc || values.recognitionType;
+    const recNum = selectedTableRows.length + 1;
+    const pointName = buildCabinetGeneratedPointName(values.pointName, values.recognitionLabel, recognitionType, recNum);
     const boundRect: ImageRect = {
       ...singlePointTargetRect,
       text: recognitionType,
@@ -836,7 +951,7 @@ export default function ScreenVerify() {
     const point: CabinetSinglePoint = {
       id: createSinglePointId(),
       componentCode: selectedComponentCode,
-      pointName: values.pointName,
+      pointName,
       recognitionType: values.recognitionType,
       recognitionLabel: values.recognitionLabel,
       recognitionLabelDesc: recognitionType,
@@ -854,10 +969,7 @@ export default function ScreenVerify() {
         rect.id === boundRect.id ? boundRect : rect
       )),
     }));
-    setSinglePointsByComponent((prev) => ({
-      ...prev,
-      [selectedComponentCode]: [...(prev[selectedComponentCode] || []), point],
-    }));
+    setComponentSinglePoints(selectedComponentCode, [...(singlePointsByComponentRef.current[selectedComponentCode] || []), point]);
     setSinglePointModalOpen(false);
     setSinglePointTargetRect(null);
     setSinglePointDrawing(false);
@@ -866,7 +978,7 @@ export default function ScreenVerify() {
     setSelectedAnnotation({ tool: "deviceBox", id: boundRect.id });
     setSinglePointDraft(EMPTY_SINGLE_POINT_DRAFT);
     message.success("单点已生成");
-  }, [message, pushAnnotationHistory, selectedComponentCode, singlePointTargetRect]);
+  }, [message, pushAnnotationHistory, selectedComponentCode, selectedTableRows.length, setComponentSinglePoints, singlePointTargetRect]);
 
   const saveComponentAnnotations = useCallback(async (
     record: CabinetImagePackageRecord,
@@ -888,6 +1000,7 @@ export default function ScreenVerify() {
     const hasCurrentData = annotationCount > 0 || singlePoints.length > 0 || ocrRows.length > 0;
     const hadPersistedData = persistedAnnotationKeysRef.current.has(componentCode);
     if (!hasCurrentData && !hadPersistedData) {
+      setComponentPointVerified(componentCode, false);
       if (!options.silent) message.warning("当前图片暂无可保存数据");
       return { saved: false, emptyNameSelection: null };
     }
@@ -909,6 +1022,7 @@ export default function ScreenVerify() {
       annotations: savedAnnotations,
       ocrRows,
       singlePoints: savedPoints,
+      pointVerified: Boolean(pointVerifiedByComponentRef.current[componentCode]),
     });
     if (!result.success) throw new Error(result.error || "保存屏柜标注失败");
     console.info("[screen-verify] cabinet image save", {
@@ -921,11 +1035,12 @@ export default function ScreenVerify() {
     });
 
     if (options.trackHistory) pushAnnotationHistory(componentCode);
-    updateComponentAnnotations(componentCode, () => savedAnnotations);
-    setComponentOcrRows(componentCode, ocrRows);
-    setComponentSinglePoints(componentCode, savedPoints);
+    updateComponentAnnotations(componentCode, () => savedAnnotations, { preservePointVerification: true });
+    setComponentOcrRows(componentCode, ocrRows, { preservePointVerification: true });
+    setComponentSinglePoints(componentCode, savedPoints, { preservePointVerification: true });
     if (!hasCurrentData) {
       persistedAnnotationKeysRef.current.delete(componentCode);
+      setComponentPointVerified(componentCode, false);
       if (!options.silent) message.success("已保存");
       return { saved: true, emptyNameSelection: null };
     }
@@ -944,6 +1059,7 @@ export default function ScreenVerify() {
     selectedProject,
     setComponentOcrRows,
     setComponentSinglePoints,
+    setComponentPointVerified,
     updateComponentAnnotations,
   ]);
 
@@ -978,6 +1094,51 @@ export default function ScreenVerify() {
     saveComponentAnnotations,
     selectedComponent,
     selectedComponentCode,
+  ]);
+
+  const handlePointVerificationChange = useCallback(async (event: { target: { checked: boolean } }) => {
+    if (!selectedComponent || !selectedComponentCode) {
+      message.warning("请先选择左侧部件");
+      return;
+    }
+
+    const checked = event.target.checked;
+    const currentAnnotations = annotationsByComponentRef.current[selectedComponentCode] || createEmptyAnnotations();
+    const currentRows = ocrRowsByComponentRef.current[selectedComponentCode] || [];
+    const currentSinglePoints = singlePointsByComponentRef.current[selectedComponentCode] || [];
+    if (checked) {
+      const validation = validateCabinetPointVerification(selectedTableRows);
+      if (!validation.valid) {
+        const emptyNameSelection = findFirstEmptyNameSelection(currentRows, currentSinglePoints, currentAnnotations);
+        if (emptyNameSelection) setSelectedAnnotation(emptyNameSelection);
+        message.warning(validation.message || "点位信息不完整，不能勾选核查完成");
+        return;
+      }
+    }
+
+    const previous = Boolean(pointVerifiedByComponentRef.current[selectedComponentCode]);
+    setComponentPointVerified(selectedComponentCode, checked);
+    try {
+      await saveComponentAnnotations(
+        selectedComponent,
+        selectedComponentCode,
+        currentAnnotations,
+        currentRows,
+        currentSinglePoints,
+        { silent: true },
+      );
+      message.success(checked ? "点位核查已完成" : "已取消点位核查");
+    } catch (error: any) {
+      setComponentPointVerified(selectedComponentCode, previous);
+      message.error(error?.message || "保存点位核查状态失败");
+    }
+  }, [
+    message,
+    saveComponentAnnotations,
+    selectedComponent,
+    selectedComponentCode,
+    selectedTableRows,
+    setComponentPointVerified,
   ]);
 
   /**
@@ -1371,21 +1532,17 @@ export default function ScreenVerify() {
       };
     });
     if (tool === "deviceBox") {
-      setSinglePointsByComponent((prev) => {
-        const points = prev[selectedComponentCode] || [];
-        if (!points.some((point) => point.boundRectId === rect.id && point.boundRectTool === tool)) return prev;
-        return {
-          ...prev,
-          [selectedComponentCode]: points.map((point) => (
-            point.boundRectId === rect.id && point.boundRectTool === tool
-              ? { ...point, rectSnapshot: { ...rect }, saved: false }
-              : point
-          )),
-        };
-      });
+      const points = singlePointsByComponentRef.current[selectedComponentCode] || [];
+      if (points.some((point) => point.boundRectId === rect.id && point.boundRectTool === tool)) {
+        setComponentSinglePoints(selectedComponentCode, points.map((point) => (
+          point.boundRectId === rect.id && point.boundRectTool === tool
+            ? { ...point, rectSnapshot: { ...rect }, saved: false }
+            : point
+        )));
+      }
     }
     setSelectedAnnotation({ tool, id: rect.id });
-  }, [pushAnnotationHistory, selectedComponentCode, updateComponentAnnotations]);
+  }, [pushAnnotationHistory, selectedComponentCode, setComponentSinglePoints, updateComponentAnnotations]);
 
   /**
    * 删除标注框时同步清理右侧点位表和单点记录中的绑定关系。
@@ -1400,30 +1557,25 @@ export default function ScreenVerify() {
         [key]: current[key].filter((item) => item.id !== selection.id),
       };
     });
-    setSinglePointsByComponent((prev) => {
-      const points = prev[selectedComponentCode] || [];
-      if (!points.some((point) => point.boundRectId === selection.id && point.boundRectTool === selection.tool)) return prev;
-      return {
-        ...prev,
-        [selectedComponentCode]: points.filter((point) => point.boundRectId !== selection.id || point.boundRectTool !== selection.tool),
-      };
-    });
+    const points = singlePointsByComponentRef.current[selectedComponentCode] || [];
+    if (points.some((point) => point.boundRectId === selection.id && point.boundRectTool === selection.tool)) {
+      setComponentSinglePoints(
+        selectedComponentCode,
+        points.filter((point) => point.boundRectId !== selection.id || point.boundRectTool !== selection.tool),
+      );
+    }
     if (selection.tool === "deviceLabel" || selection.tool === "deviceBox" || selection.tool === "appearance") {
-      setOcrRowsByComponent((prev) => {
-        const rows = prev[selectedComponentCode] || [];
-        const shouldRemoveRow = (row: CabinetPointRow) => (
-          (row.boundRectId === selection.id && row.boundRectTool === selection.tool)
-          || (row.relatedRectId === selection.id && row.relatedRectTool === selection.tool)
-        );
-        if (!rows.some(shouldRemoveRow)) return prev;
-        return {
-          ...prev,
-          [selectedComponentCode]: rows.filter((row) => !shouldRemoveRow(row)),
-        };
-      });
+      const rows = ocrRowsByComponentRef.current[selectedComponentCode] || [];
+      const shouldRemoveRow = (row: CabinetPointRow) => (
+        (row.boundRectId === selection.id && row.boundRectTool === selection.tool)
+        || (row.relatedRectId === selection.id && row.relatedRectTool === selection.tool)
+      );
+      if (rows.some(shouldRemoveRow)) {
+        setComponentOcrRows(selectedComponentCode, rows.filter((row) => !shouldRemoveRow(row)));
+      }
     }
     setSelectedAnnotation(null);
-  }, [pushAnnotationHistory, selectedComponentCode, updateComponentAnnotations]);
+  }, [pushAnnotationHistory, selectedComponentCode, setComponentOcrRows, setComponentSinglePoints, updateComponentAnnotations]);
 
   const handleUndoAnnotation = useCallback(() => {
     const previous = annotationHistoryRef.current.pop();
@@ -1453,8 +1605,9 @@ export default function ScreenVerify() {
       singlePointsByComponentRef.current = nextSinglePoints;
       setSinglePointsByComponent(nextSinglePoints);
     }
+    resetComponentPointVerification(previous.componentCode);
     setSelectedAnnotation(null);
-  }, []);
+  }, [resetComponentPointVerification]);
 
   const handleExitAnnotationTool = useCallback(() => {
     setActiveAnnotationTool(null);
@@ -1492,7 +1645,12 @@ export default function ScreenVerify() {
       return;
     }
     if (!selectedComponentCode || !editingNameRow) return;
-    const nextName = editingNameValue.trim();
+    const nextName = buildCabinetGeneratedPointName(
+      editingNameValue,
+      editingNameRow.recognitionLabel,
+      editingNameRow.recognitionLabelDesc || editingNameRow.type,
+      editingNameRow.index || 1,
+    );
     if (nextName === (editingNameRow.name || "")) {
       handleCancelTableRowNameEdit();
       return;
@@ -1500,23 +1658,17 @@ export default function ScreenVerify() {
 
     pushAnnotationHistory(selectedComponentCode);
     if (editingNameRow.source === "single") {
-      setSinglePointsByComponent((prev) => ({
-        ...prev,
-        [selectedComponentCode]: (prev[selectedComponentCode] || []).map((point) => (
-          point.id === editingNameRow.key
-            ? { ...point, pointName: nextName, saved: false }
-            : point
-        )),
-      }));
+      setComponentSinglePoints(selectedComponentCode, (singlePointsByComponentRef.current[selectedComponentCode] || []).map((point) => (
+        point.id === editingNameRow.key
+          ? { ...point, pointName: nextName, saved: false }
+          : point
+      )));
     } else {
-      setOcrRowsByComponent((prev) => ({
-        ...prev,
-        [selectedComponentCode]: (prev[selectedComponentCode] || []).map((row) => (
-          row.boundRectId === editingNameRow.boundRectId && row.boundRectTool === editingNameRow.boundRectTool
-            ? { ...row, name: nextName }
-            : row
-        )),
-      }));
+      setComponentOcrRows(selectedComponentCode, (ocrRowsByComponentRef.current[selectedComponentCode] || []).map((row) => (
+        row.boundRectId === editingNameRow.boundRectId && row.boundRectTool === editingNameRow.boundRectTool
+          ? { ...row, name: nextName }
+          : row
+      )));
       if (editingNameRow.boundRectId) {
         updateComponentAnnotations(selectedComponentCode, (current) => ({
           ...current,
@@ -1542,6 +1694,8 @@ export default function ScreenVerify() {
     handleCancelTableRowNameEdit,
     pushAnnotationHistory,
     selectedComponentCode,
+    setComponentOcrRows,
+    setComponentSinglePoints,
     updateComponentAnnotations,
   ]);
 
@@ -1560,43 +1714,39 @@ export default function ScreenVerify() {
 
     pushAnnotationHistory(selectedComponentCode);
     if (editingTargetTypeRow.source === "single") {
-      setSinglePointsByComponent((prev) => ({
-        ...prev,
-        [selectedComponentCode]: (prev[selectedComponentCode] || []).map((point) => (
-          point.id === editingTargetTypeRow.key
-            ? {
-              ...point,
-              recognitionType: option.label,
+      setComponentSinglePoints(selectedComponentCode, (singlePointsByComponentRef.current[selectedComponentCode] || []).map((point) => (
+        point.id === editingTargetTypeRow.key
+          ? {
+            ...point,
+            pointName: buildCabinetGeneratedPointName(point.pointName, option.value, option.label, editingTargetTypeRow.index || 1),
+            recognitionType: option.label,
+            recognitionLabel: option.value,
+            recognitionLabelDesc: option.label,
+            deviceName: option.deviceName,
+            rectSnapshot: {
+              ...point.rectSnapshot,
+              text: option.label,
               recognitionLabel: option.value,
               recognitionLabelDesc: option.label,
               deviceName: option.deviceName,
-              rectSnapshot: {
-                ...point.rectSnapshot,
-                text: option.label,
-                recognitionLabel: option.value,
-                recognitionLabelDesc: option.label,
-                deviceName: option.deviceName,
-              },
-              saved: false,
-            }
-            : point
-        )),
-      }));
+            },
+            saved: false,
+          }
+          : point
+      )));
     } else {
-      setOcrRowsByComponent((prev) => ({
-        ...prev,
-        [selectedComponentCode]: (prev[selectedComponentCode] || []).map((row) => (
-          row.key === editingTargetTypeRow.key
-            ? {
-              ...row,
-              type: option.label,
-              recognitionLabel: option.value,
-              recognitionLabelDesc: option.label,
-              deviceName: option.deviceName,
-            }
-            : row
-        )),
-      }));
+      setComponentOcrRows(selectedComponentCode, (ocrRowsByComponentRef.current[selectedComponentCode] || []).map((row) => (
+        row.key === editingTargetTypeRow.key
+          ? {
+            ...row,
+            name: buildCabinetGeneratedPointName(row.name, option.value, option.label, editingTargetTypeRow.index || row.index || 1),
+            type: option.label,
+            recognitionLabel: option.value,
+            recognitionLabelDesc: option.label,
+            deviceName: option.deviceName,
+          }
+          : row
+      )));
     }
 
     const targetSelection = editingTargetTypeRow.relatedRectId && editingTargetTypeRow.relatedRectTool
@@ -1626,7 +1776,15 @@ export default function ScreenVerify() {
     setTargetTypeModalOpen(false);
     setEditingTargetTypeRow(null);
     message.success("目标类型已修改");
-  }, [editingTargetTypeRow, message, pushAnnotationHistory, selectedComponentCode, updateComponentAnnotations]);
+  }, [
+    editingTargetTypeRow,
+    message,
+    pushAnnotationHistory,
+    selectedComponentCode,
+    setComponentOcrRows,
+    setComponentSinglePoints,
+    updateComponentAnnotations,
+  ]);
 
   const tableColumns = useMemo(
     () => createCabinetPointColumns({
@@ -1674,10 +1832,12 @@ export default function ScreenVerify() {
     annotationsByComponentRef.current = {};
     ocrRowsByComponentRef.current = {};
     singlePointsByComponentRef.current = {};
+    pointVerifiedByComponentRef.current = {};
     persistedAnnotationKeysRef.current = new Set();
     setAnnotationsByComponent({});
     setOcrRowsByComponent({});
     setSinglePointsByComponent({});
+    setPointVerifiedByComponentState({});
     setSinglePointModalOpen(false);
     setSinglePointTargetRect(null);
     setSinglePointDrawing(false);
@@ -1702,6 +1862,7 @@ export default function ScreenVerify() {
     const nextAnnotations = (result.annotationsByComponent || {}) as Record<string, ComponentAnnotations>;
     const nextOcrRows = (result.ocrRowsByComponent || {}) as Record<string, CabinetPointRow[]>;
     const nextSinglePoints = (result.singlePointsByComponent || {}) as Record<string, CabinetSinglePoint[]>;
+    const nextPointVerified = (result.pointVerifiedByComponent || {}) as Record<string, boolean>;
     imageCacheRef.current.clear();
     setSelectedImageDataUrl("");
     setImageError("");
@@ -1711,6 +1872,7 @@ export default function ScreenVerify() {
     annotationsByComponentRef.current = nextAnnotations;
     ocrRowsByComponentRef.current = nextOcrRows;
     singlePointsByComponentRef.current = nextSinglePoints;
+    pointVerifiedByComponentRef.current = nextPointVerified;
     persistedAnnotationKeysRef.current = new Set([
       ...Object.keys(nextAnnotations),
       ...Object.keys(nextOcrRows),
@@ -1719,6 +1881,7 @@ export default function ScreenVerify() {
     setAnnotationsByComponent(nextAnnotations);
     setOcrRowsByComponent(nextOcrRows);
     setSinglePointsByComponent(nextSinglePoints);
+    setPointVerifiedByComponentState(nextPointVerified);
     setSinglePointModalOpen(false);
     setSinglePointTargetRect(null);
     setSinglePointDrawing(false);
@@ -1892,6 +2055,31 @@ export default function ScreenVerify() {
       return;
     }
 
+    const summary = buildCabinetPointExportSummary(
+      components,
+      ocrRowsByComponentRef.current,
+      singlePointsByComponentRef.current,
+      pointVerifiedByComponentRef.current,
+    );
+    if (!summary.verifiedPoints) {
+      message.warning("暂无已核查的屏柜点表数据");
+      return;
+    }
+    if (summary.totalPoints > summary.verifiedPoints) {
+      const confirmed = await new Promise<boolean>((resolve) => {
+        modal.confirm({
+          title: "确认导出屏柜点表",
+          content: `当前共有 ${summary.verifiedPoints} 条已核查点位、${summary.totalPoints - summary.verifiedPoints} 条未核查点位，导出时只包含已核查数据。`,
+          okText: "继续导出",
+          cancelText: "取消",
+          centered: true,
+          onOk: () => resolve(true),
+          onCancel: () => resolve(false),
+        });
+      });
+      if (!confirmed) return;
+    }
+
     const destDir = await window.electronAPI.selectDir("选择屏柜点表导出目录");
     if (!destDir) return;
 
@@ -1899,13 +2087,13 @@ export default function ScreenVerify() {
     try {
       const result = await window.electronAPI.exportCabinetPointTable(selectedProject, destDir);
       if (!result.success) throw new Error(result.error || "导出屏柜点表失败");
-      message.success(`已导出 ${result.fileName || "屏柜点表.xlsx"}，点位 ${result.pointCount || 0} 条，部件 ${result.componentCount || 0} 条`);
+      message.success(`已导出 ${result.fileName || "屏柜点表.xlsx"}，已核查点位 ${result.pointCount || 0} 条`);
     } catch (e: any) {
       message.error(e?.message || "导出屏柜点表失败");
     } finally {
       setExportingPointTable(false);
     }
-  }, [components.length, message, selectedProject]);
+  }, [components, message, modal, selectedProject]);
 
   /**
    * 导出 detector.json 标注参数。
@@ -1925,12 +2113,38 @@ export default function ScreenVerify() {
       return;
     }
 
+    const summary = buildCabinetPointExportSummary(
+      components,
+      ocrRowsByComponentRef.current,
+      singlePointsByComponentRef.current,
+      pointVerifiedByComponentRef.current,
+    );
+    if (!summary.verifiedPoints) {
+      message.warning("暂无已核查的标注点位");
+      return;
+    }
+    if (summary.totalPoints > summary.verifiedPoints) {
+      const confirmed = await new Promise<boolean>((resolve) => {
+        modal.confirm({
+          title: "确认导出标注参数",
+          content: `当前共有 ${summary.verifiedPoints} 条已核查点位、${summary.totalPoints - summary.verifiedPoints} 条未核查点位，导出时只包含已核查数据。`,
+          okText: "继续导出",
+          cancelText: "取消",
+          centered: true,
+          onOk: () => resolve(true),
+          onCancel: () => resolve(false),
+        });
+      });
+      if (!confirmed) return;
+    }
+
     const exportResult = buildCabinetAnnotationParamsExport({
       projectName: selectedProject,
       records: components,
       annotationsByComponent: annotationsByComponentRef.current,
       ocrRowsByComponent: ocrRowsByComponentRef.current,
       singlePointsByComponent: singlePointsByComponentRef.current,
+      pointVerifiedByComponent: pointVerifiedByComponentRef.current,
     });
 
     if (exportResult.errors.length) {
@@ -2105,7 +2319,13 @@ export default function ScreenVerify() {
 
         <aside className="screen-verify-right" style={{ width: rightWidth }}>
           <div className="screen-verify-check">
-            <Checkbox>点位核查完成</Checkbox>
+            <Checkbox
+              checked={selectedPointVerified}
+              disabled={!selectedTableRows.length || ocrLoading || loadingPackage || loadingImage}
+              onChange={handlePointVerificationChange}
+            >
+              点位核查完成
+            </Checkbox>
           </div>
           <div className="screen-verify-table-wrap" ref={rightTableWrapRef}>
             <Table<CabinetPointRow>
