@@ -1119,6 +1119,7 @@ export default function ScreenVerify() {
     const previous = Boolean(pointVerifiedByComponentRef.current[selectedComponentCode]);
     setComponentPointVerified(selectedComponentCode, checked);
     try {
+      // 点位核查状态也是标注数据的一部分，勾选或取消后立即保存当前图片全部中间态。
       await saveComponentAnnotations(
         selectedComponent,
         selectedComponentCode,
@@ -1127,7 +1128,7 @@ export default function ScreenVerify() {
         currentSinglePoints,
         { silent: true },
       );
-      message.success(checked ? "点位核查已完成" : "已取消点位核查");
+      message.success(checked ? "点位核查已完成并保存" : "已取消点位核查并保存");
     } catch (error: any) {
       setComponentPointVerified(selectedComponentCode, previous);
       message.error(error?.message || "保存点位核查状态失败");
@@ -1645,12 +1646,7 @@ export default function ScreenVerify() {
       return;
     }
     if (!selectedComponentCode || !editingNameRow) return;
-    const nextName = buildCabinetGeneratedPointName(
-      editingNameValue,
-      editingNameRow.recognitionLabel,
-      editingNameRow.recognitionLabelDesc || editingNameRow.type,
-      editingNameRow.index || 1,
-    );
+    const nextName = editingNameValue.trim();
     if (nextName === (editingNameRow.name || "")) {
       handleCancelTableRowNameEdit();
       return;
@@ -1665,25 +1661,10 @@ export default function ScreenVerify() {
       )));
     } else {
       setComponentOcrRows(selectedComponentCode, (ocrRowsByComponentRef.current[selectedComponentCode] || []).map((row) => (
-        row.boundRectId === editingNameRow.boundRectId && row.boundRectTool === editingNameRow.boundRectTool
+        row.key === editingNameRow.key
           ? { ...row, name: nextName }
           : row
       )));
-      if (editingNameRow.boundRectId) {
-        updateComponentAnnotations(selectedComponentCode, (current) => ({
-          ...current,
-          deviceLabelRects: current.deviceLabelRects.map((rect) => (
-            rect.id === editingNameRow.boundRectId
-              ? {
-                ...rect,
-                text: nextName,
-                saved: false,
-                generationStatus: rect.source === "manual" || !rect.source ? "pending" : "generated",
-              }
-              : rect
-          )),
-        }));
-      }
     }
 
     setEditingNameRow(null);
@@ -1696,7 +1677,6 @@ export default function ScreenVerify() {
     selectedComponentCode,
     setComponentOcrRows,
     setComponentSinglePoints,
-    updateComponentAnnotations,
   ]);
 
   const handleEditTableRowType = useCallback((row: CabinetPointRow) => {

@@ -331,14 +331,16 @@ async function recognizeFacadeComponentImage(options: {
 }
 
 /**
- * 整图重新识别时只保留可作为输入条件的手工框，避免旧 AI/OCR 结果重复参与识别。
+ * 整图重新识别会清空当前图片旧结果，只保留本次新框选且尚未保存的手工输入框。
+ *
+ * 保存过的手工框也属于旧结果，不能继续作为输入条件，否则确认弹窗里的“删除旧框”不会真正生效。
  */
 function retainRecognitionInputAnnotations(annotations: ComponentAnnotations): ComponentAnnotations {
   return {
-    standardPartRects: annotations.standardPartRects.filter(isManualInputRect),
-    deviceLabelRects: annotations.deviceLabelRects.filter(isWholeRecognitionLabelRect),
-    deviceBoxRects: annotations.deviceBoxRects.filter(isManualInputRect),
-    appearanceRects: annotations.appearanceRects.filter(isManualInputRect),
+    standardPartRects: annotations.standardPartRects.filter(isPendingManualRect),
+    deviceLabelRects: annotations.deviceLabelRects.filter(isPendingManualRect),
+    deviceBoxRects: annotations.deviceBoxRects.filter(isPendingManualRect),
+    appearanceRects: annotations.appearanceRects.filter(isPendingManualRect),
   };
 }
 
