@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   readFileChunk: (path, offset, length) =>
     ipcRenderer.invoke("read-file-chunk", path, offset, length),
   readLargeFile: (path) => ipcRenderer.invoke("read-large-file", path),
+  downloadRemoteFile: (remoteUrl, preferredFileName, destDir) =>
+    ipcRenderer.invoke("download-remote-file", remoteUrl, preferredFileName, destDir),
   // GPU 信息诊断：帮助排查核显/独显导致颜色渲染异常的问题
   getGPUInfo: () => ipcRenderer.invoke("gpu:info"),
   project: {

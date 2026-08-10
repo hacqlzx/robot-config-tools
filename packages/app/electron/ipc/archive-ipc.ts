@@ -22,6 +22,7 @@ const OVERVIEW_DIR_NAME = "总览图";
 const CABINET_IMAGE_DIR_NAME = "屏柜图像";
 const CABINET_IMAGE_DATA_FILE_NAME = "cabinet-image-data.json";
 const CABINET_COMPONENT_WORKBOOK_NAME = "屏柜部件表.xlsx";
+const CABINET_POINT_TABLE_FILE_NAME = "point.xlsx";
 const CABINET_POINT_TABLE_ROBOT_COL = "机器人编码";
 const CABINET_POINT_CODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
@@ -177,6 +178,18 @@ interface CabinetExportPoint {
   boundRectTool?: CabinetAnnotationTool;
   relatedRectId?: string;
   relatedRectTool?: CabinetAnnotationTool;
+}
+
+interface CabinetPointTableExportBuildResult {
+  rows: PointExcelExportRow[];
+  calibrationRecords: PointCalibrationRecord[];
+  pointCount: number;
+  componentCount: number;
+}
+
+interface CabinetCruiseExportState {
+  calibrationCounters: Map<string, number>;
+  usedCruiseIds: Set<string>;
 }
 
 const cabinetImageSources = new Map<string, CabinetImageSourceRef>();
@@ -465,7 +478,7 @@ export function registerArchiveIpc(): void {
 
   ipcMain.handle("export-cabinet-point-table", async (_event, projectName: string, destDir: string) => {
     try {
-      const result = exportCabinetPointTable(projectName, destDir);
+      const result = await exportCabinetPointTable(projectName, destDir);
       return { success: true, ...result };
     } catch (e: any) {
       console.error("[export-cabinet-point-table] 导出失败:", e.message);
@@ -869,7 +882,8 @@ function saveCabinetMainDeviceNameOverride(projectName: string, payload: any): {
 }
 
 /**
- * 将前端生成的 detector.json 写入用户选择的导出目录。
+ * 将前端生成的屏柜标注参数写入用户选择的导出目录。
+ * 文件名统一带导出时间，避免同目录多次导出时覆盖历史文件。
  */
 function exportCabinetAnnotationParams(projectName: string, destDir: string, data: any): { filePath: string; fileName: string; pointCount: number; matchCount: number } {
   const safeProjectName = String(projectName || "").trim();
@@ -881,7 +895,10 @@ function exportCabinetAnnotationParams(projectName: string, destDir: string, dat
   }
   if (!data || typeof data !== "object") throw new Error("标注参数数据为空");
 
-  const fileName = "detector.json";
+  const fileName = uniqueCabinetExportFileName(
+    targetDir,
+    `${sanitizeFileName(safeProjectName)}_屏柜标注参数_${formatCabinetExportTime(new Date())}.json`,
+  );
   const filePath = path.join(targetDir, fileName);
   fs.writeFileSync(filePath, JSON.stringify(data, null, 4), "utf-8");
   return {
@@ -893,9 +910,17 @@ function exportCabinetAnnotationParams(projectName: string, destDir: string, dat
 }
 
 /**
- * 汇总屏柜导入 Excel 和后续生成的点位，导出屏柜点表。
+ * 汇总屏柜导入 Excel 和后续生成的点位，导出屏柜点表 ZIP。
+ * ZIP 内固定包含 point.xlsx 和 calibration.json，方便后台按同一批点位编码建立关联。
  */
-function exportCabinetPointTable(projectName: string, destDir: string): { filePath: string; fileName: string; rowCount: number; pointCount: number; componentCount: number } {
+async function exportCabinetPointTable(projectName: string, destDir: string): Promise<{
+  filePath: string;
+  fileName: string;
+  rowCount: number;
+  pointCount: number;
+  componentCount: number;
+  calibrationCount: number;
+}> {
   const safeProjectName = String(projectName || "").trim();
   if (!safeProjectName) throw new Error("请先选择项目");
   const targetDir = String(destDir || "").trim();
@@ -913,13 +938,14 @@ function exportCabinetPointTable(projectName: string, destDir: string): { filePa
 
   const fileName = uniqueCabinetExportFileName(
     targetDir,
-    `${sanitizeFileName(safeProjectName)}_屏柜点表_${formatCabinetExportTime(new Date())}.xlsx`,
+    `${sanitizeFileName(safeProjectName)}_屏柜点表_${formatCabinetExportTime(new Date())}.zip`,
   );
   const filePath = path.join(targetDir, fileName);
-  fs.writeFileSync(filePath, generatePointExcelFromRows(exportData.rows, {
+  const xlsxBuffer = generatePointExcelFromRows(exportData.rows, {
     extraColumns: [CABINET_POINT_TABLE_ROBOT_COL],
     sheetName: "屏柜点表",
-  }));
+  });
+  await writeCabinetPointTableZip(filePath, xlsxBuffer, exportData.calibrationRecords);
 
   return {
     filePath,
@@ -927,7 +953,23 @@ function exportCabinetPointTable(projectName: string, destDir: string): { filePa
     rowCount: exportData.rows.length,
     pointCount: exportData.pointCount,
     componentCount: exportData.componentCount,
+    calibrationCount: exportData.calibrationRecords.length,
   };
+}
+
+async function writeCabinetPointTableZip(zipPath: string, xlsxBuffer: Buffer, calibrationRecords: PointCalibrationRecord[]): Promise<void> {
+  const output = fs.createWriteStream(zipPath);
+  const archive = new ZipArchive({ zlib: { level: 0 } });
+  const completed = new Promise<void>((resolve, reject) => {
+    output.on("close", resolve);
+    output.on("error", reject);
+    (archive as any).on("error", reject);
+  });
+  archive.pipe(output);
+  archive.append(xlsxBuffer, { name: CABINET_POINT_TABLE_FILE_NAME });
+  archive.append(`${JSON.stringify(calibrationRecords, null, 2)}\n`, { name: POINT_CALIBRATION_FILE_NAME });
+  await archive.finalize();
+  await completed;
 }
 
 /**
@@ -968,10 +1010,12 @@ function collectExistingPointCodes(projectName: string, workspace: ReturnType<ty
 function buildCabinetPointTableRows(
   workspace: ReturnType<typeof readCabinetImageWorkspace>,
   usedPointCodes: Set<string>,
-): { rows: PointExcelExportRow[]; pointCount: number; componentCount: number } {
+): CabinetPointTableExportBuildResult {
   const rows: PointExcelExportRow[] = [];
+  const calibrationRecords: PointCalibrationRecord[] = [];
   let pointCount = 0;
   let componentCount = 0;
+  const cruiseState = createCabinetCruiseExportState();
 
   for (const record of workspace.records) {
     const recordKey = valueText(record.recordKey) || buildCabinetRecordKey(record);
@@ -982,16 +1026,18 @@ function buildCabinetPointTableRows(
       workspace.ocrRowsByComponent[recordKey] || [],
       workspace.singlePointsByComponent[recordKey] || [],
       usedPointCodes,
+      cruiseState,
     );
 
-    if (generatedRows.length > 0) {
-      rows.push(...generatedRows);
-      pointCount += generatedRows.length;
+    if (generatedRows.rows.length > 0) {
+      rows.push(...generatedRows.rows);
+      calibrationRecords.push(...generatedRows.calibrationRecords);
+      pointCount += generatedRows.rows.length;
       componentCount += 1;
     }
   }
 
-  return { rows, pointCount, componentCount };
+  return { rows, calibrationRecords, pointCount, componentCount };
 }
 
 function cabinetComponentExportRow(record: CabinetImagePackageRecord): PointExcelExportRow {
@@ -1020,9 +1066,11 @@ function cabinetGeneratedPointRows(
   ocrRows: any[],
   singlePoints: any[],
   usedPointCodes: Set<string>,
-): PointExcelExportRow[] {
+  cruiseState: CabinetCruiseExportState,
+): Pick<CabinetPointTableExportBuildResult, "rows" | "calibrationRecords"> {
   const baseRow = cabinetComponentExportRow(record);
   const rows: PointExcelExportRow[] = [];
+  const calibrationRecords: PointCalibrationRecord[] = [];
   const points: CabinetExportPoint[] = [
     ...(ocrRows || []).map((row) => ({
       name: valueText(row?.name),
@@ -1045,10 +1093,13 @@ function cabinetGeneratedPointRows(
   ];
 
   for (const point of sortCabinetExportPoints(points, annotations)) {
-    rows.push(cabinetPointExportRow(baseRow, point, usedPointCodes, rows.length + 1));
+    const pointRow = cabinetPointExportRow(baseRow, point, usedPointCodes, rows.length + 1);
+    const pointCode = valueText(pointRow["点位编码"]);
+    rows.push(pointRow);
+    if (pointCode) calibrationRecords.push(cabinetPointCalibrationRecord(record, pointCode, cruiseState));
   }
 
-  return rows;
+  return { rows, calibrationRecords };
 }
 
 /**
@@ -1068,6 +1119,50 @@ function cabinetPointExportRow(
     "点位编码": pointCode,
     ...recognition,
   };
+}
+
+function createCabinetCruiseExportState(): CabinetCruiseExportState {
+  return {
+    calibrationCounters: new Map(),
+    usedCruiseIds: new Set(),
+  };
+}
+
+/**
+ * 屏柜点表 ZIP 中的 calibration.json 和 point.xlsx 同步生成。
+ *
+ * calibration_id 使用导入屏柜部件表里的部件标定 id；
+ * cruise_id 以该标定 id 为前缀，按点位顺序追加 0001/0002...，不再追加业务后缀。
+ * 每个点位只写入 point_code、calibration_id、cruise_id。
+ */
+function cabinetPointCalibrationRecord(
+  record: CabinetImagePackageRecord,
+  pointCode: string,
+  state: CabinetCruiseExportState,
+): PointCalibrationRecord {
+  const calibrationId = valueText(record.calibrationId);
+  if (!calibrationId) {
+    throw new Error(`部件 ${valueText(record.componentName) || valueText(record.componentCode)} 缺少标定id`);
+  }
+  return {
+    point_code: pointCode,
+    calibration_id: calibrationId,
+    cruise_id: generateCabinetPointCruiseId(calibrationId, state),
+  };
+}
+
+function generateCabinetPointCruiseId(calibrationId: string, state: CabinetCruiseExportState): string {
+  let nextSeq = (state.calibrationCounters.get(calibrationId) || 0) + 1;
+  while (nextSeq < 100000) {
+    const cruiseId = `${calibrationId}${String(nextSeq).padStart(4, "0")}`;
+    state.calibrationCounters.set(calibrationId, nextSeq);
+    if (!state.usedCruiseIds.has(cruiseId)) {
+      state.usedCruiseIds.add(cruiseId);
+      return cruiseId;
+    }
+    nextSeq += 1;
+  }
+  throw new Error(`生成 cruise_id 失败：${calibrationId}`);
 }
 
 function toCabinetAnnotationTool(value: unknown): CabinetAnnotationTool | undefined {

@@ -2019,7 +2019,8 @@ export default function ScreenVerify() {
   };
 
   /**
-   * 导出屏柜点表，数据来源包括原始部件 Excel 和当前保存的识别/人工点位。
+   * 导出屏柜点表 ZIP，数据来源包括原始部件 Excel 和当前保存的识别/人工点位。
+   * ZIP 内包含 point.xlsx 和 calibration.json，且只导出已核查点位。
    */
   const handleExportCabinetPointTable = useCallback(async () => {
     if (!selectedProject) {
@@ -2067,7 +2068,7 @@ export default function ScreenVerify() {
     try {
       const result = await window.electronAPI.exportCabinetPointTable(selectedProject, destDir);
       if (!result.success) throw new Error(result.error || "导出屏柜点表失败");
-      message.success(`已导出 ${result.fileName || "屏柜点表.xlsx"}，已核查点位 ${result.pointCount || 0} 条`);
+      message.success(`已导出 ${result.fileName || "屏柜点表.zip"}，已核查点位 ${result.pointCount || 0} 条，关联 ${result.calibrationCount || 0} 条`);
     } catch (e: any) {
       message.error(e?.message || "导出屏柜点表失败");
     } finally {
@@ -2152,7 +2153,7 @@ export default function ScreenVerify() {
     try {
       const result = await window.electronAPI.exportCabinetAnnotationParams(selectedProject, destDir, exportResult.data);
       if (!result.success) throw new Error(result.error || "导出标注参数失败");
-      message.success(`已导出 detector.json，点位 ${exportResult.pointCount} 个，对位组 ${exportResult.matchCount} 个`);
+      message.success(`已导出 ${result.fileName || "屏柜标注参数.json"}，点位 ${exportResult.pointCount} 个，对位组 ${exportResult.matchCount} 个`);
     } catch (e: any) {
       message.error(e?.message || "导出标注参数失败");
     } finally {

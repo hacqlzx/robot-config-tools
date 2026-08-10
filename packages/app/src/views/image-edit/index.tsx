@@ -23,6 +23,7 @@ import {
   electronFileSource,
   loadRobotRouteDrawingData,
   type RayRenderData,
+  type RayRenderItem,
   useThreeDViewer,
 } from "@/components/three-d-engine";
 import { loadSurveyRayDrawingData } from "./utils/survey-ray-data";
@@ -49,6 +50,25 @@ const CALIBRATION_FILE_NAME = "勘察数据.json";
 const SURVEY_POLL_INTERVAL_MS = 2000;
 /** 任务刚下发后后台可能短暂查不到运行态，此窗口内先显示“执行中”。 */
 const SURVEY_START_WAIT_MS = 15000;
+/** 缩略图定位时的最小视野范围，太小会导致停靠点周边环境看不全。 */
+const SURVEY_IMAGE_LOCATE_MIN_EXTENT = 8;
+
+function getTaskImageRayId(item: ImageItem | null): string {
+  return item ? `${item.spId}:${item.visName}` : "";
+}
+
+function getRayLocateExtent(ray: RayRenderItem): number {
+  const length = typeof ray.length === "number" && Number.isFinite(ray.length) ? ray.length : 4;
+  return Math.max(SURVEY_IMAGE_LOCATE_MIN_EXTENT, length * 3);
+}
+
+function isFiniteVec3(value: unknown): value is [number, number, number] {
+  return Array.isArray(value)
+    && value.length >= 3
+    && Number.isFinite(value[0])
+    && Number.isFinite(value[1])
+    && Number.isFinite(value[2]);
+}
 
 function getSharedCalibrationFilePath(surveyDir: string): string {
   const normalized = surveyDir.replace(/[\\/]+$/, "");
@@ -271,7 +291,7 @@ export default function ImageEdit() {
   // 公共 3D 查看器
   const viewerCanvasRef = useRef<HTMLCanvasElement>(null);
   const viewerContainerRef = useRef<HTMLDivElement>(null);
-  const { loadFile, loadDrawing, loadDrawingData, loading, loadingFile, progress, drawingRef, loaderRef } = useThreeDViewer({
+  const { loadFile, loadDrawing, loadDrawingData, loading, loadingFile, progress, drawingRef, loaderRef, focusAlongDirection } = useThreeDViewer({
     canvasRef: viewerCanvasRef,
     containerRef: viewerContainerRef,
     onSelect: handle3DSelect,
@@ -436,7 +456,7 @@ export default function ImageEdit() {
   }, [loadTask, clearTask, setSide, ptzSide, message, refreshCalibratedRects, loadDrawingData, drawingRef]);
 
   const handleTaskImageHover = useCallback((item: ImageItem | null) => {
-    const rayId = item ? `${item.spId}:${item.visName}` : "";
+    const rayId = getTaskImageRayId(item);
     if (visibleRayIdRef.current === rayId) return;
     visibleRayIdRef.current = rayId;
     if (!rayId) {
@@ -450,6 +470,44 @@ export default function ImageEdit() {
     }
     loadDrawingData({ rays: [ray] });
   }, [loadDrawingData]);
+
+  const handleTaskImageLocate = useCallback((item: ImageItem) => {
+    const rayId = getTaskImageRayId(item);
+    const ray = surveyRayDataRef.current?.rays.find((candidate) => String(candidate.id) === rayId);
+    if (!ray) {
+      message.warning("未找到该图片的地图位置");
+      return;
+    }
+    if (!isFiniteVec3(ray.origin)) {
+      message.warning("该图片地图坐标无效");
+      return;
+    }
+    if (!isFiniteVec3(ray.direction)) {
+      message.warning("该图片射线方向无效");
+      return;
+    }
+
+    const locate = () => {
+      visibleRayIdRef.current = rayId;
+      loadDrawingData({ rays: [ray] });
+      focusAlongDirection(
+        ray.origin[0],
+        ray.origin[1],
+        ray.origin[2],
+        ray.direction[0],
+        ray.direction[1],
+        ray.direction[2],
+        getRayLocateExtent(ray),
+      );
+    };
+
+    if (!mapVisible) {
+      setMapVisible(true);
+      window.requestAnimationFrame(() => window.requestAnimationFrame(locate));
+      return;
+    }
+    locate();
+  }, [focusAlongDirection, loadDrawingData, mapVisible, message]);
 
   // ptzSide 切换时重新计算布局
   useEffect(() => {
@@ -850,6 +908,7 @@ export default function ImageEdit() {
                 calibrationRects={calibrationRects}
                 onImageDoubleClick={handleImageDoubleClick}
                 onImageHover={handleTaskImageHover}
+                onImageLocate={handleTaskImageLocate}
               />
               {taskLoading && (
                 <div className="map-loading-overlay">

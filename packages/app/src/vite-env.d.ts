@@ -129,6 +129,7 @@ declare global {
     rowCount?: number;
     pointCount?: number;
     componentCount?: number;
+    calibrationCount?: number;
   }
 
   interface AppWindowState {
@@ -236,6 +237,11 @@ declare global {
       readFileChunk: (path: string, offset: number, length: number) => Promise<ArrayBuffer>;
       readLargeFile: (path: string) => Promise<ArrayBuffer>;
       getFilePath: (file: File) => string;
+      downloadRemoteFile: (
+        remoteUrl: string,
+        preferredFileName: string,
+        destDir: string,
+      ) => Promise<{ success: boolean; error?: string; filePath?: string; fileName?: string }>;
       project: {
         list: () => Promise<string[]>;
         create: (name: string) => Promise<string>;

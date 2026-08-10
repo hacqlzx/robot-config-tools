@@ -149,5 +149,9 @@ export function useThreeDViewer({
     drawingRef,
     requestRender: () => engineRef.current?.requestRender(),
     focusOn: (cx: number, cy: number, cz: number, extent: number) => engineRef.current?.focusOn(cx, cy, cz, extent),
+    focusTopOn: (cx: number, cy: number, cz: number, extent: number) => engineRef.current?.focusTopOn(cx, cy, cz, extent),
+    focusAlongDirection: (cx: number, cy: number, cz: number, dx: number, dy: number, dz: number, extent: number) => (
+      engineRef.current?.focusAlongDirection(cx, cy, cz, dx, dy, dz, extent)
+    ),
   };
 }

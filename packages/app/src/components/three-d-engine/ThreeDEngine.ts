@@ -1,6 +1,11 @@
 import * as pc from "playcanvas";
 import { SimpleOrbitCamera } from "../../playcanvas-core/simple-camera";
 
+const DIRECTION_LOCATE_FORWARD_FACTOR = 0.65;
+const DIRECTION_LOCATE_BACK_FACTOR = 0.55;
+const DIRECTION_LOCATE_LIFT_FACTOR = 0.35;
+const DIRECTION_LOCATE_MIN_TOP_FACTOR = 0.25;
+
 export interface ThreeDEngineOptions {
   /** 相机垂直视场角，单位为度。默认 60。 */
   fov?: number;
@@ -124,6 +129,59 @@ export class ThreeDEngine {
     this.orbit.sceneCenter.set(cx, cy, cz);
     this.orbit.maxDistance = Math.max(this.orbit.maxDistance, extent * 5);
     this.orbit.distance = extent * 1.5;
+    this.orbit.updateCamera();
+    this.renderDirty = true;
+  }
+
+  /** 俯视定位到指定场景点，供勘察图片缩略图快速跳转到对应停靠点。 */
+  focusTopOn(cx: number, cy: number, cz: number, extent: number) {
+    this.focusOn(cx, cy, cz, extent);
+    this.orbit.controlMode = "orbit";
+    this.orbit.setViewDirection("上");
+    this.renderDirty = true;
+  }
+
+  /** 沿指定方向定位；按勘察图片射线方向为主，同时后退并抬高一点，避免相机贴到拍照点。 */
+  focusAlongDirection(cx: number, cy: number, cz: number, dx: number, dy: number, dz: number, extent: number) {
+    const len = Math.hypot(dx, dy, dz);
+    if (!Number.isFinite(len) || len < 1e-6) {
+      this.focusTopOn(cx, cy, cz, extent);
+      return;
+    }
+
+    const nx = dx / len;
+    const ny = dy / len;
+    const nz = dz / len;
+    const baseDistance = Math.max(0.5, extent);
+    const horizontalLen = Math.hypot(nx, nz);
+    const hx = horizontalLen > 1e-6 ? nx / horizontalLen : 0;
+    const hz = horizontalLen > 1e-6 ? nz / horizontalLen : 1;
+    const forwardDistance = baseDistance * DIRECTION_LOCATE_FORWARD_FACTOR;
+    const backDistance = baseDistance * DIRECTION_LOCATE_BACK_FACTOR;
+    const liftHeight = baseDistance * DIRECTION_LOCATE_LIFT_FACTOR;
+    const minTopHeight = baseDistance * DIRECTION_LOCATE_MIN_TOP_FACTOR;
+
+    const lookX = cx + nx * forwardDistance;
+    const lookY = cy + ny * forwardDistance;
+    const lookZ = cz + nz * forwardDistance;
+    const cameraX = cx - hx * backDistance;
+    const cameraY = Math.max(cy + liftHeight, lookY + minTopHeight);
+    const cameraZ = cz - hz * backDistance;
+    const offsetX = cameraX - lookX;
+    const offsetY = cameraY - lookY;
+    const offsetZ = cameraZ - lookZ;
+    const cameraDistance = Math.max(0.5, Math.hypot(offsetX, offsetY, offsetZ));
+
+    this.orbit.controlMode = "orbit";
+    this.orbit.lookAt.set(lookX, lookY, lookZ);
+    this.orbit.sceneRadius = Math.max(this.orbit.sceneRadius, cameraDistance);
+    this.orbit.sceneCenter.set(lookX, lookY, lookZ);
+    this.orbit.maxDistance = Math.max(this.orbit.maxDistance, cameraDistance * 5);
+    this.orbit.distance = cameraDistance;
+
+    const horizontal = Math.hypot(offsetX, offsetZ);
+    this.orbit.azimuth = Math.atan2(offsetX, offsetZ) * pc.math.RAD_TO_DEG;
+    this.orbit.elevation = Math.max(-89, Math.min(89, Math.atan2(offsetY, horizontal) * pc.math.RAD_TO_DEG));
     this.orbit.updateCamera();
     this.renderDirty = true;
   }

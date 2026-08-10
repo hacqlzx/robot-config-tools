@@ -130,7 +130,7 @@ export function editNetwork(data) {
 
 /**
  * 点表导入（文件上传）
- * @param {File} file - Excel 文件
+ * @param {File} file - 点表 ZIP 文件包
  * @param {number} robotId - 机器人 ID
  * @param {number} stationId - 厂站 ID
  */

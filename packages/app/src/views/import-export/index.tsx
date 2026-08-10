@@ -133,9 +133,16 @@ function isImportKey(key: string): boolean {
   return key === "import";
 }
 
+function matchImportAccept(fileName: string, accept: string): boolean {
+  const rules = accept.split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
+  if (rules.length === 0) return true;
+  const name = fileName.toLowerCase();
+  return rules.some((rule) => rule.startsWith(".") && name.endsWith(rule));
+}
+
 export default function ImportExport() {
   const { message } = App.useApp();
-  const { selectedProject, selectedRobot, backendIp } = useAppContext();
+  const { selectedRobot, backendIp } = useAppContext();
   const containerRef = useRef<HTMLDivElement>(null);
   const [columns, setColumns] = useState(4);
   const [uploadingLabel, setUploadingLabel] = useState<string | null>(null);
@@ -159,46 +166,33 @@ export default function ImportExport() {
     setImportDialog(config);
   }, []);
 
-  /** 通用下载到目录：Electron 选目录下载，浏览器直接触发下载 */
-  const downloadFileToDir = useCallback(async (filePath: string, label: string) => {
+  /** 下载后台返回的文件路径到指定目录；Electron 由主进程流式落盘，避免依赖项目临时目录。 */
+  const downloadFileToSelectedDir = useCallback(async (filePath: string, label: string, destDir?: string) => {
     if (!backendIp) {
       message.warning("请先连接后台");
       return;
     }
-    if (window.electronAPI && !selectedProject) {
-      message.warning("请先在顶部选择项目");
-      return;
-    }
 
-    const downloadUrl = `https://${backendIp}${filePath}`;
+    const downloadUrl = /^https?:\/\//i.test(filePath) ? filePath : `https://${backendIp}${filePath}`;
     // 从路径中提取文件名，并替换 Windows 非法字符
     const rawName = filePath.split("/").pop() || `${label}.xlsx`;
     const fileName = rawName.replace(/[<>:"/\\|?*]/g, "-");
 
     if (window.electronAPI) {
-      const dir = await window.electronAPI.selectDir();
-      if (!dir) return;
+      if (!destDir) return;
+      if (!window.electronAPI.downloadRemoteFile) {
+        message.error("当前版本不支持直接下载");
+        return;
+      }
 
       setUploadingLabel(label);
-      let tempFilePath = "";
       try {
-        const response = await fetch(downloadUrl);
-        if (!response.ok) throw new Error("下载失败: " + response.status);
-        const buffer = await response.arrayBuffer();
-
-        const tempPath = `_temp/${fileName}`;
-        tempFilePath = await window.electronAPI.project.writeFile(selectedProject, tempPath, buffer);
-        await window.electronAPI.project.exportFile(selectedProject, tempPath, dir);
-
-        message.success("下载成功");
+        const result = await window.electronAPI.downloadRemoteFile(downloadUrl, fileName, destDir);
+        if (!result.success) throw new Error(result.error || "下载失败");
+        message.success(`下载成功：${result.fileName || fileName}`);
       } catch (e: any) {
         message.error("下载失败: " + (e?.message || e));
       } finally {
-        if (tempFilePath) {
-          try {
-            await window.electronAPI.project.deletePath(tempFilePath);
-          } catch {}
-        }
         setUploadingLabel(null);
       }
     } else {
@@ -210,7 +204,18 @@ export default function ImportExport() {
       document.body.removeChild(a);
       message.success("已开始下载");
     }
-  }, [backendIp, message, selectedProject]);
+  }, [backendIp, message]);
+
+  /** 通用下载到目录：Electron 先选目录，浏览器直接触发下载 */
+  const downloadFileToDir = useCallback(async (filePath: string, label: string) => {
+    if (window.electronAPI) {
+      const dir = await window.electronAPI.selectDir(`选择${label}保存目录`);
+      if (!dir) return;
+      await downloadFileToSelectedDir(filePath, label, dir);
+      return;
+    }
+    await downloadFileToSelectedDir(filePath, label);
+  }, [downloadFileToSelectedDir]);
 
   /** 通信信息导入 */
   const handleCommunicationImport = useCallback(async (file: File) => {
@@ -268,7 +273,7 @@ export default function ImportExport() {
     return station;
   }, [message]);
 
-  /** 屏柜点表导入 */
+  /** 屏柜点表导入：后台当前接收屏柜点表 ZIP 包，文件内容由后台解析。 */
   const handleScreenVerifyPointTableImport = useCallback(async (file: File) => {
     setUploadingLabel("点表导入");
     try {
@@ -417,6 +422,20 @@ export default function ImportExport() {
 
   /** 空间模型导出 */
   const handleSpaceModelExport = useCallback(async () => {
+    if (!backendIp) {
+      message.warning("请先连接后台");
+      return;
+    }
+    if (!selectedRobot) {
+      message.warning("请先在顶部选择机器人");
+      return;
+    }
+
+    const destDir = window.electronAPI
+      ? await window.electronAPI.selectDir("选择空间模型保存目录")
+      : undefined;
+    if (window.electronAPI && !destDir) return;
+
     setUploadingLabel("空间模型导出");
     try {
       const robot = await resolveSelectedRobot();
@@ -428,13 +447,13 @@ export default function ImportExport() {
         return;
       }
 
-      await downloadFileToDir(body.data, "空间模型导出");
+      await downloadFileToSelectedDir(body.data, "空间模型导出", destDir || undefined);
     } catch (e: any) {
       message.error("导出失败: " + (e?.message || e));
     } finally {
       setUploadingLabel(null);
     }
-  }, [resolveSelectedRobot, message, downloadFileToDir]);
+  }, [backendIp, selectedRobot, resolveSelectedRobot, message, downloadFileToSelectedDir]);
 
   /** 勘察图像导出 */
   const handleSurveyImageExport = useCallback(async () => {
@@ -573,8 +592,8 @@ export default function ImportExport() {
     if (card.key === "screen-verify" && actionKey === "import" && label === "点表导入") {
       openImportDialog({
         title: "点表导入",
-        accept: ".xlsx,.xls",
-        acceptHint: ".xlsx、.xls 格式",
+        accept: ".zip",
+        acceptHint: ".zip 格式",
         onImport: handleScreenVerifyPointTableImport,
       });
       return;
@@ -645,6 +664,10 @@ export default function ImportExport() {
     const file = importFileList[0]?.originFileObj;
     if (!importDialog || !file) {
       message.warning("请先选择导入文件");
+      return;
+    }
+    if (!matchImportAccept(file.name, importDialog.accept)) {
+      message.warning(`请选择${importDialog.acceptHint}文件`);
       return;
     }
     await importDialog.onImport(file, backupImportType);
@@ -743,7 +766,13 @@ export default function ImportExport() {
             multiple={false}
             maxCount={1}
             fileList={importFileList}
-            beforeUpload={() => false}
+            beforeUpload={(file) => {
+              if (importDialog && !matchImportAccept(file.name, importDialog.accept)) {
+                message.warning(`请选择${importDialog.acceptHint}文件`);
+                return Upload.LIST_IGNORE;
+              }
+              return false;
+            }}
             onChange={({ fileList }) => setImportFileList(fileList.slice(-1))}
             onRemove={() => {
               setImportFileList([]);

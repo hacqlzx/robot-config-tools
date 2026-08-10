@@ -211,7 +211,7 @@ function buildExportPointItem(options: {
 
 /**
  * 根据标定 assId 生成巡检点 ID。
- * 同一张图片内按空间排序追加 4 位序号，最终格式类似 85540001_2_6。
+ * 同一张图片内按空间排序追加 4 位序号，最终格式类似 85540001。
  */
 function assignCruiseIds(points: ExportPointItem[], errors: string[]): void {
   const assCounters = new Map<string, number>();
@@ -219,7 +219,7 @@ function assignCruiseIds(points: ExportPointItem[], errors: string[]): void {
   for (const point of points) {
     const nextSeq = (assCounters.get(point.assId) || 0) + 1;
     assCounters.set(point.assId, nextSeq);
-    point.cruiseId = `${point.assId}${String(nextSeq).padStart(4, "0")}_2_6`;
+    point.cruiseId = `${point.assId}${String(nextSeq).padStart(4, "0")}`;
     if (cruiseIds.has(point.cruiseId)) {
       errors.push(`巡检点 ID 重复：${point.cruiseId}`);
     }

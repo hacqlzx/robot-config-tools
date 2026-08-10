@@ -23,6 +23,16 @@ const MIN_SCALE = 0.05;
 const MAX_SCALE = 8;
 const ZOOM_STEP = 1.2;
 const FIT_PADDING = 24;
+const CORRECTION_HANDLE_SIZE = 9;
+
+type CorrectionResizeHandle = "nw" | "ne" | "sw" | "se";
+
+interface CorrectionDragRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 export default function VerificationImageCanvas({
   src,
@@ -51,7 +61,7 @@ export default function VerificationImageCanvas({
   const correctionRectRef = useRef<DeviceCorrectionRect | null>(null);
   const correctionSelectedRef = useRef(false);
   const correctionDraftRef = useRef<{
-    action: "draw" | "move";
+    action: "draw" | "move" | "resize";
     pointerId: number;
     startClientX: number;
     startClientY: number;
@@ -59,12 +69,21 @@ export default function VerificationImageCanvas({
     startY: number;
     originRect: DeviceCorrectionRect | null;
     previewRect: DeviceCorrectionRect | null;
+    dragRect?: CorrectionDragRect | null;
+    resizeHandle?: CorrectionResizeHandle;
     moved: boolean;
   } | null>(null);
   const pendingFitRef = useRef(false);
+  const cursorRef = useRef("");
   const [zoomPercent, setZoomPercent] = useState(100);
   const [dragging, setDragging] = useState(false);
   const [correctionSelected, setCorrectionSelected] = useState(false);
+
+  const setCanvasCursor = useCallback((cursor: string) => {
+    if (cursorRef.current === cursor) return;
+    cursorRef.current = cursor;
+    if (canvasRef.current) canvasRef.current.style.cursor = cursor;
+  }, []);
 
   const syncCanvasSize = useCallback(() => {
     const canvas = canvasRef.current;
@@ -111,9 +130,22 @@ export default function VerificationImageCanvas({
       image.naturalHeight * view.scale,
     );
     const draft = correctionDraftRef.current;
-    const shouldDrawStoredRect = !(draft?.action === "move" && draft.previewRect);
-    drawCorrectionRect(context, shouldDrawStoredRect ? correctionRectRef.current : null, view, correctionSelectedRef.current, false);
-    drawCorrectionRect(context, draft?.previewRect || null, view, true, draft?.action === "draw");
+    const correctionEditable = correctionModeRef.current;
+    const shouldDrawStoredRect = !(draft?.previewRect && (draft.action === "move" || draft.action === "resize"));
+    drawCorrectionRect(
+      context,
+      shouldDrawStoredRect ? correctionRectRef.current : null,
+      view,
+      correctionEditable && correctionSelectedRef.current,
+      false,
+      correctionEditable && correctionSelectedRef.current && !draft,
+    );
+    if (draft?.action === "draw") {
+      drawCorrectionDragRect(context, draft.dragRect || null, view);
+      drawCorrectionRect(context, draft.previewRect || null, view, true, true, false);
+    } else {
+      drawCorrectionRect(context, draft?.previewRect || null, view, true, false, correctionEditable && Boolean(draft?.previewRect));
+    }
   }, [syncCanvasSize]);
 
   const applyView = useCallback((nextView: ViewState) => {
@@ -170,8 +202,15 @@ export default function VerificationImageCanvas({
 
   useEffect(() => {
     correctionModeRef.current = Boolean(correctionMode);
+    if (!correctionMode) {
+      correctionDraftRef.current = null;
+      setCorrectionSelected(false);
+      setCanvasCursor("");
+    } else {
+      setCanvasCursor("crosshair");
+    }
     draw();
-  }, [correctionMode, draw]);
+  }, [correctionMode, draw, setCanvasCursor]);
 
   useEffect(() => {
     correctionRectRef.current = correctionRect || null;
@@ -186,7 +225,8 @@ export default function VerificationImageCanvas({
 
   useEffect(() => {
     setCorrectionSelected(false);
-  }, [src]);
+    setCanvasCursor("");
+  }, [setCanvasCursor, src]);
 
   useEffect(() => {
     let cancelled = false;
@@ -258,23 +298,28 @@ export default function VerificationImageCanvas({
       const point = canvasEventToImagePoint(event, event.currentTarget, imageRef.current, viewRef.current);
       if (!point) return;
       const rect = correctionRectRef.current;
+      const resizeHandle = rect ? hitCorrectionResizeHandle(rect, point, viewRef.current.scale) : null;
       const hitRect = Boolean(rect && rectContainsPoint(rect, point.x, point.y));
-      setCorrectionSelected(hitRect);
+      setCorrectionSelected(Boolean(resizeHandle || hitRect));
+      setCanvasCursor(resizeHandle ? getCorrectionHandleCursor(resizeHandle) : hitRect ? "move" : "crosshair");
       correctionDraftRef.current = {
-        action: hitRect ? "move" : "draw",
+        action: resizeHandle ? "resize" : hitRect ? "move" : "draw",
         pointerId: event.pointerId,
         startClientX: event.clientX,
         startClientY: event.clientY,
         startX: point.x,
         startY: point.y,
-        originRect: hitRect ? rect : null,
-        previewRect: hitRect ? rect : null,
+        originRect: resizeHandle || hitRect ? rect : null,
+        previewRect: resizeHandle || hitRect ? rect : null,
+        dragRect: null,
+        resizeHandle: resizeHandle || undefined,
         moved: false,
       };
       draw();
       return;
     }
 
+    setCanvasCursor("");
     const view = viewRef.current;
     dragRef.current = {
       pointerId: event.pointerId,
@@ -291,6 +336,19 @@ export default function VerificationImageCanvas({
     const correctionDraft = correctionDraftRef.current;
     const image = imageRef.current;
     if (correctionDraft && correctionDraft.pointerId === event.pointerId && image) {
+      if (!correctionModeRef.current) {
+        correctionDraftRef.current = null;
+        setCanvasCursor("");
+        draw();
+        return;
+      }
+      setCanvasCursor(
+        correctionDraft.action === "resize" && correctionDraft.resizeHandle
+          ? getCorrectionHandleCursor(correctionDraft.resizeHandle)
+          : correctionDraft.action === "move"
+            ? "move"
+            : "crosshair",
+      );
       const point = canvasEventToImagePoint(event, event.currentTarget, image, viewRef.current);
       if (!point) return;
       correctionDraft.moved = correctionDraft.moved
@@ -303,7 +361,19 @@ export default function VerificationImageCanvas({
           image.naturalWidth,
           image.naturalHeight,
         );
+      } else if (correctionDraft.action === "resize" && correctionDraft.originRect && correctionDraft.resizeHandle) {
+        correctionDraft.previewRect = resizeCorrectionRect(
+          correctionDraft.originRect,
+          correctionDraft.resizeHandle,
+          point.x,
+          point.y,
+          image.naturalWidth,
+          image.naturalHeight,
+        );
       } else {
+        correctionDraft.dragRect = correctionDraft.moved
+          ? buildDragRect(correctionDraft.startX, correctionDraft.startY, point.x, point.y)
+          : null;
         correctionDraft.previewRect = correctionDraft.moved
           ? buildSquareRect(correctionDraft.startX, correctionDraft.startY, point.x, point.y, image.naturalWidth, image.naturalHeight)
           : null;
@@ -313,7 +383,13 @@ export default function VerificationImageCanvas({
     }
 
     const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      if (correctionModeRef.current && image) {
+        const point = canvasEventToImagePoint(event, event.currentTarget, image, viewRef.current);
+        setCanvasCursor(point ? getCorrectionHoverCursor(correctionRectRef.current, point, viewRef.current.scale) : "crosshair");
+      }
+      return;
+    }
     drag.moved = drag.moved || Math.hypot(event.clientX - drag.clientX, event.clientY - drag.clientY) >= 3;
     viewRef.current = {
       ...viewRef.current,
@@ -330,7 +406,10 @@ export default function VerificationImageCanvas({
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
-      if (correctionDraft.moved && correctionDraft.previewRect) {
+      if (!correctionModeRef.current) {
+        setCorrectionSelected(false);
+        setCanvasCursor("");
+      } else if (correctionDraft.moved && correctionDraft.previewRect) {
         correctionRectRef.current = correctionDraft.previewRect;
         setCorrectionSelected(true);
         onCorrectionChange?.(correctionDraft.previewRect);
@@ -340,6 +419,9 @@ export default function VerificationImageCanvas({
         const rect = correctionRectRef.current;
         setCorrectionSelected(Boolean(point && rect && rectContainsPoint(rect, point.x, point.y)));
       }
+      const image = imageRef.current;
+      const point = image ? canvasEventToImagePoint(event, event.currentTarget, image, viewRef.current) : null;
+      setCanvasCursor(correctionModeRef.current && point ? getCorrectionHoverCursor(correctionRectRef.current, point, viewRef.current.scale) : "");
       draw();
       return;
     }
@@ -350,15 +432,21 @@ export default function VerificationImageCanvas({
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-    if (!drag.moved && correctionRectRef.current && imageRef.current) {
+    if (correctionModeRef.current && !drag.moved && correctionRectRef.current && imageRef.current) {
       const point = canvasEventToImagePoint(event, event.currentTarget, imageRef.current, viewRef.current);
       setCorrectionSelected(Boolean(point && rectContainsPoint(correctionRectRef.current, point.x, point.y)));
     }
+    setCanvasCursor("");
     setDragging(false);
   };
 
+  const handlePointerLeave = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (correctionDraftRef.current || dragRef.current) return;
+    setCanvasCursor(correctionModeRef.current ? "crosshair" : "");
+  };
+
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Delete" || !correctionSelectedRef.current || !correctionRectRef.current) return;
+    if (event.key !== "Delete" || !correctionModeRef.current || !correctionSelectedRef.current || !correctionRectRef.current) return;
     event.preventDefault();
     correctionRectRef.current = null;
     setCorrectionSelected(false);
@@ -387,6 +475,7 @@ export default function VerificationImageCanvas({
         aria-label={label}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
+        onPointerLeave={handlePointerLeave}
         onPointerUp={stopDragging}
         onPointerCancel={stopDragging}
         onDoubleClick={fitToView}
@@ -444,6 +533,15 @@ function buildSquareRect(
   };
 }
 
+function buildDragRect(startX: number, startY: number, currentX: number, currentY: number): CorrectionDragRect | null {
+  const x = Math.min(startX, currentX);
+  const y = Math.min(startY, currentY);
+  const w = Math.abs(currentX - startX);
+  const h = Math.abs(currentY - startY);
+  if (!Number.isFinite(w) || !Number.isFinite(h) || (w < 2 && h < 2)) return null;
+  return { x, y, w, h };
+}
+
 function moveCorrectionRect(
   rect: DeviceCorrectionRect,
   deltaX: number,
@@ -460,12 +558,43 @@ function moveCorrectionRect(
   };
 }
 
+function resizeCorrectionRect(
+  rect: DeviceCorrectionRect,
+  handle: CorrectionResizeHandle,
+  currentX: number,
+  currentY: number,
+  imageWidth: number,
+  imageHeight: number,
+): DeviceCorrectionRect | null {
+  const anchor = getOppositeCorrectionCorner(rect, handle);
+  return buildSquareRect(anchor.x, anchor.y, currentX, currentY, imageWidth, imageHeight);
+}
+
+function getOppositeCorrectionCorner(rect: DeviceCorrectionRect, handle: CorrectionResizeHandle): { x: number; y: number } {
+  const left = rect.x;
+  const top = rect.y;
+  const right = rect.x + rect.size;
+  const bottom = rect.y + rect.size;
+  switch (handle) {
+    case "nw":
+      return { x: right, y: bottom };
+    case "ne":
+      return { x: left, y: bottom };
+    case "sw":
+      return { x: right, y: top };
+    case "se":
+    default:
+      return { x: left, y: top };
+  }
+}
+
 function drawCorrectionRect(
   context: CanvasRenderingContext2D,
   rect: DeviceCorrectionRect | null,
   view: ViewState,
   selected: boolean,
   preview: boolean,
+  handles: boolean,
 ): void {
   if (!rect) return;
   const x = view.offsetX + rect.x * view.scale;
@@ -479,11 +608,87 @@ function drawCorrectionRect(
   context.fillStyle = preview ? "rgba(250, 140, 22, 0.12)" : "rgba(22, 119, 255, 0.10)";
   context.fillRect(x, y, size, size);
   context.strokeRect(x, y, size, size);
+  if (handles) drawCorrectionHandles(context, x, y, size);
+  context.restore();
+}
+
+function drawCorrectionDragRect(
+  context: CanvasRenderingContext2D,
+  rect: CorrectionDragRect | null,
+  view: ViewState,
+): void {
+  if (!rect) return;
+  const x = view.offsetX + rect.x * view.scale;
+  const y = view.offsetY + rect.y * view.scale;
+  const w = rect.w * view.scale;
+  const h = rect.h * view.scale;
+  if (w <= 0 || h <= 0) return;
+
+  context.save();
+  context.lineWidth = 1.5;
+  context.strokeStyle = "#fa8c16";
+  context.setLineDash([6, 4]);
+  context.strokeRect(x, y, w, h);
+  context.restore();
+}
+
+function drawCorrectionHandles(context: CanvasRenderingContext2D, x: number, y: number, size: number): void {
+  const points = [
+    [x, y],
+    [x + size, y],
+    [x, y + size],
+    [x + size, y + size],
+  ];
+  context.save();
+  context.setLineDash([]);
+  context.fillStyle = "#fff";
+  context.strokeStyle = "#fa8c16";
+  context.lineWidth = 2;
+  for (const [px, py] of points) {
+    context.beginPath();
+    context.rect(px - CORRECTION_HANDLE_SIZE / 2, py - CORRECTION_HANDLE_SIZE / 2, CORRECTION_HANDLE_SIZE, CORRECTION_HANDLE_SIZE);
+    context.fill();
+    context.stroke();
+  }
   context.restore();
 }
 
 function rectContainsPoint(rect: DeviceCorrectionRect, x: number, y: number): boolean {
   return x >= rect.x && x <= rect.x + rect.size && y >= rect.y && y <= rect.y + rect.size;
+}
+
+function hitCorrectionResizeHandle(
+  rect: DeviceCorrectionRect,
+  point: { x: number; y: number },
+  scale: number,
+): CorrectionResizeHandle | null {
+  const tolerance = Math.max(4, CORRECTION_HANDLE_SIZE / Math.max(scale, MIN_SCALE));
+  const handles: Array<{ handle: CorrectionResizeHandle; x: number; y: number }> = [
+    { handle: "nw", x: rect.x, y: rect.y },
+    { handle: "ne", x: rect.x + rect.size, y: rect.y },
+    { handle: "sw", x: rect.x, y: rect.y + rect.size },
+    { handle: "se", x: rect.x + rect.size, y: rect.y + rect.size },
+  ];
+  const hit = handles.find((item) => (
+    Math.abs(point.x - item.x) <= tolerance
+    && Math.abs(point.y - item.y) <= tolerance
+  ));
+  return hit?.handle || null;
+}
+
+function getCorrectionHandleCursor(handle: CorrectionResizeHandle): string {
+  return handle === "nw" || handle === "se" ? "nwse-resize" : "nesw-resize";
+}
+
+function getCorrectionHoverCursor(
+  rect: DeviceCorrectionRect | null,
+  point: { x: number; y: number },
+  scale: number,
+): string {
+  if (!rect) return "crosshair";
+  const handle = hitCorrectionResizeHandle(rect, point, scale);
+  if (handle) return getCorrectionHandleCursor(handle);
+  return rectContainsPoint(rect, point.x, point.y) ? "move" : "crosshair";
 }
 
 function clampNumber(value: number, min: number, max: number): number {

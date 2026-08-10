@@ -118,6 +118,10 @@ export function registerDeviceVerifyIpc(): void {
       if (!fs.existsSync(localDir) || !fs.statSync(localDir).isDirectory()) {
         return { success: true, hasData: false };
       }
+      const files = collectFiles(localDir);
+      if (!findPointWorkbookPath(files)) {
+        return { success: true, hasData: false };
+      }
 
       const session = readDeviceVerificationDirectory(localDir, DEVICE_VERIFY_DIR_NAME);
       activeSession = session;
@@ -353,22 +357,22 @@ function exportDeviceVerificationCorrectionData(projectName: string, destDir: st
   if (correctionRecords.length === 0) throw new Error("暂无纠偏数据");
 
   const files = collectFiles(localDir);
-  const cruiseIdByPointCode = readCruiseIdMapFromExtendJson(files, localDir);
+  const calibrationByPointCode = readPointCalibrationMapFromExtendJson(files, localDir);
   const zip = new AdmZip();
   const usedEntryNames = new Set<string>();
   let exportedCount = 0;
 
   for (const record of correctionRecords) {
     const rect = normalizeCorrectionRect(record.rect);
-    const cruiseId = cruiseIdByPointCode.get(record.pointCode.toLowerCase());
-    if (!cruiseId) throw new Error(`extend.json 中未找到点位 ${record.pointCode} 的 cruise_id`);
+    const calibration = calibrationByPointCode.get(record.pointCode.toLowerCase());
+    if (!calibration?.calibrationId) throw new Error(`extend.json 中未找到点位 ${record.pointCode} 的 calibration_id`);
 
     const payload = [{
-      cp_id: cruiseId,
+      cp_id: calibration.calibrationId,
       target_point: correctionRectToTargetPoint(rect),
       target_rect: correctionRectToTargetRect(rect),
     }];
-    const entryName = uniqueZipEntryName(usedEntryNames, `${cruiseId}.json`);
+    const entryName = uniqueZipEntryName(usedEntryNames, `${calibration.cruiseId || calibration.calibrationId}.json`);
     zip.addFile(entryName, Buffer.from(`${JSON.stringify(payload, null, 2)}\n`, "utf-8"));
     exportedCount++;
   }
@@ -589,7 +593,7 @@ function collectPointImages(files: string[], sourceDir: string): Map<string, Ima
   return imageByPointCode;
 }
 
-function readCruiseIdMapFromExtendJson(files: string[], sourceDir: string): Map<string, string> {
+function readPointCalibrationMapFromExtendJson(files: string[], sourceDir: string): Map<string, { calibrationId: string; cruiseId: string }> {
   const extendPath = findExtendJsonPath(files, sourceDir);
   if (!extendPath) throw new Error("未找到 extend.json");
 
@@ -601,16 +605,17 @@ function readCruiseIdMapFromExtendJson(files: string[], sourceDir: string): Map<
       : [];
   if (rows.length === 0) throw new Error("extend.json 中未找到点位映射");
 
-  const cruiseIdByPointCode = new Map<string, string>();
+  const calibrationByPointCode = new Map<string, { calibrationId: string; cruiseId: string }>();
   for (const row of rows) {
     const pointCode = valueText(row?.point_code ?? row?.pointCode);
+    const calibrationId = valueText(row?.calibration_id ?? row?.calibrationId);
     const cruiseId = valueText(row?.cruise_id ?? row?.cruiseId);
-    if (!pointCode || !cruiseId) continue;
-    cruiseIdByPointCode.set(pointCode.toLowerCase(), cruiseId);
+    if (!pointCode || !calibrationId) continue;
+    calibrationByPointCode.set(pointCode.toLowerCase(), { calibrationId, cruiseId });
   }
 
-  if (cruiseIdByPointCode.size === 0) throw new Error("extend.json 中未找到有效 cruise_id");
-  return cruiseIdByPointCode;
+  if (calibrationByPointCode.size === 0) throw new Error("extend.json 中未找到有效 calibration_id");
+  return calibrationByPointCode;
 }
 
 function findExtendJsonPath(files: string[], sourceDir: string): string | undefined {
