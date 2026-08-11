@@ -169,9 +169,9 @@ export async function recognizeComponentImage(options: RecognizeComponentImageOp
     .map((group) => ({
       ...group,
       labelRects: completedLabelRects.filter((rect) => rect.groupId === group.id),
-      deviceRects: [] as ImageRect[],
+      deviceRects: generatedDeviceRects.filter((rect) => rect.groupId === group.id),
     }))
-    .filter((group) => group.labelRects.length > 0);
+    .filter((group) => group.labelRects.length > 0 || group.deviceRects.length > 0);
 
   const recognizedSourceRectIds = new Set(
     recognizedLabelRects.map((rect) => rect.generatedFromRectId).filter(Boolean) as string[],
@@ -208,7 +208,7 @@ export async function recognizeComponentImage(options: RecognizeComponentImageOp
       ...generatedDeviceRects,
     ],
   };
-  const recognizedPointRows = buildRowsFromRecognizedLabels(completedLabelRects, generatedDeviceRects);
+  const recognizedPointRows = buildRowsFromRecognitionGroups(recognizedGroups);
   const recognizedRows = recognizedPointRows.rows;
   const nextRows = applyCabinetGeneratedPointNames(mode === "whole" ? recognizedRows : [...existingRows, ...recognizedRows]);
   const nextSinglePoints = mode === "whole" ? [] : existingSinglePoints;
@@ -1182,6 +1182,29 @@ function buildRowsFromRecognizedLabels(
   };
 }
 
+function buildRowsFromRecognitionGroups(
+  groups: Array<{ labelRects: ImageRect[]; deviceRects: ImageRect[] }>,
+): PointRowsWithDiagnostics {
+  const rows: CabinetPointRow[] = [];
+  let unboundLabelCount = 0;
+  let unboundDeviceCount = 0;
+
+  for (const group of groups) {
+    if (!group.labelRects.length && !group.deviceRects.length) continue;
+    const result = buildRowsFromRecognizedLabels(group.labelRects, group.deviceRects);
+    rows.push(...result.rows);
+    unboundLabelCount += result.unboundLabelCount;
+    unboundDeviceCount += result.unboundDeviceCount;
+  }
+
+  return {
+    rows,
+    emptyNameCount: rows.filter((row) => !row.name.trim()).length,
+    unboundLabelCount,
+    unboundDeviceCount,
+  };
+}
+
 export interface SortedPointRowsResult {
   annotations: ComponentAnnotations;
   rows: CabinetPointRow[];
@@ -1365,29 +1388,83 @@ function selectRelevantLabelRowsForDeviceRows(labelRows: ImageRect[][], deviceRo
   if (!labelRows.length || !deviceRows.length) return labelRows;
   const visibleLabelRows = labelRows.filter((row) => row.some((rect) => hasVisibleLabelTextRect(rect)));
   const candidateRows = visibleLabelRows.length ? visibleLabelRows : labelRows;
-  const filterThreshold = Math.max(2, deviceRows.length * 2);
-  if (candidateRows.length <= filterThreshold) return candidateRows;
+  if (candidateRows.length <= Math.max(1, deviceRows.length)) return candidateRows;
 
-  const bestByDeviceRowKey = new Map<string, { labelRow: ImageRect[]; score: number }>();
-  for (const labelRow of candidateRows) {
-    const relatedRows = findRelatedDeviceRowsForLabelRow(labelRow, deviceRows);
-    for (const deviceRow of relatedRows) {
-      const key = getRectRowKey(deviceRow);
-      const score = getLabelRowSelectionScore(labelRow, deviceRow);
-      const current = bestByDeviceRowKey.get(key);
-      if (!current || score < current.score) {
-        bestByDeviceRowKey.set(key, { labelRow, score });
-      }
-    }
-  }
-
-  const selectedRows = uniqueRectRows([...bestByDeviceRowKey.values()].map((item) => item.labelRow));
+  const selectedRows = selectBestLabelRowsForDeviceRows(candidateRows, deviceRows);
   return selectedRows.length ? sortRectRowsByPosition(selectedRows) : candidateRows;
 }
 
-function getLabelRowSelectionScore(labelRow: ImageRect[], deviceRow: ImageRect[]): number {
-  return getRowRelationScore(labelRow, deviceRow) + getLabelRowTextPenalty(labelRow);
+function selectBestLabelRowsForDeviceRows(labelRows: ImageRect[][], deviceRows: ImageRect[][]): ImageRect[][] {
+  const pairs: Array<{ labelRow: ImageRect[]; deviceRow: ImageRect[]; score: number }> = [];
+  for (const labelRow of labelRows) {
+    for (const deviceRow of deviceRows) {
+      if (!isDeviceRowHorizontallyRelated(getRowHorizontalSpan(labelRow), deviceRow)) continue;
+      pairs.push({
+        labelRow,
+        deviceRow,
+        score: getLabelRowSelectionScore(labelRow, deviceRow),
+      });
+    }
+  }
+
+  pairs.sort((left, right) => left.score - right.score);
+  const selectedRows: ImageRect[][] = [];
+  const usedLabelRowKeys = new Set<string>();
+  const usedDeviceRowKeys = new Set<string>();
+  for (const pair of pairs) {
+    const labelRowKey = getRectRowKey(pair.labelRow);
+    const deviceRowKey = getRectRowKey(pair.deviceRow);
+    if (usedLabelRowKeys.has(labelRowKey) || usedDeviceRowKeys.has(deviceRowKey)) continue;
+    usedLabelRowKeys.add(labelRowKey);
+    usedDeviceRowKeys.add(deviceRowKey);
+    selectedRows.push(pair.labelRow);
+    if (usedDeviceRowKeys.size >= deviceRows.length) break;
+  }
+
+  return selectedRows;
 }
+
+function getLabelRowSelectionScore(labelRow: ImageRect[], deviceRow: ImageRect[]): number {
+  return getRowRelationScore(labelRow, deviceRow)
+    + getLabelRowTextPenalty(labelRow)
+    + getLabelDeviceTypePenalty(labelRow, deviceRow);
+}
+
+function getLabelDeviceTypePenalty(labelRow: ImageRect[], deviceRow: ImageRect[]): number {
+  const labelCategory = getLabelRowTextCategory(labelRow);
+  const deviceCategory = getDeviceRowTypeCategory(deviceRow);
+  if (!labelCategory || !deviceCategory) return 0;
+  return labelCategory === deviceCategory ? -50 : 160;
+}
+
+function getLabelRowTextCategory(labelRow: ImageRect[]): CabinetLabelTextCategory | "" {
+  const text = labelRow.map((rect) => normalizeLabelTextForScoring(rect.text)).join("");
+  if (/压板/u.test(text)) return "plate";
+  if (/指示灯|LED|灯/u.test(text)) return "light";
+  if (/空开|空气开关/u.test(text)) return "airSwitch";
+  if (/旋钮/u.test(text)) return "knob";
+  if (/钥匙|钥匙孔/u.test(text)) return "keyhole";
+  if (/把手/u.test(text)) return "handle";
+  return "";
+}
+
+function getDeviceRowTypeCategory(deviceRow: ImageRect[]): CabinetLabelTextCategory | "" {
+  const text = deviceRow.map((rect) => normalizeLabelTextForScoring([
+    rect.deviceName,
+    rect.recognitionLabelDesc,
+    rect.recognitionLabel,
+    rect.text,
+  ].filter(Boolean).join(""))).join("");
+  if (/压板/u.test(text)) return "plate";
+  if (/指示灯|LED|矩形灯|小灯|显示屏|灯亮|灯灭/u.test(text)) return "light";
+  if (/空开/u.test(text)) return "airSwitch";
+  if (/旋钮/u.test(text)) return "knob";
+  if (/钥匙|钥匙孔/u.test(text)) return "keyhole";
+  if (/把手/u.test(text)) return "handle";
+  return "";
+}
+
+type CabinetLabelTextCategory = "plate" | "light" | "airSwitch" | "knob" | "keyhole" | "handle";
 
 function getLabelRowTextPenalty(labelRow: ImageRect[]): number {
   const texts = labelRow.map((rect) => normalizeLabelTextForScoring(rect.text)).filter(Boolean);
@@ -1646,7 +1723,7 @@ function assignRectsToStandardPartGroups(rects: ImageRect[], standardPartRects: 
   const byGroup = new Map<string, ImageRect[]>();
   const unassigned: ImageRect[] = [];
   const nextRects = rects.map((rect) => {
-    const group = findContainerStandardPart(rect, standardPartRects);
+    const group = findPresetStandardPartGroup(rect, standardPartRects) || findContainerStandardPart(rect, standardPartRects);
     if (!group) {
       const nextRect: ImageRect = {
         ...rect,
@@ -1667,6 +1744,11 @@ function assignRectsToStandardPartGroups(rects: ImageRect[], standardPartRects: 
     return nextRect;
   });
   return { rects: nextRects, byGroup, unassigned };
+}
+
+function findPresetStandardPartGroup(rect: ImageRect, standardPartRects: ImageRect[]): ImageRect | null {
+  if (!rect.groupId) return null;
+  return standardPartRects.find((standardPart) => standardPart.id === rect.groupId) || null;
 }
 
 function findContainerStandardPart(rect: ImageRect, standardPartRects: ImageRect[]): ImageRect | null {
@@ -2306,37 +2388,58 @@ async function buildDeviceLabelOcrSources(
   const validRects = rects.filter((rect) => rect.w >= MIN_ANNOTATION_RECT_SIZE && rect.h >= MIN_ANNOTATION_RECT_SIZE);
   if (!validRects.length) return [];
 
-  // 多个手工标签区域取一个共同外接矩形并只裁图一次，使 qwen3.5-ocr 一次请求即可识别全部区域。
-  const sharedBounds = mergeImageRectBounds(validRects);
-  const crop = await cropCabinetOcrImage(imageDataUrl, sharedBounds, 0);
-  return validRects.map((rect, index) => {
-    const groupId = groupByRectId?.get(rect.id);
-    return {
-      regionId: `region_${index + 1}`,
-      title: `标签区域 ${index + 1}`,
-      dataUrl: crop.dataUrl,
-      originX: crop.originX,
-      originY: crop.originY,
-      width: crop.width,
-      height: crop.height,
-      // roi 使用共享裁剪图内的局部坐标；target 则保留原图坐标，供结果映射回画布。
-      roi: {
-        x: rect.x - crop.originX,
-        y: rect.y - crop.originY,
-        w: rect.w,
-        h: rect.h,
-      },
-      targetX: rect.x,
-      targetY: rect.y,
-      targetW: rect.w,
-      targetH: rect.h,
-      sourceRectId: rect.id,
-      groupId,
-      masked: false,
-      sourceMode: "crop",
-      coordinateMode: "original",
-    };
-  });
+  const groups = groupLabelRectsForOcr(validRects, groupByRectId);
+  const sources: CabinetOcrSource[] = [];
+
+  // OCR 按标准部件组裁图：组内仍然合并请求，组间隔离，避免两组设备复用同一组标签。
+  for (const group of groups) {
+    const bounds = mergeImageRectBounds(group.rects);
+    const crop = await cropCabinetOcrImage(imageDataUrl, bounds, 0);
+    for (const rect of group.rects) {
+      const groupId = groupByRectId?.get(rect.id) || rect.groupId;
+      const index = sources.length + 1;
+      sources.push({
+        regionId: `region_${index}`,
+        title: `标签区域 ${index}`,
+        dataUrl: crop.dataUrl,
+        originX: crop.originX,
+        originY: crop.originY,
+        width: crop.width,
+        height: crop.height,
+        // roi 使用当前组裁剪图内的局部坐标；target 保留原图坐标，供结果映射回画布。
+        roi: {
+          x: rect.x - crop.originX,
+          y: rect.y - crop.originY,
+          w: rect.w,
+          h: rect.h,
+        },
+        targetX: rect.x,
+        targetY: rect.y,
+        targetW: rect.w,
+        targetH: rect.h,
+        sourceRectId: rect.id,
+        groupId,
+        masked: false,
+        sourceMode: "crop",
+        coordinateMode: "original",
+      });
+    }
+  }
+
+  return sources;
+}
+
+function groupLabelRectsForOcr(
+  rects: ImageRect[],
+  groupByRectId?: Map<string, string>,
+): Array<{ key: string; rects: ImageRect[] }> {
+  const grouped = new Map<string, ImageRect[]>();
+  for (const rect of rects) {
+    const groupId = groupByRectId?.get(rect.id) || rect.groupId;
+    const key = groupId ? `group:${groupId}` : `rect:${rect.id}`;
+    grouped.set(key, [...(grouped.get(key) || []), rect]);
+  }
+  return Array.from(grouped.entries()).map(([key, groupRects]) => ({ key, rects: groupRects }));
 }
 
 function mergeImageRectBounds(rects: ImageRect[]): { x: number; y: number; w: number; h: number } {
