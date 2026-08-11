@@ -5,6 +5,7 @@ import { createWindow } from "./app/create-window";
 import { loadInitialProjectRoot } from "./project-core/project-root";
 import { registerArchiveIpc } from "./ipc/archive-ipc";
 import { registerDeviceVerifyIpc } from "./ipc/device-verify-ipc";
+import { registerExportTaskIpc } from "./ipc/export-task-ipc";
 import { registerFileIpc } from "./ipc/file-ipc";
 import { registerProjectIpc } from "./ipc/project-ipc";
 import { registerSystemIpc } from "./ipc/system-ipc";
@@ -22,6 +23,7 @@ app.whenReady().then(async () => {
   registerProjectIpc();
   registerArchiveIpc();
   registerDeviceVerifyIpc();
+  registerExportTaskIpc();
 
   await initDbIpc();
   createWindow();

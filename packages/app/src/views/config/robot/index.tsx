@@ -4,9 +4,10 @@ import type { ColumnsType } from "antd/es/table";
 import { ReloadOutlined, PlusOutlined } from "@ant-design/icons";
 import RobotFormModal from "./RobotFormModal";
 import CameraTableModal, { type CameraVO } from "./CameraTableModal";
-import { getAllRobot, addRobot, updateRobot, deleteRobot, getFacInfo } from "@/api/config.js";
+import { addRobot, updateRobot, deleteRobot, getFacInfo } from "@/api/config.js";
 import { getRequestErrorMessage } from "@/services/http";
-import { getConnectionStatus, setRobotOptions, subscribeBackendContext } from "@/stores/appContextStore";
+import { getConnectionStatus, subscribeBackendContext, useRobotRecords } from "@/stores/appContextStore";
+import { refreshRobotRecords } from "@/services/robot-options";
 
 export interface RobotRecord {
   id: number;
@@ -62,6 +63,7 @@ const getStatusPill = (state: number) => {
 };
 
 export default function RobotConfig() {
+  const cachedRobotRecords = useRobotRecords();
   const [data, setData] = useState<RobotRecord[]>([]);
   const [facOptions, setFacOptions] = useState<{ value: number; label: string }[]>([]);
   const [loading, setLoading] = useState(false);
@@ -76,15 +78,8 @@ export default function RobotConfig() {
   const fetchRobots = async () => {
     setLoading(true);
     try {
-      const res = await getAllRobot();
-      const body = res.data as ApiResponse<RobotRecord[]>;
-      if (body.success) {
-        const robots = Array.isArray(body.data) ? body.data : [];
-        setData(robots);
-        setRobotOptions(robots.map((robot) => ({ label: robot.robotName, value: robot.robotName })));
-      } else {
-        message.error(body.message || "获取机器人列表失败");
-      }
+      const robots = await refreshRobotRecords({ force: true });
+      setData(robots as RobotRecord[]);
     } catch (error) {
       message.error(getRequestErrorMessage(error, "获取机器人列表失败"));
     } finally {
@@ -112,17 +107,19 @@ export default function RobotConfig() {
   useEffect(() => {
     if (!fetchedRef.current && getConnectionStatus() === "connected") {
       fetchedRef.current = true;
-      fetchRobots();
       fetchFacOptions();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // IP 切换时重新加载
+  useEffect(() => {
+    setData(cachedRobotRecords as RobotRecord[]);
+  }, [cachedRobotRecords]);
+
+  // IP 切换时只刷新厂站选项；机器人列表由顶部栏统一刷新缓存。
   useEffect(() => {
     return subscribeBackendContext(() => {
       if (getConnectionStatus() === "connected") {
-        fetchRobots();
         fetchFacOptions();
       }
     });

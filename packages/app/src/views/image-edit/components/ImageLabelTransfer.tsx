@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Modal, Form, Input, Select, Button, App, Alert } from "antd";
 import { FolderOpenOutlined } from "@ant-design/icons";
 import { useSelectedProject } from "@/stores/appContextStore";
+import { createLocalExportTask } from "@/components/download-task/task-actions";
 import ExportMapPicker, { ExportMapFooter, type ExportMapOption } from "./ExportMapPicker";
 
 interface ImageLabelTransferProps {
@@ -93,7 +94,7 @@ export default function ImageLabelTransfer({ open, mode, onClose, onImported }: 
     if (filePath) setZipPath(filePath);
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (triggerElement?: HTMLElement) => {
     if (!currentProject) {
       message.warning("请先选择项目");
       return;
@@ -106,16 +107,21 @@ export default function ImageLabelTransfer({ open, mode, onClose, onImported }: 
     setSubmitting(true);
     try {
       if (mode === "export") {
-        const destDir = await window.electronAPI?.selectDir?.();
-        if (!destDir) return;
-        const result = await window.electronAPI?.exportImageLabels?.(currentProject, selectedMap, destDir);
-        if (!result?.success) {
-          message.error(`导出失败: ${result?.error || "未知错误"}`);
+        const result = await createLocalExportTask({
+          name: "图像标识导出",
+          operation: "image-labels",
+          destTitle: "选择图像标识导出目录",
+          payload: { projectName: currentProject, mapName: selectedMap },
+          triggerElement,
+        });
+        if (!result.success) {
+          message.warning(result.error || "创建导出任务失败");
           return;
         }
-        message.success("导出成功");
-        resetModalState();
-        onClose();
+        if (!result.cancelled) {
+          resetModalState();
+          onClose();
+        }
         return;
       }
 
@@ -134,7 +140,7 @@ export default function ImageLabelTransfer({ open, mode, onClose, onImported }: 
       resetModalState();
       onClose();
     } catch (e: any) {
-      message.error(`${mode === "export" ? "导出" : "导入"}失败: ` + (e?.message || e));
+      message.error(e?.message || `${mode === "export" ? "创建导出任务" : "导入"}失败`);
     } finally {
       setSubmitting(false);
     }

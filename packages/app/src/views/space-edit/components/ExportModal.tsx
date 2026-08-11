@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Modal, Divider, Progress, Button, App } from "antd";
+import { Modal, Divider, Button, App } from "antd";
 import { FolderOutlined } from "@ant-design/icons";
+import { createLocalExportTask } from "@/components/download-task/task-actions";
 import { MAP_DIR_NAME } from "../utils/space-paths";
 import { useSelectedProject } from "@/stores/appContextStore";
 
@@ -21,45 +22,40 @@ export default function ExportModal({ open, onClose, modelPath }: Props) {
   const selectedProject = useSelectedProject();
   const projectName = selectedProject || "";
   const [exporting, setExporting] = useState(false);
-  const [progressPct, setProgressPct] = useState(0);
-  const [progressStep, setProgressStep] = useState("");
   const mapName = mapNameFromModelPath(modelPath);
 
-  const handleDownload = async () => {
-    const api = window.electronAPI;
-    if (!api) return;
+  const handleDownload = async (triggerElement?: HTMLElement) => {
     if (!mapName) {
       message.warning("请先在左侧地图树加载一个模型");
       return;
     }
-    const dir = await api.selectDir();
-    if (!dir) return;
 
     setExporting(true);
-    setProgressPct(0);
-    setProgressStep("准备导出...");
-
-    // 监听进度
-    const unsub = api.onExportProgress(({ step, pct }) => {
-      setProgressPct(pct);
-      setProgressStep(step);
-    });
-
-    const items = [{ type: MAP_DIR_NAME, name: mapName }];
-
     try {
-      const result = await api.exportZip(projectName, items, dir);
-      message.success(`导出成功: ${result.zipName}.zip`);
-      onClose();
+      const result = await createLocalExportTask({
+        name: "空间模型导出",
+        operation: "project-export-zip",
+        destTitle: "选择空间模型保存目录",
+        payload: {
+          projectName,
+          items: [{ type: MAP_DIR_NAME, name: mapName }],
+        },
+        triggerElement,
+      });
+      if (!result.success) {
+        message.warning(result.error || "创建导出任务失败");
+        return;
+      }
+      if (!result.cancelled) {
+        onClose();
+      }
     } catch (e: any) {
-      message.error("导出失败: " + (e?.message || e));
+      message.error(e?.message || "创建导出任务失败");
     } finally {
-      unsub();
       setExporting(false);
     }
   };
 
-  const showProgress = exporting;
   const canExport = !!projectName && !!mapName;
 
   return (
@@ -67,12 +63,12 @@ export default function ExportModal({ open, onClose, modelPath }: Props) {
       title="导出模型"
       open={open}
       onCancel={onClose}
-      footer={
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <Button onClick={onClose} disabled={exporting}>取消</Button>
-          <Button type="primary" disabled={!canExport || exporting} loading={exporting} onClick={handleDownload}>下载</Button>
-        </div>
-      }
+        footer={
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+            <Button onClick={onClose} disabled={exporting}>取消</Button>
+            <Button type="primary" disabled={!canExport || exporting} loading={exporting} onClick={(event) => handleDownload(event.currentTarget)}>下载</Button>
+          </div>
+        }
       centered
       width={520}
       destroyOnHidden
@@ -99,12 +95,7 @@ export default function ExportModal({ open, onClose, modelPath }: Props) {
       <Divider style={{ margin: "12px 0" }} />
       <div>
         <div style={{ fontSize: 13, color: "#666", marginBottom: 8 }}>导出内容</div>
-        {showProgress ? (
-          <div style={{ padding: "24px 0" }}>
-            <Progress percent={progressPct} status="active" strokeColor="#1677ff" />
-            <div style={{ color: "#666", fontSize: 13, marginTop: 8, textAlign: "center" }}>{progressStep}</div>
-          </div>
-        ) : !canExport ? (
+        {!canExport ? (
           <div style={{ color: "#999", fontSize: 12, padding: "8px 0" }}>请先在左侧地图树加载一个模型</div>
         ) : (
           <div style={{

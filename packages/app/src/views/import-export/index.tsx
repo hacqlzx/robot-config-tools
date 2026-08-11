@@ -3,7 +3,6 @@ import { App, Button, Card, Modal, Radio, Upload } from "antd";
 import type { UploadFile } from "antd";
 import { DownloadOutlined, InboxOutlined, UploadOutlined } from "@ant-design/icons";
 import {
-  getAllRobot,
   getFacInfo,
   importDevicePoint,
   importSpaceModel,
@@ -19,7 +18,8 @@ import {
   exportBack,
   downloadCommunicateExcel,
 } from "@/api/config.js";
-import { useAppContext } from "@/stores/appContextStore";
+import { startDownloadTaskFlyAnimation } from "@/components/download-task";
+import { useAppContext, useRobotOptions } from "@/stores/appContextStore";
 import "./index.scss";
 
 interface IEAction {
@@ -59,6 +59,15 @@ interface ImportDialogConfig {
   showBackupType?: boolean;
   /** 真正执行导入的函数；backupType 只有工程备份导入会读取。 */
   onImport: (file: File, backupType: BackupImportType) => Promise<void>;
+}
+
+interface RemoteExportTaskOptions {
+  label: string;
+  exportPath: string;
+  query?: Record<string, string | number | boolean | null | undefined>;
+  destTitle: string;
+  triggerElement?: HTMLElement;
+  fallbackExport: () => Promise<any>;
 }
 
 const cardList: IECard[] = [
@@ -143,6 +152,7 @@ function matchImportAccept(fileName: string, accept: string): boolean {
 export default function ImportExport() {
   const { message } = App.useApp();
   const { selectedRobot, backendIp } = useAppContext();
+  const robotOptions = useRobotOptions();
   const containerRef = useRef<HTMLDivElement>(null);
   const [columns, setColumns] = useState(4);
   const [uploadingLabel, setUploadingLabel] = useState<string | null>(null);
@@ -206,16 +216,77 @@ export default function ImportExport() {
     }
   }, [backendIp, message]);
 
-  /** 通用下载到目录：Electron 先选目录，浏览器直接触发下载 */
-  const downloadFileToDir = useCallback(async (filePath: string, label: string) => {
-    if (window.electronAPI) {
-      const dir = await window.electronAPI.selectDir(`选择${label}保存目录`);
-      if (!dir) return;
-      await downloadFileToSelectedDir(filePath, label, dir);
+  /** 创建后台导出任务：先选择保存目录，再由下载任务中心调用后台导出接口并下载。 */
+  const createRemoteExportTask = useCallback(async ({
+    label,
+    exportPath,
+    query,
+    destTitle,
+    triggerElement,
+    fallbackExport,
+  }: RemoteExportTaskOptions) => {
+    if (!backendIp) {
+      message.warning("请先连接后台");
       return;
     }
-    await downloadFileToSelectedDir(filePath, label);
-  }, [downloadFileToSelectedDir]);
+
+    if (window.electronAPI?.downloadTasks) {
+      const tasks = await window.electronAPI.downloadTasks.list().catch(() => []);
+      if (tasks.some((task) => task.status === "pending" || task.status === "running")) {
+        message.warning("已有导出任务进行中");
+        return;
+      }
+    }
+
+    if (window.electronAPI) {
+      const destDir = await window.electronAPI.selectDir(destTitle);
+      if (!destDir) return;
+
+      if (window.electronAPI.downloadTasks) {
+        const result = await window.electronAPI.downloadTasks.create({
+          type: "remote-export",
+          name: label,
+          backendIp,
+          exportPath,
+          query,
+          destDir,
+        });
+        if (!result.success) {
+          message.warning(result.error || "创建导出任务失败");
+          return;
+        }
+        if (triggerElement) startDownloadTaskFlyAnimation(triggerElement);
+        return;
+      }
+
+      setUploadingLabel(label);
+      try {
+        const res = await fallbackExport();
+        const body = res?.data;
+        if (!body?.success || !body?.data) {
+          message.error(body?.message || "获取下载路径失败");
+          return;
+        }
+        await downloadFileToSelectedDir(String(body.data || ""), label, destDir);
+      } finally {
+        setUploadingLabel(null);
+      }
+      return;
+    }
+
+    setUploadingLabel(label);
+    try {
+      const res = await fallbackExport();
+      const body = res?.data;
+      if (!body?.success || !body?.data) {
+        message.error(body?.message || "获取下载路径失败");
+        return;
+      }
+      await downloadFileToSelectedDir(String(body.data || ""), label);
+    } finally {
+      setUploadingLabel(null);
+    }
+  }, [backendIp, downloadFileToSelectedDir, message]);
 
   /** 通信信息导入 */
   const handleCommunicationImport = useCallback(async (file: File) => {
@@ -235,26 +306,25 @@ export default function ImportExport() {
     }
   }, [message]);
 
-  /** 读取顶部栏选中的机器人 */
-  const resolveSelectedRobot = useCallback(async () => {
+  /** 读取顶部栏已缓存的机器人，避免导入导出时重复请求机器人列表接口。 */
+  const resolveSelectedRobot = useCallback(() => {
     if (!selectedRobot) {
       message.warning("请先在顶部选择机器人");
       return null;
     }
 
-    const robotRes = await getAllRobot();
-    const robotBody = robotRes.data;
-    if (!robotBody.success || !robotBody.data) {
-      message.error("获取机器人列表失败");
+    const robot = robotOptions.find((item) => item.value === selectedRobot || item.label === selectedRobot);
+    const robotId = Number(robot?.id);
+    if (!robot || !Number.isFinite(robotId)) {
+      message.warning("机器人列表未加载，请先连接后台或刷新机器人配置");
       return null;
     }
-    const robot = robotBody.data.find((r: any) => r.robotName === selectedRobot);
-    if (!robot) {
-      message.error(`未找到机器人「${selectedRobot}」`);
-      return null;
-    }
-    return robot;
-  }, [message, selectedRobot]);
+    return {
+      id: robotId,
+      robotName: robot.label,
+      robotCode: robot.robotCode || "",
+    };
+  }, [message, robotOptions, selectedRobot]);
 
   /** 读取当前默认厂站 */
   const resolveCurrentStation = useCallback(async () => {
@@ -340,25 +410,22 @@ export default function ImportExport() {
   }, [message, resolveSelectedRobot]);
 
   /** 工程备份导出 */
-  const handleProjectBackupExport = useCallback(async () => {
-    setUploadingLabel("工程备份导出");
+  const handleProjectBackupExport = useCallback(async (triggerElement?: HTMLElement) => {
     try {
       const robot = await resolveSelectedRobot();
       if (!robot) return;
-      const res = await exportBack(robot.id);
-      const body = res.data;
-      if (!body.success || !body.data) {
-        message.error(body.message || "获取下载路径失败");
-        return;
-      }
-
-      await downloadFileToDir(body.data, "工程备份导出");
+      await createRemoteExportTask({
+        label: "工程备份导出",
+        exportPath: "/robot/tool/file/exportBack",
+        query: { robotId: robot.id },
+        destTitle: "选择工程备份保存目录",
+        triggerElement,
+        fallbackExport: () => exportBack(robot.id),
+      });
     } catch (e: any) {
       message.error("导出失败: " + (e?.message || e));
-    } finally {
-      setUploadingLabel(null);
     }
-  }, [resolveSelectedRobot, message, downloadFileToDir]);
+  }, [createRemoteExportTask, resolveSelectedRobot, message]);
 
   /** 图像标识导入 */
   const handleImageLabelImport = useCallback(async (file: File) => {
@@ -421,119 +488,98 @@ export default function ImportExport() {
   }, [message]);
 
   /** 空间模型导出 */
-  const handleSpaceModelExport = useCallback(async () => {
-    if (!backendIp) {
-      message.warning("请先连接后台");
-      return;
-    }
+  const handleSpaceModelExport = useCallback(async (triggerElement?: HTMLElement) => {
     if (!selectedRobot) {
       message.warning("请先在顶部选择机器人");
       return;
     }
 
-    const destDir = window.electronAPI
-      ? await window.electronAPI.selectDir("选择空间模型保存目录")
-      : undefined;
-    if (window.electronAPI && !destDir) return;
-
-    setUploadingLabel("空间模型导出");
     try {
       const robot = await resolveSelectedRobot();
       if (!robot) return;
-      const res = await exportSpaceModel(robot.id);
-      const body = res.data;
-      if (!body.success || !body.data) {
-        message.error(body.message || "获取下载路径失败");
-        return;
-      }
-
-      await downloadFileToSelectedDir(body.data, "空间模型导出", destDir || undefined);
+      await createRemoteExportTask({
+        label: "空间模型导出",
+        exportPath: "/robot/tool/file/exportSpaceModel",
+        query: { robotId: robot.id },
+        destTitle: "选择空间模型保存目录",
+        triggerElement,
+        fallbackExport: () => exportSpaceModel(robot.id),
+      });
     } catch (e: any) {
       message.error("导出失败: " + (e?.message || e));
-    } finally {
-      setUploadingLabel(null);
     }
-  }, [backendIp, selectedRobot, resolveSelectedRobot, message, downloadFileToSelectedDir]);
+  }, [createRemoteExportTask, selectedRobot, resolveSelectedRobot, message]);
 
   /** 勘察图像导出 */
-  const handleSurveyImageExport = useCallback(async () => {
-    setUploadingLabel("勘察图像导出");
+  const handleSurveyImageExport = useCallback(async (triggerElement?: HTMLElement) => {
     try {
       const robot = await resolveSelectedRobot();
       if (!robot) return;
-      const res = await exportProspectImage(robot.id);
-      const body = res.data;
-      if (!body.success || !body.data) {
-        message.error(body.message || "获取下载路径失败");
-        return;
-      }
-
-      await downloadFileToDir(body.data, "勘察图像导出");
+      await createRemoteExportTask({
+        label: "勘察图像导出",
+        exportPath: "/robot/tool/file/exportProspectImage",
+        query: { robotId: robot.id },
+        destTitle: "选择勘察图像保存目录",
+        triggerElement,
+        fallbackExport: () => exportProspectImage(robot.id),
+      });
     } catch (e: any) {
       message.error("导出失败: " + (e?.message || e));
-    } finally {
-      setUploadingLabel(null);
     }
-  }, [resolveSelectedRobot, message, downloadFileToDir]);
+  }, [createRemoteExportTask, resolveSelectedRobot, message]);
 
   /** 屏柜验证图导出 */
-  const handleDeviceImageExport = useCallback(async () => {
-    setUploadingLabel("屏柜验证图导出");
+  const handleDeviceImageExport = useCallback(async (triggerElement?: HTMLElement) => {
     try {
       const robot = await resolveSelectedRobot();
       if (!robot) return;
-      const res = await exportDeviceImage(robot.id);
-      const body = res.data;
-      if (!body.success || !body.data) {
-        message.error(body.message || "获取下载路径失败");
-        return;
-      }
-
-      await downloadFileToDir(body.data, "屏柜验证图导出");
+      await createRemoteExportTask({
+        label: "屏柜验证图导出",
+        exportPath: "/robot/tool/file/exportDeviceImage",
+        query: { robotId: robot.id },
+        destTitle: "选择屏柜验证图保存目录",
+        triggerElement,
+        fallbackExport: () => exportDeviceImage(robot.id),
+      });
     } catch (e: any) {
       message.error("导出失败: " + (e?.message || e));
-    } finally {
-      setUploadingLabel(null);
     }
-  }, [resolveSelectedRobot, message, downloadFileToDir]);
+  }, [createRemoteExportTask, resolveSelectedRobot, message]);
 
   /** 设备验证图导出 */
-  const handleDeviceCheckImageExport = useCallback(async () => {
-    setUploadingLabel("设备验证图导出");
+  const handleDeviceCheckImageExport = useCallback(async (triggerElement?: HTMLElement) => {
     try {
       const robot = await resolveSelectedRobot();
       if (!robot) return;
-      const res = await exportDeviceCheckImage(robot.id);
-      const body = res.data;
-      if (!body.success || !body.data) {
-        message.error(body.message || "获取下载路径失败");
-        return;
-      }
-
-      await downloadFileToDir(body.data, "设备验证图导出");
+      await createRemoteExportTask({
+        label: "设备验证图导出",
+        exportPath: "/robot/tool/file/exportDeviceCheckImage",
+        query: { robotId: robot.id },
+        destTitle: "选择设备验证图保存目录",
+        triggerElement,
+        fallbackExport: () => exportDeviceCheckImage(robot.id),
+      });
     } catch (e: any) {
       message.error("导出失败: " + (e?.message || e));
-    } finally {
-      setUploadingLabel(null);
     }
-  }, [resolveSelectedRobot, message, downloadFileToDir]);
+  }, [createRemoteExportTask, resolveSelectedRobot, message]);
 
   /** 通信模板下载 */
-  const handleCommunicationTemplateDownload = useCallback(async () => {
+  const handleCommunicationTemplateDownload = useCallback(async (triggerElement?: HTMLElement) => {
     try {
-      const res = await downloadCommunicateExcel();
-      const body = res.data;
-      if (!body.success || !body.data) {
-        message.error(body.message || "获取模板失败");
-        return;
-      }
-      await downloadFileToDir(body.data, "通信模板下载");
+      await createRemoteExportTask({
+        label: "通信模板下载",
+        exportPath: "/robot/tool/file/downloadCommunicateExcel",
+        destTitle: "选择通信模板保存目录",
+        triggerElement,
+        fallbackExport: () => downloadCommunicateExcel(),
+      });
     } catch (e: any) {
       message.error("下载失败: " + (e?.message || e));
     }
-  }, [message, downloadFileToDir]);
+  }, [createRemoteExportTask, message]);
 
-  const handleAction = (card: IECard, actionKey: IEAction["key"], label: string) => {
+  const handleAction = (card: IECard, actionKey: IEAction["key"], label: string, triggerElement?: HTMLElement) => {
     const action = card.actions?.find((item) => item.key === actionKey && item.label === label);
     if (action?.disabled) return;
 
@@ -561,13 +607,13 @@ export default function ImportExport() {
 
     // 空间模型导出
     if (card.key === "space-model" && actionKey === "export") {
-      handleSpaceModelExport();
+      handleSpaceModelExport(triggerElement);
       return;
     }
 
     // 勘察图像导出
     if (card.key === "survey-image" && actionKey === "export") {
-      handleSurveyImageExport();
+      handleSurveyImageExport(triggerElement);
       return;
     }
 
@@ -584,7 +630,7 @@ export default function ImportExport() {
 
     // 屏柜验证图导出
     if (card.key === "screen-verify" && actionKey === "export") {
-      handleDeviceImageExport();
+      handleDeviceImageExport(triggerElement);
       return;
     }
 
@@ -612,13 +658,13 @@ export default function ImportExport() {
 
     // 设备验证图导出
     if (card.key === "device-verify" && actionKey === "export") {
-      handleDeviceCheckImageExport();
+      handleDeviceCheckImageExport(triggerElement);
       return;
     }
 
     // 工程备份导出
     if (card.key === "project-backup" && actionKey === "export") {
-      handleProjectBackupExport();
+      handleProjectBackupExport(triggerElement);
       return;
     }
 
@@ -650,7 +696,7 @@ export default function ImportExport() {
   };
 
   /** 模板下载映射 */
-  const templateHandlers: Record<string, () => void> = {
+  const templateHandlers: Record<string, (triggerElement?: HTMLElement) => Promise<void> | void> = {
     "communication": handleCommunicationTemplateDownload,
   };
 
@@ -687,7 +733,7 @@ export default function ImportExport() {
           disabled={act.disabled}
           icon={isImportKey(act.key) ? <UploadOutlined /> : <DownloadOutlined />}
           loading={uploadingLabel === act.label}
-          onClick={() => handleAction(card, act.key, act.label)}
+          onClick={(event) => handleAction(card, act.key, act.label, event.currentTarget)}
         >
           {act.label}
         </Button>
@@ -711,7 +757,7 @@ export default function ImportExport() {
                 <Button
                   type="text"
                   size="small"
-                  onClick={() => templateHandlers[card.key]?.()}
+                  onClick={(event) => templateHandlers[card.key]?.(event.currentTarget)}
                   style={{ marginLeft: "auto", color: "#546bf7" }}
                 >
                   模板下载

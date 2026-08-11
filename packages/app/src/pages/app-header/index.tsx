@@ -1,9 +1,11 @@
 ﻿import { useState, useEffect, useCallback } from "react";
 import { Menu, Button, Select, Dropdown, Modal, Input, Alert, message, Tooltip } from "antd";
+import { useRef } from "react";
 import { MinusOutlined, BorderOutlined, CloseOutlined, SettingOutlined, ProjectOutlined, PlusOutlined, EditOutlined, DeleteOutlined, CheckOutlined, FolderOpenOutlined, SwitcherOutlined } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 import { useNavigate, useLocation } from "react-router-dom";
 import { menuConfig } from "@/config/menu";
+import DownloadTaskButton from "@/components/download-task";
 import toolIcon from "@/assets/img/icon.png";
 import SettingsModal from "@/pages/settings-modal";
 import {
@@ -11,12 +13,11 @@ import {
   getSelectedProject,
   setConnectionStatus,
   setSelectedProject,
-  setRobotOptions,
   setSelectedRobot,
   useAppContext,
   useRobotOptions,
 } from "@/stores/appContextStore";
-import { getAllRobot } from "@/api/config.js";
+import { refreshRobotRecords } from "@/services/robot-options";
 import { MESSAGE_TOP_OFFSET } from "@/App";
 
 const menuItems: MenuProps["items"] = menuConfig.map((item) => ({ key: item.key, label: item.label }));
@@ -51,19 +52,14 @@ export default function AppHeader() {
   const [deleteSummaryLoading, setDeleteSummaryLoading] = useState(false);
   const [deleteSummaryError, setDeleteSummaryError] = useState("");
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const lastBackendIpVersionRef = useRef(backendIpVersion);
   const robotOptions = useRobotOptions();
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const [messageApi, contextHolder] = message.useMessage({ top: MESSAGE_TOP_OFFSET });
 
   const loadRobotList = useCallback(async () => {
     try {
-      const res = await getAllRobot();
-      const body = res.data;
-      if (body.success) {
-        const robots = Array.isArray(body.data) ? body.data : [];
-        const list = robots.map((r: any) => ({ label: r.robotName, value: r.robotName }));
-        setRobotOptions(list);
-      }
+      await refreshRobotRecords();
     } catch {
       // ignore
     }
@@ -71,7 +67,9 @@ export default function AppHeader() {
 
   // 连接成功后刷新机器人列表。
   useEffect(() => {
-    if (backendIpVersion > 0) clearRobotOptions();
+    const backendVersionChanged = backendIpVersion !== lastBackendIpVersionRef.current;
+    lastBackendIpVersionRef.current = backendIpVersion;
+    if (backendVersionChanged && backendIpVersion > 0) clearRobotOptions();
     if (connStatus === "connected") loadRobotList();
   }, [backendIpVersion, connStatus, loadRobotList]);
   // 启动时自动检查已保存后台。
@@ -311,6 +309,7 @@ export default function AppHeader() {
         </Dropdown>
         <Select placeholder="选择项目" style={{ width: 160 }} size="small" value={selectedProject} onChange={(v) => { setSelectedProject(v); }} allowClear options={projects.map((p) => ({ label: p, value: p }))} />
         <Select placeholder="选择机器人" style={{ width: 120 }} size="small" value={selectedRobot} onChange={(v) => { setSelectedRobot(v ?? null); }} allowClear options={robotOptions} />
+        <DownloadTaskButton />
         <div style={{ position: "relative", display: "inline-flex" }}>
           <Button type="text" size="small" icon={<SettingOutlined />} onClick={() => setSettingsOpen(true)} />
           <span style={{

@@ -225,6 +225,71 @@ declare global {
     exportedCount?: number;
   }
 
+  type ExportTaskStatus = "pending" | "running" | "success" | "failed" | "cancelled";
+
+  interface ExportTaskInfo {
+    id: string;
+    type: string;
+    name: string;
+    status: ExportTaskStatus;
+    progress: number | null;
+    message: string;
+    outputPath: string;
+    outputDir: string;
+    fileName: string;
+    createdAt: number;
+    updatedAt: number;
+  }
+
+  type LocalExportOperation =
+    | "project-export-zip"
+    | "survey-data"
+    | "image-labels"
+    | "cabinet-point-table"
+    | "cabinet-annotation-params"
+    | "device-correction-data"
+    | "device-marked-points";
+
+  interface RemoteExportTaskCreateRequest {
+    type: "remote-export";
+    name: string;
+    backendIp: string;
+    exportPath: string;
+    query?: Record<string, string | number | boolean | null | undefined>;
+    destDir: string;
+    preferredFileName?: string;
+  }
+
+  interface RemoteDownloadTaskCreateRequest {
+    type: "remote-download";
+    name: string;
+    backendIp: string;
+    downloadPath: string;
+    destDir: string;
+    preferredFileName?: string;
+  }
+
+  interface LocalExportTaskCreateRequest {
+    type: "local-export";
+    name: string;
+    operation: LocalExportOperation;
+    destDir: string;
+    payload?: Record<string, unknown>;
+  }
+
+  interface LocalExportPrepareRequest {
+    operation: LocalExportOperation;
+    payload?: Record<string, unknown>;
+  }
+
+  type ExportTaskCreateRequest = RemoteExportTaskCreateRequest | RemoteDownloadTaskCreateRequest | LocalExportTaskCreateRequest;
+
+  interface ExportTaskActionResult {
+    success: boolean;
+    error?: string;
+    task?: ExportTaskInfo | null;
+  }
+
   interface Window {
     electronAPI?: {
       platform: string;
@@ -242,6 +307,16 @@ declare global {
         preferredFileName: string,
         destDir: string,
       ) => Promise<{ success: boolean; error?: string; filePath?: string; fileName?: string }>;
+      downloadTasks: {
+        list: () => Promise<ExportTaskInfo[]>;
+        prepareLocal: (request: LocalExportPrepareRequest) => Promise<ExportTaskActionResult>;
+        create: (request: ExportTaskCreateRequest) => Promise<ExportTaskActionResult>;
+        cancel: (taskId: string) => Promise<ExportTaskActionResult>;
+        retry: (taskId: string) => Promise<ExportTaskActionResult>;
+        openFolder: (taskId: string) => Promise<{ success: boolean; error?: string }>;
+        remove: (taskId: string) => Promise<ExportTaskActionResult>;
+        onChanged: (callback: (tasks: ExportTaskInfo[]) => void) => () => void;
+      };
       project: {
         list: () => Promise<string[]>;
         create: (name: string) => Promise<string>;

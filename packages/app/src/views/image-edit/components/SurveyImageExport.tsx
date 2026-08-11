@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Modal, App } from "antd";
 import { useSelectedProject } from "@/stores/appContextStore";
+import { createLocalExportTask } from "@/components/download-task/task-actions";
 import ExportMapPicker, { ExportMapFooter, type ExportMapOption } from "./ExportMapPicker";
 
 interface SurveyImageExportProps {
@@ -53,7 +54,7 @@ export default function SurveyImageExport({ open, onClose }: SurveyImageExportPr
       .finally(() => setLoading(false));
   }, [currentProject, open, resetModalState]);
 
-  const handleExport = async () => {
+  const handleExport = async (triggerElement?: HTMLElement) => {
     if (!currentProject) {
       message.warning("请先选择项目");
       return;
@@ -63,23 +64,25 @@ export default function SurveyImageExport({ open, onClose }: SurveyImageExportPr
       return;
     }
 
-    const exportDir = await window.electronAPI?.selectDir?.();
-    if (!exportDir) {
-      return;
-    }
-
     setExporting(true);
     try {
-      const result = await window.electronAPI?.exportSurveyData?.(currentProject, selectedMap, exportDir);
-      if (!result?.success) {
-        message.error(`导出失败: ${result?.error || "未知错误"}`);
+      const result = await createLocalExportTask({
+        name: "勘察图像导出",
+        operation: "survey-data",
+        destTitle: "选择勘察图像导出目录",
+        payload: { projectName: currentProject, mapName: selectedMap },
+        triggerElement,
+      });
+      if (!result.success) {
+        message.warning(result.error || "创建导出任务失败");
         return;
       }
-      message.success("导出成功");
-      resetModalState();
-      onClose();
+      if (!result.cancelled) {
+        resetModalState();
+        onClose();
+      }
     } catch (e: any) {
-      message.error("导出失败: " + (e?.message || e));
+      message.error(e?.message || "创建导出任务失败");
     } finally {
       setExporting(false);
     }

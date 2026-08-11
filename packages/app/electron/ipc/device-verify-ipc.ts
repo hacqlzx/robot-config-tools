@@ -78,6 +78,25 @@ interface MarkedPointExcelExportRow {
   bayName: string;
 }
 
+interface PreparedMarkedDeviceVerificationPoints {
+  safeProjectName: string;
+  exportRows: MarkedPointExcelExportRow[];
+}
+
+interface PreparedDeviceCorrectionEntry {
+  entryName: string;
+  payload: Array<{
+    cp_id: string;
+    target_point: ReturnType<typeof correctionRectToTargetPoint>;
+    target_rect: ReturnType<typeof correctionRectToTargetRect>;
+  }>;
+}
+
+interface PreparedDeviceVerificationCorrectionData {
+  safeProjectName: string;
+  entries: PreparedDeviceCorrectionEntry[];
+}
+
 const OVERVIEW_DIR_NAME = "总览图";
 const DEVICE_VERIFY_DIR_NAME = "设备验证图";
 const DEVICE_CORRECTION_FILE_NAME = "设备纠偏.json";
@@ -301,14 +320,29 @@ function importDeviceVerificationSource(projectName: string, source: DeviceVerif
   return targetDir;
 }
 
-function exportMarkedDeviceVerificationPoints(projectName: string, destDir: string) {
-  const safeProjectName = String(projectName || "").trim();
-  if (!safeProjectName) throw new Error("请先选择项目");
-
+export function exportMarkedDeviceVerificationPoints(projectName: string, destDir: string) {
+  const prepared = prepareMarkedDeviceVerificationPoints(projectName);
   const outputDir = path.resolve(String(destDir || "").trim());
   if (!path.isAbsolute(outputDir) || !fs.existsSync(outputDir) || !fs.statSync(outputDir).isDirectory()) {
     throw new Error("导出目录无效");
   }
+
+  const { safeProjectName, exportRows } = prepared;
+  const fileName = uniqueFileName(outputDir, `${safeProjectName}_标记点位_${formatExportTime(new Date())}.xlsx`);
+  const filePath = path.join(outputDir, fileName);
+  fs.writeFileSync(filePath, generateMarkedPointExcel(exportRows));
+
+  return {
+    success: true,
+    filePath,
+    fileName,
+    exportedCount: exportRows.length,
+  };
+}
+
+export function prepareMarkedDeviceVerificationPoints(projectName: string): PreparedMarkedDeviceVerificationPoints {
+  const safeProjectName = String(projectName || "").trim();
+  if (!safeProjectName) throw new Error("请先选择项目");
 
   const localDir = getDeviceVerificationDir(safeProjectName);
   if (!fs.existsSync(localDir) || !fs.statSync(localDir).isDirectory()) {
@@ -325,26 +359,37 @@ function exportMarkedDeviceVerificationPoints(projectName: string, destDir: stri
   const exportRows = readMarkedPointExportRows(fs.readFileSync(workbookPath), markedPointCodes);
   if (exportRows.length === 0) throw new Error("点表.xlsx 中未找到已标记点位");
 
-  const fileName = uniqueFileName(outputDir, `${safeProjectName}_标记点位_${formatExportTime(new Date())}.xlsx`);
+  return { safeProjectName, exportRows };
+}
+
+export function exportDeviceVerificationCorrectionData(projectName: string, destDir: string) {
+  const prepared = prepareDeviceVerificationCorrectionData(projectName);
+  const outputDir = path.resolve(String(destDir || "").trim());
+  if (!path.isAbsolute(outputDir) || !fs.existsSync(outputDir) || !fs.statSync(outputDir).isDirectory()) {
+    throw new Error("导出目录无效");
+  }
+
+  const { safeProjectName, entries } = prepared;
+  const zip = new AdmZip();
+  for (const entry of entries) {
+    zip.addFile(entry.entryName, Buffer.from(`${JSON.stringify(entry.payload, null, 2)}\n`, "utf-8"));
+  }
+
+  const fileName = uniqueFileName(outputDir, `${safeProjectName}_纠偏数据_${formatExportTime(new Date())}.zip`);
   const filePath = path.join(outputDir, fileName);
-  fs.writeFileSync(filePath, generateMarkedPointExcel(exportRows));
+  zip.writeZip(filePath);
 
   return {
     success: true,
     filePath,
     fileName,
-    exportedCount: exportRows.length,
+    exportedCount: entries.length,
   };
 }
 
-function exportDeviceVerificationCorrectionData(projectName: string, destDir: string) {
+export function prepareDeviceVerificationCorrectionData(projectName: string): PreparedDeviceVerificationCorrectionData {
   const safeProjectName = String(projectName || "").trim();
   if (!safeProjectName) throw new Error("请先选择项目");
-
-  const outputDir = path.resolve(String(destDir || "").trim());
-  if (!path.isAbsolute(outputDir) || !fs.existsSync(outputDir) || !fs.statSync(outputDir).isDirectory()) {
-    throw new Error("导出目录无效");
-  }
 
   const localDir = getDeviceVerificationDir(safeProjectName);
   if (!fs.existsSync(localDir) || !fs.statSync(localDir).isDirectory()) {
@@ -358,9 +403,8 @@ function exportDeviceVerificationCorrectionData(projectName: string, destDir: st
 
   const files = collectFiles(localDir);
   const calibrationByPointCode = readPointCalibrationMapFromExtendJson(files, localDir);
-  const zip = new AdmZip();
   const usedEntryNames = new Set<string>();
-  let exportedCount = 0;
+  const entries: PreparedDeviceCorrectionEntry[] = [];
 
   for (const record of correctionRecords) {
     const rect = normalizeCorrectionRect(record.rect);
@@ -373,20 +417,10 @@ function exportDeviceVerificationCorrectionData(projectName: string, destDir: st
       target_rect: correctionRectToTargetRect(rect),
     }];
     const entryName = uniqueZipEntryName(usedEntryNames, `${calibration.cruiseId || calibration.calibrationId}.json`);
-    zip.addFile(entryName, Buffer.from(`${JSON.stringify(payload, null, 2)}\n`, "utf-8"));
-    exportedCount++;
+    entries.push({ entryName, payload });
   }
 
-  const fileName = uniqueFileName(outputDir, `${safeProjectName}_纠偏数据_${formatExportTime(new Date())}.zip`);
-  const filePath = path.join(outputDir, fileName);
-  zip.writeZip(filePath);
-
-  return {
-    success: true,
-    filePath,
-    fileName,
-    exportedCount,
-  };
+  return { safeProjectName, entries };
 }
 
 function getDeviceVerificationDir(projectName: string): string {

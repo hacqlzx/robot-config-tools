@@ -11,6 +11,7 @@ import {
   UploadOutlined,
 } from "@ant-design/icons";
 import { useLocation } from "react-router-dom";
+import { createLocalExportTask } from "@/components/download-task/task-actions";
 import { useResizable } from "@/components/useResizable";
 import { useSelectedProject } from "@/stores/appContextStore";
 import VerificationImageCanvas from "./components/VerificationImageCanvas";
@@ -147,57 +148,61 @@ export default function DeviceVerify() {
     message.info(`${label}（功能待接入）`);
   };
 
-  const handleExportCorrectionData = async () => {
+  const handleExportCorrectionData = async (triggerElement?: HTMLElement) => {
     const api = window.electronAPI;
     if (!selectedProject) {
       message.warning("请先选择项目");
       return;
     }
-    if (!api?.exportDeviceCorrectionData || !api.selectDir) {
+    if (!api?.downloadTasks || !api.selectDir) {
       message.warning("仅 Electron 环境支持导出纠偏数据");
       return;
     }
 
-    const destDir = await api.selectDir("选择纠偏数据导出目录");
-    if (!destDir) return;
-
     setExportingCorrectionData(true);
     try {
-      const result = await api.exportDeviceCorrectionData(selectedProject, destDir);
-      if (!result.success) throw new Error(result.error || "导出纠偏数据失败");
-      message.success(`已导出 ${result.exportedCount || 0} 个纠偏数据：${result.fileName || ""}`);
+      const result = await createLocalExportTask({
+        name: "纠偏数据导出",
+        operation: "device-correction-data",
+        destTitle: "选择纠偏数据导出目录",
+        payload: { projectName: selectedProject },
+        triggerElement,
+      });
+      if (!result.success) {
+        message.warning(result.error || "创建导出任务失败");
+      }
     } catch (error: any) {
-      const text = error?.message || "导出纠偏数据失败";
-      if (text.includes("暂无纠偏数据")) message.warning(text);
-      else message.error(text);
+      message.error(error?.message || "创建导出任务失败");
     } finally {
       setExportingCorrectionData(false);
     }
   };
 
-  const handleExportMarkedPoints = async () => {
+  const handleExportMarkedPoints = async (triggerElement?: HTMLElement) => {
     const api = window.electronAPI;
     if (!selectedProject) {
       message.warning("请先选择项目");
       return;
     }
-    if (!api?.exportMarkedDevicePoints || !api.selectDir) {
+    if (!api?.downloadTasks || !api.selectDir) {
       message.warning("仅 Electron 环境支持导出标记点位");
       return;
     }
 
-    const destDir = await api.selectDir("选择标记点位导出目录");
-    if (!destDir) return;
-
     setExportingMarkedPoints(true);
     try {
-      const result = await api.exportMarkedDevicePoints(selectedProject, destDir);
-      if (!result.success) throw new Error(result.error || "导出标记点位失败");
-      message.success(`已导出 ${result.exportedCount || 0} 个标记点位：${result.fileName || ""}`);
+      const result = await createLocalExportTask({
+        name: "标记点位导出",
+        operation: "device-marked-points",
+        destTitle: "选择标记点位导出目录",
+        payload: { projectName: selectedProject },
+        triggerElement,
+      });
+      if (!result.success) {
+        message.warning(result.error || "创建导出任务失败");
+      }
     } catch (error: any) {
-      const text = error?.message || "导出标记点位失败";
-      if (text.includes("暂无标记点位")) message.warning(text);
-      else message.error(text);
+      message.error(error?.message || "创建导出任务失败");
     } finally {
       setExportingMarkedPoints(false);
     }
@@ -527,8 +532,8 @@ export default function DeviceVerify() {
               <Button icon={<DownOutlined />} disabled={loadingPackage} />
             </Dropdown>
           </Space.Compact>
-          <Button icon={<SyncOutlined />} loading={exportingCorrectionData} onClick={handleExportCorrectionData}>导出纠偏数据</Button>
-          <Button icon={<PushpinOutlined />} loading={exportingMarkedPoints} onClick={handleExportMarkedPoints}>导出标记点位</Button>
+          <Button icon={<SyncOutlined />} loading={exportingCorrectionData} onClick={(event) => handleExportCorrectionData(event.currentTarget)}>导出纠偏数据</Button>
+          <Button icon={<PushpinOutlined />} loading={exportingMarkedPoints} onClick={(event) => handleExportMarkedPoints(event.currentTarget)}>导出标记点位</Button>
           <Button icon={<CloudSyncOutlined />} onClick={() => placeholder("同步分析主机")}>同步分析主机</Button>
         </Space>
       </div>

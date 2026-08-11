@@ -27,6 +27,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
   readLargeFile: (path) => ipcRenderer.invoke("read-large-file", path),
   downloadRemoteFile: (remoteUrl, preferredFileName, destDir) =>
     ipcRenderer.invoke("download-remote-file", remoteUrl, preferredFileName, destDir),
+  downloadTasks: {
+    list: () => ipcRenderer.invoke("export-task:list"),
+    prepareLocal: (request) => ipcRenderer.invoke("export-task:prepare-local", request),
+    create: (request) => ipcRenderer.invoke("export-task:create", request),
+    cancel: (taskId) => ipcRenderer.invoke("export-task:cancel", taskId),
+    retry: (taskId) => ipcRenderer.invoke("export-task:retry", taskId),
+    openFolder: (taskId) => ipcRenderer.invoke("export-task:open-folder", taskId),
+    remove: (taskId) => ipcRenderer.invoke("export-task:remove", taskId),
+    onChanged: (callback) => {
+      const handler = (_event, tasks) => callback(tasks);
+      ipcRenderer.on("export-task:changed", handler);
+      return () => ipcRenderer.removeListener("export-task:changed", handler);
+    },
+  },
   // GPU 信息诊断：帮助排查核显/独显导致颜色渲染异常的问题
   getGPUInfo: () => ipcRenderer.invoke("gpu:info"),
   project: {

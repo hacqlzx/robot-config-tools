@@ -23,7 +23,6 @@ const CABINET_IMAGE_DIR_NAME = "屏柜图像";
 const CABINET_IMAGE_DATA_FILE_NAME = "cabinet-image-data.json";
 const CABINET_COMPONENT_WORKBOOK_NAME = "屏柜部件表.xlsx";
 const CABINET_POINT_TABLE_FILE_NAME = "point.xlsx";
-const CABINET_POINT_TABLE_ROBOT_COL = "机器人编码";
 const CABINET_POINT_CODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
 interface CalibrationBinding {
@@ -187,6 +186,10 @@ interface CabinetPointTableExportBuildResult {
   componentCount: number;
 }
 
+interface CabinetPointTablePreparedExport extends CabinetPointTableExportBuildResult {
+  safeProjectName: string;
+}
+
 interface CabinetCruiseExportState {
   calibrationCounters: Map<string, number>;
   usedCruiseIds: Set<string>;
@@ -275,30 +278,9 @@ export function registerArchiveIpc(): void {
   ipcMain.handle("export-survey-data", async (_event, projectName: string, mapName: string, destDir: string) => {
     console.log("[export-survey-data] 开始导出:", "project:", projectName, "map:", mapName, "dest:", destDir);
     try {
-      const safeProjectName = assertSafePathSegment(projectName, "项目名称");
-      const safeMapName = assertSafePathSegment(mapName, "地图名称");
-      const rawDestDir = String(destDir || "").trim();
-      if (!rawDestDir || !path.isAbsolute(rawDestDir)) throw new Error("导出目录无效");
-
-      const projectDir = assertInside(getProjectRoot(), path.join(getProjectRoot(), safeProjectName), "导出勘察数据");
-      if (!fs.existsSync(projectDir)) throw new Error(`项目 "${safeProjectName}" 不存在`);
-
-      const surveyRoot = assertInside(projectDir, path.join(projectDir, SURVEY_DIR_NAME), "导出勘察数据");
-      const surveyDir = assertInside(projectDir, path.join(surveyRoot, safeMapName), "导出勘察数据");
-      if (!fs.existsSync(surveyDir)) throw new Error(`当前地图暂无勘察数据：${safeMapName}`);
-
-      const outputDir = path.resolve(rawDestDir);
-      fs.mkdirSync(outputDir, { recursive: true });
-
-      const stationName = sanitizeFileName(readStationName(safeProjectName) || safeProjectName || "未知厂站");
-      const mapFileName = sanitizeFileName(safeMapName);
-      const timeStr = formatMinuteStamp(new Date());
-      const zipBaseName = `${stationName}_${mapFileName}_${timeStr}`;
-      const zipPath = nextAvailableZipPath(outputDir, zipBaseName);
-
-      await writeSurveyZip(zipPath, surveyDir);
-      console.log("[export-survey-data] 导出完成:", zipPath);
-      return { success: true, zipPath, zipName: path.basename(zipPath) };
+      const result = await exportSurveyDataArchive(projectName, mapName, destDir);
+      console.log("[export-survey-data] 导出完成:", result.zipPath);
+      return { success: true, ...result };
     } catch (e: any) {
       console.error("[export-survey-data] 导出失败:", e.message);
       return { success: false, error: e.message };
@@ -308,43 +290,9 @@ export function registerArchiveIpc(): void {
   ipcMain.handle("export-image-labels", async (_event, projectName: string, mapName: string, destDir: string) => {
     console.log("[export-image-labels] 开始导出:", "project:", projectName, "map:", mapName, "dest:", destDir);
     try {
-      const safeProjectName = assertSafePathSegment(projectName, "项目名称");
-      const safeMapName = assertSafePathSegment(mapName, "地图名称");
-      const rawDestDir = String(destDir || "").trim();
-      if (!rawDestDir || !path.isAbsolute(rawDestDir)) throw new Error("导出目录无效");
-
-      const projectDir = assertInside(getProjectRoot(), path.join(getProjectRoot(), safeProjectName), "导出图像标识");
-      if (!fs.existsSync(projectDir)) throw new Error(`项目 "${safeProjectName}" 不存在`);
-
-      const surveyRoot = assertInside(projectDir, path.join(projectDir, SURVEY_DIR_NAME), "导出图像标识");
-      const surveyDir = assertInside(projectDir, path.join(surveyRoot, safeMapName), "导出图像标识");
-      if (!fs.existsSync(surveyDir)) throw new Error(`当前地图暂无勘察数据：${safeMapName}`);
-
-      const deviceDir = resolveDeviceDir(surveyDir);
-      if (!deviceDir) throw new Error("未找到设备区 json_list.json，请先导入勘察图像数据");
-
-      const calibrationPath = path.join(surveyRoot, CALIBRATION_FILE_NAME);
-      if (!fs.existsSync(calibrationPath)) throw new Error("暂无图像标识数据");
-
-      const context = readSurveyContext(surveyDir, deviceDir, safeMapName, readMapDeviceAreas(projectDir, safeMapName));
-      const calibration = readCalibrationFile(calibrationPath);
-      ensureCalibrationIds(safeProjectName, calibration, context);
-      const points = readProjectPoints(safeProjectName);
-      const timeStr = formatMinuteStamp(new Date());
-      const records = buildImageLabelRecords(calibration, context, points);
-      const pointRecords = buildPointCalibrationRecords(calibration, context, points);
-      if (records.length === 0) throw new Error("当前地图暂无可导出的图像标识");
-
-      const outputDir = path.resolve(rawDestDir);
-      fs.mkdirSync(outputDir, { recursive: true });
-      const stationName = sanitizeFileName(readStationName(safeProjectName) || safeProjectName || "未知厂站");
-      const mapFileName = sanitizeFileName(safeMapName);
-      const zipBaseName = `${stationName}_${mapFileName}_图像标识_${timeStr}`;
-      const zipPath = nextAvailableZipPath(outputDir, zipBaseName);
-
-      await writeImageLabelsZip(zipPath, records, pointRecords);
-      console.log("[export-image-labels] 导出完成:", zipPath, "count:", records.length);
-      return { success: true, zipPath, zipName: path.basename(zipPath), exportedCount: records.length };
+      const result = await exportImageLabelsArchive(projectName, mapName, destDir);
+      console.log("[export-image-labels] 导出完成:", result.zipPath, "count:", result.exportedCount);
+      return { success: true, ...result };
     } catch (e: any) {
       console.error("[export-image-labels] 导出失败:", e.message);
       return { success: false, error: e.message };
@@ -485,6 +433,85 @@ export function registerArchiveIpc(): void {
       return { success: false, error: e.message };
     }
   });
+}
+
+export async function exportSurveyDataArchive(projectName: string, mapName: string, destDir: string): Promise<{ zipPath: string; zipName: string }> {
+  const { safeProjectName, safeMapName, surveyDir } = prepareSurveyDataArchive(projectName, mapName);
+  const rawDestDir = String(destDir || "").trim();
+  if (!rawDestDir || !path.isAbsolute(rawDestDir)) throw new Error("导出目录无效");
+
+  const outputDir = path.resolve(rawDestDir);
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  const stationName = sanitizeFileName(readStationName(safeProjectName) || safeProjectName || "未知厂站");
+  const mapFileName = sanitizeFileName(safeMapName);
+  const timeStr = formatMinuteStamp(new Date());
+  const zipBaseName = `${stationName}_${mapFileName}_${timeStr}`;
+  const zipPath = nextAvailableZipPath(outputDir, zipBaseName);
+
+  await writeSurveyZip(zipPath, surveyDir);
+  return { zipPath, zipName: path.basename(zipPath) };
+}
+
+export function prepareSurveyDataArchive(projectName: string, mapName: string): { safeProjectName: string; safeMapName: string; surveyDir: string } {
+  const safeProjectName = assertSafePathSegment(projectName, "项目名称");
+  const safeMapName = assertSafePathSegment(mapName, "地图名称");
+  const projectDir = assertInside(getProjectRoot(), path.join(getProjectRoot(), safeProjectName), "导出勘察数据");
+  if (!fs.existsSync(projectDir)) throw new Error(`项目 "${safeProjectName}" 不存在`);
+
+  const surveyRoot = assertInside(projectDir, path.join(projectDir, SURVEY_DIR_NAME), "导出勘察数据");
+  const surveyDir = assertInside(projectDir, path.join(surveyRoot, safeMapName), "导出勘察数据");
+  if (!fs.existsSync(surveyDir)) throw new Error(`当前地图暂无勘察数据：${safeMapName}`);
+  return { safeProjectName, safeMapName, surveyDir };
+}
+
+export async function exportImageLabelsArchive(projectName: string, mapName: string, destDir: string): Promise<{ zipPath: string; zipName: string; exportedCount: number }> {
+  const { safeProjectName, safeMapName, records, pointRecords } = prepareImageLabelsArchive(projectName, mapName);
+  const rawDestDir = String(destDir || "").trim();
+  if (!rawDestDir || !path.isAbsolute(rawDestDir)) throw new Error("导出目录无效");
+
+  const outputDir = path.resolve(rawDestDir);
+  fs.mkdirSync(outputDir, { recursive: true });
+  const stationName = sanitizeFileName(readStationName(safeProjectName) || safeProjectName || "未知厂站");
+  const mapFileName = sanitizeFileName(safeMapName);
+  const timeStr = formatMinuteStamp(new Date());
+  const zipBaseName = `${stationName}_${mapFileName}_图像标识_${timeStr}`;
+  const zipPath = nextAvailableZipPath(outputDir, zipBaseName);
+
+  await writeImageLabelsZip(zipPath, records, pointRecords);
+  return { zipPath, zipName: path.basename(zipPath), exportedCount: records.length };
+}
+
+export function prepareImageLabelsArchive(projectName: string, mapName: string): {
+  safeProjectName: string;
+  safeMapName: string;
+  records: ImageLabelRecord[];
+  pointRecords: PointCalibrationRecord[];
+  exportedCount: number;
+} {
+  const safeProjectName = assertSafePathSegment(projectName, "项目名称");
+  const safeMapName = assertSafePathSegment(mapName, "地图名称");
+  const projectDir = assertInside(getProjectRoot(), path.join(getProjectRoot(), safeProjectName), "导出图像标识");
+  if (!fs.existsSync(projectDir)) throw new Error(`项目 "${safeProjectName}" 不存在`);
+
+  const surveyRoot = assertInside(projectDir, path.join(projectDir, SURVEY_DIR_NAME), "导出图像标识");
+  const surveyDir = assertInside(projectDir, path.join(surveyRoot, safeMapName), "导出图像标识");
+  if (!fs.existsSync(surveyDir)) throw new Error(`当前地图暂无勘察数据：${safeMapName}`);
+
+  const deviceDir = resolveDeviceDir(surveyDir);
+  if (!deviceDir) throw new Error("未找到设备区 json_list.json，请先导入勘察图像数据");
+
+  const calibrationPath = path.join(surveyRoot, CALIBRATION_FILE_NAME);
+  if (!fs.existsSync(calibrationPath)) throw new Error("暂无图像标识数据");
+
+  const context = readSurveyContext(surveyDir, deviceDir, safeMapName, readMapDeviceAreas(projectDir, safeMapName));
+  const calibration = readCalibrationFile(calibrationPath);
+  ensureCalibrationIds(safeProjectName, calibration, context);
+  const points = readProjectPoints(safeProjectName);
+  const records = buildImageLabelRecords(calibration, context, points);
+  const pointRecords = buildPointCalibrationRecords(calibration, context, points);
+  if (records.length === 0) throw new Error("当前地图暂无可导出的图像标识");
+  return { safeProjectName, safeMapName, records, pointRecords, exportedCount: records.length };
 }
 
 /**
@@ -885,25 +912,34 @@ function saveCabinetMainDeviceNameOverride(projectName: string, payload: any): {
  * 将前端生成的屏柜标注参数写入用户选择的导出目录。
  * 文件名统一带导出时间，避免同目录多次导出时覆盖历史文件。
  */
-function exportCabinetAnnotationParams(projectName: string, destDir: string, data: any): { filePath: string; fileName: string; pointCount: number; matchCount: number } {
-  const safeProjectName = String(projectName || "").trim();
-  if (!safeProjectName) throw new Error("请先选择项目");
+export function exportCabinetAnnotationParams(projectName: string, destDir: string, data: any): { filePath: string; fileName: string; pointCount: number; matchCount: number } {
+  const prepared = prepareCabinetAnnotationParamsExport(projectName, data);
   const targetDir = String(destDir || "").trim();
   if (!targetDir) throw new Error("请选择导出目录");
   if (!fs.existsSync(targetDir) || !fs.statSync(targetDir).isDirectory()) {
     throw new Error("导出目录不存在");
   }
-  if (!data || typeof data !== "object") throw new Error("标注参数数据为空");
 
   const fileName = uniqueCabinetExportFileName(
     targetDir,
-    `${sanitizeFileName(safeProjectName)}_屏柜标注参数_${formatCabinetExportTime(new Date())}.json`,
+    `${sanitizeFileName(prepared.safeProjectName)}_屏柜标注参数_${formatCabinetExportTime(new Date())}.json`,
   );
   const filePath = path.join(targetDir, fileName);
   fs.writeFileSync(filePath, JSON.stringify(data, null, 4), "utf-8");
   return {
     filePath,
     fileName,
+    pointCount: prepared.pointCount,
+    matchCount: prepared.matchCount,
+  };
+}
+
+export function prepareCabinetAnnotationParamsExport(projectName: string, data: any): { safeProjectName: string; pointCount: number; matchCount: number } {
+  const safeProjectName = String(projectName || "").trim();
+  if (!safeProjectName) throw new Error("请先选择项目");
+  if (!data || typeof data !== "object") throw new Error("标注参数数据为空");
+  return {
+    safeProjectName,
     pointCount: Array.isArray(data.detTypeInfo) ? data.detTypeInfo.length : 0,
     matchCount: Array.isArray(data.matchInfo) ? data.matchInfo.length : 0,
   };
@@ -913,7 +949,7 @@ function exportCabinetAnnotationParams(projectName: string, destDir: string, dat
  * 汇总屏柜导入 Excel 和后续生成的点位，导出屏柜点表 ZIP。
  * ZIP 内固定包含 point.xlsx 和 calibration.json，方便后台按同一批点位编码建立关联。
  */
-async function exportCabinetPointTable(projectName: string, destDir: string): Promise<{
+export async function exportCabinetPointTable(projectName: string, destDir: string): Promise<{
   filePath: string;
   fileName: string;
   rowCount: number;
@@ -921,13 +957,35 @@ async function exportCabinetPointTable(projectName: string, destDir: string): Pr
   componentCount: number;
   calibrationCount: number;
 }> {
-  const safeProjectName = String(projectName || "").trim();
-  if (!safeProjectName) throw new Error("请先选择项目");
+  const prepared = prepareCabinetPointTableExport(projectName);
   const targetDir = String(destDir || "").trim();
   if (!targetDir) throw new Error("请选择导出目录");
   if (!fs.existsSync(targetDir) || !fs.statSync(targetDir).isDirectory()) {
     throw new Error("导出目录不存在");
   }
+
+  const { safeProjectName, rows, calibrationRecords, pointCount, componentCount } = prepared;
+  const xlsxBuffer = generatePointExcelFromRows(rows, { sheetName: "屏柜点表" });
+  const fileName = uniqueCabinetExportFileName(
+    targetDir,
+    `${sanitizeFileName(safeProjectName)}_屏柜点表_${formatCabinetExportTime(new Date())}.zip`,
+  );
+  const filePath = path.join(targetDir, fileName);
+  await writeCabinetPointTableZip(filePath, xlsxBuffer, calibrationRecords);
+
+  return {
+    filePath,
+    fileName,
+    rowCount: rows.length,
+    pointCount,
+    componentCount,
+    calibrationCount: calibrationRecords.length,
+  };
+}
+
+export function prepareCabinetPointTableExport(projectName: string): CabinetPointTablePreparedExport {
+  const safeProjectName = String(projectName || "").trim();
+  if (!safeProjectName) throw new Error("请先选择项目");
 
   const workspace = readCabinetImageWorkspace(safeProjectName);
   if (!workspace.records.length) throw new Error("请先导入屏柜图像");
@@ -936,24 +994,12 @@ async function exportCabinetPointTable(projectName: string, destDir: string): Pr
   const exportData = buildCabinetPointTableRows(workspace, usedPointCodes);
   if (!exportData.rows.length) throw new Error("暂无已核查的屏柜点表数据");
 
-  const fileName = uniqueCabinetExportFileName(
-    targetDir,
-    `${sanitizeFileName(safeProjectName)}_屏柜点表_${formatCabinetExportTime(new Date())}.zip`,
-  );
-  const filePath = path.join(targetDir, fileName);
-  const xlsxBuffer = generatePointExcelFromRows(exportData.rows, {
-    extraColumns: [CABINET_POINT_TABLE_ROBOT_COL],
-    sheetName: "屏柜点表",
-  });
-  await writeCabinetPointTableZip(filePath, xlsxBuffer, exportData.calibrationRecords);
-
   return {
-    filePath,
-    fileName,
-    rowCount: exportData.rows.length,
-    pointCount: exportData.pointCount,
+    safeProjectName,
+    rows: exportData.rows,
+    calibrationRecords: exportData.calibrationRecords,
     componentCount: exportData.componentCount,
-    calibrationCount: exportData.calibrationRecords.length,
+    pointCount: exportData.pointCount,
   };
 }
 
@@ -1042,7 +1088,6 @@ function buildCabinetPointTableRows(
 
 function cabinetComponentExportRow(record: CabinetImagePackageRecord): PointExcelExportRow {
   return {
-    [CABINET_POINT_TABLE_ROBOT_COL]: valueText(record.robotCode),
     "*部件名称": valueText(record.componentName) || valueText(record.componentCode),
     "部件编码": valueText(record.componentCode),
     "*主设备名称": valueText(record.mainDeviceName) || valueText(record.mainDeviceCode),

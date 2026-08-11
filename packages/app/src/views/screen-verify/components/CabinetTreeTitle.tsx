@@ -1,4 +1,4 @@
-import { EditOutlined } from "@ant-design/icons";
+import { CheckCircleFilled, EditOutlined } from "@ant-design/icons";
 import { Spin } from "antd";
 import type { CabinetTreeNode } from "../types";
 
@@ -7,12 +7,14 @@ export type BatchRecognitionNodeStatus = "loading" | "done";
 interface CabinetTreeTitleProps {
   node: CabinetTreeNode;
   batchStatus?: BatchRecognitionNodeStatus;
+  pointVerified?: boolean;
   onRenameMainDevice: (node: CabinetTreeNode) => void;
 }
 
 export function CabinetTreeTitle({
   node,
   batchStatus,
+  pointVerified,
   onRenameMainDevice,
 }: CabinetTreeTitleProps) {
   const title = node.title;
@@ -20,6 +22,11 @@ export function CabinetTreeTitle({
   if (node.nodeType === "component") {
     return (
       <span className="screen-verify-tree-title screen-verify-tree-title-status" title={title}>
+        {pointVerified ? (
+          <span className="screen-verify-tree-verified" title="点位核查已完成">
+            <CheckCircleFilled />
+          </span>
+        ) : null}
         {batchStatus ? (
           <span className={`screen-verify-tree-batch-state is-${batchStatus}`}>
             {batchStatus === "loading" ? <Spin size="small" /> : "√"}

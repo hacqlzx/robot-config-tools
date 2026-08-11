@@ -4,6 +4,7 @@ const SELECTED_PROJECT_KEY = "selectedProject";
 const SELECTED_ROBOT_KEY = "selectedRobot";
 const BACKEND_IP_KEY = "backend_current_ip";
 const CACHED_ROBOT_LIST_KEY = "cachedRobotList";
+const CACHED_ROBOT_RECORDS_KEY = "cachedRobotRecords";
 
 export type ConnectionStatus = "disconnected" | "connected" | "failed";
 
@@ -31,6 +32,17 @@ export interface RobotOption {
   label: string;
   /** 后台接口使用的机器人值 */
   value: string;
+  /** 后台机器人 ID，导入导出和任务下发直接复用缓存，不再实时查询机器人列表。 */
+  id?: number;
+  /** 后台机器人编码，预留给后续需要编码的接口。 */
+  robotCode?: string;
+}
+
+export interface RobotRecordCacheItem {
+  id?: number;
+  robotName?: string;
+  robotCode?: string;
+  [key: string]: unknown;
 }
 
 function readStorage(key: string): string | null {
@@ -62,6 +74,18 @@ function readRobotOptions(): RobotOption[] {
   }
 }
 
+function readRobotRecords(): RobotRecordCacheItem[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CACHED_ROBOT_RECORDS_KEY) || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is RobotRecordCacheItem =>
+      item && typeof item === "object",
+    );
+  } catch {
+    return [];
+  }
+}
+
 let state: AppContextState = {
   selectedProject: readStorage(SELECTED_PROJECT_KEY),
   selectedRobot: readStorage(SELECTED_ROBOT_KEY),
@@ -72,7 +96,9 @@ let state: AppContextState = {
 
 const listeners = new Set<Listener>();
 const robotOptionListeners = new Set<Listener>();
+const robotRecordListeners = new Set<Listener>();
 let robotOptions = readRobotOptions();
+let robotRecords = readRobotRecords();
 
 /**
  * 合并更新上下文状态，并只在实际变化时通知订阅者。
@@ -105,6 +131,15 @@ export function subscribeRobotOptions(listener: Listener): () => void {
   return () => robotOptionListeners.delete(listener);
 }
 
+export function getRobotRecords(): RobotRecordCacheItem[] {
+  return robotRecords;
+}
+
+export function subscribeRobotRecords(listener: Listener): () => void {
+  robotRecordListeners.add(listener);
+  return () => robotRecordListeners.delete(listener);
+}
+
 /**
  * 更新机器人下拉选项。
  * validateSelection=true 时会校验当前选中机器人是否仍存在，不存在则清空。
@@ -115,12 +150,19 @@ function updateRobotOptions(options: RobotOption[], validateSelection: boolean):
     const value = option.value?.trim();
     if (!value || seen.has(value)) return result;
     seen.add(value);
-    result.push({ label: option.label?.trim() || value, value });
+    result.push({
+      label: option.label?.trim() || value,
+      value,
+      id: Number.isFinite(Number(option.id)) ? Number(option.id) : undefined,
+      robotCode: option.robotCode?.trim(),
+    });
     return result;
   }, []);
   const changed = next.length !== robotOptions.length
     || next.some((option, index) => option.label !== robotOptions[index]?.label
-      || option.value !== robotOptions[index]?.value);
+      || option.value !== robotOptions[index]?.value
+      || option.id !== robotOptions[index]?.id
+      || option.robotCode !== robotOptions[index]?.robotCode);
   if (validateSelection) {
     const currentRobot = getSelectedRobot();
     if (currentRobot && !next.some((option) => option.value === currentRobot)) {
@@ -142,6 +184,27 @@ export function setRobotOptions(options: RobotOption[]): void {
 /** 后台切换期间暂时清空旧列表，等待新后台返回后再校验当前选择。 */
 export function clearRobotOptions(): void {
   updateRobotOptions([], false);
+  updateRobotRecords([], true);
+}
+
+/** 发布后台完整机器人列表，配置页表格和顶部选择框共享同一份缓存。 */
+export function setRobotRecords(records: RobotRecordCacheItem[]): void {
+  updateRobotRecords(records, true);
+  setRobotOptions(records.map((robot) => ({
+    label: String(robot.robotName || ""),
+    value: String(robot.robotName || ""),
+    id: Number(robot.id),
+    robotCode: String(robot.robotCode || ""),
+  })));
+}
+
+function updateRobotRecords(records: RobotRecordCacheItem[], notify: boolean): void {
+  const next = records.filter((item) => item && typeof item === "object").map((item) => ({ ...item }));
+  const changed = JSON.stringify(next) !== JSON.stringify(robotRecords);
+  if (!changed) return;
+  robotRecords = next;
+  writeStorage(CACHED_ROBOT_RECORDS_KEY, JSON.stringify(next));
+  if (notify) robotRecordListeners.forEach((listener) => listener());
 }
 
 /** 仅在后台连接状态或后台 IP 版本变化时通知配置页。 */
@@ -230,4 +293,8 @@ export function useSelectedRobot(): string | null {
 
 export function useRobotOptions(): RobotOption[] {
   return useSyncExternalStore(subscribeRobotOptions, getRobotOptions, getRobotOptions);
+}
+
+export function useRobotRecords(): RobotRecordCacheItem[] {
+  return useSyncExternalStore(subscribeRobotRecords, getRobotRecords, getRobotRecords);
 }

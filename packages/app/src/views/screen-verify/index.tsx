@@ -4,6 +4,7 @@ import { useLocation } from "react-router-dom";
 import { DownOutlined } from "@ant-design/icons";
 import { App as AntdApp, Button, Checkbox, Dropdown, Empty, Input, Modal, Select, Space, Spin, Table, Tree } from "antd";
 import type { MenuProps } from "antd";
+import { createLocalExportTask } from "@/components/download-task/task-actions";
 import { useResizable } from "@/components/useResizable";
 import { buildCabinetGeneratedPointName } from "@/shared/cabinet-detection";
 import { useSelectedProject } from "@/stores/appContextStore";
@@ -2022,7 +2023,7 @@ export default function ScreenVerify() {
    * 导出屏柜点表 ZIP，数据来源包括原始部件 Excel 和当前保存的识别/人工点位。
    * ZIP 内包含 point.xlsx 和 calibration.json，且只导出已核查点位。
    */
-  const handleExportCabinetPointTable = useCallback(async () => {
+  const handleExportCabinetPointTable = useCallback(async (triggerElement?: HTMLElement) => {
     if (!selectedProject) {
       message.warning("请先选择项目");
       return;
@@ -2031,7 +2032,7 @@ export default function ScreenVerify() {
       message.warning("请先导入屏柜图像");
       return;
     }
-    if (!window.electronAPI?.selectDir || !window.electronAPI?.exportCabinetPointTable) {
+    if (!window.electronAPI?.downloadTasks || !window.electronAPI?.selectDir) {
       message.warning("仅 Electron 环境支持导出屏柜点表");
       return;
     }
@@ -2061,16 +2062,20 @@ export default function ScreenVerify() {
       if (!confirmed) return;
     }
 
-    const destDir = await window.electronAPI.selectDir("选择屏柜点表导出目录");
-    if (!destDir) return;
-
     setExportingPointTable(true);
     try {
-      const result = await window.electronAPI.exportCabinetPointTable(selectedProject, destDir);
-      if (!result.success) throw new Error(result.error || "导出屏柜点表失败");
-      message.success(`已导出 ${result.fileName || "屏柜点表.zip"}，已核查点位 ${result.pointCount || 0} 条，关联 ${result.calibrationCount || 0} 条`);
+      const result = await createLocalExportTask({
+        name: "屏柜点表导出",
+        operation: "cabinet-point-table",
+        destTitle: "选择屏柜点表导出目录",
+        payload: { projectName: selectedProject },
+        triggerElement,
+      });
+      if (!result.success) {
+        message.warning(result.error || "创建导出任务失败");
+      }
     } catch (e: any) {
-      message.error(e?.message || "导出屏柜点表失败");
+      message.error(e?.message || "创建导出任务失败");
     } finally {
       setExportingPointTable(false);
     }
@@ -2080,7 +2085,7 @@ export default function ScreenVerify() {
    * 导出 detector.json 标注参数。
    * 这里会先做强校验，确保名称、类型、目标框和标定 id 都完整。
    */
-  const handleExportAnnotationParams = useCallback(async () => {
+  const handleExportAnnotationParams = useCallback(async (triggerElement?: HTMLElement) => {
     if (!selectedProject) {
       message.warning("请先选择项目");
       return;
@@ -2089,7 +2094,7 @@ export default function ScreenVerify() {
       message.warning("请先导入屏柜图像");
       return;
     }
-    if (!window.electronAPI?.selectDir || !window.electronAPI?.exportCabinetAnnotationParams) {
+    if (!window.electronAPI?.downloadTasks || !window.electronAPI?.selectDir) {
       message.warning("仅 Electron 环境支持导出标注参数");
       return;
     }
@@ -2146,16 +2151,20 @@ export default function ScreenVerify() {
       return;
     }
 
-    const destDir = await window.electronAPI.selectDir("选择标注参数导出目录");
-    if (!destDir) return;
-
     setExportingAnnotationParams(true);
     try {
-      const result = await window.electronAPI.exportCabinetAnnotationParams(selectedProject, destDir, exportResult.data);
-      if (!result.success) throw new Error(result.error || "导出标注参数失败");
-      message.success(`已导出 ${result.fileName || "屏柜标注参数.json"}，点位 ${exportResult.pointCount} 个，对位组 ${exportResult.matchCount} 个`);
+      const result = await createLocalExportTask({
+        name: "屏柜标注参数导出",
+        operation: "cabinet-annotation-params",
+        destTitle: "选择标注参数导出目录",
+        payload: { projectName: selectedProject, data: exportResult.data },
+        triggerElement,
+      });
+      if (!result.success) {
+        message.warning(result.error || "创建导出任务失败");
+      }
     } catch (e: any) {
-      message.error(e?.message || "导出标注参数失败");
+      message.error(e?.message || "创建导出任务失败");
     } finally {
       setExportingAnnotationParams(false);
     }
@@ -2166,8 +2175,8 @@ export default function ScreenVerify() {
       <div className="screen-verify-toolbar">
         <Space size={12} wrap>
           <Button loading={loadingPackage} onClick={handleImportCabinetImages}>导入屏柜图像</Button>
-          <Button loading={exportingPointTable} onClick={handleExportCabinetPointTable}>导出屏柜点表</Button>
-          <Button loading={exportingAnnotationParams} onClick={handleExportAnnotationParams}>导出标注参数</Button>
+          <Button loading={exportingPointTable} onClick={(event) => handleExportCabinetPointTable(event.currentTarget)}>导出屏柜点表</Button>
+          <Button loading={exportingAnnotationParams} onClick={(event) => handleExportAnnotationParams(event.currentTarget)}>导出标注参数</Button>
           <Button onClick={handleOpenBatchRecognition}>批量识别</Button>
         </Space>
       </div>
@@ -2208,6 +2217,7 @@ export default function ScreenVerify() {
                     <CabinetTreeTitle
                       node={treeNode}
                       batchStatus={batchNodeStatus[componentCode]}
+                      pointVerified={Boolean(pointVerifiedByComponent[componentCode])}
                       onRenameMainDevice={openRenameMainDevice}
                     />
                   );

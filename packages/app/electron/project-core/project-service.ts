@@ -1402,6 +1402,30 @@ export interface ExportZipItem {
 }
 
 /**
+ * 空间模型本地导出预检。
+ * 这里只校验项目和导出项，不创建文件，避免数据问题进入下载任务列表后才失败。
+ */
+export function prepareProjectZipExport(projectName: string, items: ExportZipItem[]): { projectName: string; mapDirs: string[] } {
+  const safeProjectName = assertSafePathSegment(projectName, "项目名称");
+  const projectDir = resolveProjectDir(safeProjectName);
+  if (!fs.existsSync(projectDir) || !fs.statSync(projectDir).isDirectory()) {
+    throw new Error(`项目 "${safeProjectName}" 不存在`);
+  }
+
+  const mapDirs = items
+    .filter((it) => it.type === "地图")
+    .map((it) => assertSafePathSegment(it.name, "地图名称"));
+  if (mapDirs.length !== 1) throw new Error("导出模型仅支持当前左侧树已加载的单个模型");
+
+  const mapDir = resolveProjectPath(safeProjectName, MAP_DIR_NAME, mapDirs[0]);
+  if (!fs.existsSync(mapDir) || !fs.statSync(mapDir).isDirectory()) {
+    throw new Error(`地图不存在：${mapDirs[0]}`);
+  }
+
+  return { projectName: safeProjectName, mapDirs };
+}
+
+/**
  * 导出空间模型 ZIP。
  * 导出包包含项目级点表 ZIP，以及每张地图单独的地图 ZIP。
  */
@@ -1411,7 +1435,7 @@ export async function exportProjectZip(
   destDir: string,
   onProgress: (step: string, pct: number) => void,
 ) {
-  const safeProjectName = assertSafePathSegment(projectName, "项目名称");
+  const { projectName: safeProjectName, mapDirs } = prepareProjectZipExport(projectName, items);
   const rawDestDir = String(destDir ?? "").trim();
   if (!rawDestDir) throw new Error("目标目录不能为空");
 
@@ -1424,11 +1448,6 @@ export async function exportProjectZip(
     components: db.prepare("SELECT * FROM device_component WHERE project_name = ? ORDER BY sort_num, id").all(safeProjectName) as any[],
     points: db.prepare("SELECT * FROM device_point WHERE project_name = ? ORDER BY sort_num, id").all(safeProjectName) as any[],
   };
-
-  const mapDirs = items
-    .filter((it) => it.type === "地图")
-    .map((it) => assertSafePathSegment(it.name, "地图名称"));
-  if (mapDirs.length !== 1) throw new Error("导出模型仅支持当前左侧树已加载的单个模型");
 
   return exportSpaceZip(safeProjectName, getProjectRoot(), pointTableData, mapDirs, destRoot, onProgress);
 }

@@ -18,7 +18,7 @@ interface ExportMapFooterProps {
   selectedMap?: string;
   confirming?: boolean;
   disabled?: boolean;
-  onConfirm: () => void;
+  onConfirm: (triggerElement?: HTMLElement) => Promise<void> | void;
 }
 
 export default function ExportMapPicker({
@@ -91,7 +91,14 @@ export function ExportMapFooter({ selectedMap, confirming, disabled, onConfirm }
       <span style={{ color: "#2f7af8", fontSize: 13, fontWeight: 600 }}>
         已选择：{selectedMap || "未选择"}
       </span>
-      <Button size="small" type="primary" onClick={onConfirm} loading={confirming} disabled={disabled} style={{ minWidth: 64 }}>
+      <Button
+        size="small"
+        type="primary"
+        onClick={(event) => onConfirm(event.currentTarget)}
+        loading={confirming}
+        disabled={disabled}
+        style={{ minWidth: 64 }}
+      >
         确定
       </Button>
     </div>

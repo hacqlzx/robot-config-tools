@@ -31,8 +31,8 @@ import { useResizable } from "@/components/useResizable";
 import ImageCanvas from "@/components/image-canvas/ImageCanvas";
 import type { ImageItem } from "@/components/image-canvas/ImageCanvas";
 import { useTaskLoader } from "./hooks/useTaskLoader";
-import { useSelectedProject, useSelectedRobot } from "@/stores/appContextStore";
-import { cabinetDeviceMainCollect, equipmentDeviceMainCollect, getAllRobot, getSurveyRunning, startTask, stopPointCollect } from "@/api/config.js";
+import { useRobotOptions, useSelectedProject, useSelectedRobot } from "@/stores/appContextStore";
+import { cabinetDeviceMainCollect, equipmentDeviceMainCollect, getSurveyRunning, startTask, stopPointCollect } from "@/api/config.js";
 import "./index.scss";
 
 type CalibrationImageItem = ImageItem & { img: HTMLImageElement };
@@ -160,6 +160,7 @@ export default function ImageEdit() {
   const { message } = App.useApp();
   const selectedProject = useSelectedProject();
   const selectedRobot = useSelectedRobot();
+  const robotOptions = useRobotOptions();
   const containerRef = useRef<HTMLDivElement>(null);
 
   const { width: leftWidth, resizing, onMouseDown } = useResizable({
@@ -553,32 +554,20 @@ export default function ImageEdit() {
       return cached;
     }
 
-    const robotRes = await getAllRobot();
-    const robotBody = robotRes.data;
-    if (!robotBody.success || !Array.isArray(robotBody.data)) {
-      if (!silent) message.error("获取机器人列表失败");
-      return null;
-    }
-
-    const robot = robotBody.data.find((item: any) => item.robotName === selectedRobot);
-    if (!robot) {
-      if (!silent) message.error(`未找到机器人「${selectedRobot}」`);
-      return null;
-    }
-
-    const robotId = Number(robot.id);
-    if (!Number.isFinite(robotId)) {
-      if (!silent) message.error(`机器人「${selectedRobot}」ID 无效`);
+    const robot = robotOptions.find((item) => item.value === selectedRobot || item.label === selectedRobot);
+    const robotId = Number(robot?.id);
+    if (!robot || !Number.isFinite(robotId)) {
+      if (!silent) message.warning("机器人列表未加载，请先连接后台或刷新机器人配置");
       return null;
     }
     const robotInfo = { id: robotId, name: selectedRobot };
     selectedRobotInfoRef.current = robotInfo;
     return robotInfo;
-  }, [message, selectedRobot]);
+  }, [message, robotOptions, selectedRobot]);
 
   useEffect(() => {
     selectedRobotInfoRef.current = null;
-  }, [selectedRobot]);
+  }, [robotOptions, selectedRobot]);
 
   const resolveSelectedRobotId = useCallback(async (): Promise<number | null> => {
     const robot = await resolveSelectedRobotInfo(false);

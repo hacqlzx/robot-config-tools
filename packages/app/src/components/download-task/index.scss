@@ -1,0 +1,211 @@
+.download-task-button-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  -webkit-app-region: no-drag;
+}
+
+.download-task-button {
+  position: relative;
+  color: #000;
+
+  .anticon {
+    color: #000;
+  }
+}
+
+.download-task-indicator {
+  position: absolute;
+  right: 0;
+  top: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #fff;
+  border-radius: 999px;
+  background: #262626;
+  color: #fff;
+  font-size: 10px;
+  line-height: 1;
+  transform: translate(35%, -35%);
+  pointer-events: none;
+
+  .anticon {
+    color: #fff;
+    font-size: 10px;
+  }
+
+  &.is-running {
+    background: #1677ff;
+  }
+
+  &.is-failed {
+    background: #ff4d4f;
+  }
+}
+
+.download-task-popover {
+  width: 420px;
+  -webkit-app-region: no-drag;
+
+  .ant-popover-inner {
+    padding: 0;
+  }
+}
+
+.download-task-panel {
+  padding: 14px 16px;
+}
+
+.download-task-panel-title {
+  margin-bottom: 12px;
+  color: #1f1f1f;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.download-task-empty {
+  padding: 18px 0;
+  color: #8c8c8c;
+  text-align: center;
+}
+
+.download-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 8px;
+  box-sizing: border-box;
+  scrollbar-gutter: stable;
+}
+
+.download-task-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 96px;
+  align-items: center;
+  gap: 8px;
+  min-height: 58px;
+  padding: 8px 30px 8px 10px;
+  border: 1px solid #f0f0f0;
+  border-radius: 6px;
+  background: #fafafa;
+
+  &:hover .download-task-remove,
+  &:focus-within .download-task-remove {
+    opacity: 1;
+  }
+}
+
+.download-task-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.download-task-main {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+}
+
+.download-task-name {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: #262626;
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.download-task-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  min-width: 0;
+}
+
+.download-task-status {
+  color: #8c8c8c;
+  font-size: 12px;
+  line-height: 18px;
+
+  &.running {
+    color: #1677ff;
+  }
+
+  &.success {
+    color: #389e0d;
+  }
+
+  &.failed {
+    color: #cf1322;
+  }
+}
+
+.download-task-message {
+  margin-top: 2px;
+  overflow: hidden;
+  color: #8c8c8c;
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.download-task-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  min-height: 24px;
+  margin-top: 2px;
+
+  .ant-btn {
+    height: 22px;
+    padding: 0;
+  }
+}
+
+.download-task-remove {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  color: #ff4d4f;
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 0.15s ease, color 0.15s ease, background-color 0.15s ease;
+
+  &:hover {
+    color: #cf1322;
+    background: rgba(255, 77, 79, 0.08);
+  }
+}
+
+.download-task-fly-icon {
+  position: fixed;
+  z-index: 5000;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #fff;
+  background: #1677ff;
+  box-shadow: 0 4px 12px rgba(22, 119, 255, 0.36);
+  pointer-events: none;
+}
