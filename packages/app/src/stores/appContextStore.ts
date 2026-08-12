@@ -62,6 +62,12 @@ function writeStorage(key: string, value: string | null): void {
   }
 }
 
+function clearStorage(keys: string[]): void {
+  for (const key of keys) {
+    writeStorage(key, null);
+  }
+}
+
 function readRobotOptions(): RobotOption[] {
   try {
     const parsed = JSON.parse(localStorage.getItem(CACHED_ROBOT_LIST_KEY) || "[]");
@@ -185,6 +191,22 @@ export function setRobotOptions(options: RobotOption[]): void {
 export function clearRobotOptions(): void {
   updateRobotOptions([], false);
   updateRobotRecords([], true);
+}
+
+/** 清除本地持久化缓存，回到未选择项目/机器人/后台的初始状态。 */
+export function resetAppPersistentState(): void {
+  clearStorage([SELECTED_PROJECT_KEY, SELECTED_ROBOT_KEY, BACKEND_IP_KEY, CACHED_ROBOT_LIST_KEY, CACHED_ROBOT_RECORDS_KEY]);
+  robotOptions = [];
+  robotRecords = [];
+  updateState({
+    selectedProject: null,
+    selectedRobot: null,
+    backendIp: "",
+    connectionStatus: "disconnected",
+    backendIpVersion: state.backendIpVersion + 1,
+  });
+  robotOptionListeners.forEach((listener) => listener());
+  robotRecordListeners.forEach((listener) => listener());
 }
 
 /** 发布后台完整机器人列表，配置页表格和顶部选择框共享同一份缓存。 */

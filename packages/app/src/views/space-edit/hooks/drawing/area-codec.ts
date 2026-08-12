@@ -178,10 +178,9 @@ function vertsToPose(verts: number[][], indices: number[]): string | null {
 }
 
 function cabinetPoseToVerts(points: VecTuple[]): number[][] {
-  // 屏柜协议依次保存编辑器顶点 [0, 1, 2, 6]。
-  // A/B/C 为正面，DC 为正面朝向；加载时做正交补全，避免旧数据或人工数据略歪时生成斜盒。
-  // 该索引顺序与现有屏柜绘制器一致，不能直接套用下方区域盒子的顺序。
-  const [p0, p1, p2, p6] = points;
+  // 屏柜协议只在文件层改为 [0, 1, 2, 4]：第四点是后左下。
+  // 读取后仍还原成编辑器内部 8 顶点，因此不改变屏柜绘制交互。
+  const [p0, p1, p2, p4] = points;
   const width = sub(p1, p0);
   const widthDir = normalize(width);
   const rawUp = sub(p2, p1);
@@ -189,33 +188,31 @@ function cabinetPoseToVerts(points: VecTuple[]): number[][] {
     ? sub(rawUp, scale(widthDir, dot(rawUp, widthDir)))
     : rawUp;
   const upDir = normalize(up);
-  const rawDepth = sub(p6, p2);
+  const rawDepth = sub(p4, p0);
   let depth = rawDepth;
   if (widthDir && upDir) {
-    let frontDir = normalize(cross(widthDir, upDir));
-    if (frontDir) {
-      const dc = sub(p2, p6);
-      if (dot(frontDir, dc) < 0) frontDir = scale(frontDir, -1);
-      const depthLength = Math.abs(dot(rawDepth, frontDir));
-      if (depthLength > 1e-4) depth = scale(frontDir, -depthLength);
+    let depthDir = normalize(cross(widthDir, upDir));
+    if (depthDir) {
+      if (dot(depthDir, rawDepth) < 0) depthDir = scale(depthDir, -1);
+      const depthLength = Math.abs(dot(rawDepth, depthDir));
+      if (depthLength > 1e-4) depth = scale(depthDir, depthLength);
     }
   }
   const p3 = add(p0, up);
-  const p4 = add(p0, depth);
   const p5 = add(p1, depth);
+  const p6 = add(p2, depth);
   const p7 = add(p3, depth);
   return [p0, p1, p2, p3, p4, p5, p6, p7].map((point) => [...point]);
 }
 
 function boxPoseToVerts(points: VecTuple[]): number[][] {
-  // 充电区/设备区协议依次保存编辑器顶点 [0, 1, 5, 6]。
-  // 1→5 是高度方向，5→6 是深度方向；与屏柜 pose 的 [0,1,2,6] 约定不同。
-  const [p0, p1, p5, p6] = points;
+  // 充电区/设备区协议也使用新 A/B/C/D：A/B 为前底边，C 是 B 点正上方，D 是后左下。
+  const [p0, p1, p5, p3] = points;
   const up = sub(p5, p1);
-  const depth = sub(p6, p5);
+  const depth = sub(p3, p0);
   const p2 = add(p1, depth);
-  const p3 = add(p0, depth);
   const p4 = add(p0, up);
+  const p6 = add(p2, up);
   const p7 = add(p4, depth);
   return [p0, p1, p2, p3, p4, p5, p6, p7].map((point) => [...point]);
 }
@@ -226,11 +223,12 @@ function boxHeightFromPose(points: VecTuple[]): number {
 }
 
 function cabinetPoseFromVerts(verts: number[][]): string | null {
-  return vertsToPose(verts, [0, 1, 2, 6]);
+  // 仅保存生成 description_file.json 时使用新协议：第四点输出后左下，不改变编辑器内部 8 顶点。
+  return vertsToPose(verts, [0, 1, 2, 4]);
 }
 
 export function boxPoseFromVerts(verts: number[][]): string | null {
-  return vertsToPose(verts, [0, 1, 5, 6]);
+  return vertsToPose(verts, [0, 1, 5, 3]);
 }
 
 function sortedSplitBounds(splits: number[]): number[] {

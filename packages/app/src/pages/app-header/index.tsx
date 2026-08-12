@@ -1,13 +1,14 @@
 ﻿import { useState, useEffect, useCallback } from "react";
-import { Menu, Button, Select, Dropdown, Modal, Input, Alert, message, Tooltip } from "antd";
+import { Menu, Button, Select, Modal, Alert, message, Tooltip } from "antd";
 import { useRef } from "react";
-import { MinusOutlined, BorderOutlined, CloseOutlined, SettingOutlined, ProjectOutlined, PlusOutlined, EditOutlined, DeleteOutlined, CheckOutlined, FolderOpenOutlined, SwitcherOutlined } from "@ant-design/icons";
+import { MinusOutlined, BorderOutlined, CloseOutlined, SettingOutlined, ProjectOutlined, SwitcherOutlined } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 import { useNavigate, useLocation } from "react-router-dom";
 import { menuConfig } from "@/config/menu";
 import DownloadTaskButton from "@/components/download-task";
 import toolIcon from "@/assets/img/icon.png";
 import SettingsModal from "@/pages/settings-modal";
+import ProjectManagerModal from "./ProjectManagerModal";
 import {
   clearRobotOptions,
   getSelectedProject,
@@ -40,13 +41,9 @@ export default function AppHeader() {
     connectionStatus: connStatus,
   } = useAppContext();
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [addProjectOpen, setAddProjectOpen] = useState(false);
-  const [editProjectOpen, setEditProjectOpen] = useState(false);
-  const [projectName, setProjectName] = useState("");
+  const [projectManagerOpen, setProjectManagerOpen] = useState(false);
   const [projects, setProjects] = useState<string[]>([]);
   const [projectRoot, setProjectRoot] = useState("");
-  const [editingName, setEditingName] = useState<string | null>(null);
-  const [editingValue, setEditingValue] = useState("");
   const [deleteProjectName, setDeleteProjectName] = useState<string | null>(null);
   const [deleteSummary, setDeleteSummary] = useState<ProjectDataCounts | null>(null);
   const [deleteSummaryLoading, setDeleteSummaryLoading] = useState(false);
@@ -131,30 +128,6 @@ export default function AppHeader() {
   useEffect(() => {
     loadProjects();
   }, []); // eslint-disable-next-line
-
-  useEffect(() => {
-    if (editProjectOpen) {
-      loadProjects();
-    }
-  }, [editProjectOpen, loadProjects]);
-
-  const handleCreateProject = async () => {
-    if (!projectName.trim()) return;
-    if (!window.electronAPI?.project) {
-      messageApi.warning("仅 Electron 环境支持项目管理");
-      return;
-    }
-    try {
-      const createdName = await window.electronAPI.project.create(projectName.trim());
-      setSelectedProject(createdName);
-      messageApi.success(`项目 "${createdName}" 创建成功，已切换到该项目`);
-      setProjectName("");
-      setAddProjectOpen(false);
-      await loadProjects();
-    } catch (e: any) {
-      messageApi.error(e?.message || "创建项目失败");
-    }
-  };
 
   const handleDeleteProject = async () => {
     if (!deleteProjectName || !window.electronAPI?.project) return;
@@ -241,61 +214,6 @@ export default function AppHeader() {
     }
   };
 
-  const handleStartRename = (name: string) => {
-    setEditingName(name);
-    setEditingValue(name);
-  };
-
-  const handleCancelRename = () => {
-    setEditingName(null);
-    setEditingValue("");
-  };
-
-  const handleConfirmRename = async () => {
-    if (!editingName || !editingValue.trim() || editingValue.trim() === editingName) {
-      handleCancelRename();
-      return;
-    }
-    if (!window.electronAPI?.project) return;
-    try {
-      const newName = editingValue.trim();
-      await window.electronAPI.project.rename(editingName, newName);
-      messageApi.success(`已重命名为 "${newName}"`);
-      if (selectedProject === editingName) {
-        setSelectedProject(newName);
-      }
-      setEditingName(null);
-      setEditingValue("");
-      loadProjects();
-    } catch (e: any) {
-      messageApi.error(e?.message || "重命名失败");
-    }
-  };
-
-  const projectMenu: MenuProps["items"] = [
-    {
-      key: "add-project",
-      icon: <PlusOutlined />,
-      label: "新增项目",
-      onClick: () => {
-        loadProjectRoot();
-        setAddProjectOpen(true);
-      },
-    },
-    {
-      key: "edit-project",
-      icon: <EditOutlined />,
-      label: "编辑项目",
-      onClick: () => {
-        loadProjects();
-        setEditProjectOpen(true);
-      },
-    },
-  ];
-
-  const trimmedProjectName = projectName.trim();
-  const addProjectPath = trimmedProjectName ? getProjectPath(trimmedProjectName) : "";
-
   return (
     <div className="app-header" style={{ background: "#fff", borderBottom: "1px solid #f0f0f0" }}>
       {contextHolder}
@@ -304,9 +222,16 @@ export default function AppHeader() {
       </div>
       <Menu mode="horizontal" selectedKeys={[location.hash.slice(1) || location.pathname]} items={menuItems} className="app-header__menu" style={{ width: "auto" }} onClick={({ key }) => navigate(key)} />
       <div className="app-header__toolbar">
-        <Dropdown menu={{ items: projectMenu }} trigger={["hover"]}>
-          <Button type="text" size="small" icon={<ProjectOutlined />} />
-        </Dropdown>
+        <Button
+          type="text"
+          size="small"
+          icon={<ProjectOutlined />}
+          title="项目管理"
+          onClick={() => {
+            loadProjects();
+            setProjectManagerOpen(true);
+          }}
+        />
         <Select placeholder="选择项目" style={{ width: 160 }} size="small" value={selectedProject} onChange={(v) => { setSelectedProject(v); }} allowClear options={projects.map((p) => ({ label: p, value: p }))} />
         <Select placeholder="选择机器人" style={{ width: 120 }} size="small" value={selectedRobot} onChange={(v) => { setSelectedRobot(v ?? null); }} allowClear options={robotOptions} />
         <DownloadTaskButton />
@@ -338,111 +263,20 @@ export default function AppHeader() {
         </div>
       </div>
 
-      {/* 新增项目弹窗 */}
-      <Modal
-        title="新增项目"
-        open={addProjectOpen}
-        centered
-        mask={{ closable: false }}
-        okText="确定"
-        cancelText="取消"
-        onOk={handleCreateProject}
-        onCancel={() => {
-          setProjectName("");
-          setAddProjectOpen(false);
-        }}
-        afterClose={() => setProjectName("")}
-      >
-        <Input
-          placeholder="请输入项目名称"
-          value={projectName}
-          onChange={(e) => setProjectName(e.target.value)}
-          onPressEnter={handleCreateProject}
-          autoFocus
-        />
-        <div style={{ marginTop: 12, fontSize: 12, color: "#666", lineHeight: 1.6 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ flexShrink: 0 }}>保存目录：</span>
-            <Tooltip title={projectRoot || "未获取到保存目录"}>
-              <span style={{ minWidth: 0, flex: 1, color: projectRoot ? "#1677ff" : "#999", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{projectRoot || "未获取到保存目录"}</span>
-            </Tooltip>
-            <Button size="small" type="link" onClick={handleChooseProjectRoot} style={{ padding: 0 }}>选择目录</Button>
-          </div>
-          <div>
-            项目路径：
-            <Tooltip title={addProjectPath || "输入项目名称后显示完整路径"}>
-              <span style={{ color: addProjectPath ? "#1677ff" : "#999" }}>{addProjectPath || "输入项目名称后显示完整路径"}</span>
-            </Tooltip>
-          </div>
-        </div>
-      </Modal>
-
-      {/* 编辑项目弹窗 */}
-      <Modal
-        title="编辑项目"
-        open={editProjectOpen}
-        centered
-        width={760}
-        mask={{ closable: false }}
-        footer={null}
-        onCancel={() => {
-          setEditProjectOpen(false);
-          setEditingName(null);
-        }}
-      >
-        {projects.length === 0 ? (
-          <div style={{ textAlign: "center", color: "#999", padding: 24 }}>暂无项目</div>
-        ) : (
-          projects.map((item) => {
-            const displayName = editingName === item ? editingValue.trim() || item : item;
-            const projectPath = getProjectPath(displayName);
-            return (
-            <div key={item} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "8px 0", borderBottom: "1px solid #f0f0f0" }}>
-              <div style={{ minWidth: 0, flex: 1 }}>
-              {editingName === item ? (
-                <Input
-                  size="small"
-                  value={editingValue}
-                  onChange={(e) => setEditingValue(e.target.value)}
-                  onPressEnter={handleConfirmRename}
-                  autoFocus
-                  style={{ width: 220 }}
-                />
-              ) : (
-                <span style={{ fontWeight: selectedProject === item ? 500 : 400 }}>{item}</span>
-              )}
-                <Tooltip title={projectPath}>
-                  <div style={{ marginTop: 2, color: "#8c8c8c", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {projectPath || "项目路径不可用"}
-                  </div>
-                </Tooltip>
-              </div>
-              <div style={{ display: "flex", gap: 0, flexShrink: 0 }}>
-                {editingName === item ? (
-                  <>
-                    <Button type="link" size="small" onClick={handleConfirmRename}>确认</Button>
-                    <Button type="link" size="small" onClick={handleCancelRename}>取消</Button>
-                  </>
-                ) : (
-                  <>
-                    {selectedProject === item ? (
-                      <Button type="link" size="small" icon={<CheckOutlined />} disabled>当前项目</Button>
-                    ) : (
-                      <Button type="link" size="small" onClick={() => handleSwitchProject(item)}>切换</Button>
-                    )}
-                    <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={() => handleOpenProjectDir(item)}>打开目录</Button>
-                    <Button type="link" size="small" onClick={() => handleStartRename(item)}>重命名</Button>
-                    {selectedProject !== item ? (
-                      <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleOpenDeleteModal(item)}>删除</Button>
-                    ) : null}
-                  </>
-                )}
-              </div>
-            </div>
-            );
-          })
-        )}
-      </Modal>
+      <ProjectManagerModal
+        open={projectManagerOpen}
+        projects={projects}
+        selectedProject={selectedProject}
+        projectRoot={projectRoot}
+        messageApi={messageApi}
+        getProjectPath={getProjectPath}
+        onClose={() => setProjectManagerOpen(false)}
+        onReloadProjects={loadProjects}
+        onChooseProjectRoot={handleChooseProjectRoot}
+        onSwitchProject={handleSwitchProject}
+        onOpenProjectDir={handleOpenProjectDir}
+        onDeleteProject={handleOpenDeleteModal}
+      />
 
       <Modal
         title={`删除项目${deleteProjectName ? ` "${deleteProjectName}"` : ""}`}

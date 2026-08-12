@@ -227,23 +227,23 @@ function clamp01(value: number): number {
 }
 
 function cabinetPoseToVerts(points: VecTuple[]): number[][] {
-  const [p0, p1, p2, p6] = points;
+  const [p0, p1, p2, p4] = points;
   const up = sub(p2, p1);
-  const depth = sub(p6, p2);
+  const depth = sub(p4, p0);
   const p3 = add(p0, up);
-  const p4 = add(p0, depth);
   const p5 = add(p1, depth);
+  const p6 = add(p2, depth);
   const p7 = add(p3, depth);
   return [p0, p1, p2, p3, p4, p5, p6, p7].map((p) => [...p]);
 }
 
 function boxPoseToVerts(points: VecTuple[]): number[][] {
-  const [p0, p1, p5, p6] = points;
+  const [p0, p1, p5, p3] = points;
   const up = sub(p5, p1);
-  const depth = sub(p6, p5);
+  const depth = sub(p3, p0);
   const p2 = add(p1, depth);
-  const p3 = add(p0, depth);
   const p4 = add(p0, up);
+  const p6 = add(p2, up);
   const p7 = add(p4, depth);
   return [p0, p1, p2, p3, p4, p5, p6, p7].map((p) => [...p]);
 }
