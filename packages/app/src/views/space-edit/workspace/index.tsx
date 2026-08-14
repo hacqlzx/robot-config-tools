@@ -10,6 +10,7 @@ import SidePanel from "../components/SidePanel";
 import SpaceEditLayout from "../components/SpaceEditLayout";
 import Toolbar from "../components/Toolbar";
 import ViewCube from "../components/ViewCube";
+import type { ViewDirection } from "../types";
 import {
   POINT_TABLE_DIR_NAME,
   POINT_TABLE_FILE_RE,
@@ -19,18 +20,21 @@ import {
   stripModelExtension,
 } from "../utils/space-paths";
 import ModelLoadingOverlay from "./components/ModelLoadingOverlay";
+import PotreeClipController from "./components/PotreeClipController";
 import PotreeRenderSettings from "./components/PotreeRenderSettings";
 import SpaceSceneHost from "./components/SpaceSceneHost";
 import { PotreeSpaceSceneAdapter } from "./engine/PotreeSpaceSceneAdapter";
 import {
   DEFAULT_SPACE_RENDER_SETTINGS,
   normalizeSpaceRenderSettings,
+  type SpaceClipBounds,
   type SpaceRenderSettings,
 } from "./engine/types";
 
 const RENDER_SETTINGS_STORAGE_KEY = "space-edit:potree-render-settings";
 
 interface LoadingState {
+  kind: "model" | "clip";
   modelPath: string | null;
   title: string;
   message: string;
@@ -85,6 +89,10 @@ export default function SpaceEditWorkspace() {
   const operationVersion = useRef(0);
   const modelBusyRef = useRef(false);
   const [activeModelPath, setActiveModelPath] = useState<string | null>(null);
+  const [activeSourcePath, setActiveSourcePath] = useState<string | null>(null);
+  const [clipBounds, setClipBounds] = useState<SpaceClipBounds | null>(null);
+  const [clipSaving, setClipSaving] = useState(false);
+  const [clipProgress, setClipProgress] = useState<number | undefined>();
   const [loading, setLoading] = useState<LoadingState | null>(null);
   const [treeKey, setTreeKey] = useState(0);
   const [pointImporting, setPointImporting] = useState(false);
@@ -118,6 +126,10 @@ export default function SpaceEditWorkspace() {
     operationVersion.current += 1;
     modelBusyRef.current = false;
     setActiveModelPath(null);
+    setActiveSourcePath(null);
+    setClipBounds(null);
+    setClipSaving(false);
+    setClipProgress(undefined);
     setLoading(null);
     adapter.clearModel();
   }, [adapter, selectedProject]);
@@ -127,8 +139,21 @@ export default function SpaceEditWorkspace() {
     if (!api) return;
     return api.onConversionProgress((progress) => {
       setLoading((current) => {
-        if (!current?.modelPath || progress.projectName !== selectedProject) return current;
+        if (current?.kind !== "model" || !current.modelPath || progress.projectName !== selectedProject) return current;
         if (loadedFileKey(current.modelPath) !== loadedFileKey(progress.modelPath)) return current;
+        return { ...current, message: progress.message, percent: progress.percent };
+      });
+    });
+  }, [selectedProject]);
+
+  useEffect(() => {
+    const api = window.electronAPI?.potree;
+    if (!api) return;
+    return api.onClipProgress((progress) => {
+      setLoading((current) => {
+        if (current?.kind !== "clip" || !current.modelPath || progress.projectName !== selectedProject) return current;
+        if (loadedFileKey(current.modelPath) !== loadedFileKey(progress.modelPath)) return current;
+        setClipProgress(progress.percent);
         return { ...current, message: progress.message, percent: progress.percent };
       });
     });
@@ -137,6 +162,10 @@ export default function SpaceEditWorkspace() {
   const notifyPending = useCallback((feature: string) => {
     message.info(`${feature}正在迁移到 Potree`);
   }, [message]);
+
+  const handleViewChange = useCallback((direction: ViewDirection) => {
+    adapter.setViewDirection(direction);
+  }, [adapter]);
 
   const loadModel = useCallback(async (item: MapModelItem) => {
     if (!selectedProject) {
@@ -154,16 +183,19 @@ export default function SpaceEditWorkspace() {
     }
 
     modelBusyRef.current = true;
+    adapter.stopClipping();
+    setClipBounds(null);
     const version = ++operationVersion.current;
-    setLoading({ modelPath: item.modelPath, title: item.mapName, message: "正在检查 Potree 数据", percent: 2 });
+    setLoading({ kind: "model", modelPath: item.modelPath, title: item.mapName, message: "正在检查 Potree 数据", percent: 2 });
 
     try {
       const result = await api.ensureModel(selectedProject, item.modelPath);
       if (version !== operationVersion.current) return;
-      setLoading({ modelPath: item.modelPath, title: item.mapName, message: "正在加载点云层级", percent: 98 });
-      await adapter.loadModel({ name: item.mapName, metadataUrl: result.metadataUrl });
+      setLoading({ kind: "model", modelPath: item.modelPath, title: item.mapName, message: "正在加载点云层级", percent: 98 });
+      await adapter.loadModel({ name: item.mapName, metadataUrl: result.metadataUrl, clipBounds: result.bounds });
       if (version !== operationVersion.current) return;
       setActiveModelPath(item.modelPath);
+      setActiveSourcePath(result.modelPath);
       if (result.generated) message.success("模型转换并加载完成");
     } catch (error) {
       if (version === operationVersion.current) message.error(errorMessage(error));
@@ -179,6 +211,10 @@ export default function SpaceEditWorkspace() {
     modelBusyRef.current = false;
     adapter.clearModel();
     setActiveModelPath(null);
+    setActiveSourcePath(null);
+    setClipBounds(null);
+    setClipSaving(false);
+    setClipProgress(undefined);
     setLoading(null);
   }, [activeModelPath, adapter]);
 
@@ -209,7 +245,7 @@ export default function SpaceEditWorkspace() {
 
     modelBusyRef.current = true;
     const version = ++operationVersion.current;
-    setLoading({ modelPath: null, title: file.name, message: "正在导入模型" });
+    setLoading({ kind: "model", modelPath: null, title: file.name, message: "正在导入模型" });
     try {
       let modelPath: string;
       let mapName: string;
@@ -218,12 +254,16 @@ export default function SpaceEditWorkspace() {
         if (plan.willReplace && !(await confirmReplaceModel(plan))) return;
         adapter.clearModel();
         setActiveModelPath(null);
+        setActiveSourcePath(null);
+        setClipBounds(null);
         const result = await electronApi.project.importModelZip(selectedProject, sourcePath);
         modelPath = result.modelPath;
         mapName = result.mapName;
       } else {
         adapter.clearModel();
         setActiveModelPath(null);
+        setActiveSourcePath(null);
+        setClipBounds(null);
         mapName = stripModelExtension(file.name);
         modelPath = await electronApi.project.importFile(selectedProject, sourcePath, file.name);
       }
@@ -288,12 +328,75 @@ export default function SpaceEditWorkspace() {
   }, [message, selectedProject]);
 
   const handleClip = useCallback(() => {
-    if (!activeModelPath) {
+    if (!activeModelPath || !activeSourcePath) {
       message.warning("请先加载模型");
       return;
     }
-    notifyPending("裁切模型");
-  }, [activeModelPath, message, notifyPending]);
+    if (modelBusyRef.current) {
+      message.warning("模型正在处理中，请稍后再试");
+      return;
+    }
+    const initialBounds = adapter.startClipping((bounds) => setClipBounds(bounds));
+    if (!initialBounds) {
+      message.error("无法读取当前模型范围");
+      return;
+    }
+    setClipBounds(initialBounds);
+    setClipProgress(undefined);
+  }, [activeModelPath, activeSourcePath, adapter, message]);
+
+  const handleClipBoundsChange = useCallback((bounds: SpaceClipBounds) => {
+    setClipBounds(bounds);
+    adapter.setClipBounds(bounds);
+  }, [adapter]);
+
+  const handleClipCancel = useCallback(() => {
+    if (clipSaving) return;
+    adapter.stopClipping();
+    setClipBounds(null);
+    setClipProgress(undefined);
+  }, [adapter, clipSaving]);
+
+  const handleClipConfirm = useCallback(async () => {
+    if (!clipBounds || !activeSourcePath || !selectedProject) return;
+    const api = window.electronAPI?.potree;
+    if (!api) {
+      message.error("模型裁切仅支持 Electron 模式");
+      return;
+    }
+    if (modelBusyRef.current) return;
+
+    modelBusyRef.current = true;
+    setClipSaving(true);
+    setClipProgress(0);
+    const version = ++operationVersion.current;
+    setLoading({
+      kind: "clip",
+      modelPath: activeSourcePath,
+      title: "正在裁切模型",
+      message: "正在读取 LAS 点数据",
+      percent: 0,
+    });
+
+    try {
+      const result = await api.clipModel(selectedProject, activeSourcePath, clipBounds);
+      if (version !== operationVersion.current) return;
+      adapter.stopClipping();
+      setClipBounds(null);
+      setTreeKey((value) => value + 1);
+      modelBusyRef.current = false;
+      setLoading(null);
+      await loadModel({ mapName: result.mapName, modelPath: result.modelPath });
+      message.success(`裁切完成，保留 ${result.pointCount.toLocaleString()} 个点`);
+    } catch (error) {
+      if (version === operationVersion.current) message.error(`裁切失败: ${errorMessage(error)}`);
+    } finally {
+      if (version === operationVersion.current) setLoading(null);
+      setClipSaving(false);
+      setClipProgress(undefined);
+      modelBusyRef.current = false;
+    }
+  }, [activeSourcePath, adapter, clipBounds, loadModel, message, selectedProject]);
 
   return (
     <>
@@ -319,7 +422,7 @@ export default function SpaceEditWorkspace() {
             importing={pointImporting}
           />
         )}
-        viewControls={<ViewCube onViewChange={() => notifyPending("视角切换")} />}
+        viewControls={<ViewCube onViewChange={handleViewChange} />}
         sidePanel={(
           <SidePanel
             panelWidth={panelWidth}
@@ -328,7 +431,7 @@ export default function SpaceEditWorkspace() {
             onToggleVisible={handleToggleFromTree}
             onUnloadMapFile={clearModel}
             loadedFiles={loadedFiles}
-            loadingFile={loading?.modelPath || ""}
+            loadingFile={loading?.kind === "model" ? loading.modelPath || "" : ""}
             onCabinetCheck={(bayIds) => { if (bayIds.length > 0) notifyPending("屏柜回显"); }}
             mapDrawingShown={emptyPathSet}
             onToggleDrawing={() => notifyPending("区域回显")}
@@ -362,6 +465,16 @@ export default function SpaceEditWorkspace() {
                   </div>
                 ) : null}
                 <PotreeRenderSettings settings={renderSettings} onChange={setRenderSettings} />
+                {clipBounds && (
+                  <PotreeClipController
+                    bounds={clipBounds}
+                    saving={clipSaving}
+                    progress={clipProgress}
+                    onChange={handleClipBoundsChange}
+                    onConfirm={() => void handleClipConfirm()}
+                    onCancel={handleClipCancel}
+                  />
+                )}
               </>
             )}
           />

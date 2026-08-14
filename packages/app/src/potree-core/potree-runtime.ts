@@ -7,6 +7,7 @@ import {
 export interface PotreePointCloud {
   name: string;
   visible: boolean;
+  position?: PotreeVector3;
   material: {
     size: number;
     pointSizeType: unknown;
@@ -14,6 +15,14 @@ export interface PotreePointCloud {
     dispose?: () => void;
   };
   pcoGeometry?: {
+    boundingBox?: {
+      min: PotreeVector3;
+      max: PotreeVector3;
+    };
+    tightBoundingBox?: {
+      min: PotreeVector3;
+      max: PotreeVector3;
+    };
     root?: PotreeGeometryNode;
     numPoints?: number;
     loader?: {
@@ -45,6 +54,31 @@ export interface PotreeVector3 {
   x: number;
   y: number;
   z: number;
+  set?: (x: number, y: number, z: number) => void;
+  copy?: (value: PotreeVector3) => void;
+}
+
+export interface PotreeBoxVolume {
+  position: PotreeVector3;
+  scale: PotreeVector3;
+  rotation: {
+    x: number;
+    y: number;
+    z: number;
+    set: (x: number, y: number, z: number) => void;
+  };
+  visible: boolean;
+  clip: boolean;
+  frame?: {
+    material?: {
+      color?: { setHex: (value: number) => void };
+      depthTest?: boolean;
+      depthWrite?: boolean;
+    };
+  };
+  update?: () => void;
+  addEventListener?: (type: string, listener: (event: unknown) => void) => void;
+  removeEventListener?: (type: string, listener: (event: unknown) => void) => void;
 }
 
 export interface PotreeView {
@@ -64,14 +98,18 @@ export interface PotreeCamera {
 export interface PotreeViewerInstance {
   scene: {
     pointclouds: PotreePointCloud[];
+    volumes: PotreeBoxVolume[];
     scenePointCloud: { remove: (pointcloud: PotreePointCloud) => void };
     addPointCloud: (pointcloud: PotreePointCloud) => void;
+    addVolume: (volume: PotreeBoxVolume) => void;
+    removeVolume: (volume: PotreeBoxVolume) => void;
     getActiveCamera?: () => PotreeCamera;
     view: PotreeView;
   };
   renderer: {
     domElement: HTMLElement;
     setSize: (width: number, height: number) => void;
+    render: (scene: unknown, camera: PotreeCamera) => void;
     setAnimationLoop: (callback: null) => void;
     dispose: () => void;
     forceContextLoss?: () => void;
@@ -81,11 +119,38 @@ export interface PotreeViewerInstance {
   setMinNodeSize: (size: number) => void;
   setPointBudget: (budget: number) => void;
   setBackground: (background: string) => void;
+  setView: (view: "F" | "B" | "L" | "R" | "U" | "D") => void;
   fitToScreen: () => void;
+  setClipTask: (task: number) => void;
+  setClipMethod: (method: number) => void;
+  clipTask?: number;
+  clipMethod?: number;
+  inputHandler?: {
+    deselectAll: () => void;
+    deselect: (object: PotreeBoxVolume) => void;
+    toggleSelection: (object: PotreeBoxVolume) => void;
+  };
+  transformationTool?: {
+    scene?: unknown;
+    rotationHandles?: Record<string, { node?: { visible: boolean } }>;
+  };
+  addEventListener: (type: string, listener: (event: unknown) => void) => void;
+  removeEventListener: (type: string, listener: (event: unknown) => void) => void;
 }
 
 export interface PotreeNamespace {
   Viewer: new (host: HTMLElement) => PotreeViewerInstance;
+  BoxVolume: new () => PotreeBoxVolume;
+  ClipTask: {
+    NONE: number;
+    HIGHLIGHT: number;
+    SHOW_INSIDE: number;
+    SHOW_OUTSIDE: number;
+  };
+  ClipMethod: {
+    INSIDE_ANY: number;
+    INSIDE_ALL: number;
+  };
   PointSizeType: {
     FIXED: unknown;
     ATTENUATED: unknown;

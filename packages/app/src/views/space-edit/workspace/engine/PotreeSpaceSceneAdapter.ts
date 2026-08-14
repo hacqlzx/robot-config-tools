@@ -5,6 +5,7 @@ import {
   type PotreePointCloud,
   type PotreeViewerInstance,
 } from "@/potree-core/potree-runtime";
+import type { ViewDirection } from "../../types";
 import { PotreeDepthZoomController } from "./PotreeDepthZoomController";
 import { PotreeFlyKeyboardController } from "./PotreeFlyKeyboardController";
 import {
@@ -14,6 +15,7 @@ import {
   SPACE_POINT_BUDGET_MAX,
   type SpaceRenderDetailLevel,
   type SpaceRenderSettings,
+  type SpaceClipBounds,
   type SpaceSceneAdapter,
   type SpaceSceneModel,
 } from "./types";
@@ -24,6 +26,15 @@ const MIN_NODE_SIZE_BY_DETAIL: Record<SpaceRenderDetailLevel, number> = {
   2: 30,
   3: 15,
   4: 8,
+};
+
+const POTREE_VIEW_BY_DIRECTION: Record<ViewDirection, "F" | "B" | "L" | "R" | "U" | "D"> = {
+  前: "F",
+  后: "B",
+  左: "L",
+  右: "R",
+  上: "U",
+  下: "D",
 };
 
 function getPointCloudPointCount(pointcloud: PotreePointCloud): number | null {
@@ -59,7 +70,14 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   private mountVersion = 0;
   private loadVersion = 0;
   private loadedPointCount: number | null = null;
+  private modelClipBounds: SpaceClipBounds | null = null;
   private renderSettings = { ...DEFAULT_SPACE_RENDER_SETTINGS };
+  private clipVolume: NonNullable<PotreeViewerInstance["scene"]["volumes"]>[number] | null = null;
+  private clipBoundsListener: ((bounds: SpaceClipBounds) => void) | null = null;
+  private clipVolumeListener: ((event: unknown) => void) | null = null;
+  private clipOverlayRenderer: ((event: unknown) => void) | null = null;
+  private clipPreviousTask: number | null = null;
+  private clipPreviousMethod: number | null = null;
 
   mount(host: HTMLElement): Promise<void> {
     this.host = host;
@@ -99,6 +117,156 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   setRenderSettings(settings: SpaceRenderSettings): void {
     this.renderSettings = normalizeSpaceRenderSettings(settings);
     this.applyRenderSettings();
+  }
+
+  setViewDirection(direction: ViewDirection): void {
+    this.viewer?.setView(POTREE_VIEW_BY_DIRECTION[direction]);
+  }
+
+  private getModelWorldBounds(): SpaceClipBounds | null {
+    if (this.modelClipBounds) return { ...this.modelClipBounds };
+    const pointcloud = this.pointcloud;
+    const localBounds = pointcloud?.pcoGeometry?.tightBoundingBox
+      ?? pointcloud?.pcoGeometry?.boundingBox;
+    if (!localBounds) return null;
+    const offset = pointcloud.position || { x: 0, y: 0, z: 0 };
+    return {
+      minX: offset.x + localBounds.min.x,
+      maxX: offset.x + localBounds.max.x,
+      minY: offset.y + localBounds.min.y,
+      maxY: offset.y + localBounds.max.y,
+      minZ: offset.z + localBounds.min.z,
+      maxZ: offset.z + localBounds.max.z,
+    };
+  }
+
+  private getVolumeBounds(): SpaceClipBounds | null {
+    const volume = this.clipVolume;
+    if (!volume) return null;
+    return {
+      minX: volume.position.x - Math.abs(volume.scale.x) / 2,
+      maxX: volume.position.x + Math.abs(volume.scale.x) / 2,
+      minY: volume.position.y - Math.abs(volume.scale.y) / 2,
+      maxY: volume.position.y + Math.abs(volume.scale.y) / 2,
+      minZ: volume.position.z - Math.abs(volume.scale.z) / 2,
+      maxZ: volume.position.z + Math.abs(volume.scale.z) / 2,
+    };
+  }
+
+  private setVector(vector: { x: number; y: number; z: number; set?: (x: number, y: number, z: number) => void }, x: number, y: number, z: number): void {
+    if (vector.set) vector.set(x, y, z);
+    else {
+      vector.x = x;
+      vector.y = y;
+      vector.z = z;
+    }
+  }
+
+  startClipping(onBoundsChange: (bounds: SpaceClipBounds) => void): SpaceClipBounds | null {
+    const viewer = this.viewer;
+    const potree = this.potree;
+    const modelBounds = this.getModelWorldBounds();
+    if (!viewer || !potree || !modelBounds) return null;
+
+    this.stopClipping();
+    const volume = new potree.BoxVolume();
+    const centerX = (modelBounds.minX + modelBounds.maxX) / 2;
+    const centerY = (modelBounds.minY + modelBounds.maxY) / 2;
+    const centerZ = (modelBounds.minZ + modelBounds.maxZ) / 2;
+    this.setVector(volume.position, centerX, centerY, centerZ);
+    this.setVector(
+      volume.scale,
+      Math.max(modelBounds.maxX - modelBounds.minX, 1e-6),
+      Math.max(modelBounds.maxY - modelBounds.minY, 1e-6),
+      Math.max(modelBounds.maxZ - modelBounds.minZ, 1e-6),
+    );
+    volume.rotation.set(0, 0, 0);
+    volume.clip = true;
+    volume.visible = true;
+    volume.frame?.material?.color?.setHex(0x39d98a);
+    if (volume.frame?.material) {
+      volume.frame.material.depthTest = false;
+      volume.frame.material.depthWrite = false;
+    }
+
+    this.clipPreviousTask = viewer.clipTask ?? potree.ClipTask.NONE;
+    this.clipPreviousMethod = viewer.clipMethod ?? potree.ClipMethod.INSIDE_ANY;
+    this.clipVolume = volume;
+    this.clipBoundsListener = onBoundsChange;
+    this.clipVolumeListener = () => {
+      const bounds = this.getVolumeBounds();
+      if (bounds) this.clipBoundsListener?.(bounds);
+    };
+    volume.addEventListener?.("position_changed", this.clipVolumeListener);
+    volume.addEventListener?.("scale_changed", this.clipVolumeListener);
+    volume.addEventListener?.("orientation_changed", () => volume.rotation.set(0, 0, 0));
+    viewer.scene.addVolume(volume);
+    viewer.setClipMethod(potree.ClipMethod.INSIDE_ALL);
+    viewer.setClipTask(potree.ClipTask.SHOW_INSIDE);
+    this.clipOverlayRenderer = () => {
+      const toolScene = viewer.transformationTool?.scene;
+      const camera = viewer.scene.getActiveCamera?.();
+      if (toolScene && camera) viewer.renderer.render(toolScene, camera);
+    };
+    viewer.addEventListener("render.pass.perspective_overlay", this.clipOverlayRenderer);
+
+    // Potree's scale handles provide the six-face editing behavior. Rotation
+    // would produce an oriented box that cannot be represented by LAS bounds.
+    const rotationHandles = viewer.transformationTool?.rotationHandles;
+    if (rotationHandles) {
+      Object.values(rotationHandles).forEach((handle) => {
+        if (handle.node) handle.node.visible = false;
+      });
+    }
+    viewer.inputHandler?.deselectAll();
+    viewer.inputHandler?.toggleSelection(volume);
+    return modelBounds;
+  }
+
+  setClipBounds(bounds: SpaceClipBounds): void {
+    const volume = this.clipVolume;
+    if (!volume) return;
+    this.setVector(volume.position,
+      (bounds.minX + bounds.maxX) / 2,
+      (bounds.minY + bounds.maxY) / 2,
+      (bounds.minZ + bounds.maxZ) / 2);
+    this.setVector(volume.scale,
+      Math.max(bounds.maxX - bounds.minX, 1e-6),
+      Math.max(bounds.maxY - bounds.minY, 1e-6),
+      Math.max(bounds.maxZ - bounds.minZ, 1e-6));
+    volume.rotation.set(0, 0, 0);
+    volume.update?.();
+    this.clipBoundsListener?.(bounds);
+  }
+
+  stopClipping(): void {
+    const viewer = this.viewer;
+    const volume = this.clipVolume;
+    if (viewer && volume) {
+      if (this.clipOverlayRenderer) {
+        viewer.removeEventListener("render.pass.perspective_overlay", this.clipOverlayRenderer);
+      }
+      viewer.inputHandler?.deselect(volume);
+      viewer.scene.removeVolume(volume);
+      viewer.setClipTask(this.clipPreviousTask ?? viewer.clipTask ?? 0);
+      viewer.setClipMethod(this.clipPreviousMethod ?? viewer.clipMethod ?? 0);
+      const rotationHandles = viewer.transformationTool?.rotationHandles;
+      if (rotationHandles) {
+        Object.values(rotationHandles).forEach((handle) => {
+          if (handle.node) handle.node.visible = true;
+        });
+      }
+    }
+    if (volume && this.clipVolumeListener) {
+      volume.removeEventListener?.("position_changed", this.clipVolumeListener);
+      volume.removeEventListener?.("scale_changed", this.clipVolumeListener);
+    }
+    this.clipVolume = null;
+    this.clipBoundsListener = null;
+    this.clipVolumeListener = null;
+    this.clipOverlayRenderer = null;
+    this.clipPreviousTask = null;
+    this.clipPreviousMethod = null;
   }
 
   private applyRenderSettings(): void {
@@ -144,6 +312,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
       if (pointcloud.getAttribute?.("rgba")) pointcloud.material.activeAttributeName = "rgba";
       viewer.scene.addPointCloud(pointcloud);
       this.pointcloud = pointcloud;
+      this.modelClipBounds = model.clipBounds ? { ...model.clipBounds } : null;
       this.loadedPointCount = getPointCloudPointCount(pointcloud);
       this.applyRenderSettings();
 
@@ -157,6 +326,8 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
 
   clearModel(): void {
     this.loadVersion += 1;
+    this.stopClipping();
+    this.modelClipBounds = null;
     this.loadedPointCount = null;
     if (this.fitTimer !== null) {
       window.clearTimeout(this.fitTimer);

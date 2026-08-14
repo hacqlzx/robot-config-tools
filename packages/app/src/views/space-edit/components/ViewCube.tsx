@@ -71,6 +71,9 @@ export default function ViewCube({ onViewChange }: Props) {
           <button
             key={v}
             className="space-edit-view-btn"
+            type="button"
+            aria-label={`${v}视角`}
+            title={`${v}视角`}
             onClick={() => onViewChange?.(v)}
           >
             <img src={ICONS[v]} alt={v} />

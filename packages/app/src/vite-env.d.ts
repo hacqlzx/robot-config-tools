@@ -22,6 +22,30 @@ declare global {
     modelPath: string;
     metadataUrl: string;
     generated: boolean;
+    bounds: PotreeClipBounds;
+  }
+
+  interface PotreeClipBounds {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+    minZ: number;
+    maxZ: number;
+  }
+
+  interface PotreeClipProgress {
+    projectName: string;
+    modelPath: string;
+    phase: "scanning" | "complete";
+    percent: number;
+    message: string;
+  }
+
+  interface PotreeClipResult {
+    mapName: string;
+    modelPath: string;
+    pointCount: number;
   }
 
   interface ProjectManifestAsset {
@@ -350,7 +374,9 @@ declare global {
       };
       potree: {
         ensureModel: (projectName: string, modelPath: string) => Promise<PotreeModelResult>;
+        clipModel: (projectName: string, modelPath: string, bounds: PotreeClipBounds) => Promise<PotreeClipResult>;
         onConversionProgress: (callback: (progress: PotreeConversionProgress) => void) => () => void;
+        onClipProgress: (callback: (progress: PotreeClipProgress) => void) => () => void;
       };
       selectDir: (title?: string) => Promise<string | null>;
       selectZipFile: () => Promise<string | null>;

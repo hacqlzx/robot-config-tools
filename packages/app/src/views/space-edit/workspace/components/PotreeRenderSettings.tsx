@@ -73,7 +73,7 @@ export default function PotreeRenderSettings({ settings, onChange }: PotreeRende
             step={SPACE_POINT_BUDGET_STEP}
             value={limitedPointBudget}
             tooltip={{ formatter: (value) => pointCountFormatter.format(value || 0) }}
-            onChange={(pointBudget) => onChange({ ...settings, pointBudget })}
+            onChange={(pointBudget: number) => onChange({ ...settings, pointBudget })}
           />
         )}
       </div>

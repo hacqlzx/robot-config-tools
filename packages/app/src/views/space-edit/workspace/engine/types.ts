@@ -1,8 +1,20 @@
+import type { ViewDirection } from "../../types";
+
 export type SpaceSceneLifecycleState = "detached" | "mounting" | "ready" | "failed";
 
 export interface SpaceSceneModel {
   name: string;
   metadataUrl: string;
+  clipBounds?: SpaceClipBounds;
+}
+
+export interface SpaceClipBounds {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  minZ: number;
+  maxZ: number;
 }
 
 export const SPACE_RENDER_DETAIL_LEVELS = [1, 2, 3, 4] as const;
@@ -52,8 +64,12 @@ export function normalizeSpaceRenderSettings(settings: Partial<SpaceRenderSettin
 export interface SpaceSceneAdapter {
   mount(host: HTMLElement): void | Promise<void>;
   loadModel(model: SpaceSceneModel): void | Promise<void>;
+  setViewDirection(direction: ViewDirection): void;
   getRenderSettings(): SpaceRenderSettings;
   setRenderSettings(settings: SpaceRenderSettings): void;
+  startClipping(onBoundsChange: (bounds: SpaceClipBounds) => void): SpaceClipBounds | null;
+  setClipBounds(bounds: SpaceClipBounds): void;
+  stopClipping(): void;
   clearModel(): void;
   resize(): void;
   dispose(): void | Promise<void>;
