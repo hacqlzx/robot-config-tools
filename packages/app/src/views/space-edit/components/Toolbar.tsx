@@ -99,6 +99,8 @@ export default function Toolbar({ onOpenLoadModel, onClipModel, cabinetMode, onT
           padding: 6px 10px;
           border-radius: 6px;
           transition: all 0.2s;
+          flex: 0 0 auto;
+          min-width: 64px;
         }
         .space-edit-toolbar-btn.active { background: #1677ff; color: #fff; }
         .space-edit-toolbar-btn:hover {
@@ -121,6 +123,7 @@ export default function Toolbar({ onOpenLoadModel, onClipModel, cabinetMode, onT
         background: "#fff",
         borderBottom: "1px solid #e8e8e8",
         flexShrink: 0,
+        overflowX: "auto",
       }}>
         {/* 点表文件选择器，隐藏在 DOM 中，由按钮点击触发 */}
         <input ref={pointInputRef} type="file" accept={POINT_TABLE_FILE_ACCEPT} onChange={handlePointFile} style={{ display: "none" }} />

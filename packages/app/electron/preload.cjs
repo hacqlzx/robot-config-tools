@@ -71,6 +71,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
     exportFile: (projectName, subPath, destDir) =>
       ipcRenderer.invoke("project:export-file", projectName, subPath, destDir),
   },
+  potree: {
+    ensureModel: (projectName, modelPath) =>
+      ipcRenderer.invoke("potree:ensure-model", projectName, modelPath),
+    onConversionProgress: (callback) => {
+      const handler = (_event, progress) => callback(progress);
+      ipcRenderer.on("potree:conversion-progress", handler);
+      return () => ipcRenderer.removeListener("potree:conversion-progress", handler);
+    },
+  },
   selectDir: (title) => ipcRenderer.invoke("dialog:select-dir", title),
   selectZipFile: () => ipcRenderer.invoke("dialog:select-zip-file"),
   onExportProgress: (callback) => {

@@ -1,7 +1,11 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import { fileURLToPath } from 'node:url';
 import electron from 'vite-plugin-electron';
+import { potreeAssetsPlugin } from './src/potree-core/vite-potree-assets';
+
+const appRoot = fileURLToPath(new URL('.', import.meta.url));
 
 export default defineConfig(({ mode }) => {
   const isElectron = process.env.ELECTRON === 'true';
@@ -12,9 +16,9 @@ export default defineConfig(({ mode }) => {
 
     resolve: {
       alias: {
-        '@': path.resolve('src'),
-        playcanvas: path.resolve(`node_modules/playcanvas/build/playcanvas${isDev ? '.dbg' : ''}/src/index.js`),
-        'laz-perf': path.resolve('node_modules/laz-perf/lib/web/index'),
+        '@': path.resolve(appRoot, 'src'),
+        playcanvas: path.resolve(appRoot, `node_modules/playcanvas/build/playcanvas${isDev ? '.dbg' : ''}/src/index.js`),
+        'laz-perf': path.resolve(appRoot, 'node_modules/laz-perf/lib/web/index'),
       },
     },
 
@@ -54,6 +58,7 @@ export default defineConfig(({ mode }) => {
     },
 
     plugins: [
+      potreeAssetsPlugin({ sourceRoot: path.resolve(appRoot, 'src/potree-core') }),
       react(),
       {
         name: 'svg-data-uri',

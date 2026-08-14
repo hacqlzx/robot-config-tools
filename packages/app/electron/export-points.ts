@@ -223,10 +223,16 @@ function generatePointExcel(data: PointTableExportData): Buffer {
   return generatePointExcelFromRows(buildPointExportRows(data));
 }
 
-/** 递归计算目录总字节数 */
+function isGeneratedPotreeDirectory(name: string): boolean {
+  const lowerName = name.toLowerCase();
+  return lowerName === ".potree" || lowerName.startsWith(".potree.");
+}
+
+/** 递归计算目录总字节数，忽略可由原始 LAS/LAZ 重新生成的 Potree 缓存。 */
 function getDirSize(dir: string): number {
   let size = 0;
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory() && isGeneratedPotreeDirectory(entry.name)) continue;
     const p = path.join(dir, entry.name);
     if (entry.isDirectory()) size += getDirSize(p);
     else size += fs.statSync(p).size;
@@ -237,6 +243,7 @@ function getDirSize(dir: string): number {
 function listFilesRecursive(dir: string): string[] {
   const files: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory() && isGeneratedPotreeDirectory(entry.name)) continue;
     const p = path.join(dir, entry.name);
     if (entry.isDirectory()) files.push(...listFilesRecursive(p));
     else files.push(p);

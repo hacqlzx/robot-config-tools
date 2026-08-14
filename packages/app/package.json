@@ -60,6 +60,10 @@
             {
                 "from": "src/assets/img/icon.png",
                 "to": "icon.png"
+            },
+            {
+                "from": "src/potree-core/PotreeConverter_2.1.3",
+                "to": "potree/PotreeConverter_2.1.3"
             }
         ],
         "win": {

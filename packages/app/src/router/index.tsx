@@ -1,7 +1,7 @@
 ﻿import { lazy, Suspense } from "react";
 import { createHashRouter, Navigate } from "react-router-dom";
 import AppLayout from "../App";
-import SpaceEdit from "../views/space-edit";
+import SpaceEdit from "../views/space-edit/workspace";
 
 const ImageEdit = lazy(() => import("../views/image-edit"));
 const ImportExport = lazy(() => import("../views/import-export"));

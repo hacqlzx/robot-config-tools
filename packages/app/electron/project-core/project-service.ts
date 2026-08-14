@@ -923,7 +923,7 @@ export async function listProjects(): Promise<string[]> {
   ensureProjectRoot();
   const entries = fs.readdirSync(getProjectRoot(), { withFileTypes: true });
   const projectNames = entries
-    .filter((d) => d.isDirectory())
+    .filter((d) => d.isDirectory() && d.name !== ".potree-converter-runtime")
     .map((d) => d.name);
 
   for (const name of projectNames) {

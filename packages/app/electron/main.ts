@@ -8,19 +8,24 @@ import { registerDeviceVerifyIpc } from "./ipc/device-verify-ipc";
 import { registerExportTaskIpc } from "./ipc/export-task-ipc";
 import { registerFileIpc } from "./ipc/file-ipc";
 import { registerProjectIpc } from "./ipc/project-ipc";
+import { registerPotreeIpc } from "./ipc/potree-ipc";
 import { registerSystemIpc } from "./ipc/system-ipc";
+import { configureProjectAssetScheme, registerProjectAssetProtocol } from "./potree/project-asset-protocol";
 
 configureAppCommandLine();
 disableApplicationMenu();
 configureCertificateHandling();
+configureProjectAssetScheme();
 
 app.whenReady().then(async () => {
   await logGPUInfo();
   loadInitialProjectRoot();
+  registerProjectAssetProtocol();
 
   registerSystemIpc();
   registerFileIpc();
   registerProjectIpc();
+  registerPotreeIpc();
   registerArchiveIpc();
   registerDeviceVerifyIpc();
   registerExportTaskIpc();

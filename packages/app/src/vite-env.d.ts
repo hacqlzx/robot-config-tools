@@ -10,6 +10,20 @@ declare global {
     children?: TreeNode[];
   }
 
+  interface PotreeConversionProgress {
+    projectName: string;
+    modelPath: string;
+    phase: "checking" | "converting" | "validating" | "complete";
+    percent: number;
+    message: string;
+  }
+
+  interface PotreeModelResult {
+    modelPath: string;
+    metadataUrl: string;
+    generated: boolean;
+  }
+
   interface ProjectManifestAsset {
     id: string;
     name: string;
@@ -333,6 +347,10 @@ declare global {
         renamePath: (targetPath: string, newName: string) => Promise<string>;
         openDir: (targetPath: string) => Promise<void>;
         exportFile: (projectName: string, subPath: string, destDir: string) => Promise<string>;
+      };
+      potree: {
+        ensureModel: (projectName: string, modelPath: string) => Promise<PotreeModelResult>;
+        onConversionProgress: (callback: (progress: PotreeConversionProgress) => void) => () => void;
       };
       selectDir: (title?: string) => Promise<string | null>;
       selectZipFile: () => Promise<string | null>;
