@@ -1,6 +1,14 @@
 import { useState, useEffect, useRef } from "react";
 import { Dropdown } from "antd";
-import { FolderOutlined, FileOutlined, LoadingOutlined } from "@ant-design/icons";
+import {
+  CheckCircleOutlined,
+  ClockCircleOutlined,
+  CloseCircleOutlined,
+  FileOutlined,
+  FolderOutlined,
+  LoadingOutlined,
+  QuestionCircleOutlined,
+} from "@ant-design/icons";
 import {
   DRAWING_FILE_NAME,
   PATH_FILE_NAME,
@@ -33,6 +41,8 @@ interface Props {
   pathShown?: Set<string>;
   /** 勾选/取消路径 json */
   onTogglePath?: (path: string, checked: boolean) => void;
+  /** 地图模型的 Potree 转换状态 */
+  mapPotreeStatuses?: Record<string, ProjectMapPotreeState>;
 }
 
 function displayNodeName(node: SpaceTreeNode): string {
@@ -52,7 +62,26 @@ function isRobotStopPointFileName(name: string): boolean {
   return (ROBOT_STOP_POINTS_FILE_NAMES as readonly string[]).includes(name);
 }
 
-export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, onLoadLas, onToggleVisible, loadChildren, onRequestDelete, onRequestOpenDir, drawingShown, onToggleDrawing, pathShown, onTogglePath }: Props) {
+function getPotreeStatusMeta(status?: ProjectMapPotreeState["status"], error?: string): { title: string; color: string; icon: JSX.Element } | null {
+  switch (status) {
+    case "checking":
+    case "converting":
+    case "validating":
+      return { title: "Potree 正在转换", color: "#1677ff", icon: <LoadingOutlined spin /> };
+    case "ready":
+      return { title: "Potree 数据已生成", color: "#52c41a", icon: <CheckCircleOutlined /> };
+    case "stale":
+      return { title: "Potree 数据已过期", color: "#faad14", icon: <ClockCircleOutlined /> };
+    case "error":
+      return { title: error ? `Potree 转换失败：${error}` : "Potree 转换失败", color: "#ff4d4f", icon: <CloseCircleOutlined /> };
+    case "missing":
+      return { title: "Potree 数据未生成", color: "#8c8c8c", icon: <QuestionCircleOutlined /> };
+    default:
+      return null;
+  }
+}
+
+export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, onLoadLas, onToggleVisible, loadChildren, onRequestDelete, onRequestOpenDir, drawingShown, onToggleDrawing, pathShown, onTogglePath, mapPotreeStatuses }: Props) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
     const expandAll = (list: SpaceTreeNode[]) => {
@@ -255,6 +284,11 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
         const state = getCheckState(node);
         const effectiveChildren = getEffectiveChildren(node);
         const isLoading = loadingNodes.has(node.path);
+        const nodeFileKey = loadedFileKey(node.path);
+        const modelStatus = !node.isDir && isLas(node.name) ? mapPotreeStatuses?.[nodeFileKey] : undefined;
+        const statusMeta = !node.isDir && isLas(node.name) && loadingFile !== nodeFileKey
+          ? getPotreeStatusMeta(modelStatus?.status, modelStatus?.error)
+          : null;
         const menuItems = [
           { key: "openDir", label: "打开文件目录" },
           { key: "delete", label: "删除", danger: true },
@@ -324,7 +358,21 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
               >
                 {displayNodeName(node)}
               </span>
-              {!node.isDir && isLas(node.name) && loadingFile === loadedFileKey(node.path) && (
+              {statusMeta && (
+                <span
+                  title={statusMeta.title}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    color: statusMeta.color,
+                    fontSize: 12,
+                    flexShrink: 0,
+                  }}
+                >
+                  {statusMeta.icon}
+                </span>
+              )}
+              {!node.isDir && isLas(node.name) && loadingFile === nodeFileKey && (
                 <LoadingOutlined style={{ color: "#1677ff", fontSize: 14, flexShrink: 0 }} />
               )}
             </div>
@@ -344,6 +392,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
                 onToggleDrawing={onToggleDrawing}
                 pathShown={pathShown}
                 onTogglePath={onTogglePath}
+                mapPotreeStatuses={mapPotreeStatuses}
               />
             )}
           </div>

@@ -48,12 +48,33 @@ declare global {
     pointCount: number;
   }
 
+  type ProjectMapPotreeStatus =
+    | "missing"
+    | "checking"
+    | "converting"
+    | "validating"
+    | "ready"
+    | "stale"
+    | "error";
+
+  interface ProjectMapPotreeState {
+    status: ProjectMapPotreeStatus;
+    outputRelativePath: string;
+    metadataRelativePath: string;
+    updatedAt: string;
+    generatedAt?: string;
+    error?: string;
+    sourceSize?: number;
+    sourceMtimeMs?: number;
+  }
+
   interface ProjectManifestAsset {
     id: string;
     name: string;
     relativePath: string;
     createdAt: string;
     updatedAt: string;
+    potree?: ProjectMapPotreeState;
     [key: string]: unknown;
   }
 

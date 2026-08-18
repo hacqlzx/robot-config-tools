@@ -222,6 +222,10 @@ export class PotreeCabinetEditor {
     this.restore(next);
   }
 
+  restoreSnapshot(snapshot: unknown): void {
+    this.restore(snapshot as CabinetSnapshot);
+  }
+
   clear(): void {
     this.points = [];
     this.verts = null;
@@ -262,9 +266,10 @@ export class PotreeCabinetEditor {
     this.emitChange();
   }
 
-  private commit(before: CabinetSnapshot): void {
+  private commit(before: CabinetSnapshot, label = "屏柜编辑"): void {
     this.undoStack.push(before);
     this.redoStack = [];
+    this.callbacks?.onHistory?.(before, this.snapshot(), label);
     this.rebuildVisuals();
     this.emitChange();
   }
@@ -296,7 +301,7 @@ export class PotreeCabinetEditor {
       this.points = [];
       this.verts = verts;
     }
-    this.commit(before);
+    this.commit(before, this.verts ? "生成屏柜" : "绘制屏柜点");
   }
 
   private moveVertex(index: number, position: Vec3): void {
@@ -311,7 +316,7 @@ export class PotreeCabinetEditor {
     if (!this.verts) return;
     const before = this.snapshot();
     this.splits.push(amount);
-    this.commit(before);
+    this.commit(before, "添加屏柜分隔");
   }
 
   private splitCorners(amount: number): Vec3[] {
@@ -369,6 +374,7 @@ export class PotreeCabinetEditor {
       if (JSON.stringify(before) !== JSON.stringify(after)) {
         this.undoStack.push(before);
         this.redoStack = [];
+        this.callbacks?.onHistory?.(before, after, "移动屏柜顶点");
       }
       this.rebuildVisuals();
       this.emitChange();

@@ -110,6 +110,32 @@ function buildCabinetMainDeviceTree(voltList: any[], bayList: any[], mainList: a
     .filter(Boolean) as TreeDataNode[];
 }
 
+function normalizeRootPath(rootPath: string): string {
+  return rootPath.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+function buildMapPotreeStatuses(projectRoot: string, manifest: ProjectManifest): Record<string, ProjectMapPotreeState> {
+  const root = normalizeRootPath(projectRoot);
+  if (!root) return {};
+
+  const statuses: Record<string, ProjectMapPotreeState> = {};
+  manifest.assets.maps.forEach((asset) => {
+    const sourceRelativePath = String(asset.entryFile || "").replace(/\\/g, "/");
+    if (!sourceRelativePath) return;
+    const mapRelativePath = String(asset.relativePath || "").replace(/\\/g, "/");
+    const outputRelativePath = `${mapRelativePath}/.potree`;
+    const metadataRelativePath = `${outputRelativePath}/metadata.json`;
+    const key = loadedFileKey(`${root}/${sourceRelativePath}`);
+    statuses[key] = asset.potree || {
+      status: "missing",
+      outputRelativePath,
+      metadataRelativePath,
+      updatedAt: asset.updatedAt,
+    };
+  });
+  return statuses;
+}
+
 const TREE_CSS = `
   .side-tree .ant-tree-treenode { white-space: nowrap; }
   .side-tree .ant-tree-node-content-wrapper { overflow: hidden; flex: 1; min-width: 0; }
@@ -122,6 +148,7 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
   const selectedProject = useSelectedProject();
   const [sideTab, setSideTab] = useState("map");
   const [mapTreeData, setMapTreeData] = useState<SpaceTreeNode[]>([]);
+  const [mapPotreeStatuses, setMapPotreeStatuses] = useState<Record<string, ProjectMapPotreeState>>({});
   const [cabinetTreeData, setCabinetTreeData] = useState<TreeDataNode[]>([]);
   const [deviceAreaTreeData, setDeviceAreaTreeData] = useState<TreeDataNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(false);
@@ -129,13 +156,21 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
   const loadMapTree = useCallback(async () => {
     if (!selectedProject || !window.electronAPI) {
       setMapTreeData([]);
+      setMapPotreeStatuses({});
       return;
     }
     try {
-      const nodes = await window.electronAPI.project.listTree(selectedProject, MAP_DIR_NAME);
+      const api = window.electronAPI;
+      const [nodes, manifest, projectRoot] = await Promise.all([
+        api.project.listTree(selectedProject, MAP_DIR_NAME),
+        api.project.getManifest(selectedProject),
+        api.getProjectRoot(),
+      ]);
       setMapTreeData(nodes);
+      setMapPotreeStatuses(buildMapPotreeStatuses(projectRoot || "", manifest));
     } catch {
       setMapTreeData([]);
+      setMapPotreeStatuses({});
     }
   }, [selectedProject]);
 
@@ -311,6 +346,7 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
                 onToggleDrawing={onToggleDrawing}
                 pathShown={mapPathShown}
                 onTogglePath={onTogglePath}
+                mapPotreeStatuses={mapPotreeStatuses}
               />
             )
           ) : sideTab === "device" ? (

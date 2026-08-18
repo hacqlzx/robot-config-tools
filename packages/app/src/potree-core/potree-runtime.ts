@@ -95,6 +95,7 @@ export interface PotreeView {
   radius: number;
   yaw: number;
   pitch: number;
+  lookAt?: (x: number, y: number, z: number) => void;
   translate: (x: number, y: number, z: number) => void;
   translateWorld: (x: number, y: number, z: number) => void;
 }

@@ -26,7 +26,29 @@ export interface ProjectManifestAsset {
   createdAt: string;
   /** 最近更新时间 */
   updatedAt: string;
+  /** Potree 转换状态，主要供空间编辑显示模型缓存情况 */
+  potree?: ProjectMapPotreeState;
   [key: string]: unknown;
+}
+
+export type ProjectMapPotreeStatus =
+  | "missing"
+  | "checking"
+  | "converting"
+  | "validating"
+  | "ready"
+  | "stale"
+  | "error";
+
+export interface ProjectMapPotreeState {
+  status: ProjectMapPotreeStatus;
+  outputRelativePath: string;
+  metadataRelativePath: string;
+  updatedAt: string;
+  generatedAt?: string;
+  error?: string;
+  sourceSize?: number;
+  sourceMtimeMs?: number;
 }
 
 export interface ProjectManifest {
@@ -223,6 +245,15 @@ function upsertManifestAsset(
   }
 }
 
+function mapAssetBySourcePath(manifest: ProjectManifest, relativePath: string): ProjectManifestAsset | undefined {
+  const normalizedPath = relativePath.replace(/\\/g, "/");
+  const mapDir = manifest.layout.dirs.maps;
+  const parts = normalizedPath.split("/");
+  if (parts[0] !== mapDir || !parts[1]) return undefined;
+  const mapRelativePath = `${mapDir}/${parts[1]}`;
+  return manifest.assets.maps.find((item) => item.relativePath === mapRelativePath || item.entryFile === normalizedPath);
+}
+
 /**
  * 根据项目内写入路径维护地图资产。
  */
@@ -246,6 +277,16 @@ function touchMapAssetForPath(manifest: ProjectManifest, relativePath: string): 
       ext,
       type: "pointCloud",
     });
+    const asset = manifest.assets.maps.find((item) => item.relativePath === mapRelativePath || item.entryFile === normalizedPath);
+    if (asset?.potree) {
+      asset.potree = {
+        ...asset.potree,
+        status: "stale",
+        error: undefined,
+        updatedAt: nowIso(),
+      };
+      asset.updatedAt = nowIso();
+    }
     return;
   }
 
@@ -287,6 +328,46 @@ export function updateManifestForWrittenFile(projectName: string, filePath: stri
   });
 }
 
+export function updateManifestForPotreeModel(
+  projectName: string,
+  params: {
+    modelPath: string;
+    outputDir: string;
+    metadataPath?: string;
+    status: ProjectMapPotreeStatus;
+    generated?: boolean;
+    error?: string;
+  },
+): void {
+  updateProjectManifest(projectName, (manifest, projectDir) => {
+    const safeModelPath = assertInside(projectDir, params.modelPath, "更新 Potree 清单");
+    const safeOutputDir = assertInside(projectDir, params.outputDir, "更新 Potree 清单");
+    const safeMetadataPath = params.metadataPath
+      ? assertInside(projectDir, params.metadataPath, "更新 Potree 清单")
+      : path.join(safeOutputDir, "metadata.json");
+    const relativeModelPath = toProjectRelativePath(projectDir, safeModelPath).replace(/\\/g, "/");
+    const relativeOutputDir = toProjectRelativePath(projectDir, safeOutputDir).replace(/\\/g, "/");
+    const relativeMetadataPath = toProjectRelativePath(projectDir, safeMetadataPath).replace(/\\/g, "/");
+    touchMapAssetForPath(manifest, relativeModelPath);
+    const asset = mapAssetBySourcePath(manifest, relativeModelPath);
+    if (!asset) return;
+
+    const sourceStat = fs.existsSync(safeModelPath) ? fs.statSync(safeModelPath) : null;
+    const stamp = nowIso();
+    asset.potree = {
+      status: params.status,
+      outputRelativePath: relativeOutputDir,
+      metadataRelativePath: relativeMetadataPath,
+      updatedAt: stamp,
+      generatedAt: params.generated ? stamp : asset.potree?.generatedAt,
+      error: params.error || undefined,
+      sourceSize: sourceStat?.size,
+      sourceMtimeMs: sourceStat?.mtimeMs,
+    };
+    asset.updatedAt = stamp;
+  });
+}
+
 export function removeManifestAssetsUnderPath(projectName: string, targetPath: string): void {
   updateProjectManifest(projectName, (manifest, projectDir) => {
     const relativePath = toProjectRelativePath(projectDir, targetPath);
@@ -321,6 +402,14 @@ export function rewriteManifestAssetPathsAfterMove(projectName: string, oldPath:
           asset.entryFile = rewrite(asset.entryFile);
         }
         asset.updatedAt = nowIso();
+        if (key === "maps" && asset.potree) {
+          asset.potree = {
+            ...asset.potree,
+            outputRelativePath: `${asset.relativePath}/.potree`,
+            metadataRelativePath: `${asset.relativePath}/.potree/metadata.json`,
+            updatedAt: nowIso(),
+          };
+        }
         if (key === "maps") {
           asset.name = asset.relativePath.split("/")[1] || asset.name;
         } else if (key === "pointTables") {

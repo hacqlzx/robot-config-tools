@@ -21,16 +21,16 @@ import {
   ROBOT_PATH_FILE_NAME,
   ROBOT_STOP_POINT_FILE_NAMES,
   electronFileSource,
-  loadRobotRouteDrawingData,
   type RayRenderData,
   type RayRenderItem,
-  useThreeDViewer,
 } from "@/components/three-d-engine";
 import { loadSurveyRayDrawingData } from "./utils/survey-ray-data";
+import { usePotreeSurveyViewer, type PotreeSurveySelectInfo } from "./hooks/usePotreeSurveyViewer";
 import { useResizable } from "@/components/useResizable";
 import ImageCanvas from "@/components/image-canvas/ImageCanvas";
 import type { ImageItem } from "@/components/image-canvas/ImageCanvas";
 import { useTaskLoader } from "./hooks/useTaskLoader";
+import PotreeRenderSettings from "@/views/space-edit/workspace/components/PotreeRenderSettings";
 import { useRobotOptions, useSelectedProject, useSelectedRobot } from "@/stores/appContextStore";
 import { cabinetDeviceMainCollect, equipmentDeviceMainCollect, getSurveyRunning, startTask, stopPointCollect } from "@/api/config.js";
 import "./index.scss";
@@ -285,16 +285,28 @@ export default function ImageEdit() {
     }).catch(() => setPoints([]));
   }, [selBayId, selectedProject]);
 
-  const handle3DSelect = useCallback((info: { type: string; bayId: number }) => {
+  const handle3DSelect = useCallback((info: PotreeSurveySelectInfo) => {
     if (info.bayId) setSelBayId(info.bayId);
   }, []);
 
-  // 公共 3D 查看器
-  const viewerCanvasRef = useRef<HTMLCanvasElement>(null);
-  const viewerContainerRef = useRef<HTMLDivElement>(null);
-  const { loadFile, loadDrawing, loadDrawingData, loading, loadingFile, progress, drawingRef, loaderRef, focusAlongDirection } = useThreeDViewer({
-    canvasRef: viewerCanvasRef,
-    containerRef: viewerContainerRef,
+  // Potree 3D 查看器
+  const {
+    hostRef: viewerHostRef,
+    clear: clearViewer,
+    clearRays,
+    focusAlongDirection,
+    loadDrawing,
+    loadModel: loadPotreeModel,
+    loadPath,
+    loading,
+    loadingFile,
+    progress,
+    renderSettings,
+    error: viewerError,
+    setRenderSettings,
+    showRay,
+  } = usePotreeSurveyViewer({
+    selectedProject,
     onSelect: handle3DSelect,
   });
 
@@ -320,8 +332,7 @@ export default function ImageEdit() {
   const handleSurveyLoad = useCallback(async (mapName: string) => {
     if (!selectedProject || !window.electronAPI?.project) return;
     // 卸载旧模型和旧任务状态；勘察页同一时间只展示一张地图，避免区域/射线跨地图残留。
-    loaderRef.current?.destroy();
-    drawingRef.current?.clear();
+    clearViewer();
     loadedMapRef.current = null;
     loadedModelPathRef.current = "";
     loadedStopPointFilePathRef.current = "";
@@ -358,7 +369,7 @@ export default function ImageEdit() {
               if (!stopPointFile || fileName === ROBOT_STOP_POINT_FILE_NAMES[0]) {
                 stopPointFile = n.path;
               }
-            } else if (fileName.endsWith(".json")) {
+            } else if (fileName === "description_file.json") {
               drawingJsonFiles.push(n.path);
             }
           }
@@ -380,11 +391,9 @@ export default function ImageEdit() {
 
       const primaryModelPath = lasFiles.find((filePath) => /[\\/]map\.(las|laz)$/i.test(filePath)) || lasFiles[0];
       loadedStopPointFilePathRef.current = stopPointFile;
-      // 加载 LAS
-      for (let i = 0; i < lasFiles.length; i++) {
-        await loadFile(lasFiles[i]);
-      }
-      loadedModelPathRef.current = primaryModelPath;
+      const loadedSourceModelPath = await loadPotreeModel({ mapName, modelPath: primaryModelPath });
+      if (!loadedSourceModelPath) return;
+      loadedModelPathRef.current = loadedSourceModelPath;
 
       // 区域等绘制 JSON 仍按原格式加载；路径文件单独走 path.json + stop_points.json，不读 reference_path.txt。
       for (const jsonPath of drawingJsonFiles) {
@@ -395,15 +404,10 @@ export default function ImageEdit() {
         }
       }
 
-      if (pathFile && stopPointFile) {
+      if (pathFile) {
         try {
           // 机器人路径用 path.json + stop_points.json 组合回显，和空间编辑写的 reference_path.txt 分开处理。
-          const pathData = await loadRobotRouteDrawingData({
-            fileSource: electronFileSource,
-            pathFilePath: pathFile,
-            stopPointFilePath: stopPointFile,
-          });
-          if (pathData) loadDrawingData(pathData);
+          await loadPath(pathFile);
         } catch (e) {
           console.error("路径/停靠点加载失败:", { pathFile, stopPointFile, error: e });
         }
@@ -415,7 +419,7 @@ export default function ImageEdit() {
     } catch (e: any) {
       message.error("加载地图数据失败: " + (e?.message || ""));
     }
-  }, [message, loadFile, loadDrawing, loadDrawingData, clearTask, selectedProject]);
+  }, [clearTask, clearViewer, loadDrawing, loadPath, loadPotreeModel, message, selectedProject]);
 
   /** 加载任务图像（任务模式：JSON + JPG 拼接） */
   const handleTaskLoad = useCallback(async (taskDir: string) => {
@@ -423,7 +427,7 @@ export default function ImageEdit() {
     surveyDirRef.current = taskDir;
     try {
       clearTask();
-      drawingRef.current?.clearRays();
+      clearRays();
       surveyRayDataRef.current = null;
       visibleRayIdRef.current = "";
       setTaskImages([]);
@@ -437,6 +441,7 @@ export default function ImageEdit() {
             deviceDir: result.deviceDir,
             modelPath: loadedModelPathRef.current,
             stopPointFilePath: loadedStopPointFilePathRef.current || undefined,
+            outputCoordinates: "las",
           });
           surveyRayDataRef.current = rayData;
         } catch (rayError) {
@@ -454,23 +459,23 @@ export default function ImageEdit() {
       console.error("[handleTaskLoad] 失败:", e);
       message.error("加载任务数据失败: " + (e?.message || ""));
     }
-  }, [loadTask, clearTask, setSide, ptzSide, message, refreshCalibratedRects, loadDrawingData, drawingRef]);
+  }, [clearRays, clearTask, getTotalCount, loadTask, message, ptzSide, refreshCalibratedRects, setSide]);
 
   const handleTaskImageHover = useCallback((item: ImageItem | null) => {
     const rayId = getTaskImageRayId(item);
     if (visibleRayIdRef.current === rayId) return;
     visibleRayIdRef.current = rayId;
     if (!rayId) {
-      drawingRef.current?.clearRays();
+      clearRays();
       return;
     }
     const ray = surveyRayDataRef.current?.rays.find((candidate) => String(candidate.id) === rayId);
     if (!ray) {
-      drawingRef.current?.clearRays();
+      clearRays();
       return;
     }
-    loadDrawingData({ rays: [ray] });
-  }, [loadDrawingData]);
+    showRay(ray);
+  }, [clearRays, showRay]);
 
   const handleTaskImageLocate = useCallback((item: ImageItem) => {
     const rayId = getTaskImageRayId(item);
@@ -490,7 +495,7 @@ export default function ImageEdit() {
 
     const locate = () => {
       visibleRayIdRef.current = rayId;
-      loadDrawingData({ rays: [ray] });
+      showRay(ray);
       focusAlongDirection(
         ray.origin[0],
         ray.origin[1],
@@ -508,7 +513,7 @@ export default function ImageEdit() {
       return;
     }
     locate();
-  }, [focusAlongDirection, loadDrawingData, mapVisible, message]);
+  }, [focusAlongDirection, mapVisible, message, showRay]);
 
   // ptzSide 切换时重新计算布局
   useEffect(() => {
@@ -851,11 +856,15 @@ export default function ImageEdit() {
               style={{ marginLeft: mapVisible ? 8 : 0 }}
             >{mapVisible ? '<' : '>'}</span>
           </div>
-          <div className="image-edit-map" ref={viewerContainerRef} style={{ display: mapVisible ? "" : "none" }}>
-            <canvas ref={viewerCanvasRef} className="viewer-canvas" />
-            {!loadedMap && !loading && (
+          <div className="image-edit-map" style={{ display: mapVisible ? "" : "none" }}>
+            <div ref={viewerHostRef} className="viewer-canvas" />
+            {viewerError && !loading && (
+              <div className="map-empty">{viewerError.message}</div>
+            )}
+            {!viewerError && !loadedMap && !loading && (
               <div className="map-empty">请先加载勘察图像</div>
             )}
+            <PotreeRenderSettings settings={renderSettings} onChange={setRenderSettings} />
             {loading && (
               <div className="map-loading-overlay">
                 <Spin size="large" />

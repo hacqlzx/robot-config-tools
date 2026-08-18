@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertInside, resolveProjectDir, resolveProjectRootPath } from "../project-core/project-paths";
+import { updateManifestForPotreeModel, type ProjectMapPotreeStatus } from "../project-core/project-manifest";
 import { ensureProjectRoot, getProjectRoot } from "../project-core/project-root";
 import { readLasModelBounds, type LasClipBounds } from "./las-clip";
 import { createProjectAssetUrl } from "./project-asset-protocol";
@@ -124,6 +125,28 @@ function resolveConverterPath(): string {
   const converterPath = candidates.find((candidate) => fs.existsSync(candidate));
   if (!converterPath) throw new Error("未找到 PotreeConverter.exe，请检查应用资源是否完整");
   return converterPath;
+}
+
+function recordModelState(
+  projectName: string,
+  modelPath: string,
+  outputDir: string,
+  metadataPath: string,
+  status: ProjectMapPotreeStatus,
+  options: { generated?: boolean; error?: string } = {},
+): void {
+  try {
+    updateManifestForPotreeModel(projectName, {
+      modelPath,
+      outputDir,
+      metadataPath,
+      status,
+      generated: options.generated,
+      error: options.error,
+    });
+  } catch (error) {
+    console.warn("[potree-converter] failed to update model manifest", { projectName, modelPath, outputDir, error });
+  }
 }
 
 async function hasUsableOutput(modelPath: string, outputDir: string): Promise<boolean> {
@@ -265,7 +288,6 @@ async function ensureModelInternal(
   modelPath: string,
   notify: (phase: PotreeConversionPhase, percent: number, message: string) => void,
 ): Promise<PotreeModelResult> {
-  notify("checking", 2, "正在检查 Potree 数据");
   const safeModelPath = assertInside(
     resolveProjectDir(projectName),
     resolveProjectRootPath(modelPath, "转换点云"),
@@ -274,11 +296,22 @@ async function ensureModelInternal(
   if (!/\.(las|laz)$/i.test(safeModelPath)) throw new Error("仅支持转换 LAS/LAZ 模型");
   const sourceStat = await fs.promises.stat(safeModelPath);
   if (!sourceStat.isFile()) throw new Error("模型文件不存在");
-  const bounds = await readLasModelBounds(safeModelPath);
-
   const outputDir = assertInside(path.dirname(safeModelPath), path.join(path.dirname(safeModelPath), POTREE_OUTPUT_DIR_NAME), "生成点云数据");
   const metadataPath = path.join(outputDir, "metadata.json");
+
+  notify("checking", 2, "正在检查 Potree 数据");
+  recordModelState(projectName, safeModelPath, outputDir, metadataPath, "checking");
+
+  let bounds: LasClipBounds;
+  try {
+    bounds = await readLasModelBounds(safeModelPath);
+  } catch (error) {
+    recordModelState(projectName, safeModelPath, outputDir, metadataPath, "error", { error: error instanceof Error ? error.message : String(error) });
+    throw error;
+  }
+
   if (await hasUsableOutput(safeModelPath, outputDir)) {
+    recordModelState(projectName, safeModelPath, outputDir, metadataPath, "ready", { generated: false });
     notify("complete", 100, "Potree 数据已就绪");
     return { modelPath: safeModelPath, metadataUrl: createProjectAssetUrl(metadataPath), generated: false, bounds };
   }
@@ -286,13 +319,17 @@ async function ensureModelInternal(
   const tempDir = `${outputDir}.tmp-${process.pid}-${Date.now()}`;
   try {
     notify("converting", 4, "正在启动 PotreeConverter");
+    recordModelState(projectName, safeModelPath, outputDir, metadataPath, "converting");
     await runConverter(safeModelPath, tempDir, (percent, message) => notify("converting", percent, message));
     notify("validating", 96, "正在校验转换产物");
+    recordModelState(projectName, safeModelPath, outputDir, metadataPath, "validating");
     await validateOutput(tempDir);
     await replaceOutputDirectory(tempDir, outputDir);
+    recordModelState(projectName, safeModelPath, outputDir, metadataPath, "ready", { generated: true });
     notify("complete", 100, "Potree 数据已生成");
     return { modelPath: safeModelPath, metadataUrl: createProjectAssetUrl(metadataPath), generated: true, bounds };
   } catch (error) {
+    recordModelState(projectName, safeModelPath, outputDir, metadataPath, "error", { error: error instanceof Error ? error.message : String(error) });
     await fs.promises.rm(tempDir, { recursive: true, force: true }).catch((_cleanupError: unknown): undefined => undefined);
     throw error;
   }

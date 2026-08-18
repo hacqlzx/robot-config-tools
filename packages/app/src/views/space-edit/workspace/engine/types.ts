@@ -12,6 +12,15 @@ export interface SpaceSceneModel {
 export interface SpaceDrawingLayer {
   areas?: DrawingItem[];
   path?: PathData | null;
+  rays?: SpaceRayItem[];
+}
+
+export interface SpaceRayItem {
+  id?: string | number;
+  name?: string;
+  origin: [number, number, number];
+  direction: [number, number, number];
+  length?: number;
 }
 
 export interface SpaceDrawingSelection {
@@ -36,6 +45,7 @@ export interface SpaceChargingAreaState {
 export interface SpaceChargingAreaCallbacks {
   onChange: (state: SpaceChargingAreaState) => void;
   onDelete: () => void;
+  onHistory?: SpaceDrawingHistoryCallback;
 }
 
 export interface SpaceDeviceAreaBay {
@@ -67,6 +77,7 @@ export interface SpaceDeviceAreaState {
 export interface SpaceDeviceAreaCallbacks {
   onChange: (state: SpaceDeviceAreaState) => void;
   onDelete: () => void;
+  onHistory?: SpaceDrawingHistoryCallback;
 }
 
 export interface SpaceCabinetState {
@@ -79,6 +90,7 @@ export interface SpaceCabinetState {
 
 export interface SpaceCabinetCallbacks {
   onChange: (state: SpaceCabinetState) => void;
+  onHistory?: SpaceDrawingHistoryCallback;
 }
 
 export interface SpacePathState {
@@ -93,6 +105,7 @@ export interface SpacePathState {
 
 export interface SpacePathCallbacks {
   onChange: (state: SpacePathState) => void;
+  onHistory?: SpaceDrawingHistoryCallback;
 }
 
 export interface SpaceClipBounds {
@@ -122,6 +135,14 @@ export const DEFAULT_SPACE_RENDER_SETTINGS: SpaceRenderSettings = {
   detailLevel: 2,
   pointBudget: 500_000,
 };
+
+export type SpaceDrawingHistoryScope = "cabinet" | "charging" | "device-area" | "path";
+export type SpaceDrawingHistorySnapshot = unknown;
+export type SpaceDrawingHistoryCallback = (
+  before: SpaceDrawingHistorySnapshot,
+  after: SpaceDrawingHistorySnapshot,
+  label: string,
+) => void;
 
 export function normalizeSpaceRenderSettings(settings: Partial<SpaceRenderSettings>): SpaceRenderSettings {
   const detailLevel = SPACE_RENDER_DETAIL_LEVELS.includes(settings.detailLevel as SpaceRenderDetailLevel)
@@ -201,6 +222,8 @@ export interface SpaceSceneAdapter {
   clearModel(): void;
   resize(): void;
   dispose(): void | Promise<void>;
+  restoreDrawingHistorySnapshot(scope: SpaceDrawingHistoryScope, snapshot: SpaceDrawingHistorySnapshot): void;
+  focusAlongDirection(cx: number, cy: number, cz: number, dx: number, dy: number, dz: number, extent: number): void;
 }
 
 export type SpaceSceneAdapterFactory = () => SpaceSceneAdapter;

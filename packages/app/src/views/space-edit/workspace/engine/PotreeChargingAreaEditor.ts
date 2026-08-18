@@ -179,7 +179,7 @@ export class PotreeChargingAreaEditor {
     this.height = height;
     const baseZ = this.box.slice(0, 4).reduce((sum, point) => sum + point[2], 0) / 4;
     for (let index = 4; index < 8; index += 1) this.box[index][2] = baseZ + height;
-    this.commit(before);
+    this.commit(before, "调整充电区域高度");
   }
 
   getBoxVerts(): number[][] | null {
@@ -202,6 +202,10 @@ export class PotreeChargingAreaEditor {
     if (!next) return;
     this.undoStack.push(this.snapshot());
     this.restore(next);
+  }
+
+  restoreSnapshot(snapshot: unknown): void {
+    this.restore(snapshot as ChargingSnapshot);
   }
 
   clear(): void {
@@ -246,9 +250,10 @@ export class PotreeChargingAreaEditor {
     this.emitChange();
   }
 
-  private commit(before: ChargingSnapshot): void {
+  private commit(before: ChargingSnapshot, label = "充电区域编辑"): void {
     this.undoStack.push(before);
     this.redoStack = [];
+    this.callbacks?.onHistory?.(before, this.snapshot(), label);
     this.rebuildVisuals();
     this.emitChange();
   }
@@ -290,7 +295,7 @@ export class PotreeChargingAreaEditor {
       this.points[2] = clonePoint(box[2]);
       this.box = box;
     }
-    this.commit(before);
+    this.commit(before, this.box ? "生成充电区域" : "绘制充电区域点");
   }
 
   private moveBox(dx: number, dy: number): void {
@@ -300,7 +305,7 @@ export class PotreeChargingAreaEditor {
       point[0] += dx;
       point[1] += dy;
     });
-    this.commit(before);
+    this.commit(before, "移动充电区域");
   }
 
   private deleteBox(): void {
@@ -309,7 +314,7 @@ export class PotreeChargingAreaEditor {
     this.points = [];
     this.box = null;
     this.selected = false;
-    this.commit(before);
+    this.commit(before, "删除充电区域");
     this.callbacks?.onDelete();
   }
 

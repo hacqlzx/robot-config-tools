@@ -20,6 +20,8 @@ interface LoadSurveyRayDrawingDataOptions {
   stopPointFilePath?: string;
   /** 射线显示长度，单位沿用场景坐标。 */
   rayLength?: number;
+  /** 输出坐标系；Potree 直接使用 LAS 绝对坐标，旧 PlayCanvas 查看器继续使用 scene 坐标。 */
+  outputCoordinates?: "scene" | "las";
 }
 
 interface StopPointPose {
@@ -174,6 +176,7 @@ export async function loadSurveyRayDrawingData({
   modelPath,
   stopPointFilePath,
   rayLength = DEFAULT_SURVEY_RAY_LENGTH,
+  outputCoordinates = "scene",
 }: LoadSurveyRayDrawingDataOptions): Promise<RayRenderData | null> {
   // 优先使用 stop_points.json 的精确停靠点位姿；缺失时回退到每个 SP 配置中的 sp_pose。
   const [manifest, stopPointPoses] = await Promise.all([
@@ -221,6 +224,7 @@ export async function loadSurveyRayDrawingData({
   }
 
   if (rays.length === 0) return null;
+  if (outputCoordinates === "las") return { rays };
   const coordinate = await loadLasCoordinateTransform(fileSource, modelPath);
   return drawingDataLasToScene({ rays }, coordinate) as RayRenderData;
 }

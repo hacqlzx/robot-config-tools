@@ -201,7 +201,7 @@ export class PotreeDeviceAreaEditor {
     selected.height = height;
     const baseZ = selected.verts.slice(0, 4).reduce((sum, point) => sum + point[2], 0) / 4;
     for (let index = 4; index < 8; index += 1) selected.verts[index][2] = baseZ + height;
-    this.commit(before);
+    this.commit(before, "调整设备区域高度");
   }
 
   getBoxes(): SpaceDeviceAreaBox[] {
@@ -222,7 +222,7 @@ export class PotreeDeviceAreaEditor {
     const before = this.snapshot();
     selected.bay = { ...bay };
     selected.name = bay.name;
-    this.commit(before);
+    this.commit(before, "绑定设备区域间隔");
   }
 
   unbindSelectedBay(): void {
@@ -231,7 +231,7 @@ export class PotreeDeviceAreaEditor {
     const before = this.snapshot();
     selected.bay = null;
     selected.name = undefined;
-    this.commit(before);
+    this.commit(before, "解绑设备区域间隔");
   }
 
   loadBoxes(boxes: SpaceDeviceAreaBox[]): void {
@@ -267,6 +267,10 @@ export class PotreeDeviceAreaEditor {
     if (!next) return;
     this.undoStack.push(this.snapshot());
     this.restore(next);
+  }
+
+  restoreSnapshot(snapshot: unknown): void {
+    this.restore(snapshot as DeviceSnapshot);
   }
 
   clear(): void {
@@ -309,9 +313,10 @@ export class PotreeDeviceAreaEditor {
     this.emitChange();
   }
 
-  private commit(before: DeviceSnapshot): void {
+  private commit(before: DeviceSnapshot, label = "设备区域编辑"): void {
     this.undoStack.push(before);
     this.redoStack = [];
+    this.callbacks?.onHistory?.(before, this.snapshot(), label);
     this.rebuildVisuals();
     this.emitChange();
   }
@@ -368,7 +373,7 @@ export class PotreeDeviceAreaEditor {
       });
       this.points = [];
     }
-    this.commit(before);
+    this.commit(before, this.points.length === 0 ? "生成设备区域" : "绘制设备区域点");
   }
 
   private moveSelected(dx: number, dy: number): void {
@@ -379,7 +384,7 @@ export class PotreeDeviceAreaEditor {
       point[0] += dx;
       point[1] += dy;
     });
-    this.commit(before);
+    this.commit(before, "移动设备区域");
   }
 
   private deleteSelected(): void {
@@ -387,7 +392,7 @@ export class PotreeDeviceAreaEditor {
     if (!selected) return;
     const before = this.snapshot();
     this.boxes = this.boxes.filter((box) => box !== selected);
-    this.commit(before);
+    this.commit(before, "删除设备区域");
     this.callbacks?.onDelete();
   }
 

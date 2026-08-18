@@ -1,4 +1,7 @@
 import type {
+  PotreeCamera,
+  PotreeNamespace,
+  PotreeRay,
   PotreeThreeDisposable,
   PotreeThreeNamespace,
   PotreeThreeObject3D,
@@ -16,12 +19,16 @@ const CHARGING_ORANGE = 0xff8c1a;
 const DEVICE_BLUE = 0x3399ff;
 const PATH_GREEN = 0x4de666;
 const PATH_CURVE = 0xf2a81f;
-const PATH_TOPO = 0xc2c7d1;
+const RAY_YELLOW = 0xffd666;
 const AREA_LINE_THICKNESS = 0.01;
 const PATH_LINE_THICKNESS = 0.05;
-const PATH_POINT_SCALE = 0.12;
-const PATH_COLLECTION_POINT_SCALE = PATH_POINT_SCALE * 1.2;
-const PATH_TOPO_POINT_SCALE = 0.065;
+const PATH_POINT_SCALE = 0.07;
+const PATH_COLLECTION_POINT_SCALE = 0.085;
+const PATH_TOPO_POINT_SCALE = 0.055;
+const RAY_LINE_THICKNESS = 0.025;
+const RAY_ORIGIN_SCALE = 0.09;
+const RAY_END_SCALE = 0.05;
+const RAY_DEFAULT_LENGTH = 4;
 
 const RED_EDGES: [number, number][] = [[0, 1], [1, 2], [2, 6]];
 const GREEN_EDGES: [number, number][] = [
@@ -36,6 +43,7 @@ interface LineBuckets {
   device: Vec3[];
   path: Vec3[];
   pathCurve: Vec3[];
+  ray: Vec3[];
   selected: Vec3[];
 }
 
@@ -75,6 +83,90 @@ function finitePoint(value: number[] | Vec3 | undefined): value is Vec3 {
     && Number.isFinite(value[2]);
 }
 
+function subtract(left: Vec3, right: Vec3): Vec3 {
+  return [left[0] - right[0], left[1] - right[1], left[2] - right[2]];
+}
+
+function dot(left: Vec3, right: Vec3): number {
+  return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
+}
+
+function scale(value: Vec3, amount: number): Vec3 {
+  return [value[0] * amount, value[1] * amount, value[2] * amount];
+}
+
+function normalize(value: Vec3): Vec3 | null {
+  const length = Math.hypot(value[0], value[1], value[2]);
+  return length > 1e-8 ? scale(value, 1 / length) : null;
+}
+
+interface DrawingObb {
+  center: Vec3;
+  axes: [Vec3, Vec3, Vec3];
+  extents: [number, number, number];
+}
+
+function extractDrawingObb(points: Vec3[]): DrawingObb | null {
+  if (points.length < 8) return null;
+  const edgeVectors = [
+    subtract(points[1], points[0]),
+    subtract(points[3], points[0]),
+    subtract(points[4], points[0]),
+  ];
+  const axes = edgeVectors.map(normalize);
+  if (axes.some((axis) => !axis)) return null;
+
+  const center = points.slice(0, 8).reduce(
+    (sum, point) => [sum[0] + point[0], sum[1] + point[1], sum[2] + point[2]] as Vec3,
+    [0, 0, 0] as Vec3,
+  );
+  center[0] /= 8;
+  center[1] /= 8;
+  center[2] /= 8;
+
+  return {
+    center,
+    axes: axes as [Vec3, Vec3, Vec3],
+    extents: [
+      Math.hypot(edgeVectors[0][0], edgeVectors[0][1], edgeVectors[0][2]) / 2,
+      Math.hypot(edgeVectors[1][0], edgeVectors[1][1], edgeVectors[1][2]) / 2,
+      Math.hypot(edgeVectors[2][0], edgeVectors[2][1], edgeVectors[2][2]) / 2,
+    ],
+  };
+}
+
+function rayDrawingObbHit(
+  ray: PotreeRay,
+  obb: DrawingObb,
+  tolerance = 1.2,
+): number | null {
+  const origin: Vec3 = [ray.origin.x, ray.origin.y, ray.origin.z];
+  const direction: Vec3 = [ray.direction.x, ray.direction.y, ray.direction.z];
+  const relativeOrigin = subtract(origin, obb.center);
+  let near = 0;
+  let far = Number.POSITIVE_INFINITY;
+
+  for (let index = 0; index < obb.axes.length; index += 1) {
+    const axis = obb.axes[index];
+    const extent = obb.extents[index] * tolerance;
+    const originAmount = dot(relativeOrigin, axis);
+    const directionAmount = dot(direction, axis);
+    if (Math.abs(directionAmount) < 1e-9) {
+      if (originAmount < -extent || originAmount > extent) return null;
+      continue;
+    }
+
+    let first = (-extent - originAmount) / directionAmount;
+    let second = (extent - originAmount) / directionAmount;
+    if (first > second) [first, second] = [second, first];
+    near = Math.max(near, first);
+    far = Math.min(far, second);
+    if (near > far) return null;
+  }
+
+  return far >= 0 ? Math.max(0, near) : null;
+}
+
 function addEdge(target: Vec3[], points: number[][], edge: [number, number]): void {
   const from = points[edge[0]];
   const to = points[edge[1]];
@@ -101,6 +193,14 @@ function bezierPoint(amount: number, from: Vec3, cp1: Vec3, cp2: Vec3, to: Vec3)
 function pathPointTuple(point: PathPoint): Vec3 | null {
   const value: Vec3 = [point.x, point.y, point.z];
   return finitePoint(value) ? value : null;
+}
+
+function rayEnd(origin: Vec3, direction: Vec3, length: number): Vec3 {
+  return [
+    origin[0] + direction[0] * length,
+    origin[1] + direction[1] * length,
+    origin[2] + direction[2] * length,
+  ];
 }
 
 function topCenter(points: number[][]): Vec3 | null {
@@ -211,7 +311,7 @@ function addPathLines(data: PathData, buckets: LineBuckets, labels: LabelSpec[])
       labels.push({
         position: tuple,
         text: point.name.trim(),
-        color: isTopo ? "#c7ccd4" : "#44e95f",
+        color: isTopo ? "#3dde69" : "#44e95f",
         fontSize: 16,
         transform: "translate(-50%, -145%)",
       });
@@ -238,6 +338,37 @@ function addPathLines(data: PathData, buckets: LineBuckets, labels: LabelSpec[])
   return { regular, collection, topo };
 }
 
+function addRayLines(data: SpaceDrawingLayer, buckets: LineBuckets, labels: LabelSpec[]): {
+  origins: Vec3[];
+  ends: Vec3[];
+} {
+  const origins: Vec3[] = [];
+  const ends: Vec3[] = [];
+  (data.rays ?? []).forEach((ray) => {
+    if (!finitePoint(ray.origin) || !finitePoint(ray.direction)) return;
+    const direction = normalize(ray.direction);
+    if (!direction) return;
+    const length = typeof ray.length === "number" && Number.isFinite(ray.length) && ray.length > 0
+      ? Math.max(0.1, ray.length)
+      : RAY_DEFAULT_LENGTH;
+    const origin: Vec3 = [ray.origin[0], ray.origin[1], ray.origin[2]];
+    const end = rayEnd(origin, direction, length);
+    buckets.ray.push(origin, end);
+    origins.push(origin);
+    ends.push(end);
+    if (ray.name?.trim()) {
+      labels.push({
+        position: origin,
+        text: ray.name.trim(),
+        color: "#ffd666",
+        fontSize: 12,
+        transform: "translate(-50%, -140%)",
+      });
+    }
+  });
+  return { origins, ends };
+}
+
 function findOrigin(layer: SpaceDrawingLayer): Vec3 {
   for (const item of layer.areas ?? []) {
     const point = item.geometry.verts.find(finitePoint);
@@ -246,6 +377,9 @@ function findOrigin(layer: SpaceDrawingLayer): Vec3 {
   for (const point of layer.path?.points ?? []) {
     const tuple = pathPointTuple(point);
     if (tuple) return tuple;
+  }
+  for (const ray of layer.rays ?? []) {
+    if (finitePoint(ray.origin)) return [ray.origin[0], ray.origin[1], ray.origin[2]];
   }
   return [0, 0, 0];
 }
@@ -265,7 +399,7 @@ function disposeObject(root: PotreeThreeObject3D): void {
 }
 
 export class PotreeDrawingRenderer {
-  private projectPoint(point: Vec3, camera: any) {
+  private projectPoint(point: Vec3, camera: PotreeCamera) {
     const projected = new this.three.Vector3(point[0], point[1], point[2]).project(camera);
     if (
       !Number.isFinite(projected.x) ||
@@ -288,9 +422,11 @@ export class PotreeDrawingRenderer {
   private interactionCallbacks: SpaceDrawingInteractionCallbacks | null = null;
   private selectedItems = new Map<string, string>();
   private mouseDown: { x: number; y: number } | null = null;
+  private pendingSelection: SpaceDrawingSelection | null = null;
 
   constructor(
     private readonly viewer: PotreeViewerInstance,
+    private readonly potree: PotreeNamespace,
     private readonly three: PotreeThreeNamespace,
     private readonly host: HTMLElement,
   ) {
@@ -344,6 +480,7 @@ export class PotreeDrawingRenderer {
     this.viewer.removeEventListener("render.pass.perspective_overlay", this.renderOverlay);
     this.clear();
     this.labelContainer.remove();
+    (window as Window & { __spaceEditSelectionPending?: boolean }).__spaceEditSelectionPending = false;
     this.interactionCallbacks = null;
   }
 
@@ -355,6 +492,7 @@ export class PotreeDrawingRenderer {
       device: [],
       path: [],
       pathCurve: [],
+      ray: [],
       selected: [],
     };
     const labelSpecs: LabelSpec[] = [];
@@ -368,10 +506,13 @@ export class PotreeDrawingRenderer {
     const pathPoints = data.path
       ? addPathLines(data.path, buckets, labelSpecs)
       : { regular: [], collection: [], topo: [] };
+    const rayPoints = addRayLines(data, buckets, labelSpecs);
     const hasData = Object.values(buckets).some((points) => points.length > 0)
       || pathPoints.regular.length > 0
       || pathPoints.collection.length > 0
-      || pathPoints.topo.length > 0;
+      || pathPoints.topo.length > 0
+      || rayPoints.origins.length > 0
+      || rayPoints.ends.length > 0;
     if (!hasData) return null;
 
     const origin = findOrigin(data);
@@ -383,10 +524,13 @@ export class PotreeDrawingRenderer {
     this.addLines(group, buckets.device, origin, DEVICE_BLUE, AREA_LINE_THICKNESS);
     this.addLines(group, buckets.path, origin, PATH_GREEN, PATH_LINE_THICKNESS);
     this.addLines(group, buckets.pathCurve, origin, PATH_CURVE, PATH_LINE_THICKNESS);
+    this.addLines(group, buckets.ray, origin, RAY_YELLOW, RAY_LINE_THICKNESS, false);
     this.addLines(group, buckets.selected, origin, 0xffe14b, AREA_LINE_THICKNESS * 2.5);
     this.addPoints(group, pathPoints.regular, origin, PATH_GREEN, PATH_POINT_SCALE);
     this.addPoints(group, pathPoints.collection, origin, PATH_GREEN, PATH_COLLECTION_POINT_SCALE);
-    this.addPoints(group, pathPoints.topo, origin, PATH_TOPO, PATH_TOPO_POINT_SCALE);
+    this.addPoints(group, pathPoints.topo, origin, PATH_GREEN, PATH_TOPO_POINT_SCALE);
+    this.addPoints(group, rayPoints.origins, origin, RAY_YELLOW, RAY_ORIGIN_SCALE, false);
+    this.addPoints(group, rayPoints.ends, origin, RAY_YELLOW, RAY_END_SCALE, false);
     return {
       group,
       labels: labelSpecs.map((spec) => ({ ...spec, element: this.createLabel(spec) })),
@@ -396,29 +540,46 @@ export class PotreeDrawingRenderer {
   }
 
   private canHandlePointer(): boolean {
-    const flags = window as Window & { __clipDragging?: boolean; __drawingDragging?: boolean };
-    return !flags.__clipDragging
+    const flags = window as Window & {
+      __clipDragging?: boolean;
+      __drawingDragging?: boolean;
+      __spaceEditPathSelectionPending?: boolean;
+    };
+    const mode = (window as Window & { __spaceEditInteractionMode?: string }).__spaceEditInteractionMode;
+    return (!mode || mode === "idle")
+      && !flags.__clipDragging
       && !flags.__drawingDragging
+      && !flags.__spaceEditPathSelectionPending
       && !this.host.closest("[data-space-edit-busy='true']");
   }
 
   private readonly handleMouseDown = (event: MouseEvent): void => {
     if (event.button !== 0 || !this.canHandlePointer()) return;
+    const flags = window as Window & { __spaceEditSelectionPending?: boolean };
     this.mouseDown = { x: event.clientX, y: event.clientY };
+    this.pendingSelection = this.hitTest(this.mousePosition(event));
+    flags.__spaceEditSelectionPending = !!this.pendingSelection;
   };
 
   private readonly handleMouseUp = (event: MouseEvent): void => {
+    const flags = window as Window & { __spaceEditSelectionPending?: boolean };
+    const pendingSelection = this.pendingSelection;
+    this.pendingSelection = null;
+    flags.__spaceEditSelectionPending = false;
     const start = this.mouseDown;
     this.mouseDown = null;
     if (event.button !== 0 || !start || !this.canHandlePointer()) return;
     if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
 
-    const selection = this.hitTest(this.mousePosition(event));
+    const selection = pendingSelection ?? this.hitTest(this.mousePosition(event));
+    const previousSelectedLayers = [...this.selectedItems.keys()];
     this.selectedItems.clear();
     if (selection) {
       this.selectedItems.set(selection.layerId, drawingItemKey(selection.item));
       this.interactionCallbacks?.onSelect(selection);
-      this.rebuildLayer(selection.layerId);
+      new Set([...previousSelectedLayers, selection.layerId]).forEach((layerId) => {
+        this.rebuildLayer(layerId);
+      });
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
@@ -480,24 +641,23 @@ export class PotreeDrawingRenderer {
   private hitTest(mouse: { x: number; y: number }): SpaceDrawingSelection | null {
     const camera = this.viewer.scene.getActiveCamera?.();
     if (!camera) return null;
+    const mouseToRay = this.potree.Utils?.mouseToRay;
+    if (!mouseToRay) return null;
+    const element = this.viewer.renderer.domElement;
+    let ray: PotreeRay;
+    try {
+      ray = mouseToRay(mouse, camera, element.clientWidth, element.clientHeight);
+    } catch {
+      return null;
+    }
+
     let best: { selection: SpaceDrawingSelection; distance: number } | null = null;
     for (const [layerId, layer] of this.layers) {
       for (const hitItem of layer.hitItems) {
-        const projected = hitItem.points
-          .map((point) => this.projectPoint(point, camera))
-          .filter((point): point is { x: number; y: number } => !!point);
-        if (projected.length < 4) continue;
-        const minX = Math.min(...projected.map((point) => point.x));
-        const maxX = Math.max(...projected.map((point) => point.x));
-        const minY = Math.min(...projected.map((point) => point.y));
-        const maxY = Math.max(...projected.map((point) => point.y));
-        const padding = 12;
-        if (mouse.x < minX - padding || mouse.x > maxX + padding || mouse.y < minY - padding || mouse.y > maxY + padding) continue;
-        const distance = Math.min(
-          ...projected.map((point) => (point.x - mouse.x) ** 2 + (point.y - mouse.y) ** 2),
-          (mouse.x - (minX + maxX) / 2) ** 2 + (mouse.y - (minY + maxY) / 2) ** 2,
-        );
-        if (!best || distance < best.distance) {
+        const obb = extractDrawingObb(hitItem.points);
+        if (!obb) continue;
+        const distance = rayDrawingObbHit(ray, obb);
+        if (distance !== null && (!best || distance < best.distance)) {
           best = {
             selection: { layerId, item: hitItem.item },
             distance,
@@ -518,10 +678,11 @@ export class PotreeDrawingRenderer {
     origin: Vec3,
     color: number,
     thickness: number,
+    depthTest = true,
   ): void {
     if (points.length === 0) return;
     const geometry = new this.three.BoxGeometry(1, 1, 1);
-    const material = new this.three.MeshBasicMaterial({ color, depthTest: true, depthWrite: true });
+    const material = new this.three.MeshBasicMaterial({ color, depthTest, depthWrite: depthTest });
     const meshes: PotreeThreeObject3D[] = [];
     for (let index = 0; index + 1 < points.length; index += 2) {
       const from = this.localPoint(points[index], origin);
@@ -551,10 +712,11 @@ export class PotreeDrawingRenderer {
     origin: Vec3,
     color: number,
     size: number,
+    depthTest = true,
   ): void {
     if (points.length === 0) return;
     const geometry = new this.three.SphereGeometry(1, 12, 8);
-    const material = new this.three.MeshBasicMaterial({ color, depthTest: true, depthWrite: true });
+    const material = new this.three.MeshBasicMaterial({ color, depthTest, depthWrite: depthTest });
     const meshes = points.map((point) => {
       const local = this.localPoint(point, origin);
       const mesh = new this.three.Mesh(geometry, material);

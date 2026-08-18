@@ -20,15 +20,31 @@ interface PathSnapshot {
   lastConnectedPointId: string | null;
 }
 
+interface PathLabel {
+  position: Vec3;
+  element: HTMLDivElement;
+}
+
+interface PointVisualStyle {
+  color: number;
+  scale: number;
+  labelColor: string;
+}
+
 const CLICK_THRESHOLD = 3;
 const POINT_HIT_DISTANCE_SQ = 100;
 const PATH_HIT_DISTANCE_SQ = 64;
+const CONTROL_HIT_DISTANCE_SQ = 100;
 const CURVE_SEGMENTS = 16;
 const PATH_COLOR = 0x9ee694;
 const SELECTED_COLOR = 0xffd91a;
 const CONTROL_COLOR = 0x8099ff;
 const PATH_THICKNESS = 0.025;
 const POINT_SCALE = 0.08;
+const POINT_COLLECTION_SCALE = 0.095;
+const POINT_TOPO_SCALE = 0.055;
+const POINT_LABEL_COLOR = "#44e95f";
+const POINT_TOPO_LABEL_COLOR = "#c7ccd4";
 const CONTROL_SCALE = 0.065;
 
 function clonePoint(point: PathPoint): PathPoint {
@@ -53,6 +69,17 @@ function cloneData(data: PathData): PathData {
 
 function finitePoint(point: Vec3): boolean {
   return point.every(Number.isFinite);
+}
+
+function pointVisualStyle(point: PathPoint, selected: boolean): PointVisualStyle | null {
+  if (point.role === "waypoint") return null;
+  const isTopo = point.robotType === "4";
+  const baseScale = isTopo ? POINT_TOPO_SCALE : point.robotType === "5" ? POINT_COLLECTION_SCALE : POINT_SCALE;
+  return {
+    color: selected ? SELECTED_COLOR : isTopo ? 0xc7ccd4 : PATH_COLOR,
+    scale: selected ? baseScale * 1.25 : baseScale,
+    labelColor: isTopo ? POINT_TOPO_LABEL_COLOR : POINT_LABEL_COLOR,
+  };
 }
 
 function distanceSquaredToSegment(
@@ -93,7 +120,9 @@ function createId(prefix: string): string {
 /** Potree 版可行驶参考路径编辑器，坐标直接使用 LAS 绝对坐标。 */
 export class PotreePathEditor {
   private readonly scene: PotreeThreeObject3D;
+  private readonly labelContainer: HTMLDivElement;
   private visualGroup: PotreeThreeObject3D | null = null;
+  private labels: PathLabel[] = [];
   private callbacks: SpacePathCallbacks | null = null;
   private data: PathData = { points: [], paths: [] };
   private enabled = false;
@@ -102,9 +131,13 @@ export class PotreePathEditor {
   private selectedPathId: string | null = null;
   private lastConnectedPointId: string | null = null;
   private mouseDown: { x: number; y: number } | null = null;
+  private pendingPointId: string | null = null;
   private pendingPathId: string | null = null;
   private draggingPointId: string | null = null;
   private dragBefore: PathSnapshot | null = null;
+  private pendingControl: { pathId: string; which: 1 | 2 } | null = null;
+  private draggingControl: { pathId: string; which: 1 | 2 } | null = null;
+  private controlDragBefore: PathSnapshot | null = null;
   private undoStack: PathSnapshot[] = [];
   private redoStack: PathSnapshot[] = [];
 
@@ -115,6 +148,7 @@ export class PotreePathEditor {
     private readonly host: HTMLElement,
   ) {
     this.scene = new three.Scene();
+    this.labelContainer = this.createLabelContainer(host);
     host.addEventListener("mousedown", this.handleMouseDown, true);
     document.addEventListener("mousemove", this.handleMouseMove, true);
     document.addEventListener("mouseup", this.handleMouseUp, true);
@@ -138,9 +172,12 @@ export class PotreePathEditor {
 
   setActive(active: boolean): void {
     this.active = active;
+    this.clearPathSelectionClaim();
     this.selectedPointId = null;
     this.selectedPathId = null;
+    this.pendingPointId = null;
     this.pendingPathId = null;
+    this.pendingControl = null;
     this.lastConnectedPointId = null;
     this.cancelDrag();
     this.rebuildVisuals();
@@ -149,8 +186,12 @@ export class PotreePathEditor {
 
   setData(data: PathData | null): void {
     this.data = data ? cloneData(data) : { points: [], paths: [] };
+    this.clearPathSelectionClaim();
     this.selectedPointId = null;
     this.selectedPathId = null;
+    this.pendingPointId = null;
+    this.pendingPathId = null;
+    this.pendingControl = null;
     this.lastConnectedPointId = null;
     this.undoStack = [];
     this.redoStack = [];
@@ -181,11 +222,19 @@ export class PotreePathEditor {
     this.restore(next);
   }
 
+  restoreSnapshot(snapshot: unknown): void {
+    this.restore(snapshot as PathSnapshot);
+  }
+
   clear(): void {
     this.data = { points: [], paths: [] };
+    this.clearPathSelectionClaim();
     this.selectedPointId = null;
     this.selectedPathId = null;
     this.lastConnectedPointId = null;
+    this.pendingPointId = null;
+    this.pendingPathId = null;
+    this.pendingControl = null;
     this.undoStack = [];
     this.redoStack = [];
     this.cancelDrag();
@@ -194,6 +243,7 @@ export class PotreePathEditor {
   }
 
   dispose(): void {
+    this.clearPathSelectionClaim();
     this.host.removeEventListener("mousedown", this.handleMouseDown, true);
     document.removeEventListener("mousemove", this.handleMouseMove, true);
     document.removeEventListener("mouseup", this.handleMouseUp, true);
@@ -202,6 +252,7 @@ export class PotreePathEditor {
     window.removeEventListener("blur", this.cancelDrag);
     this.viewer.removeEventListener("render.pass.perspective_overlay", this.renderOverlay);
     this.clearVisualGroup();
+    this.labelContainer.remove();
     this.callbacks = null;
   }
 
@@ -223,9 +274,10 @@ export class PotreePathEditor {
     this.emitChange();
   }
 
-  private commit(before: PathSnapshot): void {
+  private commit(before: PathSnapshot, label = "路径编辑"): void {
     this.undoStack.push(before);
     this.redoStack = [];
+    this.callbacks?.onHistory?.(before, this.snapshot(), label);
     this.rebuildVisuals();
     this.emitChange();
   }
@@ -261,7 +313,7 @@ export class PotreePathEditor {
     this.lastConnectedPointId = point.id;
     this.selectedPointId = null;
     this.selectedPathId = null;
-    this.commit(before);
+    this.commit(before, "绘制路径点");
   }
 
   private connectToPoint(pointId: string): void {
@@ -278,7 +330,7 @@ export class PotreePathEditor {
     this.lastConnectedPointId = pointId;
     this.selectedPointId = null;
     this.selectedPathId = null;
-    this.commit(before);
+    this.commit(before, "连接路径点");
   }
 
   private movePoint(pointId: string, position: Vec3): void {
@@ -296,7 +348,7 @@ export class PotreePathEditor {
       const before = this.snapshot();
       this.data.paths = this.data.paths.filter((path) => path.id !== this.selectedPathId);
       this.selectedPathId = null;
-      this.commit(before);
+      this.commit(before, "删除路径段");
       return;
     }
     if (!this.selectedPointId) return;
@@ -306,7 +358,7 @@ export class PotreePathEditor {
     this.data.points = this.data.points.filter((point) => point.id !== deleted);
     if (this.lastConnectedPointId === deleted) this.lastConnectedPointId = null;
     this.selectedPointId = null;
-    this.commit(before);
+    this.commit(before, "删除路径点");
   }
 
   private handleKeyDown = (event: KeyboardEvent): void => {
@@ -327,23 +379,43 @@ export class PotreePathEditor {
 
     const mouse = this.mousePosition(event);
     this.mouseDown = { x: event.clientX, y: event.clientY };
+    this.pendingPointId = null;
     this.pendingPathId = null;
+    this.pendingControl = null;
+    this.clearPathSelectionClaim();
 
     if (!this.active) {
-      const point = this.hitTestPoint(mouse);
-      if (point) {
-        this.selectedPointId = point.id;
-        this.selectedPathId = null;
-        this.draggingPointId = point.id;
-        this.dragBefore = this.snapshot();
-        flags.__drawingDragging = true;
+      const control = this.hitTestControlPoint(mouse);
+      if (control) {
+        this.selectedPointId = null;
+        this.selectedPathId = control.pathId;
+        this.pendingControl = control;
+        this.setPathSelectionClaim();
         this.rebuildVisuals();
         this.emitChange();
         this.consumePointer(event);
         return;
       }
+    }
+
+    const point = this.hitTestPoint(mouse);
+    if (point) {
+      this.selectedPointId = point.id;
+      this.selectedPathId = null;
+      this.pendingPointId = point.id;
+      if (!this.active) this.setPathSelectionClaim();
+      this.rebuildVisuals();
+      this.emitChange();
+      this.consumePointer(event);
+      return;
+    }
+
+    if (!this.active) {
       const path = this.hitTestPath(mouse);
-      if (path) this.pendingPathId = path.id;
+      if (path) {
+        this.pendingPathId = path.id;
+        this.setPathSelectionClaim();
+      }
       else {
         this.selectedPointId = null;
         this.selectedPathId = null;
@@ -354,16 +426,70 @@ export class PotreePathEditor {
   };
 
   private readonly handleMouseMove = (event: MouseEvent): void => {
+    const flags = window as Window & { __drawingDragging?: boolean };
+    if (!this.active && !this.draggingControl && this.pendingControl && this.mouseDown) {
+      const distance = Math.hypot(event.clientX - this.mouseDown.x, event.clientY - this.mouseDown.y);
+      if (distance > CLICK_THRESHOLD) {
+        this.draggingControl = this.pendingControl;
+        this.controlDragBefore = this.snapshot();
+        this.pendingControl = null;
+        this.pendingPointId = null;
+        this.pendingPathId = null;
+        flags.__drawingDragging = true;
+      }
+    }
+
+    if (this.draggingControl && this.controlDragBefore) {
+      const position = this.controlDragPosition(this.mousePosition(event), this.draggingControl.pathId);
+      if (position) {
+        this.moveControlPoint(this.draggingControl.pathId, this.draggingControl.which, position);
+      }
+      this.consumePointer(event);
+      return;
+    }
+
+    if (!this.active && !this.draggingPointId && this.pendingPointId && this.mouseDown) {
+      const distance = Math.hypot(event.clientX - this.mouseDown.x, event.clientY - this.mouseDown.y);
+      if (distance <= CLICK_THRESHOLD) return;
+      this.draggingPointId = this.pendingPointId;
+      this.dragBefore = this.snapshot();
+      this.pendingPointId = null;
+      this.pendingPathId = null;
+      flags.__drawingDragging = true;
+    }
+
     if (!this.draggingPointId || !this.dragBefore) return;
     const position = this.dragPosition(this.mousePosition(event), this.draggingPointId);
-    if (!position) return;
-    this.movePoint(this.draggingPointId, position);
+    if (position) this.movePoint(this.draggingPointId, position);
     this.consumePointer(event);
   };
 
   private readonly handleMouseUp = (event: MouseEvent): void => {
     if (event.button !== 0) return;
+    // The drawing renderer runs on window capture before this document
+    // listener, so keep the claim until it has yielded the mouseup.
+    this.clearPathSelectionClaim();
     const flags = window as Window & { __drawingDragging?: boolean };
+
+    if (this.draggingControl && this.controlDragBefore) {
+      const before = this.controlDragBefore;
+      const dragging = this.draggingControl;
+      const position = this.controlDragPosition(this.mousePosition(event), dragging.pathId);
+      if (position) this.moveControlPoint(dragging.pathId, dragging.which, position);
+      this.draggingControl = null;
+      this.controlDragBefore = null;
+      this.mouseDown = null;
+      flags.__drawingDragging = false;
+      if (JSON.stringify(before.data) !== JSON.stringify(this.data)) {
+        this.undoStack.push(before);
+        this.redoStack = [];
+        this.callbacks?.onHistory?.(before, this.snapshot(), "调整路径曲线");
+      }
+      this.rebuildVisuals();
+      this.emitChange();
+      this.consumePointer(event);
+      return;
+    }
 
     if (this.draggingPointId && this.dragBefore) {
       const before = this.dragBefore;
@@ -375,6 +501,7 @@ export class PotreePathEditor {
       if (JSON.stringify(before.data) !== JSON.stringify(this.data)) {
         this.undoStack.push(before);
         this.redoStack = [];
+        this.callbacks?.onHistory?.(before, this.snapshot(), "移动路径点");
       }
       this.rebuildVisuals();
       this.emitChange();
@@ -386,12 +513,28 @@ export class PotreePathEditor {
     this.mouseDown = null;
     if (!start || !this.enabled || !this.canHandlePointer()) return;
     if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > CLICK_THRESHOLD) {
+      this.pendingPointId = null;
       this.pendingPathId = null;
+      this.pendingControl = null;
       flags.__drawingDragging = false;
       return;
     }
 
     if (!this.active) {
+      if (this.pendingControl) {
+        this.pendingControl = null;
+        this.rebuildVisuals();
+        this.emitChange();
+        this.consumePointer(event);
+        return;
+      }
+      if (this.pendingPointId) {
+        this.pendingPointId = null;
+        this.rebuildVisuals();
+        this.emitChange();
+        this.consumePointer(event);
+        return;
+      }
       if (this.pendingPathId) {
         this.selectedPointId = null;
         this.selectedPathId = this.pendingPathId;
@@ -404,24 +547,39 @@ export class PotreePathEditor {
     }
 
     const mouse = this.mousePosition(event);
-    const point = this.hitTestPoint(mouse);
+    const point = this.pendingPointId ? this.point(this.pendingPointId) : this.hitTestPoint(mouse);
     if (point) this.connectToPoint(point.id);
     else {
       const picked = this.pickPoint(mouse);
       if (picked) this.addPoint(picked);
     }
+    this.pendingPointId = null;
     this.pendingPathId = null;
+    this.pendingControl = null;
     flags.__drawingDragging = false;
     this.consumePointer(event);
   };
 
   private cancelDrag = (): void => {
+    this.clearPathSelectionClaim();
     this.mouseDown = null;
+    this.pendingPointId = null;
     this.pendingPathId = null;
+    this.pendingControl = null;
     this.draggingPointId = null;
     this.dragBefore = null;
+    this.draggingControl = null;
+    this.controlDragBefore = null;
     (window as Window & { __drawingDragging?: boolean }).__drawingDragging = false;
   };
+
+  private setPathSelectionClaim(): void {
+    (window as Window & { __spaceEditPathSelectionPending?: boolean }).__spaceEditPathSelectionPending = true;
+  }
+
+  private clearPathSelectionClaim(): void {
+    (window as Window & { __spaceEditPathSelectionPending?: boolean }).__spaceEditPathSelectionPending = false;
+  }
 
   private consumePointer(event: MouseEvent): void {
     event.preventDefault();
@@ -467,18 +625,18 @@ export class PotreePathEditor {
     const point = this.point(pointId);
     if (!camera || !point) return null;
     const ray = this.mouseRay(camera, mouse);
-    if (!ray || Math.abs(ray.direction.y) < 1e-8) return null;
-    const amount = (point.y - ray.origin.y) / ray.direction.y;
+    if (!ray || Math.abs(ray.direction.z) < 1e-8) return null;
+    const amount = (point.z - ray.origin.z) / ray.direction.z;
     if (!Number.isFinite(amount) || amount <= 0) return null;
     return [
       ray.origin.x + ray.direction.x * amount,
-      point.y,
-      ray.origin.z + ray.direction.z * amount,
+      ray.origin.y + ray.direction.y * amount,
+      point.z,
     ];
   }
 
-  private projectPoint(point: PathPoint, camera: PotreeCamera): { x: number; y: number } | null {
-    const projected = new this.three.Vector3(point.x, point.y, point.z).project(camera) as PotreeThreeVector3;
+  private projectWorldPoint(point: Vec3, camera: PotreeCamera): { x: number; y: number } | null {
+    const projected = new this.three.Vector3(point[0], point[1], point[2]).project(camera) as PotreeThreeVector3;
     const bounds = this.viewer.renderer.domElement.getBoundingClientRect();
     if (![projected.x, projected.y, projected.z].every(Number.isFinite)
       || projected.z < -1 || projected.z > 1) return null;
@@ -488,12 +646,17 @@ export class PotreePathEditor {
     };
   }
 
+  private projectPoint(point: PathPoint, camera: PotreeCamera): { x: number; y: number } | null {
+    return this.projectWorldPoint([point.x, point.y, point.z], camera);
+  }
+
   private hitTestPoint(mouse: { x: number; y: number }): PathPoint | null {
     const camera = this.viewer.scene.getActiveCamera?.();
     if (!camera) return null;
     let result: PathPoint | null = null;
     let bestDistance = POINT_HIT_DISTANCE_SQ;
     this.data.points.forEach((point) => {
+      if (!pointVisualStyle(point, false)) return;
       const projected = this.projectPoint(point, camera);
       if (!projected) return;
       const distance = (projected.x - mouse.x) ** 2 + (projected.y - mouse.y) ** 2;
@@ -527,6 +690,77 @@ export class PotreePathEditor {
       }
     });
     return result;
+  }
+
+  private controlPoints(segment: PathSegment, from: PathPoint, to: PathPoint): [Vec3, Vec3] {
+    if (segment.bezier) return [segment.bezier.cp1, segment.bezier.cp2];
+    return [
+      [
+        from.x + (to.x - from.x) / 3,
+        from.y + (to.y - from.y) / 3,
+        from.z + (to.z - from.z) / 3,
+      ],
+      [
+        from.x + (to.x - from.x) * 2 / 3,
+        from.y + (to.y - from.y) * 2 / 3,
+        from.z + (to.z - from.z) * 2 / 3,
+      ],
+    ];
+  }
+
+  private hitTestControlPoint(mouse: { x: number; y: number }): { pathId: string; which: 1 | 2 } | null {
+    const camera = this.viewer.scene.getActiveCamera?.();
+    if (!camera || !this.selectedPathId) return null;
+    const segment = this.data.paths.find((item) => item.id === this.selectedPathId);
+    if (!segment) return null;
+    const from = this.point(segment.from);
+    const to = this.point(segment.to);
+    if (!from || !to) return null;
+    const [cp1, cp2] = this.controlPoints(segment, from, to);
+    const candidates: Array<[Vec3, 1 | 2]> = [[cp1, 1], [cp2, 2]];
+    for (const [point, which] of candidates) {
+      const projected = this.projectWorldPoint(point, camera);
+      if (!projected) continue;
+      const distance = (projected.x - mouse.x) ** 2 + (projected.y - mouse.y) ** 2;
+      if (distance < CONTROL_HIT_DISTANCE_SQ) return { pathId: segment.id, which };
+    }
+    return null;
+  }
+
+  private controlDragPosition(mouse: { x: number; y: number }, pathId: string): Vec3 | null {
+    const camera = this.viewer.scene.getActiveCamera?.();
+    if (!camera) return null;
+    const segment = this.data.paths.find((item) => item.id === pathId);
+    if (!segment) return null;
+    const from = this.point(segment.from);
+    const to = this.point(segment.to);
+    if (!from || !to) return null;
+    const ray = this.mouseRay(camera, mouse);
+    if (!ray || Math.abs(ray.direction.z) < 1e-8) return null;
+    const planeZ = (from.z + to.z) / 2;
+    const amount = (planeZ - ray.origin.z) / ray.direction.z;
+    if (!Number.isFinite(amount) || amount <= 0) return null;
+    return [
+      ray.origin.x + ray.direction.x * amount,
+      ray.origin.y + ray.direction.y * amount,
+      planeZ,
+    ];
+  }
+
+  private moveControlPoint(pathId: string, which: 1 | 2, position: Vec3): void {
+    const segment = this.data.paths.find((item) => item.id === pathId);
+    if (!segment) return;
+    if (!segment.bezier) {
+      const from = this.point(segment.from);
+      const to = this.point(segment.to);
+      if (!from || !to) return;
+      const [cp1, cp2] = this.controlPoints(segment, from, to);
+      segment.bezier = { cp1: [...cp1] as Vec3, cp2: [...cp2] as Vec3 };
+    }
+    if (which === 1) segment.bezier.cp1 = [position[0], position[1], position[2]];
+    else segment.bezier.cp2 = [position[0], position[1], position[2]];
+    this.rebuildVisuals();
+    this.emitChange();
   }
 
   private segmentPoints(segment: PathSegment, from: PathPoint, to: PathPoint): PathPoint[] {
@@ -605,18 +839,29 @@ export class PotreePathEditor {
   private addPoints(group: PotreeThreeObject3D, points: PathPoint[], origin: Vec3): void {
     const geometry = new this.three.SphereGeometry(1, 12, 8);
     points.forEach((point) => {
-      const color = point.id === this.selectedPointId ? SELECTED_COLOR : PATH_COLOR;
-      const material = new this.three.MeshBasicMaterial({ color, depthTest: true, depthWrite: true });
+      const selected = point.id === this.selectedPointId;
+      const style = pointVisualStyle(point, selected);
+      if (!style) return;
+      const material = new this.three.MeshBasicMaterial({ color: style.color, depthTest: true, depthWrite: true });
       const mesh = new this.three.Mesh(geometry, material);
       mesh.position.set(point.x - origin[0], point.y - origin[1], point.z - origin[2]);
-      const scale = point.id === this.selectedPointId ? POINT_SCALE * 1.25 : POINT_SCALE;
-      mesh.scale.set(scale, scale, scale);
+      mesh.scale.set(style.scale, style.scale, style.scale);
       group.add(mesh);
+      const name = point.name?.trim();
+      if (name) {
+        this.labels.push({
+          position: [point.x, point.y, point.z],
+          element: this.createLabel(name, style.labelColor),
+        });
+      }
     });
     if (this.selectedPathId) {
       const segment = this.data.paths.find((item) => item.id === this.selectedPathId);
-      if (segment?.bezier) {
-        const points = [segment.bezier.cp1, segment.bezier.cp2];
+      if (segment) {
+        const from = this.point(segment.from);
+        const to = this.point(segment.to);
+        if (!from || !to) return;
+        const points = this.controlPoints(segment, from, to);
         const controlGeometry = new this.three.SphereGeometry(1, 10, 6);
         const controlMaterial = new this.three.MeshBasicMaterial({ color: CONTROL_COLOR, depthTest: true, depthWrite: true });
         points.forEach((point) => {
@@ -630,14 +875,79 @@ export class PotreePathEditor {
   }
 
   private clearVisualGroup(): void {
+    this.clearLabels();
     if (!this.visualGroup) return;
     this.scene.remove(this.visualGroup);
     disposeObject(this.visualGroup);
     this.visualGroup = null;
   }
 
+  private createLabelContainer(host: HTMLElement): HTMLDivElement {
+    const container = document.createElement("div");
+    container.setAttribute("aria-hidden", "true");
+    Object.assign(container.style, {
+      position: "absolute",
+      inset: "0",
+      overflow: "hidden",
+      pointerEvents: "none",
+      zIndex: "16",
+    });
+    host.appendChild(container);
+    return container;
+  }
+
+  private createLabel(text: string, color: string): HTMLDivElement {
+    const element = document.createElement("div");
+    element.textContent = text;
+    Object.assign(element.style, {
+      position: "absolute",
+      display: "none",
+      color,
+      fontSize: "16px",
+      fontWeight: "700",
+      lineHeight: "1.2",
+      whiteSpace: "nowrap",
+      pointerEvents: "none",
+      textShadow: "0 0 3px #000, 0 0 3px #000",
+      transform: "translate(-50%, -145%)",
+    });
+    this.labelContainer.appendChild(element);
+    return element;
+  }
+
+  private clearLabels(): void {
+    this.labels.forEach((label) => label.element.remove());
+    this.labels = [];
+  }
+
+  private updateLabels(camera: PotreeCamera): void {
+    const bounds = this.viewer.renderer.domElement.getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0) return;
+    this.labels.forEach((label) => {
+      const projected = new this.three.Vector3(...label.position).project(camera) as PotreeThreeVector3;
+      const visible = Number.isFinite(projected.x)
+        && Number.isFinite(projected.y)
+        && Number.isFinite(projected.z)
+        && projected.z >= -1
+        && projected.z <= 1
+        && projected.x >= -1
+        && projected.x <= 1
+        && projected.y >= -1
+        && projected.y <= 1;
+      if (!visible) {
+        label.element.style.display = "none";
+        return;
+      }
+      label.element.style.left = `${(projected.x + 1) * 0.5 * bounds.width}px`;
+      label.element.style.top = `${(1 - projected.y) * 0.5 * bounds.height}px`;
+      label.element.style.display = "block";
+    });
+  }
+
   private readonly renderOverlay = (): void => {
     const camera = this.viewer.scene.getActiveCamera?.();
-    if (camera && this.visualGroup) this.viewer.renderer.render(this.scene, camera);
+    if (!camera) return;
+    if (this.visualGroup) this.viewer.renderer.render(this.scene, camera);
+    this.updateLabels(camera);
   };
 }

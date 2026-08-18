@@ -30,6 +30,8 @@ import {
   type SpaceDeviceAreaBox,
   type SpaceDeviceAreaCallbacks,
   type SpaceDrawingLayer,
+  type SpaceDrawingHistoryScope,
+  type SpaceDrawingHistorySnapshot,
   type SpaceDrawingInteractionCallbacks,
   type SpacePathCallbacks,
   type SpaceSceneAdapter,
@@ -39,6 +41,10 @@ import {
 const MODEL_LOAD_TIMEOUT_MS = 60_000;
 const FIT_PADDING = 1.05;
 const MIN_FIT_DISTANCE = 0.01;
+const DIRECTION_LOCATE_FORWARD_FACTOR = 0.65;
+const DIRECTION_LOCATE_BACK_FACTOR = 0.55;
+const DIRECTION_LOCATE_LIFT_FACTOR = 0.35;
+const DIRECTION_LOCATE_MIN_TOP_FACTOR = 0.25;
 const INTERACTION_LOD_MULTIPLIER = 2;
 const INTERACTION_LOD_SETTLE_MS = 180;
 const MIN_NODE_SIZE_BY_DETAIL: Record<SpaceRenderDetailLevel, number> = {
@@ -152,11 +158,14 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     viewer.controls?.addEventListener("end", this.scheduleInteractionLodRestore);
     this.rotationPivotIndicator = new PotreeRotationPivotIndicator(viewer, renderArea);
     this.rotationPivotIndicator.start();
-    this.drawingRenderer = new PotreeDrawingRenderer(viewer, three, renderArea);
+    this.drawingRenderer = new PotreeDrawingRenderer(viewer, potree, three, renderArea);
     this.chargingAreaEditor = new PotreeChargingAreaEditor(viewer, potree, three, renderArea);
     this.cabinetEditor = new PotreeCabinetEditor(viewer, potree, three, renderArea);
     this.deviceAreaEditor = new PotreeDeviceAreaEditor(viewer, potree, three, renderArea);
     this.pathEditor = new PotreePathEditor(viewer, potree, three, renderArea);
+    // Keep path interaction available outside placement mode, matching the
+    // legacy editor. Active mode only changes how a click is interpreted.
+    this.pathEditor.setEnabled(true);
     this.resize();
   }
 
@@ -346,6 +355,23 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.pathEditor?.clear();
   }
 
+  restoreDrawingHistorySnapshot(scope: SpaceDrawingHistoryScope, snapshot: SpaceDrawingHistorySnapshot): void {
+    switch (scope) {
+      case "cabinet":
+        this.cabinetEditor?.restoreSnapshot(snapshot);
+        break;
+      case "charging":
+        this.chargingAreaEditor?.restoreSnapshot(snapshot);
+        break;
+      case "device-area":
+        this.deviceAreaEditor?.restoreSnapshot(snapshot);
+        break;
+      case "path":
+        this.pathEditor?.restoreSnapshot(snapshot);
+        break;
+    }
+  }
+
   setViewDirection(direction: ViewDirection): void {
     const viewer = this.viewer;
     if (!viewer) return;
@@ -353,6 +379,62 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     viewer.scene.view.yaw = angles.yaw;
     viewer.scene.view.pitch = angles.pitch;
     this.fitModelToScreen();
+  }
+
+  focusAlongDirection(cx: number, cy: number, cz: number, dx: number, dy: number, dz: number, extent: number): void {
+    const viewer = this.viewer;
+    if (!viewer) return;
+    const len = Math.hypot(dx, dy, dz);
+    if (!Number.isFinite(len) || len < 1e-6) {
+      this.focusTopOn(cx, cy, cz, extent);
+      return;
+    }
+
+    const nx = dx / len;
+    const ny = dy / len;
+    const nz = dz / len;
+    const baseDistance = Math.max(0.5, extent);
+    const horizontalLen = Math.hypot(nx, ny);
+    const hx = horizontalLen > 1e-6 ? nx / horizontalLen : 0;
+    const hy = horizontalLen > 1e-6 ? ny / horizontalLen : 1;
+    const forwardDistance = baseDistance * DIRECTION_LOCATE_FORWARD_FACTOR;
+    const backDistance = baseDistance * DIRECTION_LOCATE_BACK_FACTOR;
+    const liftHeight = baseDistance * DIRECTION_LOCATE_LIFT_FACTOR;
+    const minTopHeight = baseDistance * DIRECTION_LOCATE_MIN_TOP_FACTOR;
+
+    const lookX = cx + nx * forwardDistance;
+    const lookY = cy + ny * forwardDistance;
+    const lookZ = cz + nz * forwardDistance;
+    const cameraX = cx - hx * backDistance;
+    const cameraY = cy - hy * backDistance;
+    const cameraZ = Math.max(cz + liftHeight, lookZ + minTopHeight);
+    this.focusCamera(cameraX, cameraY, cameraZ, lookX, lookY, lookZ);
+  }
+
+  private focusTopOn(cx: number, cy: number, cz: number, extent: number): void {
+    const distance = Math.max(0.5, extent * 1.5);
+    this.focusCamera(cx, cy, cz + distance, cx, cy, cz);
+  }
+
+  private focusCamera(cameraX: number, cameraY: number, cameraZ: number, lookX: number, lookY: number, lookZ: number): void {
+    const viewer = this.viewer;
+    if (!viewer) return;
+    const view = viewer.scene.view;
+    const offsetX = lookX - cameraX;
+    const offsetY = lookY - cameraY;
+    const offsetZ = lookZ - cameraZ;
+    const distance = Math.max(0.5, Math.hypot(offsetX, offsetY, offsetZ));
+
+    this.setVector(view.position, cameraX, cameraY, cameraZ);
+    if (view.lookAt) {
+      view.lookAt(lookX, lookY, lookZ);
+    } else {
+      const horizontal = Math.hypot(offsetX, offsetY);
+      view.yaw = horizontal > 1e-6 ? Math.atan2(offsetY, offsetX) - Math.PI / 2 : 0;
+      view.pitch = Math.atan2(offsetZ, horizontal);
+      view.radius = distance;
+    }
+    viewer.controls?.stop?.();
   }
 
   private getModelWorldBounds(): SpaceClipBounds | null {
