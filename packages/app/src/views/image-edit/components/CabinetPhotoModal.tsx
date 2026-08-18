@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type Key } from "react";
 import { App, Button, Empty, Input, Modal, Progress, Select, Spin, Table } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { DeviceMain } from "@robot/database";
-import type { RobotAreaRecord } from "@/components/three-d-engine/drawing-data";
+import type { RobotAreaRecord } from "@/space-model/drawing-data";
 import type { SurveyRunningState } from "./SurveyPhotoModal";
 import "./CabinetPhotoModal.scss";
 

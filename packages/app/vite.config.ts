@@ -7,9 +7,8 @@ import { potreeAssetsPlugin } from './src/potree-core/vite-potree-assets';
 
 const appRoot = fileURLToPath(new URL('.', import.meta.url));
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(() => {
   const isElectron = process.env.ELECTRON === 'true';
-  const isDev = mode === 'development';
 
   const config: any = {
     base: isElectron ? './' : '/',
@@ -17,7 +16,6 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@': path.resolve(appRoot, 'src'),
-        playcanvas: path.resolve(appRoot, `node_modules/playcanvas/build/playcanvas${isDev ? '.dbg' : ''}/src/index.js`),
         'laz-perf': path.resolve(appRoot, 'node_modules/laz-perf/lib/web/index'),
       },
     },
@@ -35,9 +33,7 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         output: {
           manualChunks: {
-            'playcanvas': ['playcanvas'],
             'antd': ['antd', '@ant-design/icons'],
-            'splat': ['@playcanvas/splat-transform'],
             'mqtt': ['mqtt'],
           },
         },
@@ -54,7 +50,7 @@ export default defineConfig(({ mode }) => {
     },
 
     optimizeDeps: {
-      include: ['mqtt', 'playcanvas', '@playcanvas/splat-transform'],
+      include: ['mqtt'],
     },
 
     plugins: [

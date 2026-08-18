@@ -20,10 +20,12 @@ import CalibrationView from "./components/CalibrationView";
 import {
   ROBOT_PATH_FILE_NAME,
   ROBOT_STOP_POINT_FILE_NAMES,
-  electronFileSource,
-  type RayRenderData,
-  type RayRenderItem,
-} from "@/components/three-d-engine";
+} from "@/space-model/robot-path-data";
+import { electronFileSource } from "@/space-model/file-source";
+import type {
+  RayRenderData,
+  RayRenderItem,
+} from "@/space-model/drawing-data";
 import { loadSurveyRayDrawingData } from "./utils/survey-ray-data";
 import { usePotreeSurveyViewer, type PotreeSurveySelectInfo } from "./hooks/usePotreeSurveyViewer";
 import { useResizable } from "@/components/useResizable";

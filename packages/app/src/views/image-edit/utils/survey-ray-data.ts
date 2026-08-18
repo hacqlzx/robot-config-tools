@@ -1,10 +1,10 @@
 import {
   drawingDataLasToScene,
-  loadLasCoordinateTransform,
-  type FileSource,
   type RayRenderData,
   type RayRenderItem,
-} from "@/components/three-d-engine";
+} from "@/space-model/drawing-data";
+import { loadLasCoordinateTransform } from "@/space-model/coordinate-transform";
+import type { FileSource } from "@/space-model/file-source";
 import type { TaskImageConfig, TaskManifest, TaskSPConfig, TaskSPPose } from "../types/task";
 
 const DEFAULT_SURVEY_RAY_LENGTH = 4;

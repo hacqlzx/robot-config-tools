@@ -13,8 +13,6 @@
     },
     "dependencies": {
         "@ant-design/icons": "^6.2.5",
-        "@playcanvas/pcui": "^6.1.4",
-        "@playcanvas/splat-transform": "2.1.0",
         "@robot/database": "workspace:*",
         "adm-zip": "^0.5.18",
         "antd": "^6.4.3",
@@ -22,7 +20,6 @@
         "axios": "^1.17.0",
         "laz-perf": "0.0.7",
         "mqtt": "^5.15.1",
-        "playcanvas": "^2.18.1",
         "react": "^18.3.1",
         "react-dom": "^18.3.1",
         "react-router-dom": "^7.17.0",

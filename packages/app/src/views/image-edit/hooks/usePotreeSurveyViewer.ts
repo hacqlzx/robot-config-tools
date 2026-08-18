@@ -16,7 +16,7 @@ import {
   loadPathDrawingInLasCoordinates,
 } from "@/views/space-edit/hooks/drawing/drawing-storage";
 import { loadedFileKey } from "@/views/space-edit/utils/space-paths";
-import type { RayRenderData, RayRenderItem } from "@/components/three-d-engine";
+import type { RayRenderData, RayRenderItem } from "@/space-model/drawing-data";
 
 export interface PotreeSurveySelectInfo {
   type: "cabinet" | "device-area" | "charging-area";

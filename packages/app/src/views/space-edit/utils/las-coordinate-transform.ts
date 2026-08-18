@@ -3,7 +3,7 @@ import {
   loadLasCoordinateTransform as loadSharedLasCoordinateTransform,
   type LasCoordinateTransform,
   type Vec3Tuple,
-} from "@/components/three-d-engine/coordinate-transform";
+} from "@/space-model/coordinate-transform";
 
 type ElectronAPI = NonNullable<Window["electronAPI"]>;
 

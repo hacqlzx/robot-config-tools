@@ -4,7 +4,7 @@ import type { ColumnsType } from "antd/es/table";
 import {
   type DrawingRenderItem,
   type RobotAreaRecord,
-} from "@/components/three-d-engine/drawing-data";
+} from "@/space-model/drawing-data";
 import "./SurveyPhotoModal.scss";
 
 const MAP_DIR_NAME = "地图";

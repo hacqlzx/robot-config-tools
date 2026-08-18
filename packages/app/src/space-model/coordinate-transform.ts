@@ -1,4 +1,4 @@
-import { parseLasHeader, type LasHeader } from "@/playcanvas-core/io/read/las-reader";
+import { parseLasHeader, type LasHeader } from "./las-reader";
 import type { FileSource } from "./file-source";
 
 const DEFAULT_MAP_MODEL_FILE_NAME = "map.las";
