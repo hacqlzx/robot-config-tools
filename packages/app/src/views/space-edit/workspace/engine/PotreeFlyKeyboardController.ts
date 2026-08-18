@@ -1,7 +1,8 @@
 import type { PotreeViewerInstance } from "@/potree-core/potree-runtime";
 
 const BASE_FLY_SPEED = 5;
-const MAX_FRAME_DELTA_SECONDS = 0.1;
+const MAX_FRAME_DELTA_SECONDS = 1 / 30;
+const FIRST_MOVEMENT_DELTA_SECONDS = 1 / 120;
 const MOVEMENT_KEYS = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE"]);
 const CONTROL_KEYS = new Set([
   ...MOVEMENT_KEYS,
@@ -21,24 +22,30 @@ function isEditableTarget(target: EventTarget | null): boolean {
 
 export class PotreeFlyKeyboardController {
   private readonly pressedKeys = new Set<string>();
+  private started = false;
   private animationFrame: number | null = null;
   private previousFrameTime = 0;
+  private firstMovementFrame = false;
 
   constructor(
     private readonly viewer: PotreeViewerInstance,
     private readonly host: HTMLElement,
+    private readonly onMovementStart?: () => void,
+    private readonly onMovementEnd?: () => void,
   ) {}
 
   start(): void {
-    if (this.animationFrame !== null) return;
+    if (this.started) return;
+    this.started = true;
     window.addEventListener("keydown", this.handleKeyDown);
     window.addEventListener("keyup", this.handleKeyUp);
     window.addEventListener("blur", this.clearKeys);
     this.previousFrameTime = performance.now();
-    this.animationFrame = window.requestAnimationFrame(this.update);
   }
 
   dispose(): void {
+    if (!this.started) return;
+    this.started = false;
     window.removeEventListener("keydown", this.handleKeyDown);
     window.removeEventListener("keyup", this.handleKeyUp);
     window.removeEventListener("blur", this.clearKeys);
@@ -57,27 +64,60 @@ export class PotreeFlyKeyboardController {
       && !(target instanceof Node && this.host.contains(target))
     ) return;
 
+    const wasMoving = this.hasMovementKey();
     this.pressedKeys.add(event.code);
+    if (!wasMoving && this.hasMovementKey()) {
+      this.firstMovementFrame = true;
+      this.onMovementStart?.();
+    }
+    if (MOVEMENT_KEYS.has(event.code)) this.scheduleUpdate();
     event.preventDefault();
   };
 
   private readonly handleKeyUp = (event: KeyboardEvent): void => {
     if (!CONTROL_KEYS.has(event.code)) return;
+    const wasMoving = this.hasMovementKey();
     this.pressedKeys.delete(event.code);
+    if (wasMoving && !this.hasMovementKey()) {
+      this.firstMovementFrame = false;
+      this.onMovementEnd?.();
+    }
   };
 
   private readonly clearKeys = (): void => {
+    const wasMoving = this.hasMovementKey();
     this.pressedKeys.clear();
+    if (wasMoving) this.onMovementEnd?.();
+    this.firstMovementFrame = false;
   };
 
+  private scheduleUpdate(): void {
+    if (!this.started || this.animationFrame !== null) return;
+    this.previousFrameTime = performance.now();
+    this.animationFrame = window.requestAnimationFrame(this.update);
+  }
+
+  private hasMovementKey(): boolean {
+    for (const key of MOVEMENT_KEYS) {
+      if (this.pressedKeys.has(key)) return true;
+    }
+    return false;
+  }
+
   private readonly update = (time: number): void => {
-    const deltaSeconds = Math.min(
+    this.animationFrame = null;
+    if (!this.started || !this.hasMovementKey()) return;
+    const elapsedSeconds = Math.max(0, (time - this.previousFrameTime) / 1000);
+    const deltaSeconds = this.firstMovementFrame
+      ? Math.min(elapsedSeconds, FIRST_MOVEMENT_DELTA_SECONDS)
+      : Math.min(
       MAX_FRAME_DELTA_SECONDS,
-      Math.max(0, (time - this.previousFrameTime) / 1000),
+      elapsedSeconds,
     );
+    this.firstMovementFrame = false;
     this.previousFrameTime = time;
     this.applyMovement(deltaSeconds);
-    this.animationFrame = window.requestAnimationFrame(this.update);
+    if (this.hasMovementKey()) this.animationFrame = window.requestAnimationFrame(this.update);
   };
 
   private applyMovement(deltaSeconds: number): void {

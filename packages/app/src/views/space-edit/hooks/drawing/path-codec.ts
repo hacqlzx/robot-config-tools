@@ -296,9 +296,40 @@ function pointInPolygon2D(point: PathPoint, polygon: Vec3Tuple[]): boolean {
   return inside;
 }
 
+function dot3(a: Vec3Tuple, b: Vec3Tuple): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function sub3(a: Vec3Tuple, b: Vec3Tuple): Vec3Tuple {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+function pointInBaseRectangle(point: PathPoint, base: Vec3Tuple[]): boolean {
+  const origin = base[0];
+  const width = sub3(base[1], origin);
+  const depth = sub3(base[3], origin);
+  const widthLengthSquared = dot3(width, width);
+  const depthLengthSquared = dot3(depth, depth);
+  if (widthLengthSquared < 1e-10 || depthLengthSquared < 1e-10) return false;
+
+  const target = sub3([point.x, point.y, point.z], origin);
+  const widthDepth = dot3(width, depth);
+  const targetWidth = dot3(target, width);
+  const targetDepth = dot3(target, depth);
+  const determinant = widthLengthSquared * depthLengthSquared - widthDepth * widthDepth;
+  if (Math.abs(determinant) < 1e-10) return false;
+  const widthAmount = (targetWidth * depthLengthSquared - targetDepth * widthDepth) / determinant;
+  const depthAmount = (targetDepth * widthLengthSquared - targetWidth * widthDepth) / determinant;
+  const tolerance = 1e-6;
+  return widthAmount >= -tolerance
+    && widthAmount <= 1 + tolerance
+    && depthAmount >= -tolerance
+    && depthAmount <= 1 + tolerance;
+}
+
 /**
- * 检查示意路径起点是否落在充电区域底面的 XZ 投影内。
- * 点位于多边形边界时也视为合法；Y 高度不参与判断，以兼容地面采样和区域高度的细小误差。
+ * 检查示意路径起点是否落在充电区域底面内。
+ * 使用底面自身的两条边做投影，兼容旧 PlayCanvas 的 Y-up 和 Potree 的 Z-up 坐标。
  */
 export function isPathStartInChargingArea(
   startPoint: PathPoint,
@@ -308,7 +339,9 @@ export function isPathStartInChargingArea(
   const base = [verts[0], verts[1], verts[2], verts[3]]
     .map((vertex) => toTuple(vertex))
     .filter((vertex): vertex is Vec3Tuple => vertex !== null);
-  return base.length >= 3 && pointInPolygon2D(startPoint, base);
+  if (base.length < 3) return false;
+  if (base.length >= 4 && pointInBaseRectangle(startPoint, base)) return true;
+  return pointInPolygon2D(startPoint, base);
 }
 
 /** 生成 reference_path.txt；序号从 1 开始，坐标使用稳定精度且文件末尾保留换行。 */

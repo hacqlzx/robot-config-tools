@@ -1,6 +1,7 @@
 import {
   POTREE_SCRIPTS,
   POTREE_STYLESHEETS,
+  POTREE_THREE_MODULE,
   resolvePotreeAssetUrl,
 } from "./potree-assets";
 
@@ -46,8 +47,15 @@ export interface PotreeRay {
 }
 
 export interface PotreeGeometryNode {
+  id?: string | number;
   children?: Record<string, PotreeGeometryNode> | PotreeGeometryNode[];
   dispose?: () => void;
+}
+
+export interface PotreeNodeCache {
+  remove: (node: PotreeGeometryNode) => void;
+  freeMemory?: () => void;
+  numPoints?: number;
 }
 
 export interface PotreeVector3 {
@@ -85,14 +93,80 @@ export interface PotreeView {
   direction: PotreeVector3;
   position: PotreeVector3;
   radius: number;
+  yaw: number;
+  pitch: number;
   translate: (x: number, y: number, z: number) => void;
   translateWorld: (x: number, y: number, z: number) => void;
 }
 
 export interface PotreeCamera {
   aspect: number;
+  fov?: number;
   near: number;
   updateProjectionMatrix: () => void;
+}
+
+export interface PotreeControls {
+  addEventListener: (type: string, listener: (event: unknown) => void) => void;
+  removeEventListener: (type: string, listener: (event: unknown) => void) => void;
+  stop?: () => void;
+}
+
+export interface PotreeThreeDisposable {
+  dispose: () => void;
+}
+
+export interface PotreeThreeBufferGeometry extends PotreeThreeDisposable {
+  setAttribute: (name: string, attribute: unknown) => PotreeThreeBufferGeometry;
+  computeBoundingSphere: () => void;
+}
+
+export interface PotreeThreeObject3D {
+  position: { set: (x: number, y: number, z: number) => void };
+  scale: { set: (x: number, y: number, z: number) => void };
+  up: { set: (x: number, y: number, z: number) => void };
+  geometry?: PotreeThreeDisposable;
+  material?: PotreeThreeDisposable | PotreeThreeDisposable[];
+  add: (...objects: PotreeThreeObject3D[]) => void;
+  remove: (...objects: PotreeThreeObject3D[]) => void;
+  lookAt: (x: number, y: number, z: number) => void;
+  traverse: (callback: (object: PotreeThreeObject3D) => void) => void;
+}
+
+export interface PotreeThreeVector3 {
+  x: number;
+  y: number;
+  z: number;
+  project: (camera: unknown) => PotreeThreeVector3;
+}
+
+export interface PotreeThreeNamespace {
+  Scene: new () => PotreeThreeObject3D;
+  Group: new () => PotreeThreeObject3D;
+  Vector3: new (x?: number, y?: number, z?: number) => PotreeThreeVector3;
+  BufferGeometry: new () => PotreeThreeBufferGeometry;
+  Float32BufferAttribute: new (values: number[], itemSize: number) => unknown;
+  LineBasicMaterial: new (parameters: Record<string, unknown>) => PotreeThreeDisposable;
+  LineSegments: new (
+    geometry: PotreeThreeBufferGeometry,
+    material: PotreeThreeDisposable,
+  ) => PotreeThreeObject3D;
+  PointsMaterial: new (parameters: Record<string, unknown>) => PotreeThreeDisposable;
+  Points: new (
+    geometry: PotreeThreeBufferGeometry,
+    material: PotreeThreeDisposable,
+  ) => PotreeThreeObject3D;
+  BoxGeometry: new (width?: number, height?: number, depth?: number) => PotreeThreeDisposable;
+  SphereGeometry: new (
+    radius?: number,
+    widthSegments?: number,
+    heightSegments?: number,
+  ) => PotreeThreeDisposable;
+  MeshBasicMaterial: new (parameters: Record<string, unknown>) => PotreeThreeDisposable;
+  Mesh: new (
+    geometry: PotreeThreeDisposable,
+    material: PotreeThreeDisposable,
+  ) => PotreeThreeObject3D;
 }
 
 export interface PotreeViewerInstance {
@@ -125,6 +199,7 @@ export interface PotreeViewerInstance {
   setClipMethod: (method: number) => void;
   clipTask?: number;
   clipMethod?: number;
+  controls?: PotreeControls;
   inputHandler?: {
     deselectAll: () => void;
     deselect: (object: PotreeBoxVolume) => void;
@@ -175,11 +250,13 @@ export interface PotreeNamespace {
     metadataUrl: string,
     name: string,
   ) => Promise<{ type: string; pointcloud: PotreePointCloud }>;
+  lru?: PotreeNodeCache;
   scriptPath?: string;
   resourcePath?: string;
 }
 
 let runtimePromise: Promise<PotreeNamespace> | null = null;
+let threeRuntimePromise: Promise<PotreeThreeNamespace> | null = null;
 
 function ensureStylesheet(url: string): void {
   const existing = [...document.querySelectorAll<HTMLLinkElement>("link[data-potree-asset]")]
@@ -238,4 +315,23 @@ export function loadPotreeRuntime(): Promise<PotreeNamespace> {
   });
 
   return runtimePromise;
+}
+
+export function loadPotreeThreeRuntime(): Promise<PotreeThreeNamespace> {
+  if (threeRuntimePromise) return threeRuntimePromise;
+
+  const url = resolvePotreeAssetUrl(POTREE_THREE_MODULE, document.baseURI);
+  threeRuntimePromise = import(/* @vite-ignore */ url)
+    .then((module) => {
+      if (!module.Scene || !module.Group || !module.Mesh || !module.BoxGeometry || !module.SphereGeometry) {
+        throw new Error("Potree Three.js 运行时初始化失败");
+      }
+      return module as unknown as PotreeThreeNamespace;
+    })
+    .catch((error) => {
+      threeRuntimePromise = null;
+      throw error;
+    });
+
+  return threeRuntimePromise;
 }

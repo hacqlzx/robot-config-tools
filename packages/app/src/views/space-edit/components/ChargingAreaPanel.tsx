@@ -13,10 +13,12 @@ interface Props {
   onSave: () => void;
   /** 修改高度 */
   onSetHeight: (h: number) => void;
+  /** 正在写入区域文件 */
+  saving?: boolean;
 }
 
 /** 绘制充电区域操作小窗（可拖动，提示 + 保存） */
-export default function ChargingAreaPanel({ pointCount, height, onClose, onSave, onSetHeight }: Props) {
+export default function ChargingAreaPanel({ pointCount, height, onClose, onSave, onSetHeight, saving = false }: Props) {
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
 
@@ -95,7 +97,7 @@ export default function ChargingAreaPanel({ pointCount, height, onClose, onSave,
           <span style={{ flex: 1, fontSize: 12, color: "#333" }}>{tip}</span>
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <Button size="small" type="primary" icon={<SaveOutlined />} onClick={onSave} disabled={pointCount < 3}>
+          <Button size="small" type="primary" icon={<SaveOutlined />} onClick={onSave} loading={saving} disabled={pointCount < 3 || saving}>
             保存
           </Button>
         </div>

@@ -16,11 +16,12 @@ interface Props {
   onUnbind: () => void;
   /** 已绑定的间隔 ID 列表（用于禁用已绑定项） */
   boundBayIds: Set<number>;
+  saving?: boolean;
 }
 
 export default function DeviceAreaPanel({
   boxCount, height, selectedBoxId, selectedBoxBay,
-  onClose, onSave, onSetHeight, onBindBay, onUnbind, boundBayIds,
+  onClose, onSave, onSetHeight, onBindBay, onUnbind, boundBayIds, saving = false,
 }: Props) {
   const projectName = useSelectedProject();
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -77,10 +78,10 @@ export default function DeviceAreaPanel({
         const isBoundToSelected = selectedBoxBay?.id === record.id;
         const isBoundToOther = !isBoundToSelected && boundBayIds.has(record.id);
         if (isBoundToSelected) {
-          return <Button size="small" danger onClick={() => onUnbind()}>解绑</Button>;
+          return <Button size="small" danger disabled={saving} onClick={() => onUnbind()}>解绑</Button>;
         }
         return (
-          <Button size="small" type="primary" disabled={isBoundToOther || !selectedBoxId}
+          <Button size="small" type="primary" disabled={saving || isBoundToOther || !selectedBoxId}
             onClick={() => onBindBay({ id: record.id, name: record.bayName, code: record.bayCode })}>
             {isBoundToOther ? "已绑" : "绑定"}
           </Button>
@@ -140,7 +141,7 @@ export default function DeviceAreaPanel({
           <span style={{ color: "#1677ff", cursor: "help" }} title="方向键平移选中框 / Delete 键删除选中框">ⓘ</span>
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
-          <Button size="small" type="primary" icon={<SaveOutlined />} onClick={onSave}>保存全部设备区</Button>
+          <Button size="small" type="primary" icon={<SaveOutlined />} loading={saving} disabled={saving} onClick={onSave}>保存全部设备区</Button>
         </div>
       </div>
     </div>

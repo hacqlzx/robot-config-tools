@@ -1,4 +1,5 @@
 import type { ViewDirection } from "../../types";
+import type { DrawingItem, PathData } from "../../hooks/drawing/drawing-schema";
 
 export type SpaceSceneLifecycleState = "detached" | "mounting" | "ready" | "failed";
 
@@ -6,6 +7,92 @@ export interface SpaceSceneModel {
   name: string;
   metadataUrl: string;
   clipBounds?: SpaceClipBounds;
+}
+
+export interface SpaceDrawingLayer {
+  areas?: DrawingItem[];
+  path?: PathData | null;
+}
+
+export interface SpaceDrawingSelection {
+  layerId: string;
+  item: DrawingItem;
+}
+
+export interface SpaceDrawingInteractionCallbacks {
+  onSelect: (selection: SpaceDrawingSelection | null) => void;
+  onDelete: (selection: SpaceDrawingSelection) => void;
+}
+
+export interface SpaceChargingAreaState {
+  pointCount: number;
+  height: number;
+  hasBox: boolean;
+  selected: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+}
+
+export interface SpaceChargingAreaCallbacks {
+  onChange: (state: SpaceChargingAreaState) => void;
+  onDelete: () => void;
+}
+
+export interface SpaceDeviceAreaBay {
+  id: number;
+  name: string;
+  code: string;
+}
+
+export interface SpaceDeviceAreaBox {
+  id: string;
+  verts: number[][];
+  height: number;
+  bay: SpaceDeviceAreaBay | null;
+  name?: string;
+}
+
+export interface SpaceDeviceAreaState {
+  pointCount: number;
+  boxCount: number;
+  height: number;
+  selectedBoxId: string | null;
+  selectedBoxBay: SpaceDeviceAreaBay | null;
+  boundBayIds: number[];
+  hasDraft: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+}
+
+export interface SpaceDeviceAreaCallbacks {
+  onChange: (state: SpaceDeviceAreaState) => void;
+  onDelete: () => void;
+}
+
+export interface SpaceCabinetState {
+  cornerCount: number;
+  cabinetCount: number;
+  hasDraft: boolean;
+  canUndo: boolean;
+  canRedo: boolean;
+}
+
+export interface SpaceCabinetCallbacks {
+  onChange: (state: SpaceCabinetState) => void;
+}
+
+export interface SpacePathState {
+  pointCount: number;
+  connectionCount: number;
+  active: boolean;
+  selectedPointId: string | null;
+  selectedPathId: string | null;
+  canUndo: boolean;
+  canRedo: boolean;
+}
+
+export interface SpacePathCallbacks {
+  onChange: (state: SpacePathState) => void;
 }
 
 export interface SpaceClipBounds {
@@ -59,7 +146,8 @@ export function normalizeSpaceRenderSettings(settings: Partial<SpaceRenderSettin
 
 /**
  * Minimal lifecycle boundary for a space-scene engine.
- * Model loading, drawing and clipping contracts will be added as each workflow is migrated.
+ * Each editing workflow adds only the adapter methods it needs while the legacy
+ * PlayCanvas implementation remains available for the not-yet-migrated tools.
  */
 export interface SpaceSceneAdapter {
   mount(host: HTMLElement): void | Promise<void>;
@@ -67,6 +155,46 @@ export interface SpaceSceneAdapter {
   setViewDirection(direction: ViewDirection): void;
   getRenderSettings(): SpaceRenderSettings;
   setRenderSettings(settings: SpaceRenderSettings): void;
+  setDrawingLayer(layerId: string, data: SpaceDrawingLayer): void;
+  removeDrawingLayer(layerId: string): void;
+  clearDrawingLayers(): void;
+  setDrawingInteractionCallbacks(callbacks: SpaceDrawingInteractionCallbacks | null): void;
+  startChargingAreaDrawing(callbacks: SpaceChargingAreaCallbacks): boolean;
+  setChargingAreaDrawingEnabled(enabled: boolean): void;
+  setChargingAreaHeight(height: number): void;
+  getChargingAreaVerts(): number[][] | null;
+  hasChargingAreaDraft(): boolean;
+  undoChargingArea(): void;
+  redoChargingArea(): void;
+  clearChargingAreaDrawing(): void;
+  startDeviceAreaDrawing(callbacks: SpaceDeviceAreaCallbacks): boolean;
+  setDeviceAreaDrawingEnabled(enabled: boolean): void;
+  setDeviceAreaHeight(height: number): void;
+  getDeviceAreaBoxes(): SpaceDeviceAreaBox[];
+  loadDeviceAreaBoxes(boxes: SpaceDeviceAreaBox[]): void;
+  hasDeviceAreaDraft(): boolean;
+  bindSelectedDeviceAreaBay(bay: SpaceDeviceAreaBay): void;
+  unbindSelectedDeviceAreaBay(): void;
+  undoDeviceArea(): void;
+  redoDeviceArea(): void;
+  clearDeviceAreaDrawing(): void;
+  startCabinetDrawing(callbacks: SpaceCabinetCallbacks): boolean;
+  setCabinetDrawingEnabled(enabled: boolean): void;
+  setCabinetNames(names: string[]): void;
+  getCabinetGeometry(): { verts: number[][]; splits: number[] } | null;
+  hasCabinetDraft(): boolean;
+  undoCabinet(): void;
+  redoCabinet(): void;
+  clearCabinetDrawing(): void;
+  startPathDrawing(callbacks: SpacePathCallbacks): boolean;
+  setPathDrawingEnabled(enabled: boolean): void;
+  setPathDrawingActive(active: boolean): void;
+  setEditablePathData(data: PathData | null): void;
+  getPathData(): PathData | null;
+  hasPathDraft(): boolean;
+  undoPath(): void;
+  redoPath(): void;
+  clearPathDrawing(): void;
   startClipping(onBoundsChange: (bounds: SpaceClipBounds) => void): SpaceClipBounds | null;
   setClipBounds(bounds: SpaceClipBounds): void;
   stopClipping(): void;

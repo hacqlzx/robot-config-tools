@@ -93,7 +93,7 @@ function buildCabinetMainDeviceTree(voltList: any[], bayList: any[], mainList: a
             isLeaf: mains.length === 0,
             children: mains.length > 0
               ? mains.map((main) => ({
-                key: `main/${main.id}`,
+                key: `main/${main.id}/bay/${bay.id}`,
                 title: main.mainDeviceName || main.mainDeviceCode || "(未命名主设备)",
                 isLeaf: true,
               }))
@@ -179,6 +179,20 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
       setTreeLoading(false);
     }
   }, [selectedProject]);
+
+  const handleCabinetTreeCheck: TreeProps["onCheck"] = useCallback((checkedKeys) => {
+    const keys = Array.isArray(checkedKeys) ? checkedKeys : checkedKeys.checked;
+    const bayIds = new Set<number>();
+    keys.forEach((key) => {
+      const text = String(key);
+      const bayText = text.startsWith("bay/")
+        ? text.slice("bay/".length)
+        : text.includes("/bay/") ? text.split("/bay/").at(-1) : "";
+      const id = Number(bayText);
+      if (Number.isSafeInteger(id) && id > 0) bayIds.add(id);
+    });
+    onCabinetCheck?.([...bayIds]);
+  }, [onCabinetCheck]);
 
   useEffect(() => {
     if (sideTab === "map") {
@@ -314,6 +328,8 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
                   treeData={cabinetTreeData}
                   showLine
                   blockNode
+                  checkable
+                  onCheck={handleCabinetTreeCheck}
                   defaultExpandAll
                 />
               </div>

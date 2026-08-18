@@ -18,6 +18,8 @@ interface Props {
   onDraftChange?: (data: CabinetSaveData | null) => void;
   /** 屏柜名称变化时上报（用于 3D 框上方红色标签） */
   onNamesChange?: (names: string[]) => void;
+  /** 保存进行中时禁用重复提交。 */
+  saving?: boolean;
 }
 
 /** 四个角点的分步标签 */
@@ -26,7 +28,7 @@ const STEP_LABELS = ["前左下角", "前右下角", "前右上角", "后右上�
 /** 屏柜表格行 */
 interface CabinetRow { key: string; code: string; name: string; }
 
-interface CabinetSaveData {
+export interface CabinetSaveData {
   area: { id: number; name: string; code: string };
   bay: { id: number; name: string; code: string };
   cabinetRow?: CabinetRow | null;
@@ -42,7 +44,7 @@ function gen18(): string {
 }
 
 /** 绘制屏柜操作小窗（可拖动，提示 + 区域/间隔选择 + 屏柜表格） */
-export default function CabinetPanel({ cornerCount, cabinetCount, nameSequence, onClose, onSave, onDraftChange, onNamesChange }: Props) {
+export default function CabinetPanel({ cornerCount, cabinetCount, nameSequence, onClose, onSave, onDraftChange, onNamesChange, saving }: Props) {
   const projectName = useSelectedProject();
   const cabinetRowNameStart = nameSequence?.cabinetRowStart ?? 1;
   const cabinetNameStart = nameSequence?.cabinetStart ?? 1;
@@ -328,6 +330,7 @@ export default function CabinetPanel({ cornerCount, cabinetCount, nameSequence, 
             size="small"
             icon={<SaveOutlined />}
             onClick={handleSave}
+            loading={saving}
           >
             保存
           </Button>

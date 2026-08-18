@@ -1,13 +1,18 @@
 # Potree 迁移准备与 TODO
 
-更新时间：2026-08-14
+更新时间：2026-08-17
 
 ## 当前结论
 
 - 空间编辑路由已切换到 `views/space-edit/workspace`，由 `PotreeSpaceSceneAdapter` 创建和释放 Potree Viewer。
-- 原空间编辑的工具栏、六面视角控件以及地图/设备台账/屏柜/设备区侧栏已恢复到新入口。未迁移的绘制、裁切、保存和视角动作保留可见入口，当前统一提示迁移状态。
+- 原空间编辑的工具栏、六面视角控件以及地图/设备台账/屏柜/设备区侧栏已恢复到新入口。裁切、区域/路径只读回显、充电区域、设备区域、屏柜和可行路径编辑已经接入 Potree。
 - Potree 场景已恢复原空间编辑的 `W/A/S/D/Q/E` 键盘移动；`Shift` 为 10 倍速，`Alt` 为 0.1 倍速，文本输入控件聚焦时不会抢占按键。
 - 场景右下角已提供显示设置。显示精细度控制 Potree LOD 节点阈值，加载点数量支持“全部加载”或最高 `1 亿点`上限；设置会保存到本机并在后续模型加载时继续生效。
+- 地图加载后会读取同目录 `description_file.json`、`reference_path.txt` 和 `path.json`，使用 LAS 绝对坐标回显屏柜、充电区、设备区、路径、停靠点和名称标签；树勾选状态与 Potree 图层同步。
+- 充电区域编辑已迁移：三点生成贴地正交长方体，Z 轴为高度，支持高度输入、框体选中、方向键平移、Delete 删除、撤销/恢复和保存。保存使用 LAS 坐标专用入口，不经过旧 PlayCanvas floating-origin 转换。
+- 设备区域编辑已迁移：支持多个三点成框区域、既有区域加载、顶部名称标签、选中高亮、方向键平移、高度调整、Delete 删除、撤销/恢复和 `Ctrl+S` 保存；每个区域可绑定一个设备区间隔，当前地图和其他地图的已绑定间隔均会避免重复选择。保存使用 LAS 绝对坐标专用入口，不经过旧 PlayCanvas floating-origin 转换。
+- 屏柜编辑已迁移：四点按“前左下→前右下→前右上→后右上”生成正交柜体，红色协议顶点可拖拽并吸附点云，前下红边可插入分隔线，支持多屏柜名称标签、撤销/恢复、区域/间隔选择、柜排与屏柜编码保存。Potree 编辑器直接使用 LAS 绝对坐标，保存后重新读取 `description_file.json`，保留柜排/子屏柜层级和主设备同步逻辑。
+- AABB 裁切框和完整 LAS 后台裁切已接入。裁切读取原始 LAS 全量点，完成后重新生成 PotreeConverter 产物并加载新模型，不从当前可见 LOD 导出。
 - 原 `views/space-edit` PlayCanvas 实现及其绘制、裁切、保存代码完整保留，但不再由空间编辑路由引用。
 - PlayCanvas 依赖暂不从 `package.json` 删除。`image-edit`、`components/three-d-engine` 及旧空间编辑实现仍依赖它，移除依赖是迁移末期任务。
 - Potree 运行资源来自官方 `potree-develop` 的同版本 `build` 与 `libs`，不改用 npm 中不同版本的 Three.js、jQuery 等包拼装。
@@ -21,6 +26,10 @@ router/space-edit
       -> WorkspaceMapTree
       -> SpaceSceneHost
           -> PotreeSpaceSceneAdapter
+              -> PotreeCabinetEditor
+              -> PotreeChargingAreaEditor
+              -> PotreeDeviceAreaEditor
+              -> PotreePathEditor
 
 views/space-edit/index.tsx
   -> 原 PlayCanvas 空间编辑实现（保留但未引用）
@@ -37,7 +46,7 @@ electron/potree
   -> project-asset-protocol.ts  支持 Range 的项目点云资源协议
 ```
 
-`SpaceSceneAdapter` 当前定义 `mount`、`loadModel`、`getRenderSettings`、`setRenderSettings`、`clearModel`、`resize`、`dispose`。键盘相机控制由适配器内部维护，页面只管理精细度和点预算数值；绘制和裁切接口仍按后续真实工作流增加，不复制 PlayCanvas API。
+`SpaceSceneAdapter` 当前定义 Viewer 生命周期、模型加载、显示设置、只读绘制图层、屏柜/充电区域/设备区域/路径编辑和裁切接口。键盘相机、鼠标深度缩放、旋转中心提示、绘制对象和裁切体积均由适配器内部维护，页面只管理业务状态和文件保存；旧 PlayCanvas API 不会复制到页面层。
 
 ## 资源发布规则
 
@@ -110,10 +119,17 @@ Potree 场景中的裁切体积
 - [x] 增加右下角显示设置，支持 4 档 LOD 精细度、全部加载或 10 万至 1 亿点预算和本机持久化。
 - [ ] 使用 20 GB 样例完成首帧、点预算、显存、切换地图和释放的 Electron 实机验收。
 - [ ] 建立项目模型清单：原始 LAS/LAZ、转换目录、`metadata.json`、转换状态和错误日志。
-- [ ] 补齐地图树的显隐、手动聚焦和视角切换；当前已完成单模型勾选加载与取消卸载，Potree 对象未泄漏到 React 页面。
-- [ ] 迁移屏柜、充电区、设备区和路径的显示与编辑，保持现有 JSON 协议和 LAS 坐标转换。
-- [ ] 迁移撤销/恢复、自动保存、选中互斥和绘制模式键盘交互。
-- [ ] 设计独立裁切任务：原始 LAS/LAZ 流式筛选、取消、进度、磁盘检查、输出校验和再转换。
+- [x] 补齐地图树单模型显隐、六面视角切换和自动聚焦，Potree 对象不泄漏到 React 页面。
+- [x] 迁移屏柜、充电区、设备区和路径的只读显示，保持现有 JSON 协议并直接使用 LAS 绝对坐标。
+- [x] 迁移充电区域绘制、选中、方向键平移、Delete 删除、高度调整、撤销/恢复和手动保存。
+- [x] 迁移设备区编辑，并接回多框加载、台账间隔绑定、选中、方向键平移、Delete、局部撤销/恢复、`Ctrl+S` 和 LAS 坐标保存。
+- [x] 迁移屏柜编辑，并接回四点成柜、红点拖拽、分隔线、名称标签、撤销/恢复和 LAS 坐标保存。
+- [x] 迁移路径编辑，并接回连续落点、已有点连接、路径点吸附移动、选中/删除、撤销/恢复、`Ctrl+S` 和起点充电区校验；`reference_path.txt` 可编辑，机器人 `path.json` 保持只读回显。
+- [x] 接通 Potree workspace 的 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+Shift+Z`，按当前编辑工具统一分发撤销/恢复快捷键。
+- [x] 增加回显区域和屏柜的点击命中、高亮、Delete/Backspace 删除，并复用现有 LAS 协议写回及屏柜主设备同步。
+- [x] 恢复屏柜树勾选，按间隔筛选 Potree 回显；取消全部勾选时隐藏屏柜，但保留地图树本身已显示的其他区域。
+- [ ] 在全部绘制工具迁移后统一跨工具历史时间线、30 秒自动保存和未保存离开确认；当前撤销栈仍由各 Potree 编辑器分别维护。
+- [ ] 补齐现有完整 LAS 裁切任务的取消、磁盘空间预检和输出结构校验；当前已有进度、全量筛点、输出和再转换。
 - [ ] 建立 LAS 版本/点格式/LAZ/额外维度的 Converter 兼容矩阵。
 - [ ] 完成 Electron 打包后的离线资源、Worker、WASM 和 Converter smoke test。
 - [ ] `image-edit` 完成迁移或明确保留方案后，再删除 PlayCanvas 依赖和 legacy 空间编辑代码。
@@ -125,5 +141,5 @@ Potree 场景中的裁切体积
 - 键盘监听和动画帧随适配器挂载/销毁，输入框聚焦和窗口失焦不会遗留移动状态；显示设置不向 React 暴露 Viewer 或 PointCloud。
 - 旧 PlayCanvas 文件和功能代码没有被删除或改写。
 - 构建产物保留 Potree 官方目录结构，Converter 仅进入 Electron `extraResources`。
-- 迁移基础版本的 renderer 生产构建、Electron 入口 bundle 和 Converter `--help` 冒烟检查已通过；最新相机与显示设置改动已通过差异格式检查，仍需重跑 renderer 构建和 Electron 实机操作验收。
+- 最新区域/路径回显、充电区域编辑和设备区域编辑已通过差异格式检查和 renderer 生产构建。全量 TypeScript 检查仍被仓库既有错误阻断，本轮改动文件未出现在错误列表中；Electron 实机交互仍需用现场地图验收。
 - 浏览器模式没有 `window.electronAPI`，只能检查空页面和运行资源；转换、项目协议和 20 GB 模型必须在 Electron 模式验收。

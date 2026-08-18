@@ -34,6 +34,7 @@ export class PotreeDepthZoomController {
     private readonly viewer: PotreeViewerInstance,
     private readonly potree: PotreeNamespace,
     private readonly host: HTMLElement,
+    private readonly onZoom?: () => void,
   ) {}
 
   start(): void {
@@ -57,6 +58,7 @@ export class PotreeDepthZoomController {
 
     event.preventDefault();
     event.stopImmediatePropagation();
+    this.onZoom?.();
 
     const mouse = this.getMousePosition(event);
     const hit = this.pickPointCloud(camera, mouse);

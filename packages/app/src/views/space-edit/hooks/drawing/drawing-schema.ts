@@ -32,6 +32,8 @@ export interface CabinetBayRef {
 export interface ChargingAreaItem {
   id: string;
   type: "charging-area";
+  /** 机器人区域协议中的展示名称；缺失时使用“充电区域”。 */
+  name?: string;
   geometry: { verts: number[][] };
   updatedAt: string;
 }
@@ -39,6 +41,8 @@ export interface ChargingAreaItem {
 export interface DeviceAreaItem {
   id: string;
   type: "device-area";
+  /** 机器人区域协议中的展示名称；通常与绑定间隔名称相同。 */
+  name?: string;
   geometry: { verts: number[][] };
   height: number;
   bay: { id: number; name: string; code: string } | null;

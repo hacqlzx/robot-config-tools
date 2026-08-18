@@ -428,7 +428,13 @@ function legacyItemsToRobotAreas(items: DrawingItem[]): RobotAreaRecord[] {
       records.push(...makeCabinetRobotAreas(item, rootId, usedCabinetIds));
     } else if (item?.type === "charging-area") {
       const pose = boxPoseFromVerts(item.geometry?.verts || []);
-      if (pose) records.push({ id: "1", type: AREA_TYPE_CHARGING, name: "充电区域", pose, pose_3d: pose });
+      if (pose) records.push({
+        id: "1",
+        type: AREA_TYPE_CHARGING,
+        name: valueText(item.name) || "充电区域",
+        pose,
+        pose_3d: pose,
+      });
     } else if (item?.type === "device-area") {
       const pose = boxPoseFromVerts(item.geometry?.verts || []);
       if (!pose) continue;
@@ -437,7 +443,7 @@ function legacyItemsToRobotAreas(items: DrawingItem[]): RobotAreaRecord[] {
       records.push({
         id: String(id),
         type: AREA_TYPE_DEVICE,
-        name: item.bay?.name || defaultDeviceAreaName(id),
+        name: valueText(item.name) || item.bay?.name || defaultDeviceAreaName(id),
         pose,
         pose_3d: pose,
       });
@@ -534,6 +540,7 @@ function robotAreasToDrawingItems(records: RobotAreaRecord[]): DrawingItem[] {
       if (pose) items.push({
         id: valueText(record.id) || "1",
         type: "charging-area",
+        name: valueText(record.name) || "充电区域",
         geometry: { verts: boxPoseToVerts(pose) },
         updatedAt: valueText(record.time),
       });
@@ -542,6 +549,7 @@ function robotAreasToDrawingItems(records: RobotAreaRecord[]): DrawingItem[] {
       if (pose) items.push({
         id: valueText(record.id) || String(items.length + 1),
         type: "device-area",
+        name: valueText(record.name) || defaultDeviceAreaName(record.id ?? items.length + 1),
         geometry: { verts: boxPoseToVerts(pose) },
         height: boxHeightFromPose(pose),
         bay: deviceAreaBayFromRecord(record),
@@ -550,6 +558,11 @@ function robotAreasToDrawingItems(records: RobotAreaRecord[]): DrawingItem[] {
     }
   }
   return items;
+}
+
+/** 将机器人区域协议解码为 LAS 绝对坐标，供 Potree 等原生 LAS 坐标场景使用。 */
+export function robotAreasToLasDrawingItems(records: RobotAreaRecord[]): DrawingItem[] {
+  return robotAreasToDrawingItems(records);
 }
 
 export function robotAreasToSceneDrawingItems(records: RobotAreaRecord[], coordinate: LasCoordinateTransform): DrawingItem[] {

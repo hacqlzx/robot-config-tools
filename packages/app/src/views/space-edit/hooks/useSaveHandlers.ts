@@ -296,7 +296,10 @@ export function useSaveHandlers(params: UseSaveHandlersParams) {
             geometry: { verts },
             updatedAt: "",
           } : await loadChargingArea(window.electronAPI, modelPath);
-          if (!isPathStartInChargingArea(orderedPoints[0], chargingArea)) {
+          const startsInChargingArea = isPathStartInChargingArea(orderedPoints[0], chargingArea);
+          const endsInChargingArea = orderedPoints.length > 1
+            && isPathStartInChargingArea(orderedPoints[orderedPoints.length - 1], chargingArea);
+          if (!startsInChargingArea && !endsInChargingArea) {
             isAutoSavingRef.current = false;
             if (!silent) message.warning(PATH_START_CHARGING_AREA_MESSAGE);
             return;

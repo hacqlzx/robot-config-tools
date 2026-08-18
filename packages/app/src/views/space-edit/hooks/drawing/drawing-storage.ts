@@ -50,6 +50,7 @@ import {
   isCabinetRecord,
   makeCabinetRobotAreas,
   normalizeAreaData,
+  robotAreasToLasDrawingItems,
   robotAreasToSceneDrawingItems,
 } from "./area-codec";
 import {
@@ -166,6 +167,17 @@ export async function saveCabinetDrawing(params: {
   const { api, projectName, modelPath, item } = params;
   const coordinate = await loadLasCoordinateTransform(api, modelPath);
   const robotItem = cabinetItemToLas(item, coordinate);
+  return saveCabinetDrawingInLasCoordinates({ api, projectName, modelPath, item: robotItem });
+}
+
+/** 保存已经位于 LAS 绝对坐标中的屏柜，供 Potree 编辑器使用。 */
+export async function saveCabinetDrawingInLasCoordinates(params: {
+  api: ElectronAPI;
+  projectName: string;
+  modelPath: string;
+  item: CabinetItem;
+}): Promise<CabinetItem> {
+  const { api, projectName, modelPath, item: robotItem } = params;
   const records = await readAreaRecords(api, modelPath);
   const existingRoot = findCabinetRootForItem(records, robotItem);
   const rootId = chooseCabinetRootId(records, robotItem, existingRoot);
@@ -213,7 +225,7 @@ export async function saveCabinetDrawing(params: {
   await writeAreaRecords(api, projectName, modelPath, next);
 
   return {
-    ...item,
+    ...robotItem,
     id: rootIdText,
     updatedAt: time,
   };
@@ -253,17 +265,28 @@ export async function saveChargingArea(params: {
 }): Promise<void> {
   const { api, projectName, modelPath, item } = params;
   const coordinate = await loadLasCoordinateTransform(api, modelPath);
+  const robotItem = item ? chargingItemToLas(item, coordinate) : null;
+  await saveChargingAreaInLasCoordinates({ api, projectName, modelPath, item: robotItem });
+}
+
+/** 保存已经位于 LAS 绝对坐标中的充电区域，供 Potree 编辑器使用。 */
+export async function saveChargingAreaInLasCoordinates(params: {
+  api: ElectronAPI;
+  projectName: string;
+  modelPath: string;
+  item: ChargingAreaItem | null;
+}): Promise<void> {
+  const { api, projectName, modelPath, item } = params;
   const records = await readAreaRecords(api, modelPath);
   const oldCharging = records.find((record) => areaType(record) === AREA_TYPE_CHARGING);
   const next = records.filter((record) => areaType(record) !== AREA_TYPE_CHARGING);
   if (item) {
-    const robotItem = chargingItemToLas(item, coordinate);
-    const pose = boxPoseFromVerts(robotItem.geometry.verts);
+    const pose = boxPoseFromVerts(item.geometry.verts);
     if (pose) {
       next.push({
         id: valueText(oldCharging?.id) || "1",
         type: AREA_TYPE_CHARGING,
-        name: valueText(oldCharging?.name) || "充电区域",
+        name: valueText(item.name) || valueText(oldCharging?.name) || "充电区域",
         pose,
         pose_3d: pose,
       });
@@ -291,20 +314,31 @@ export async function saveDeviceAreas(params: {
 }): Promise<void> {
   const { api, projectName, modelPath, items } = params;
   const coordinate = await loadLasCoordinateTransform(api, modelPath);
+  const robotItems = items.map((item) => deviceAreaItemToLas(item, coordinate));
+  await saveDeviceAreasInLasCoordinates({ api, projectName, modelPath, items: robotItems });
+}
+
+/** 保存已经位于 LAS 绝对坐标中的设备区域，供 Potree 编辑器使用。 */
+export async function saveDeviceAreasInLasCoordinates(params: {
+  api: ElectronAPI;
+  projectName: string;
+  modelPath: string;
+  items: DeviceAreaItem[];
+}): Promise<void> {
+  const { api, projectName, modelPath, items } = params;
   const records = await readAreaRecords(api, modelPath);
   const next = records.filter((record) => areaType(record) !== AREA_TYPE_DEVICE);
   const used = new Set<number>();
 
   for (const item of items) {
-    const robotItem = deviceAreaItemToLas(item, coordinate);
     const id = deviceAreaRecordId(item, used);
     used.add(id);
-    const pose = boxPoseFromVerts(robotItem.geometry.verts);
+    const pose = boxPoseFromVerts(item.geometry.verts);
     if (!pose) continue;
     next.push({
       id: String(id),
       type: AREA_TYPE_DEVICE,
-      name: item.bay?.name || defaultDeviceAreaName(id),
+      name: valueText(item.name) || item.bay?.name || defaultDeviceAreaName(id),
       pose,
       pose_3d: pose,
     });
@@ -362,6 +396,15 @@ export async function loadAllItemsFromJson(api: ElectronAPI, jsonPath: string): 
   try {
     const coordinate = await loadLasCoordinateTransform(api, jsonPath);
     return robotAreasToSceneDrawingItems(await readAreaRecordsFromPath(api, jsonPath), coordinate);
+  } catch {
+    return [];
+  }
+}
+
+/** 读取全部区域并保留 LAS 绝对坐标，供 Potree 场景直接回显。 */
+export async function loadAllItemsFromJsonInLasCoordinates(api: ElectronAPI, jsonPath: string): Promise<DrawingItem[]> {
+  try {
+    return robotAreasToLasDrawingItems(await readAreaRecordsFromPath(api, jsonPath));
   } catch {
     return [];
   }
@@ -495,16 +538,30 @@ async function readRobotStopPoints(api: ElectronAPI, pathJsonPath: string, groun
   return new Map();
 }
 
-async function loadRobotRouteDrawing(api: ElectronAPI, pathJsonPath: string): Promise<PathData | null> {
-  const [routeData, groundZ, coordinate] = await Promise.all([
+async function loadRobotRouteDrawingInLasCoordinates(api: ElectronAPI, pathJsonPath: string): Promise<PathData | null> {
+  const [routeData, groundZ] = await Promise.all([
     readJsonFile(api, pathJsonPath),
     readReferencePathGroundZ(api, pathJsonPath),
-    loadLasCoordinateTransform(api, pathJsonPath),
   ]);
   const stopPoints = await readRobotStopPoints(api, pathJsonPath, groundZ);
   const options = groundZ == null ? undefined : { groundZ };
-  const data = parseRobotRoutePathData(routeData, stopPoints, options);
+  return parseRobotRoutePathData(routeData, stopPoints, options);
+}
+
+async function loadRobotRouteDrawing(api: ElectronAPI, pathJsonPath: string): Promise<PathData | null> {
+  const [data, coordinate] = await Promise.all([
+    loadRobotRouteDrawingInLasCoordinates(api, pathJsonPath),
+    loadLasCoordinateTransform(api, pathJsonPath),
+  ]);
   return data ? lasPathDataToScene(data, coordinate) : null;
+}
+
+function pathPointsStartingInChargingArea(points: PathPoint[], chargingArea: ChargingAreaItem | null): PathPoint[] {
+  if (points.length === 0) return points;
+  if (isPathStartInChargingArea(points[0], chargingArea)) return points;
+  const endPoint = points.length > 1 ? points[points.length - 1] : null;
+  if (endPoint && isPathStartInChargingArea(endPoint, chargingArea)) return [...points].reverse();
+  throw new Error(PATH_START_CHARGING_AREA_MESSAGE);
 }
 
 /** 保存可行路径：写入独立的 reference_path.txt */
@@ -523,16 +580,40 @@ export async function savePathDrawing(params: {
     return;
   }
   const coordinate = await loadLasCoordinateTransform(api, modelPath);
-  const orderedScenePoints = orderedPathPoints(data);
+  let orderedScenePoints = orderedPathPoints(data);
   const chargingArea = await loadChargingArea(api, modelPath);
-  if (!isPathStartInChargingArea(orderedScenePoints[0], chargingArea)) {
-    throw new Error(PATH_START_CHARGING_AREA_MESSAGE);
-  }
+  orderedScenePoints = pathPointsStartingInChargingArea(orderedScenePoints, chargingArea);
   const robotPoints = scenePathDataToLas({
     points: orderedScenePoints,
     paths: [],
   }, coordinate).points;
   const bytes = new TextEncoder().encode(pathTextFromLasPoints(robotPoints));
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  await api.project.writeFile(projectName, pathSubPath(modelPath), buffer);
+}
+
+/** 保存已经位于 LAS 绝对坐标中的参考路径，供 Potree 编辑器使用。 */
+export async function savePathDrawingInLasCoordinates(params: {
+  api: ElectronAPI;
+  projectName: string;
+  modelPath: string;
+  data: PathData | null;
+}): Promise<void> {
+  const { api, projectName, modelPath, data } = params;
+  if (!data || data.points.length === 0) {
+    const bytes = new TextEncoder().encode("");
+    const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    await api.project.writeFile(projectName, pathSubPath(modelPath), buffer);
+    return;
+  }
+
+  let orderedPoints = orderedPathPoints(data);
+  const records = await readAreaRecords(api, modelPath);
+  const chargingArea = robotAreasToLasDrawingItems(records)
+    .find((item): item is ChargingAreaItem => item.type === "charging-area") ?? null;
+  orderedPoints = pathPointsStartingInChargingArea(orderedPoints, chargingArea);
+
+  const bytes = new TextEncoder().encode(pathTextFromLasPoints(orderedPoints));
   const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   await api.project.writeFile(projectName, pathSubPath(modelPath), buffer);
 }
@@ -555,6 +636,26 @@ export async function loadPathDrawing(api: ElectronAPI, modelPath: string): Prom
       const text = await readTextFile(api, candidate);
       const textPathData = parseReferencePathText(text);
       if (textPathData) return lasPathDataToScene(textPathData, coordinate);
+    } catch {}
+  }
+  return null;
+}
+
+/** 读取参考路径或机器人路径并保留 LAS 绝对坐标，供 Potree 场景直接回显。 */
+export async function loadPathDrawingInLasCoordinates(api: ElectronAPI, modelPath: string): Promise<PathData | null> {
+  const fileName = fileNameFromPath(modelPath);
+  const directPathFile = isReferencePathFileName(fileName);
+  const candidates = directPathFile
+    ? [modelPath]
+    : [pathAbsPath(modelPath), robotPathAbsPath(modelPath)];
+
+  for (const candidate of candidates) {
+    try {
+      if (isRobotPathFileName(fileNameFromPath(candidate))) {
+        return await loadRobotRouteDrawingInLasCoordinates(api, candidate);
+      }
+      const data = parseReferencePathText(await readTextFile(api, candidate));
+      if (data) return data;
     } catch {}
   }
   return null;

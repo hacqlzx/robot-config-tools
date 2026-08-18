@@ -1,13 +1,22 @@
 import {
   loadPotreeRuntime,
+  loadPotreeThreeRuntime,
   type PotreeNamespace,
   type PotreeGeometryNode,
+  type PotreeNodeCache,
   type PotreePointCloud,
   type PotreeViewerInstance,
 } from "@/potree-core/potree-runtime";
 import type { ViewDirection } from "../../types";
+import type { PathData } from "../../hooks/drawing/drawing-schema";
 import { PotreeDepthZoomController } from "./PotreeDepthZoomController";
+import { PotreeChargingAreaEditor } from "./PotreeChargingAreaEditor";
+import { PotreeCabinetEditor } from "./PotreeCabinetEditor";
+import { PotreeDeviceAreaEditor } from "./PotreeDeviceAreaEditor";
+import { PotreeDrawingRenderer } from "./PotreeDrawingRenderer";
 import { PotreeFlyKeyboardController } from "./PotreeFlyKeyboardController";
+import { PotreePathEditor } from "./PotreePathEditor";
+import { PotreeRotationPivotIndicator } from "./PotreeRotationPivotIndicator";
 import {
   DEFAULT_SPACE_RENDER_SETTINGS,
   normalizeSpaceRenderSettings,
@@ -16,11 +25,22 @@ import {
   type SpaceRenderDetailLevel,
   type SpaceRenderSettings,
   type SpaceClipBounds,
+  type SpaceChargingAreaCallbacks,
+  type SpaceCabinetCallbacks,
+  type SpaceDeviceAreaBox,
+  type SpaceDeviceAreaCallbacks,
+  type SpaceDrawingLayer,
+  type SpaceDrawingInteractionCallbacks,
+  type SpacePathCallbacks,
   type SpaceSceneAdapter,
   type SpaceSceneModel,
 } from "./types";
 
 const MODEL_LOAD_TIMEOUT_MS = 60_000;
+const FIT_PADDING = 1.05;
+const MIN_FIT_DISTANCE = 0.01;
+const INTERACTION_LOD_MULTIPLIER = 2;
+const INTERACTION_LOD_SETTLE_MS = 180;
 const MIN_NODE_SIZE_BY_DETAIL: Record<SpaceRenderDetailLevel, number> = {
   1: 80,
   2: 30,
@@ -28,13 +48,13 @@ const MIN_NODE_SIZE_BY_DETAIL: Record<SpaceRenderDetailLevel, number> = {
   4: 8,
 };
 
-const POTREE_VIEW_BY_DIRECTION: Record<ViewDirection, "F" | "B" | "L" | "R" | "U" | "D"> = {
-  前: "F",
-  后: "B",
-  左: "L",
-  右: "R",
-  上: "U",
-  下: "D",
+const POTREE_VIEW_ANGLES: Record<ViewDirection, { yaw: number; pitch: number }> = {
+  前: { yaw: 0, pitch: 0 },
+  后: { yaw: Math.PI, pitch: 0 },
+  左: { yaw: -Math.PI / 2, pitch: 0 },
+  右: { yaw: Math.PI / 2, pitch: 0 },
+  上: { yaw: 0, pitch: -Math.PI / 2 },
+  下: { yaw: -Math.PI, pitch: Math.PI / 2 },
 };
 
 function getPointCloudPointCount(pointcloud: PotreePointCloud): number | null {
@@ -44,7 +64,7 @@ function getPointCloudPointCount(pointcloud: PotreePointCloud): number | null {
   return Math.floor(pointCount);
 }
 
-function disposeGeometryTree(root?: PotreeGeometryNode): void {
+function disposeGeometryTree(root?: PotreeGeometryNode, cache?: PotreeNodeCache): void {
   if (!root) return;
   const pending = [root];
   while (pending.length > 0) {
@@ -54,6 +74,9 @@ function disposeGeometryTree(root?: PotreeGeometryNode): void {
       ? (Array.isArray(node.children) ? node.children : Object.values(node.children))
       : [];
     pending.push(...children);
+    // Potree's LRU is module-global. Removing nodes during model teardown is
+    // required so it cannot retain GPU buffers from an unloaded map.
+    cache?.remove(node);
     node.dispose?.();
   }
 }
@@ -65,6 +88,12 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   private pointcloud: PotreePointCloud | null = null;
   private keyboardController: PotreeFlyKeyboardController | null = null;
   private depthZoomController: PotreeDepthZoomController | null = null;
+  private rotationPivotIndicator: PotreeRotationPivotIndicator | null = null;
+  private drawingRenderer: PotreeDrawingRenderer | null = null;
+  private chargingAreaEditor: PotreeChargingAreaEditor | null = null;
+  private cabinetEditor: PotreeCabinetEditor | null = null;
+  private deviceAreaEditor: PotreeDeviceAreaEditor | null = null;
+  private pathEditor: PotreePathEditor | null = null;
   private mountPromise: Promise<void> | null = null;
   private fitTimer: number | null = null;
   private mountVersion = 0;
@@ -78,6 +107,8 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   private clipOverlayRenderer: ((event: unknown) => void) | null = null;
   private clipPreviousTask: number | null = null;
   private clipPreviousMethod: number | null = null;
+  private interactionLodTimer: number | null = null;
+  private interactionLodActive = false;
 
   mount(host: HTMLElement): Promise<void> {
     this.host = host;
@@ -87,7 +118,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   }
 
   private async mountViewer(host: HTMLElement, version: number): Promise<void> {
-    const potree = await loadPotreeRuntime();
+    const [potree, three] = await Promise.all([loadPotreeRuntime(), loadPotreeThreeRuntime()]);
     if (this.host !== host || version !== this.mountVersion) return;
 
     const renderArea = document.createElement("div");
@@ -103,10 +134,29 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.potree = potree;
     this.viewer = viewer;
     this.applyRenderSettings();
-    this.keyboardController = new PotreeFlyKeyboardController(viewer, renderArea);
+    this.keyboardController = new PotreeFlyKeyboardController(
+      viewer,
+      renderArea,
+      this.beginInteractionLod,
+      this.scheduleInteractionLodRestore,
+    );
     this.keyboardController.start();
-    this.depthZoomController = new PotreeDepthZoomController(viewer, potree, renderArea);
+    this.depthZoomController = new PotreeDepthZoomController(
+      viewer,
+      potree,
+      renderArea,
+      this.beginInteractionLod,
+    );
     this.depthZoomController.start();
+    viewer.controls?.addEventListener("start", this.beginInteractionLod);
+    viewer.controls?.addEventListener("end", this.scheduleInteractionLodRestore);
+    this.rotationPivotIndicator = new PotreeRotationPivotIndicator(viewer, renderArea);
+    this.rotationPivotIndicator.start();
+    this.drawingRenderer = new PotreeDrawingRenderer(viewer, three, renderArea);
+    this.chargingAreaEditor = new PotreeChargingAreaEditor(viewer, potree, three, renderArea);
+    this.cabinetEditor = new PotreeCabinetEditor(viewer, potree, three, renderArea);
+    this.deviceAreaEditor = new PotreeDeviceAreaEditor(viewer, potree, three, renderArea);
+    this.pathEditor = new PotreePathEditor(viewer, potree, three, renderArea);
     this.resize();
   }
 
@@ -119,8 +169,190 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.applyRenderSettings();
   }
 
+  setDrawingLayer(layerId: string, data: SpaceDrawingLayer): void {
+    this.drawingRenderer?.setLayer(layerId, data);
+  }
+
+  removeDrawingLayer(layerId: string): void {
+    this.drawingRenderer?.removeLayer(layerId);
+  }
+
+  clearDrawingLayers(): void {
+    this.drawingRenderer?.clear();
+  }
+
+  setDrawingInteractionCallbacks(callbacks: SpaceDrawingInteractionCallbacks | null): void {
+    this.drawingRenderer?.setInteractionCallbacks(callbacks);
+  }
+
+  startChargingAreaDrawing(callbacks: SpaceChargingAreaCallbacks): boolean {
+    const bounds = this.getModelWorldBounds();
+    if (!this.chargingAreaEditor || !this.pointcloud || !bounds) return false;
+    this.stopClipping();
+    this.chargingAreaEditor.start(callbacks, bounds.minZ);
+    return true;
+  }
+
+  setChargingAreaDrawingEnabled(enabled: boolean): void {
+    this.chargingAreaEditor?.setEnabled(enabled);
+  }
+
+  setChargingAreaHeight(height: number): void {
+    this.chargingAreaEditor?.setHeight(height);
+  }
+
+  getChargingAreaVerts(): number[][] | null {
+    return this.chargingAreaEditor?.getBoxVerts() ?? null;
+  }
+
+  hasChargingAreaDraft(): boolean {
+    return this.chargingAreaEditor?.hasBox() ?? false;
+  }
+
+  undoChargingArea(): void {
+    this.chargingAreaEditor?.undo();
+  }
+
+  redoChargingArea(): void {
+    this.chargingAreaEditor?.redo();
+  }
+
+  clearChargingAreaDrawing(): void {
+    this.chargingAreaEditor?.clear();
+  }
+
+  startDeviceAreaDrawing(callbacks: SpaceDeviceAreaCallbacks): boolean {
+    const bounds = this.getModelWorldBounds();
+    if (!this.deviceAreaEditor || !this.pointcloud || !bounds) return false;
+    this.stopClipping();
+    this.deviceAreaEditor.start(callbacks, bounds.minZ);
+    return true;
+  }
+
+  setDeviceAreaDrawingEnabled(enabled: boolean): void {
+    this.deviceAreaEditor?.setEnabled(enabled);
+  }
+
+  setDeviceAreaHeight(height: number): void {
+    this.deviceAreaEditor?.setHeight(height);
+  }
+
+  getDeviceAreaBoxes(): SpaceDeviceAreaBox[] {
+    return this.deviceAreaEditor?.getBoxes() ?? [];
+  }
+
+  loadDeviceAreaBoxes(boxes: SpaceDeviceAreaBox[]): void {
+    this.deviceAreaEditor?.loadBoxes(boxes);
+  }
+
+  hasDeviceAreaDraft(): boolean {
+    return this.deviceAreaEditor?.hasDraft() ?? false;
+  }
+
+  bindSelectedDeviceAreaBay(bay: { id: number; name: string; code: string }): void {
+    this.deviceAreaEditor?.bindSelectedBay(bay);
+  }
+
+  unbindSelectedDeviceAreaBay(): void {
+    this.deviceAreaEditor?.unbindSelectedBay();
+  }
+
+  undoDeviceArea(): void {
+    this.deviceAreaEditor?.undo();
+  }
+
+  redoDeviceArea(): void {
+    this.deviceAreaEditor?.redo();
+  }
+
+  clearDeviceAreaDrawing(): void {
+    this.deviceAreaEditor?.clear();
+  }
+
+  startCabinetDrawing(callbacks: SpaceCabinetCallbacks): boolean {
+    if (!this.cabinetEditor || !this.pointcloud) return false;
+    this.stopClipping();
+    this.cabinetEditor.start(callbacks);
+    return true;
+  }
+
+  setCabinetDrawingEnabled(enabled: boolean): void {
+    this.cabinetEditor?.setEnabled(enabled);
+  }
+
+  setCabinetNames(names: string[]): void {
+    this.cabinetEditor?.setCabinetNames(names);
+  }
+
+  getCabinetGeometry(): { verts: number[][]; splits: number[] } | null {
+    return this.cabinetEditor?.getGeometry() ?? null;
+  }
+
+  hasCabinetDraft(): boolean {
+    return this.cabinetEditor?.hasDraft() ?? false;
+  }
+
+  undoCabinet(): void {
+    this.cabinetEditor?.undo();
+  }
+
+  redoCabinet(): void {
+    this.cabinetEditor?.redo();
+  }
+
+  clearCabinetDrawing(): void {
+    this.cabinetEditor?.clear();
+  }
+
+  startPathDrawing(callbacks: SpacePathCallbacks): boolean {
+    if (!this.pathEditor || !this.pointcloud) return false;
+    this.stopClipping();
+    this.pathEditor.start(callbacks);
+    this.pathEditor.setEnabled(true);
+    this.pathEditor.setActive(true);
+    return true;
+  }
+
+  setPathDrawingEnabled(enabled: boolean): void {
+    this.pathEditor?.setEnabled(enabled);
+  }
+
+  setPathDrawingActive(active: boolean): void {
+    this.pathEditor?.setActive(active);
+  }
+
+  setEditablePathData(data: PathData | null): void {
+    this.pathEditor?.setData(data);
+  }
+
+  getPathData(): PathData | null {
+    return this.pathEditor?.getData() ?? null;
+  }
+
+  hasPathDraft(): boolean {
+    return this.pathEditor?.hasDraft() ?? false;
+  }
+
+  undoPath(): void {
+    this.pathEditor?.undo();
+  }
+
+  redoPath(): void {
+    this.pathEditor?.redo();
+  }
+
+  clearPathDrawing(): void {
+    this.pathEditor?.setActive(false);
+    this.pathEditor?.clear();
+  }
+
   setViewDirection(direction: ViewDirection): void {
-    this.viewer?.setView(POTREE_VIEW_BY_DIRECTION[direction]);
+    const viewer = this.viewer;
+    if (!viewer) return;
+    const angles = POTREE_VIEW_ANGLES[direction];
+    viewer.scene.view.yaw = angles.yaw;
+    viewer.scene.view.pitch = angles.pitch;
+    this.fitModelToScreen();
   }
 
   private getModelWorldBounds(): SpaceClipBounds | null {
@@ -138,6 +370,53 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
       minZ: offset.z + localBounds.min.z,
       maxZ: offset.z + localBounds.max.z,
     };
+  }
+
+  private fitModelToScreen(): void {
+    const viewer = this.viewer;
+    const bounds = this.getModelWorldBounds();
+    if (!viewer || !bounds) {
+      viewer?.fitToScreen();
+      return;
+    }
+
+    const centerX = (bounds.minX + bounds.maxX) / 2;
+    const centerY = (bounds.minY + bounds.maxY) / 2;
+    const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+    const halfX = Math.abs(bounds.maxX - bounds.minX) / 2;
+    const halfY = Math.abs(bounds.maxY - bounds.minY) / 2;
+    const halfZ = Math.abs(bounds.maxZ - bounds.minZ) / 2;
+    const radius = Math.hypot(halfX, halfY, halfZ);
+    const view = viewer.scene.view;
+    const direction = view.direction;
+    const directionLength = Math.hypot(direction.x, direction.y, direction.z);
+    if (![centerX, centerY, centerZ, radius, directionLength].every(Number.isFinite)
+      || radius <= 0 || directionLength <= 0) {
+      viewer.fitToScreen();
+      return;
+    }
+
+    const camera = viewer.scene.getActiveCamera?.();
+    const verticalFov = Math.min(179, Math.max(1, camera?.fov ?? 60)) * Math.PI / 180;
+    const aspect = Math.max(0.01, camera?.aspect ?? 1);
+    const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * aspect);
+    const limitingFov = Math.min(verticalFov, horizontalFov);
+    const distance = Math.max(
+      MIN_FIT_DISTANCE,
+      radius * FIT_PADDING / Math.sin(limitingFov / 2),
+    );
+    const directionX = direction.x / directionLength;
+    const directionY = direction.y / directionLength;
+    const directionZ = direction.z / directionLength;
+
+    this.setVector(
+      view.position,
+      centerX - directionX * distance,
+      centerY - directionY * distance,
+      centerZ - directionZ * distance,
+    );
+    view.radius = distance;
+    viewer.controls?.stop?.();
   }
 
   private getVolumeBounds(): SpaceClipBounds | null {
@@ -169,6 +448,9 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     if (!viewer || !potree || !modelBounds) return null;
 
     this.stopClipping();
+    this.chargingAreaEditor?.setEnabled(false);
+    this.cabinetEditor?.setEnabled(false);
+    this.deviceAreaEditor?.setEnabled(false);
     const volume = new potree.BoxVolume();
     const centerX = (modelBounds.minX + modelBounds.maxX) / 2;
     const centerY = (modelBounds.minY + modelBounds.maxY) / 2;
@@ -271,13 +553,51 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
 
   private applyRenderSettings(): void {
     if (!this.viewer) return;
-    this.viewer.setMinNodeSize(MIN_NODE_SIZE_BY_DETAIL[this.renderSettings.detailLevel]);
+    if (!this.interactionLodActive) {
+      this.viewer.setMinNodeSize(this.baseMinNodeSize());
+    }
     // Use the model count once metadata is available. Before that, keep the
     // budget finite so Potree never receives an unbounded traversal request.
     const pointBudget = this.renderSettings.pointBudget === SPACE_POINT_BUDGET_ALL
       ? this.loadedPointCount ?? SPACE_POINT_BUDGET_MAX
       : this.renderSettings.pointBudget;
     this.viewer.setPointBudget(pointBudget);
+  }
+
+  private baseMinNodeSize(): number {
+    return MIN_NODE_SIZE_BY_DETAIL[this.renderSettings.detailLevel];
+  }
+
+  private readonly beginInteractionLod = (): void => {
+    const viewer = this.viewer;
+    if (!viewer) return;
+    if (this.interactionLodTimer !== null) {
+      window.clearTimeout(this.interactionLodTimer);
+      this.interactionLodTimer = null;
+    }
+    if (!this.interactionLodActive) {
+      this.interactionLodActive = true;
+      viewer.setMinNodeSize(this.baseMinNodeSize() * INTERACTION_LOD_MULTIPLIER);
+    }
+  };
+
+  private readonly scheduleInteractionLodRestore = (): void => {
+    if (!this.viewer || !this.interactionLodActive) return;
+    if (this.interactionLodTimer !== null) window.clearTimeout(this.interactionLodTimer);
+    this.interactionLodTimer = window.setTimeout(() => {
+      this.interactionLodTimer = null;
+      this.interactionLodActive = false;
+      this.applyRenderSettings();
+    }, INTERACTION_LOD_SETTLE_MS);
+  };
+
+  private resetInteractionLod(): void {
+    if (this.interactionLodTimer !== null) {
+      window.clearTimeout(this.interactionLodTimer);
+      this.interactionLodTimer = null;
+    }
+    this.interactionLodActive = false;
+    this.applyRenderSettings();
   }
 
   async loadModel(model: SpaceSceneModel): Promise<void> {
@@ -317,7 +637,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
       this.applyRenderSettings();
 
       this.fitTimer = window.setTimeout(() => {
-        if (this.viewer && this.pointcloud === pointcloud) this.viewer.fitToScreen();
+        if (this.viewer && this.pointcloud === pointcloud) this.fitModelToScreen();
       }, 250);
     } finally {
       window.clearTimeout(timeoutId);
@@ -329,6 +649,12 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.stopClipping();
     this.modelClipBounds = null;
     this.loadedPointCount = null;
+    this.resetInteractionLod();
+    this.chargingAreaEditor?.clear();
+    this.cabinetEditor?.clear();
+    this.deviceAreaEditor?.clear();
+    this.pathEditor?.clear();
+    this.clearDrawingLayers();
     if (this.fitTimer !== null) {
       window.clearTimeout(this.fitTimer);
       this.fitTimer = null;
@@ -346,7 +672,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
       if (index >= 0) scene.pointclouds.splice(index, 1);
       scene.scenePointCloud.remove(pointcloud);
     }
-    disposeGeometryTree(pointcloud.pcoGeometry?.root);
+    disposeGeometryTree(pointcloud.pcoGeometry?.root, this.potree?.lru);
     pointcloud.material.dispose?.();
   }
 
@@ -366,10 +692,24 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     const host = this.host;
     this.mountVersion += 1;
     this.host = null;
+    this.viewer?.controls?.removeEventListener("start", this.beginInteractionLod);
+    this.viewer?.controls?.removeEventListener("end", this.scheduleInteractionLodRestore);
     this.keyboardController?.dispose();
     this.keyboardController = null;
     this.depthZoomController?.dispose();
     this.depthZoomController = null;
+    this.rotationPivotIndicator?.dispose();
+    this.rotationPivotIndicator = null;
+    this.drawingRenderer?.dispose();
+    this.drawingRenderer = null;
+    this.chargingAreaEditor?.dispose();
+    this.chargingAreaEditor = null;
+    this.cabinetEditor?.dispose();
+    this.cabinetEditor = null;
+    this.deviceAreaEditor?.dispose();
+    this.deviceAreaEditor = null;
+    this.pathEditor?.dispose();
+    this.pathEditor = null;
     this.clearModel();
     if (this.viewer) {
       this.viewer.renderer.setAnimationLoop(null);
