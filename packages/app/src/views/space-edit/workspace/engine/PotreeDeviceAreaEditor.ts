@@ -155,6 +155,7 @@ export class PotreeDeviceAreaEditor {
   private height = 2;
   private groundZ = Number.NaN;
   private enabled = false;
+  private active = true;
   private mouseDown: { x: number; y: number } | null = null;
   private undoStack: DeviceSnapshot[] = [];
   private redoStack: DeviceSnapshot[] = [];
@@ -186,6 +187,12 @@ export class PotreeDeviceAreaEditor {
     if (!enabled) this.deselectAll();
     this.rebuildVisuals();
     this.emitChange();
+  }
+
+  setActive(active: boolean): void {
+    this.active = active;
+    this.mouseDown = null;
+    if (!active) this.viewer.controls?.stop?.();
   }
 
   setHeight(height: number): void {
@@ -415,6 +422,7 @@ export class PotreeDeviceAreaEditor {
   }
 
   private canHandlePointer(): boolean {
+    if (!this.active) return false;
     if (this.enabled) return true;
     const mode = (window as Window & { __spaceEditInteractionMode?: string }).__spaceEditInteractionMode;
     return this.boxes.length > 0 && (!mode || mode === "idle");
@@ -428,6 +436,7 @@ export class PotreeDeviceAreaEditor {
   };
 
   private readonly handleMouseUp = (event: MouseEvent): void => {
+    if (!this.active) return;
     const start = this.mouseDown;
     this.mouseDown = null;
     if (event.button !== 0 || !start || !this.canHandlePointer()) return;
@@ -451,6 +460,7 @@ export class PotreeDeviceAreaEditor {
   };
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
+    if (!this.active) return;
     const selected = this.selectedBox();
     if (!selected) return;
     const target = event.target as HTMLElement | null;
@@ -749,6 +759,7 @@ export class PotreeDeviceAreaEditor {
   }
 
   private readonly renderOverlay = (): void => {
+    if (!this.active) return;
     const camera = this.viewer.scene.getActiveCamera?.();
     if (!camera) return;
     if (this.visualGroup) this.viewer.renderer.render(this.scene, camera);

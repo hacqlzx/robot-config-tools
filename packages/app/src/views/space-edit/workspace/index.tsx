@@ -15,6 +15,7 @@ import SpaceEditLayout from "../components/SpaceEditLayout";
 import Toolbar from "../components/Toolbar";
 import ViewCube from "../components/ViewCube";
 import type { SaveStatus, ViewDirection } from "../types";
+import { useElementActive } from "@/components/useElementActive";
 import {
   deleteCabinetItem,
   DRAWING_FILE_NAME,
@@ -241,6 +242,7 @@ export default function SpaceEditWorkspace() {
   const adapter = useMemo(() => new PotreeSpaceSceneAdapter(), []);
   const adapterFactory = useCallback(() => adapter, [adapter]);
   const containerRef = useRef<HTMLDivElement>(null);
+  const pageActive = useElementActive(containerRef);
   const operationVersion = useRef(0);
   const modelBusyRef = useRef(false);
   const [activeModelPath, setActiveModelPath] = useState<string | null>(null);
@@ -1531,6 +1533,7 @@ export default function SpaceEditWorkspace() {
   }, [adapter, handleDrawingDelete, handleDrawingSelection]);
 
   useEffect(() => {
+    if (!pageActive) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.closest("input,textarea,select,[contenteditable='true']")) return;
@@ -1574,6 +1577,7 @@ export default function SpaceEditWorkspace() {
     handleHistoryUndo,
     handleSaveAll,
     pathMode,
+    pageActive,
   ]);
 
   useEffect(() => {
@@ -1896,11 +1900,11 @@ export default function SpaceEditWorkspace() {
         scene={(
           <SpaceSceneHost
             adapterFactory={adapterFactory}
-            overlay={(
+            overlay={(sceneState) => (
               <>
                 {loading ? (
                   <ModelLoadingOverlay {...loading} />
-                ) : !activeModelPath ? (
+                ) : sceneState === "ready" && !activeModelPath ? (
                   <div
                     style={{
                       position: "absolute",

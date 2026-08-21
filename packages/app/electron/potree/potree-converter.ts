@@ -1,5 +1,5 @@
 import { app } from "electron";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const POTREE_OUTPUT_DIR_NAME = ".potree";
 const CONVERTER_ALIAS_DIR_NAME = ".potree-converter-runtime";
 const REQUIRED_OUTPUT_FILES = ["metadata.json", "octree.bin", "hierarchy.bin"] as const;
+const RESERVED_CONVERTER_DRIVES = new Set<string>();
 
 export type PotreeConversionPhase = "checking" | "converting" | "validating" | "complete";
 
@@ -46,15 +47,132 @@ interface ConverterPathAlias {
   cleanup: () => Promise<void>;
 }
 
+interface ConverterDirectoryAlias {
+  rootPath: string;
+  cleanup: () => Promise<void>;
+}
+
 function isAsciiPath(filePath: string): boolean {
   return /^[\x00-\x7F]*$/.test(filePath);
 }
 
-async function createConverterPathAlias(modelPath: string, outputDir: string): Promise<ConverterPathAlias> {
-  if (isAsciiPath(modelPath) && isAsciiPath(outputDir)) {
-    return { inputPath: modelPath, outputPath: outputDir, cleanup: async () => undefined };
+function execFileAsync(file: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { windowsHide: true }, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function reserveConverterDrive(): string {
+  for (let code = "Z".charCodeAt(0); code >= "D".charCodeAt(0); code -= 1) {
+    const letter = String.fromCharCode(code);
+    if (RESERVED_CONVERTER_DRIVES.has(letter) || fs.existsSync(`${letter}:\\`)) continue;
+    RESERVED_CONVERTER_DRIVES.add(letter);
+    return letter;
   }
 
+  throw new Error("没有可用于 PotreeConverter 的临时盘符，请释放一个盘符后重试");
+}
+
+async function createWindowsDrivePathAlias(modelPath: string, outputDir: string): Promise<ConverterPathAlias> {
+  const modelDir = path.dirname(modelPath);
+  const outputRelativePath = path.relative(modelDir, outputDir);
+  if (!outputRelativePath || outputRelativePath.startsWith("..") || path.isAbsolute(outputRelativePath)) {
+    throw new Error("PotreeConverter 输出目录无效");
+  }
+  if (!isAsciiPath(outputRelativePath)) {
+    throw new Error("PotreeConverter 输出目录必须使用英文路径");
+  }
+
+  const driveLetter = reserveConverterDrive();
+  let mounted = false;
+  let stagedInputDir: string | null = null;
+  let stagedInputPath: string | null = null;
+
+  try {
+    // PotreeConverter 通过旧版窄字符路径处理文件；用盘符隐藏中文父目录。
+    await execFileAsync("subst.exe", [`${driveLetter}:`, modelDir]);
+    mounted = true;
+
+    let inputRelativePath = path.basename(modelPath);
+
+    if (!isAsciiPath(inputRelativePath)) {
+      stagedInputDir = path.join(modelDir, `.potree.converter-source-${Date.now()}`);
+      await fs.promises.mkdir(stagedInputDir, { recursive: true });
+      stagedInputPath = path.join(stagedInputDir, `input${path.extname(modelPath).toLowerCase() || ".las"}`);
+      await fs.promises.link(modelPath, stagedInputPath);
+      inputRelativePath = path.relative(modelDir, stagedInputPath);
+    }
+
+    const driveRoot = `${driveLetter}:\\`;
+    const inputPath = path.win32.join(driveRoot, inputRelativePath);
+    const outputPath = path.win32.join(driveRoot, outputRelativePath);
+    if (!isAsciiPath(inputPath) || !isAsciiPath(outputPath)) {
+      throw new Error("无法为 PotreeConverter 创建纯英文临时路径");
+    }
+
+    return {
+      inputPath,
+      outputPath,
+      cleanup: async () => {
+        if (stagedInputPath) {
+          await fs.promises.unlink(stagedInputPath).catch((_error: unknown): undefined => undefined);
+        }
+        if (stagedInputDir) {
+          await fs.promises.rmdir(stagedInputDir).catch((_error: unknown): undefined => undefined);
+        }
+        if (mounted) {
+          await execFileAsync("subst.exe", [`${driveLetter}:`, "/d"]).catch((_error: unknown): undefined => undefined);
+        }
+        RESERVED_CONVERTER_DRIVES.delete(driveLetter);
+      },
+    };
+  } catch (error) {
+    if (stagedInputPath) {
+      await fs.promises.unlink(stagedInputPath).catch((_cleanupError: unknown): undefined => undefined);
+    }
+    if (stagedInputDir) {
+      await fs.promises.rmdir(stagedInputDir).catch((_cleanupError: unknown): undefined => undefined);
+    }
+    if (mounted) {
+      await execFileAsync("subst.exe", [`${driveLetter}:`, "/d"]).catch((_cleanupError: unknown): undefined => undefined);
+    }
+    RESERVED_CONVERTER_DRIVES.delete(driveLetter);
+    throw error;
+  }
+}
+
+async function createWindowsDirectoryAlias(directoryPath: string): Promise<ConverterDirectoryAlias> {
+  const driveLetter = reserveConverterDrive();
+  let mounted = false;
+
+  try {
+    await execFileAsync("subst.exe", [`${driveLetter}:`, directoryPath]);
+    mounted = true;
+    return {
+      rootPath: `${driveLetter}:\\`,
+      cleanup: async () => {
+        if (mounted) {
+          await execFileAsync("subst.exe", [`${driveLetter}:`, "/d"]).catch((_error: unknown): undefined => undefined);
+        }
+        RESERVED_CONVERTER_DRIVES.delete(driveLetter);
+      },
+    };
+  } catch (error) {
+    if (mounted) {
+      await execFileAsync("subst.exe", [`${driveLetter}:`, "/d"]).catch((_cleanupError: unknown): undefined => undefined);
+    }
+    RESERVED_CONVERTER_DRIVES.delete(driveLetter);
+    throw error;
+  }
+}
+
+async function createJunctionPathAlias(modelPath: string, outputDir: string): Promise<ConverterPathAlias> {
   ensureProjectRoot();
   const projectRoot = getProjectRoot();
   if (!isAsciiPath(projectRoot)) {
@@ -111,6 +229,18 @@ async function createConverterPathAlias(modelPath: string, outputDir: string): P
     }
     throw error;
   }
+}
+
+async function createConverterPathAlias(modelPath: string, outputDir: string): Promise<ConverterPathAlias> {
+  if (isAsciiPath(modelPath) && isAsciiPath(outputDir)) {
+    return { inputPath: modelPath, outputPath: outputDir, cleanup: async () => undefined };
+  }
+
+  if (process.platform === "win32") {
+    return createWindowsDrivePathAlias(modelPath, outputDir);
+  }
+
+  return createJunctionPathAlias(modelPath, outputDir);
 }
 
 function resolveConverterPath(): string {
@@ -228,11 +358,20 @@ async function runConverter(
   await fs.promises.mkdir(path.dirname(outputDir), { recursive: true });
   await fs.promises.rm(outputDir, { recursive: true, force: true });
   const pathAlias = await createConverterPathAlias(modelPath, outputDir);
+  let converterAlias: ConverterDirectoryAlias | null = null;
 
   try {
+    if (process.platform === "win32" && !isAsciiPath(converterPath)) {
+      converterAlias = await createWindowsDirectoryAlias(path.dirname(converterPath));
+    }
+    const executablePath = converterAlias
+      ? path.win32.join(converterAlias.rootPath, path.basename(converterPath))
+      : converterPath;
+    const workingDirectory = converterAlias?.rootPath ?? path.dirname(converterPath);
+
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(converterPath, [pathAlias.inputPath, "-o", pathAlias.outputPath], {
-        cwd: path.dirname(converterPath),
+      const child = spawn(executablePath, [pathAlias.inputPath, "-o", pathAlias.outputPath], {
+        cwd: workingDirectory,
         shell: false,
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
@@ -258,6 +397,7 @@ async function runConverter(
       });
     });
   } finally {
+    await converterAlias?.cleanup();
     await pathAlias.cleanup();
   }
 }

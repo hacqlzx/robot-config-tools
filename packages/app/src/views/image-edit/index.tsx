@@ -34,6 +34,7 @@ import type { ImageItem } from "@/components/image-canvas/ImageCanvas";
 import { useTaskLoader } from "./hooks/useTaskLoader";
 import PotreeRenderSettings from "@/views/space-edit/workspace/components/PotreeRenderSettings";
 import { useRobotOptions, useSelectedProject, useSelectedRobot } from "@/stores/appContextStore";
+import { useElementActive } from "@/components/useElementActive";
 import { cabinetDeviceMainCollect, equipmentDeviceMainCollect, getSurveyRunning, startTask, stopPointCollect } from "@/api/config.js";
 import "./index.scss";
 
@@ -179,6 +180,7 @@ export default function ImageEdit() {
     maxPercent: 0.6,
     reverse: true,
   });
+  const pageActive = useElementActive(containerRef);
 
   const [ptzSide, setPtzSide] = useState<"left" | "right">("left");
   const imageCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -310,6 +312,7 @@ export default function ImageEdit() {
   } = usePotreeSurveyViewer({
     selectedProject,
     onSelect: handle3DSelect,
+    active: pageActive && mapVisible,
   });
 
   // 弹窗状态

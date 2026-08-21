@@ -23,6 +23,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
 export class PotreeFlyKeyboardController {
   private readonly pressedKeys = new Set<string>();
   private started = false;
+  private active = true;
   private animationFrame: number | null = null;
   private previousFrameTime = 0;
   private firstMovementFrame = false;
@@ -43,6 +44,15 @@ export class PotreeFlyKeyboardController {
     this.previousFrameTime = performance.now();
   }
 
+  setActive(active: boolean): void {
+    this.active = active;
+    if (!active && this.animationFrame !== null) {
+      window.cancelAnimationFrame(this.animationFrame);
+      this.animationFrame = null;
+    }
+    if (!active) this.clearKeys();
+  }
+
   dispose(): void {
     if (!this.started) return;
     this.started = false;
@@ -55,6 +65,7 @@ export class PotreeFlyKeyboardController {
   }
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
+    if (!this.active) return;
     if (!CONTROL_KEYS.has(event.code) || isEditableTarget(event.target)) return;
     const target = event.target;
     if (
@@ -75,6 +86,7 @@ export class PotreeFlyKeyboardController {
   };
 
   private readonly handleKeyUp = (event: KeyboardEvent): void => {
+    if (!this.active) return;
     if (!CONTROL_KEYS.has(event.code)) return;
     const wasMoving = this.hasMovementKey();
     this.pressedKeys.delete(event.code);
@@ -92,7 +104,7 @@ export class PotreeFlyKeyboardController {
   };
 
   private scheduleUpdate(): void {
-    if (!this.started || this.animationFrame !== null) return;
+    if (!this.started || !this.active || this.animationFrame !== null) return;
     this.previousFrameTime = performance.now();
     this.animationFrame = window.requestAnimationFrame(this.update);
   }
@@ -106,7 +118,7 @@ export class PotreeFlyKeyboardController {
 
   private readonly update = (time: number): void => {
     this.animationFrame = null;
-    if (!this.started || !this.hasMovementKey()) return;
+    if (!this.started || !this.active || !this.hasMovementKey()) return;
     const elapsedSeconds = Math.max(0, (time - this.previousFrameTime) / 1000);
     const deltaSeconds = this.firstMovementFrame
       ? Math.min(elapsedSeconds, FIRST_MOVEMENT_DELTA_SECONDS)

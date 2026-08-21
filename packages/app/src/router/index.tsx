@@ -1,9 +1,7 @@
-﻿import { lazy, Suspense } from "react";
+import { lazy, Suspense } from "react";
 import { createHashRouter, Navigate } from "react-router-dom";
 import AppLayout from "../App";
-import SpaceEdit from "../views/space-edit/workspace";
 
-const ImageEdit = lazy(() => import("../views/image-edit"));
 const ImportExport = lazy(() => import("../views/import-export"));
 const Config = lazy(() => import("../views/config"));
 
@@ -18,8 +16,8 @@ function LazyPage({ children }: { children: React.ReactNode }) {
 /**
  * 应用主路由。
  *
- * 注意：screen-verify 和 device-verify 的真实组件由 AppLayout 缓存渲染，
- * 这里保留空 element 只是为了让菜单路由和地址栏匹配。
+ * 注意：space-edit、image-edit、screen-verify 和 device-verify 的真实组件
+ * 都由 AppLayout 缓存渲染，这里保留空 element 只是为了让菜单路由和地址栏匹配。
  */
 const router = createHashRouter([
   {
@@ -27,8 +25,8 @@ const router = createHashRouter([
     element: <AppLayout />,
     children: [
       { index: true, element: <Navigate to="space-edit" replace /> },
-      { path: "space-edit", element: <SpaceEdit /> },
-      { path: "image-edit", element: <LazyPage><ImageEdit /></LazyPage> },
+      { path: "space-edit", element: <></> },
+      { path: "image-edit", element: <></> },
       { path: "screen-verify", element: <></> },
       { path: "device-verify", element: <></> },
       { path: "import-export", element: <LazyPage><ImportExport /></LazyPage> },

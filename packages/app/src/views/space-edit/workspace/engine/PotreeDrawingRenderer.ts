@@ -421,6 +421,7 @@ export class PotreeDrawingRenderer {
   private readonly labelContainer: HTMLDivElement;
   private interactionCallbacks: SpaceDrawingInteractionCallbacks | null = null;
   private selectedItems = new Map<string, string>();
+  private active = true;
   private mouseDown: { x: number; y: number } | null = null;
   private pendingSelection: SpaceDrawingSelection | null = null;
 
@@ -440,6 +441,14 @@ export class PotreeDrawingRenderer {
 
   setInteractionCallbacks(callbacks: SpaceDrawingInteractionCallbacks | null): void {
     this.interactionCallbacks = callbacks;
+  }
+
+  setActive(active: boolean): void {
+    this.active = active;
+    this.mouseDown = null;
+    this.pendingSelection = null;
+    (window as Window & { __spaceEditSelectionPending?: boolean }).__spaceEditSelectionPending = false;
+    if (!active) this.viewer.controls?.stop?.();
   }
 
   setLayer(layerId: string, data: SpaceDrawingLayer): void {
@@ -540,6 +549,7 @@ export class PotreeDrawingRenderer {
   }
 
   private canHandlePointer(): boolean {
+    if (!this.active) return false;
     const flags = window as Window & {
       __clipDragging?: boolean;
       __drawingDragging?: boolean;
@@ -593,6 +603,7 @@ export class PotreeDrawingRenderer {
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== "Delete" && event.key !== "Backspace") return;
+    if (!this.active) return;
     if ((event.target as HTMLElement | null)?.closest("input,textarea,select,[contenteditable='true']")) return;
     if (!this.canHandlePointer()) return;
     const selected = this.getSelectedItem();
@@ -785,6 +796,7 @@ export class PotreeDrawingRenderer {
   }
 
   private readonly renderOverlay = (): void => {
+    if (!this.active) return;
     const camera = this.viewer.scene.getActiveCamera?.();
     if (!camera || this.layers.size === 0) return;
     this.viewer.renderer.render(this.scene, camera);

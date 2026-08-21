@@ -26,6 +26,7 @@ export interface PotreeSurveySelectInfo {
 interface UsePotreeSurveyViewerOptions {
   selectedProject?: string | null;
   onSelect?: (info: PotreeSurveySelectInfo) => void;
+  active?: boolean;
 }
 
 interface LoadSurveyModelOptions {
@@ -66,10 +67,10 @@ function ensureElectronApi(): NonNullable<Window["electronAPI"]> {
   return api;
 }
 
-export function usePotreeSurveyViewer({ selectedProject, onSelect }: UsePotreeSurveyViewerOptions) {
+export function usePotreeSurveyViewer({ selectedProject, onSelect, active = true }: UsePotreeSurveyViewerOptions) {
   const adapter = useMemo(() => new PotreeSpaceSceneAdapter(), []);
   const adapterFactory = useMemo<SpaceSceneAdapterFactory>(() => () => adapter, [adapter]);
-  const { hostRef, state, error } = useSpaceSceneHost(adapterFactory);
+  const { hostRef, state, error } = useSpaceSceneHost(adapterFactory, active);
   const [modelLoading, setModelLoading] = useState(false);
   const [loadingFile, setLoadingFile] = useState("");
   const [progress, setProgress] = useState(0);

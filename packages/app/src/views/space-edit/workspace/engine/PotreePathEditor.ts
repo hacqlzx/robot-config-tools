@@ -127,6 +127,7 @@ export class PotreePathEditor {
   private data: PathData = { points: [], paths: [] };
   private enabled = false;
   private active = false;
+  private pageActive = true;
   private selectedPointId: string | null = null;
   private selectedPathId: string | null = null;
   private lastConnectedPointId: string | null = null;
@@ -182,6 +183,14 @@ export class PotreePathEditor {
     this.cancelDrag();
     this.rebuildVisuals();
     this.emitChange();
+  }
+
+  setPageActive(active: boolean): void {
+    this.pageActive = active;
+    if (!active) {
+      this.cancelDrag();
+      this.viewer.controls?.stop?.();
+    }
   }
 
   setData(data: PathData | null): void {
@@ -362,12 +371,13 @@ export class PotreePathEditor {
   }
 
   private handleKeyDown = (event: KeyboardEvent): void => {
-    if (!this.enabled || this.active || event.key !== "Delete") return;
+    if (!this.pageActive || !this.enabled || this.active || event.key !== "Delete") return;
     if ((window as Window & { __clipDragging?: boolean }).__clipDragging) return;
     this.deleteSelected();
   };
 
   private canHandlePointer(): boolean {
+    if (!this.pageActive) return false;
     const mode = (window as Window & { __spaceEditInteractionMode?: string }).__spaceEditInteractionMode;
     return !mode || mode === "idle" || mode === "path";
   }
@@ -426,6 +436,7 @@ export class PotreePathEditor {
   };
 
   private readonly handleMouseMove = (event: MouseEvent): void => {
+    if (!this.pageActive) return;
     const flags = window as Window & { __drawingDragging?: boolean };
     if (!this.active && !this.draggingControl && this.pendingControl && this.mouseDown) {
       const distance = Math.hypot(event.clientX - this.mouseDown.x, event.clientY - this.mouseDown.y);
@@ -465,6 +476,7 @@ export class PotreePathEditor {
   };
 
   private readonly handleMouseUp = (event: MouseEvent): void => {
+    if (!this.pageActive) return;
     if (event.button !== 0) return;
     // The drawing renderer runs on window capture before this document
     // listener, so keep the claim until it has yielded the mouseup.
@@ -945,6 +957,7 @@ export class PotreePathEditor {
   }
 
   private readonly renderOverlay = (): void => {
+    if (!this.pageActive) return;
     const camera = this.viewer.scene.getActiveCamera?.();
     if (!camera) return;
     if (this.visualGroup) this.viewer.renderer.render(this.scene, camera);

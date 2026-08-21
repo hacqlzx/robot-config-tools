@@ -24,5 +24,10 @@
       "laz-perf": ["./node_modules/laz-perf/lib/web/index"]
     }
   },
-  "include": ["src", "electron"]
+  "include": ["src", "electron"],
+  "exclude": [
+    "src/potree-core/build",
+    "src/potree-core/libs",
+    "src/potree-core/PotreeConverter_2.1.3"
+  ]
 }

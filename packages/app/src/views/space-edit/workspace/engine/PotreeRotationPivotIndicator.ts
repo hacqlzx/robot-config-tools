@@ -5,6 +5,7 @@ export class PotreeRotationPivotIndicator {
   private indicator: HTMLDivElement | null = null;
   private leftButtonDown = false;
   private started = false;
+  private active = true;
 
   constructor(
     private readonly viewer: PotreeViewerInstance,
@@ -22,6 +23,12 @@ export class PotreeRotationPivotIndicator {
     window.addEventListener("blur", this.handleWindowBlur);
     this.controls?.addEventListener("start", this.handleControlsStart);
     this.controls?.addEventListener("end", this.handleControlsEnd);
+  }
+
+  setActive(active: boolean): void {
+    this.active = active;
+    this.leftButtonDown = false;
+    this.hide();
   }
 
   dispose(): void {
@@ -60,7 +67,7 @@ export class PotreeRotationPivotIndicator {
   }
 
   private show(): void {
-    if (this.indicator) this.indicator.style.display = "block";
+    if (this.active && this.indicator) this.indicator.style.display = "block";
   }
 
   private hide(): void {
@@ -68,24 +75,29 @@ export class PotreeRotationPivotIndicator {
   }
 
   private readonly handleMouseDown = (event: MouseEvent): void => {
+    if (!this.active) return;
     this.leftButtonDown = event.button === 0;
   };
 
   private readonly handleMouseUp = (): void => {
+    if (!this.active) return;
     this.leftButtonDown = false;
     this.hide();
   };
 
   private readonly handleWindowBlur = (): void => {
+    if (!this.active) return;
     this.leftButtonDown = false;
     this.hide();
   };
 
   private readonly handleControlsStart = (): void => {
+    if (!this.active) return;
     if (this.leftButtonDown) this.show();
   };
 
   private readonly handleControlsEnd = (): void => {
+    if (!this.active) return;
     this.hide();
   };
 }

@@ -154,6 +154,7 @@ export class PotreeCabinetEditor {
   private splits: number[] = [];
   private cabinetNames: string[] = [];
   private enabled = false;
+  private active = true;
   private selectedVertex = -1;
   private mouseDown: { x: number; y: number } | null = null;
   private dragBefore: CabinetSnapshot | null = null;
@@ -189,6 +190,14 @@ export class PotreeCabinetEditor {
     (window as Window & { __drawingDragging?: boolean }).__drawingDragging = false;
     this.rebuildVisuals();
     this.emitChange();
+  }
+
+  setActive(active: boolean): void {
+    this.active = active;
+    this.mouseDown = null;
+    this.dragBefore = null;
+    (window as Window & { __drawingDragging?: boolean }).__drawingDragging = false;
+    if (!active) this.viewer.controls?.stop?.();
   }
 
   setCabinetNames(names: string[]): void {
@@ -330,7 +339,7 @@ export class PotreeCabinetEditor {
   }
 
   private canHandlePointer(): boolean {
-    return this.enabled && !this.host.closest("[data-space-edit-busy='true']");
+    return this.active && this.enabled && !this.host.closest("[data-space-edit-busy='true']");
   }
 
   private readonly handleMouseDown = (event: MouseEvent): void => {
@@ -349,6 +358,7 @@ export class PotreeCabinetEditor {
   };
 
   private readonly handleMouseMove = (event: MouseEvent): void => {
+    if (!this.active) return;
     if (this.selectedVertex < 0 || !this.dragBefore) return;
     const position = this.dragPosition(this.mousePosition(event));
     if (!position) return;
@@ -357,6 +367,7 @@ export class PotreeCabinetEditor {
   };
 
   private readonly handleMouseUp = (event: MouseEvent): void => {
+    if (!this.active) return;
     const start = this.mouseDown;
     this.mouseDown = null;
     if (event.button !== 0) return;
@@ -674,6 +685,7 @@ export class PotreeCabinetEditor {
   }
 
   private readonly renderOverlay = (): void => {
+    if (!this.active) return;
     const camera = this.viewer.scene.getActiveCamera?.();
     if (!camera) return;
     if (this.visualGroup) this.viewer.renderer.render(this.scene, camera);

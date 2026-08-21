@@ -13,11 +13,16 @@ interface UseSpaceSceneHostResult {
 
 export function useSpaceSceneHost(
   adapterFactory: SpaceSceneAdapterFactory | null,
+  active = true,
 ): UseSpaceSceneHostResult {
   const hostRef = useRef<HTMLDivElement>(null);
   const adapterRef = useRef<SpaceSceneAdapter | null>(null);
   const [state, setState] = useState<SpaceSceneLifecycleState>("detached");
   const [error, setError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    adapterRef.current?.setActive(active);
+  }, [active]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -30,6 +35,7 @@ export function useSpaceSceneHost(
     let disposed = false;
     const adapter = adapterFactory();
     adapterRef.current = adapter;
+    adapter.setActive(active);
     setState("mounting");
     setError(null);
 
@@ -39,6 +45,7 @@ export function useSpaceSceneHost(
     void Promise.resolve(adapter.mount(host))
       .then(() => {
         if (!disposed) {
+          adapter.setActive(active);
           adapter.resize();
           setState("ready");
         }

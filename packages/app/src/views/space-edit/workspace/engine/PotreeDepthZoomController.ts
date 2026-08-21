@@ -29,6 +29,7 @@ function distanceBetween(a: { x: number; y: number; z: number }, b: { x: number;
 
 export class PotreeDepthZoomController {
   private started = false;
+  private active = true;
 
   constructor(
     private readonly viewer: PotreeViewerInstance,
@@ -44,6 +45,10 @@ export class PotreeDepthZoomController {
     this.host.addEventListener("DOMMouseScroll", this.handleWheel, { capture: true, passive: false });
   }
 
+  setActive(active: boolean): void {
+    this.active = active;
+  }
+
   dispose(): void {
     if (!this.started) return;
     this.started = false;
@@ -52,6 +57,7 @@ export class PotreeDepthZoomController {
   }
 
   private readonly handleWheel = (event: Event): void => {
+    if (!this.active) return;
     const direction = getWheelDirection(event as LegacyWheelEvent);
     const camera = this.viewer.scene.getActiveCamera?.();
     if (direction === 0 || !camera) return;

@@ -1,10 +1,12 @@
+import { useRef } from "react";
 import type { ReactNode } from "react";
-import type { SpaceSceneAdapterFactory } from "../engine/types";
+import { useElementActive } from "@/components/useElementActive";
+import type { SpaceSceneAdapterFactory, SpaceSceneLifecycleState } from "../engine/types";
 import { useSpaceSceneHost } from "../engine/useSpaceSceneHost";
 
 interface SpaceSceneHostProps {
   adapterFactory: SpaceSceneAdapterFactory | null;
-  overlay?: ReactNode;
+  overlay?: ReactNode | ((state: SpaceSceneLifecycleState) => ReactNode);
 }
 
 const stateText = {
@@ -15,10 +17,14 @@ const stateText = {
 } as const;
 
 export default function SpaceSceneHost({ adapterFactory, overlay }: SpaceSceneHostProps) {
-  const { hostRef, state, error } = useSpaceSceneHost(adapterFactory);
+  const sectionRef = useRef<HTMLElement | null>(null);
+  const active = useElementActive(sectionRef);
+  const { hostRef, state, error } = useSpaceSceneHost(adapterFactory, active);
+  const renderedOverlay = typeof overlay === "function" ? overlay(state) : overlay;
 
   return (
     <section
+      ref={sectionRef}
       aria-label="三维场景"
       style={{ flex: 1, minWidth: 0, position: "relative", overflow: "hidden", background: "#181a1f" }}
     >
@@ -39,7 +45,7 @@ export default function SpaceSceneHost({ adapterFactory, overlay }: SpaceSceneHo
           <span title={error?.message}>{stateText[state]}</span>
         </div>
       )}
-      {overlay}
+      {renderedOverlay}
     </section>
   );
 }

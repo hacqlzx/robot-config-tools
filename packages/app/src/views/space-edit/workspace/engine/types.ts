@@ -172,6 +172,7 @@ export function normalizeSpaceRenderSettings(settings: Partial<SpaceRenderSettin
  */
 export interface SpaceSceneAdapter {
   mount(host: HTMLElement): void | Promise<void>;
+  setActive(active: boolean): void;
   loadModel(model: SpaceSceneModel): void | Promise<void>;
   setViewDirection(direction: ViewDirection): void;
   getRenderSettings(): SpaceRenderSettings;

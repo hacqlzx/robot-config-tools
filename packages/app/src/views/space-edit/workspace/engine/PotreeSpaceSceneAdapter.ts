@@ -104,6 +104,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   private fitTimer: number | null = null;
   private mountVersion = 0;
   private loadVersion = 0;
+  private active = true;
   private loadedPointCount: number | null = null;
   private modelClipBounds: SpaceClipBounds | null = null;
   private renderSettings = { ...DEFAULT_SPACE_RENDER_SETTINGS };
@@ -147,6 +148,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
       this.scheduleInteractionLodRestore,
     );
     this.keyboardController.start();
+    this.keyboardController.setActive(this.active);
     this.depthZoomController = new PotreeDepthZoomController(
       viewer,
       potree,
@@ -154,19 +156,32 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
       this.beginInteractionLod,
     );
     this.depthZoomController.start();
+    this.depthZoomController.setActive(this.active);
     viewer.controls?.addEventListener("start", this.beginInteractionLod);
     viewer.controls?.addEventListener("end", this.scheduleInteractionLodRestore);
     this.rotationPivotIndicator = new PotreeRotationPivotIndicator(viewer, renderArea);
     this.rotationPivotIndicator.start();
+    this.rotationPivotIndicator.setActive(this.active);
     this.drawingRenderer = new PotreeDrawingRenderer(viewer, potree, three, renderArea);
+    this.drawingRenderer.setActive(this.active);
     this.chargingAreaEditor = new PotreeChargingAreaEditor(viewer, potree, three, renderArea);
+    this.chargingAreaEditor.setActive(this.active);
     this.cabinetEditor = new PotreeCabinetEditor(viewer, potree, three, renderArea);
+    this.cabinetEditor.setActive(this.active);
     this.deviceAreaEditor = new PotreeDeviceAreaEditor(viewer, potree, three, renderArea);
+    this.deviceAreaEditor.setActive(this.active);
     this.pathEditor = new PotreePathEditor(viewer, potree, three, renderArea);
+    this.pathEditor.setPageActive(this.active);
     // Keep path interaction available outside placement mode, matching the
     // legacy editor. Active mode only changes how a click is interpreted.
     this.pathEditor.setEnabled(true);
     this.resize();
+    this.syncActiveState();
+  }
+
+  setActive(active: boolean): void {
+    this.active = active;
+    this.syncActiveState();
   }
 
   getRenderSettings(): SpaceRenderSettings {
@@ -435,6 +450,22 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
       view.radius = distance;
     }
     viewer.controls?.stop?.();
+  }
+
+  private syncActiveState(): void {
+    const active = this.active;
+    this.keyboardController?.setActive(active);
+    this.depthZoomController?.setActive(active);
+    this.rotationPivotIndicator?.setActive(active && !!this.pointcloud);
+    this.drawingRenderer?.setActive(active);
+    this.chargingAreaEditor?.setActive(active);
+    this.cabinetEditor?.setActive(active);
+    this.deviceAreaEditor?.setActive(active);
+    this.pathEditor?.setPageActive(active);
+    if (!active) {
+      this.viewer?.controls?.stop?.();
+      this.resetInteractionLod();
+    }
   }
 
   private getModelWorldBounds(): SpaceClipBounds | null {
@@ -717,6 +748,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
       this.modelClipBounds = model.clipBounds ? { ...model.clipBounds } : null;
       this.loadedPointCount = getPointCloudPointCount(pointcloud);
       this.applyRenderSettings();
+      this.syncActiveState();
 
       this.fitTimer = window.setTimeout(() => {
         if (this.viewer && this.pointcloud === pointcloud) this.fitModelToScreen();
@@ -744,6 +776,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     if (!this.pointcloud) return;
     this.disposePointCloud(this.pointcloud);
     this.pointcloud = null;
+    this.syncActiveState();
   }
 
   private disposePointCloud(pointcloud: PotreePointCloud): void {
