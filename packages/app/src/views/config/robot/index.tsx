@@ -4,6 +4,7 @@ import type { ColumnsType } from "antd/es/table";
 import { ReloadOutlined, PlusOutlined } from "@ant-design/icons";
 import RobotFormModal from "./RobotFormModal";
 import CameraTableModal, { type CameraVO } from "./CameraTableModal";
+import CameraCalibrationModal from "./CameraCalibrationModal";
 import { addRobot, updateRobot, deleteRobot, getFacInfo } from "@/api/config.js";
 import { getRequestErrorMessage } from "@/services/http";
 import { getConnectionStatus, subscribeBackendContext, useRobotRecords } from "@/stores/appContextStore";
@@ -72,6 +73,8 @@ export default function RobotConfig() {
   const [editRecord, setEditRecord] = useState<{ id: number; robotName: string; robotCode: string } | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraData, setCameraData] = useState<CameraVO[]>([]);
+  const [calibrationOpen, setCalibrationOpen] = useState(false);
+  const [calibrationRobotId, setCalibrationRobotId] = useState<number | null>(null);
   const fetchedRef = useRef(false);
 
   /** 查询机器人列表 */
@@ -194,6 +197,13 @@ export default function RobotConfig() {
     setCameraOpen(true);
   };
 
+  const handleCalibration = (record: RobotRecord) => {
+    setCalibrationRobotId(record.id);
+    setCalibrationOpen(true);
+  };
+
+  const calibrationCameras = data.find((item) => item.id === calibrationRobotId)?.cameraVOS || [];
+
   const columns: ColumnsType<RobotRecord> = [
     { title: "序号", width: 60, align: "center", render: (_: any, __: any, index: number) => index + 1 },
     { title: "厂站", dataIndex: "operationFacName", width: 120 },
@@ -211,7 +221,7 @@ export default function RobotConfig() {
     },
     {
       title: "操作",
-      width: 240,
+      width: 320,
       render: (_, record) => (
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
           <Button type="link" size="small" onClick={() => handleEdit(record)}>
@@ -219,6 +229,14 @@ export default function RobotConfig() {
           </Button>
           <Button type="link" size="small" onClick={() => handleCamera(record)}>
             相机
+          </Button>
+          <Button
+            type="link"
+            size="small"
+            disabled={!record.cameraVOS?.length}
+            onClick={() => handleCalibration(record)}
+          >
+            内外参标定
           </Button>
           <Button type="link" size="small" danger onClick={() => handleDelete(record)}>
             删除
@@ -261,6 +279,12 @@ export default function RobotConfig() {
         open={cameraOpen}
         data={cameraData}
         onClose={() => setCameraOpen(false)}
+      />
+      <CameraCalibrationModal
+        open={calibrationOpen}
+        data={calibrationCameras}
+        onClose={() => setCalibrationOpen(false)}
+        onSuccess={fetchRobots}
       />
     </div>
   );

@@ -34,7 +34,7 @@ import type { ImageItem } from "@/components/image-canvas/ImageCanvas";
 import { useTaskLoader } from "./hooks/useTaskLoader";
 import PotreeRenderSettings from "@/views/space-edit/workspace/components/PotreeRenderSettings";
 import { useRobotOptions, useSelectedProject, useSelectedRobot } from "@/stores/appContextStore";
-import { useElementActive } from "@/components/useElementActive";
+import { useDocumentActive, useElementActive } from "@/components/useElementActive";
 import { cabinetDeviceMainCollect, equipmentDeviceMainCollect, getSurveyRunning, startTask, stopPointCollect } from "@/api/config.js";
 import "./index.scss";
 
@@ -180,7 +180,9 @@ export default function ImageEdit() {
     maxPercent: 0.6,
     reverse: true,
   });
-  const pageActive = useElementActive(containerRef);
+  const elementActive = useElementActive(containerRef);
+  const documentActive = useDocumentActive();
+  const pageActive = elementActive && documentActive;
 
   const [ptzSide, setPtzSide] = useState<"left" | "right">("left");
   const imageCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -585,6 +587,7 @@ export default function ImageEdit() {
   }, [resolveSelectedRobotInfo]);
 
   const refreshSurveyRunning = useCallback(async (options?: { silent?: boolean }) => {
+    if (!pageActive) return;
     if (surveyProgressRequestRef.current) return;
     surveyProgressRequestRef.current = true;
     try {
@@ -618,11 +621,12 @@ export default function ImageEdit() {
       surveyProgressRequestRef.current = false;
       setSurveyProgressLoading(false);
     }
-  }, [message, resolveSelectedRobotInfo]);
+  }, [message, pageActive, resolveSelectedRobotInfo]);
 
   useEffect(() => {
+    if (!pageActive) return;
     refreshSurveyRunning({ silent: true });
-  }, [refreshSurveyRunning]);
+  }, [pageActive, refreshSurveyRunning]);
 
   useEffect(() => {
     if (!surveyPhotoOpen) return;
@@ -630,26 +634,12 @@ export default function ImageEdit() {
   }, [refreshSurveyRunning, surveyPhotoOpen]);
 
   useEffect(() => {
-    if (!surveyRunning?.running) return;
+    if (!pageActive || !surveyRunning?.running) return;
     const timer = window.setInterval(() => {
       refreshSurveyRunning({ silent: true });
     }, SURVEY_POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [refreshSurveyRunning, surveyRunning?.running]);
-
-  useEffect(() => {
-    const handleActive = () => {
-      if (document.visibilityState === "visible") {
-        refreshSurveyRunning({ silent: true });
-      }
-    };
-    window.addEventListener("focus", handleActive);
-    document.addEventListener("visibilitychange", handleActive);
-    return () => {
-      window.removeEventListener("focus", handleActive);
-      document.removeEventListener("visibilitychange", handleActive);
-    };
-  }, [refreshSurveyRunning]);
+  }, [pageActive, refreshSurveyRunning, surveyRunning?.running]);
 
   const handleSurveyPhotoDispatch = useCallback(async (areas: SurveyPhotoDispatchItem[]) => {
     const label = surveyPhotoMode === "supplement" ? "补充勘察拍照" : "勘察拍照";

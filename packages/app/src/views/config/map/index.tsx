@@ -10,10 +10,16 @@ import {
   getFacInfo,
 } from "@/api/config.js";
 import { getRequestErrorMessage } from "@/services/http";
-import { getConnectionStatus, subscribeBackendContext } from "@/stores/appContextStore";
+import {
+  getConnectionStatus,
+  subscribeBackendContext,
+  useAppContext,
+  useRobotOptions,
+} from "@/stores/appContextStore";
 
 interface MapRecord {
   id: number;
+  mapId?: number;
   facId: number;
   mapName: string;
   mapCode: string;
@@ -28,6 +34,8 @@ interface ApiResponse<T> {
 }
 
 export default function MapConfig() {
+  const { selectedRobot } = useAppContext();
+  const robotOptions = useRobotOptions();
   const [data, setData] = useState<MapRecord[]>([]);
   const [facNameMap, setFacNameMap] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(false);
@@ -98,9 +106,31 @@ export default function MapConfig() {
   }, []);
 
   /** 切换运行地图 */
-  const handleSwitch = async (id: number) => {
+  const handleSwitch = async (record: MapRecord) => {
+    if (!selectedRobot) {
+      message.warning("请先在顶部选择机器人");
+      return;
+    }
+
+    const robot = robotOptions.find((item) =>
+      item.value === selectedRobot
+      || item.label === selectedRobot
+      || item.robotCode === selectedRobot,
+    );
+    const robotId = Number(robot?.id);
+    if (!robot || !Number.isFinite(robotId)) {
+      message.warning("机器人列表未加载，请先连接后台或刷新机器人配置");
+      return;
+    }
+
+    const mapId = Number(record.mapId ?? record.id);
+    if (!Number.isFinite(mapId)) {
+      message.error("地图 ID 无效");
+      return;
+    }
+
     try {
-      const res = await setCurrentMap(id);
+      const res = await setCurrentMap({ mapId, robotId });
       const body = res.data as ApiResponse<null>;
       if (body.success) {
         message.success("切换成功");
@@ -214,7 +244,7 @@ export default function MapConfig() {
           <Button
             type="link"
             size="small"
-            onClick={() => handleSwitch(record.id)}
+            onClick={() => handleSwitch(record)}
           >
             切换
           </Button>

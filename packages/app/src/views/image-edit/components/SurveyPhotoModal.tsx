@@ -66,6 +66,7 @@ interface SurveyPhotoModalProps {
   mode?: SurveyPhotoMode;
   projectName?: string | null;
   mapName?: string | null;
+  mapCode?: string | null;
   surveyRunning?: SurveyRunningState | null;
   onClose: () => void;
   onDispatch?: (items: SurveyPhotoDispatchItem[]) => boolean | void | Promise<boolean | void>;
@@ -102,6 +103,23 @@ function normalizeKeyword(value: string): string {
 
 function valueText(value: unknown): string {
   return value == null ? "" : String(value).trim();
+}
+
+function resolveMapOption(
+  options: { label: string; value: string }[],
+  candidates: unknown[],
+): string | undefined {
+  const values = candidates.map(valueText).filter(Boolean);
+  for (const value of values) {
+    const exact = options.find((option) => option.value === value);
+    if (exact) return exact.value;
+  }
+  for (const value of values) {
+    const normalized = value.toLowerCase();
+    const matched = options.find((option) => option.value.toLowerCase() === normalized);
+    if (matched) return matched.value;
+  }
+  return options.length === 1 ? options[0].value : undefined;
 }
 
 function positiveInt(value: unknown): number | null {
@@ -260,6 +278,7 @@ export default function SurveyPhotoModal({
   mode = "normal",
   projectName,
   mapName,
+  mapCode,
   surveyRunning,
   onClose,
   onDispatch,
@@ -269,10 +288,10 @@ export default function SurveyPhotoModal({
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [mapOptions, setMapOptions] = useState<{ label: string; value: string }[]>([]);
+  const [selectedMapName, setSelectedMapName] = useState<string | undefined>();
   const [areas, setAreas] = useState<SurveyPhotoDeviceArea[]>([]);
   const [supplementRows, setSupplementRows] = useState<SupplementSurveyPhotoRow[]>([]);
   const [selectedKeys, setSelectedKeys] = useState<Key[]>([]);
-  const selectedMapName = Form.useWatch("mapName", form) as string | undefined;
   const deviceAreaKeyword = Form.useWatch("deviceAreaName", form) || "";
   const [supplementFilters, setSupplementFilters] = useState({ deviceAreaName: "", stopPointKeyword: "" });
 
@@ -280,6 +299,7 @@ export default function SurveyPhotoModal({
     form.resetFields();
     setLoading(false);
     setMapOptions([]);
+    setSelectedMapName(undefined);
     setAreas([]);
     setSupplementRows([]);
     setSelectedKeys([]);
@@ -299,14 +319,15 @@ export default function SurveyPhotoModal({
       return;
     }
 
-    form.setFieldValue("mapName", valueText(mapName) || undefined);
-  }, [form, mapName, open, resetModalState]);
+  }, [open, resetModalState]);
 
   useEffect(() => {
     if (!open) return;
     const api = window.electronAPI?.project;
     if (!projectName || !api) {
       setMapOptions([]);
+      setSelectedMapName(undefined);
+      form.setFieldValue("mapName", undefined);
       return;
     }
 
@@ -314,16 +335,26 @@ export default function SurveyPhotoModal({
     (async () => {
       try {
         const tree = await api.listTree(projectName, MAP_DIR_NAME);
-        if (!ignore) setMapOptions(tree.filter((node) => node.isDir).map((node) => ({ label: node.name, value: node.name })));
+        if (!ignore) {
+          const options = tree.filter((node) => node.isDir).map((node) => ({ label: node.name, value: node.name }));
+          const nextMapName = resolveMapOption(options, [mapName, mapCode]);
+          setMapOptions(options);
+          setSelectedMapName(nextMapName);
+          form.setFieldValue("mapName", nextMapName);
+        }
       } catch {
-        if (!ignore) setMapOptions([]);
+        if (!ignore) {
+          setMapOptions([]);
+          setSelectedMapName(undefined);
+          form.setFieldValue("mapName", undefined);
+        }
       }
     })();
 
     return () => {
       ignore = true;
     };
-  }, [open, projectName]);
+  }, [form, mapCode, mapName, open, projectName]);
 
   useEffect(() => {
     if (!open) return;
@@ -500,7 +531,7 @@ export default function SurveyPhotoModal({
       {mode === "supplement" ? (
         <Form form={form} layout="inline" className="survey-photo-filter-form survey-photo-supplement-filter">
           <Form.Item label="地图" name="mapName">
-            <Select allowClear showSearch placeholder="请选择地图" options={mapOptions} optionFilterProp="label" />
+            <Select allowClear showSearch placeholder="请选择地图" options={mapOptions} optionFilterProp="label" onChange={setSelectedMapName} />
           </Form.Item>
           <Form.Item label="设备区" name="deviceAreaName">
             <Input allowClear placeholder="请输入设备区" />
@@ -513,7 +544,7 @@ export default function SurveyPhotoModal({
       ) : (
         <Form form={form} layout="inline" className="survey-photo-filter-form survey-photo-normal-filter">
           <Form.Item label="地图" name="mapName">
-            <Select allowClear showSearch placeholder="请选择地图" options={mapOptions} optionFilterProp="label" />
+            <Select allowClear showSearch placeholder="请选择地图" options={mapOptions} optionFilterProp="label" onChange={setSelectedMapName} />
           </Form.Item>
           <Form.Item label="设备区" name="deviceAreaName">
             <Input allowClear placeholder="请输入设备区名称" />

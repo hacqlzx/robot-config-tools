@@ -4,6 +4,7 @@ import AppLayout from "../App";
 
 const ImportExport = lazy(() => import("../views/import-export"));
 const Config = lazy(() => import("../views/config"));
+const RealtimeMonitor = lazy(() => import("../views/realtime-monitor"));
 
 /**
  * 延迟加载页面的统一包裹组件。
@@ -26,6 +27,7 @@ const router = createHashRouter([
     children: [
       { index: true, element: <Navigate to="space-edit" replace /> },
       { path: "space-edit", element: <></> },
+      { path: "realtime-monitor", element: <LazyPage><RealtimeMonitor /></LazyPage> },
       { path: "image-edit", element: <></> },
       { path: "screen-verify", element: <></> },
       { path: "device-verify", element: <></> },

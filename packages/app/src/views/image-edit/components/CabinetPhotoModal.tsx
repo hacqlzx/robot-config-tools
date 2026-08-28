@@ -33,6 +33,7 @@ interface CabinetPhotoModalProps {
   open: boolean;
   projectName?: string | null;
   mapName?: string | null;
+  mapCode?: string | null;
   surveyRunning?: SurveyRunningState | null;
   onClose: () => void;
   onDispatch?: (items: CabinetPhotoDispatchItem[]) => boolean | void | Promise<boolean | void>;
@@ -47,6 +48,23 @@ interface TreeNode {
 
 function valueText(value: unknown): string {
   return value == null ? "" : String(value).trim();
+}
+
+function resolveMapOption(
+  options: { label: string; value: string }[],
+  candidates: unknown[],
+): string | undefined {
+  const values = candidates.map(valueText).filter(Boolean);
+  for (const value of values) {
+    const exact = options.find((option) => option.value === value);
+    if (exact) return exact.value;
+  }
+  for (const value of values) {
+    const normalized = value.toLowerCase();
+    const matched = options.find((option) => option.value.toLowerCase() === normalized);
+    if (matched) return matched.value;
+  }
+  return options.length === 1 ? options[0].value : undefined;
 }
 
 function normalizeKeyword(value: string): string {
@@ -181,6 +199,7 @@ export default function CabinetPhotoModal({
   open,
   projectName,
   mapName,
+  mapCode,
   surveyRunning,
   onClose,
   onDispatch,
@@ -218,14 +237,14 @@ export default function CabinetPhotoModal({
       return;
     }
 
-    setSelectedMapName(valueText(mapName) || undefined);
-  }, [mapName, open, resetModalState]);
+  }, [open, resetModalState]);
 
   useEffect(() => {
     if (!open) return;
     const api = window.electronAPI?.project;
     if (!projectName || !api) {
       setMapOptions([]);
+      setSelectedMapName(undefined);
       return;
     }
 
@@ -233,16 +252,23 @@ export default function CabinetPhotoModal({
     (async () => {
       try {
         const tree = await api.listTree(projectName, MAP_DIR_NAME);
-        if (!ignore) setMapOptions(tree.filter((node) => node.isDir).map((node) => ({ label: node.name, value: node.name })));
+        if (!ignore) {
+          const options = tree.filter((node) => node.isDir).map((node) => ({ label: node.name, value: node.name }));
+          setMapOptions(options);
+          setSelectedMapName(resolveMapOption(options, [mapName, mapCode]));
+        }
       } catch {
-        if (!ignore) setMapOptions([]);
+        if (!ignore) {
+          setMapOptions([]);
+          setSelectedMapName(undefined);
+        }
       }
     })();
 
     return () => {
       ignore = true;
     };
-  }, [open, projectName]);
+  }, [mapCode, mapName, open, projectName]);
 
   useEffect(() => {
     if (!open) return;

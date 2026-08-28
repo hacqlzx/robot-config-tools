@@ -6,7 +6,10 @@ import CameraDetailModal from "./CameraDetailModal";
 export interface CameraVO {
   cameraId: number;
   cameraName: string;
+  cameraPosition?: string;
   videoType: string;
+  innerCalibrationState?: number;
+  outerCalibrationState?: number;
   visibleManufacturerTypeName: string;
   visibleIp: string;
   visiblePort: number | string;

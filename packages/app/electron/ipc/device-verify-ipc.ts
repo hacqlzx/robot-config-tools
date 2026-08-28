@@ -89,6 +89,7 @@ interface PreparedDeviceCorrectionEntry {
     cp_id: string;
     target_point: ReturnType<typeof correctionRectToTargetPoint>;
     target_rect: ReturnType<typeof correctionRectToTargetRect>;
+    vis_img_size: ReturnType<typeof correctionRectToVisImageSize>;
   }>;
 }
 
@@ -415,6 +416,7 @@ export function prepareDeviceVerificationCorrectionData(projectName: string): Pr
       cp_id: calibration.calibrationId,
       target_point: correctionRectToTargetPoint(rect),
       target_rect: correctionRectToTargetRect(rect),
+      vis_img_size: correctionRectToVisImageSize(rect),
     }];
     const entryName = uniqueZipEntryName(usedEntryNames, `${calibration.cruiseId || calibration.calibrationId}.json`);
     entries.push({ entryName, payload });
@@ -954,6 +956,10 @@ function correctionRectToTargetRect(rect: DeviceCorrectionRect): number[][] {
     [x2, y2],
     [x1, y2],
   ];
+}
+
+function correctionRectToVisImageSize(rect: DeviceCorrectionRect): number[] {
+  return [rect.imageWidth, rect.imageHeight];
 }
 
 function clamp01(value: number): number {

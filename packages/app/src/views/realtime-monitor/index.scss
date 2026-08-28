@@ -1,0 +1,1000 @@
+.realtime-monitor-page {
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #eef1f4;
+
+  * {
+    box-sizing: border-box;
+  }
+}
+
+.realtime-monitor-toolbar {
+  height: 44px;
+  flex: 0 0 44px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: #ffffff;
+  border-bottom: 1px solid #e7ebf0;
+
+  .ant-btn {
+    height: 32px;
+    border-radius: 4px;
+  }
+}
+
+.realtime-monitor-toolbar__left,
+.realtime-monitor-toolbar__right {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.realtime-monitor-toolbar__right {
+  justify-content: flex-end;
+}
+
+.realtime-monitor-stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  color: #ffffff;
+  background: #000000;
+}
+
+.realtime-map-canvas {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  cursor: grab;
+  background: #000000;
+
+  &.is-dragging {
+    cursor: grabbing;
+  }
+}
+
+.realtime-map-canvas__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.realtime-map-canvas__empty {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  color: rgba(236, 245, 240, 0.62);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.realtime-monitor-status-strip {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  z-index: 8;
+  max-width: calc(100% - 470px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.realtime-monitor-chip {
+  height: 28px;
+  flex: 0 0 auto;
+  padding: 0 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #dfe8e1;
+  background: rgba(14, 18, 16, 0.86);
+  border: 1px solid rgba(150, 169, 154, 0.28);
+  border-radius: 14px;
+  white-space: nowrap;
+  outline: none;
+
+  .anticon {
+    font-size: 14px;
+  }
+
+  span {
+    color: #aebcb3;
+  }
+
+  strong {
+    color: #f6faf8;
+    font-weight: 600;
+  }
+
+  &.is-good .anticon {
+    color: #50c932;
+  }
+
+  &.is-warn {
+    border-color: rgba(255, 180, 48, 0.55);
+
+    .anticon,
+    strong {
+      color: #ffb52e;
+    }
+  }
+
+  &.is-danger {
+    border-color: rgba(255, 70, 70, 0.62);
+
+    .anticon,
+    strong {
+      color: #ff5555;
+    }
+  }
+
+  &.is-muted .anticon {
+    color: #a6b3a7;
+  }
+
+  &.is-clickable {
+    cursor: pointer;
+
+    &:hover,
+    &:focus-visible {
+      background: rgba(30, 41, 35, 0.94);
+      border-color: rgba(47, 198, 202, 0.58);
+    }
+  }
+}
+
+.realtime-monitor-metrics {
+  position: absolute;
+  top: 10px;
+  right: 16px;
+  z-index: 8;
+  min-height: 28px;
+  padding: 0 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: #dfe8e1;
+  background: rgba(14, 18, 16, 0.86);
+  border: 1px solid rgba(150, 169, 154, 0.28);
+  border-radius: 14px;
+  white-space: nowrap;
+
+  span {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: #aebcb3;
+  }
+
+  strong {
+    color: #ffffff;
+    font-weight: 600;
+  }
+
+  i {
+    width: 1px;
+    height: 14px;
+    background: rgba(174, 188, 179, 0.3);
+  }
+}
+
+.realtime-monitor-camera {
+  position: absolute;
+  z-index: 9;
+  width: 52px;
+  height: 52px;
+  padding: 5px 3px;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: #31435a;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(205, 216, 224, 0.9);
+  border-radius: 6px;
+  box-shadow: 0 8px 18px rgba(4, 10, 16, 0.16);
+  cursor: pointer;
+
+  .anticon {
+    color: #597089;
+    font-size: 18px;
+  }
+
+  span {
+    font-size: 12px;
+    line-height: 16px;
+    white-space: nowrap;
+  }
+
+  &:hover,
+  &.is-active {
+    color: #1677ff;
+    border-color: #91caff;
+    box-shadow: 0 8px 20px rgba(22, 119, 255, 0.18);
+
+    .anticon {
+      color: #1677ff;
+    }
+  }
+}
+
+.realtime-monitor-camera--visible {
+  top: 64px;
+  left: 12px;
+}
+
+.realtime-monitor-camera--infrared {
+  top: 64px;
+  right: 12px;
+}
+
+.realtime-monitor-video {
+  position: absolute;
+  top: 124px;
+  z-index: 11;
+  width: min(360px, 34vw);
+  min-width: 260px;
+  height: min(220px, 30vh);
+  min-height: 160px;
+  overflow: hidden;
+  background: rgba(11, 20, 28, 0.96);
+  border: 1px solid rgba(127, 159, 176, 0.38);
+  border-radius: 6px;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.36);
+
+  header {
+    height: 32px;
+    padding: 0 8px 0 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(22, 34, 42, 0.96);
+    border-bottom: 1px solid rgba(127, 159, 176, 0.18);
+
+    strong {
+      flex: 0 0 auto;
+      font-size: 13px;
+    }
+
+    span {
+      min-width: 0;
+      flex: 1;
+      overflow: hidden;
+      color: #aebcc4;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    button {
+      width: 22px;
+      height: 22px;
+      flex: 0 0 22px;
+      padding: 0;
+      color: #b9c8ce;
+      background: transparent;
+      border: 0;
+      border-radius: 4px;
+      cursor: pointer;
+
+      &:hover {
+        color: #ffffff;
+        background: rgba(255, 255, 255, 0.1);
+      }
+    }
+  }
+}
+
+.realtime-monitor-video--visible {
+  left: 72px;
+}
+
+.realtime-monitor-video--infrared {
+  right: 72px;
+}
+
+.realtime-monitor-video.is-expanded {
+  inset: 0;
+  z-index: 32;
+  width: auto;
+  min-width: 0;
+  height: auto;
+  min-height: 0;
+  border-radius: 0;
+  box-shadow: none;
+
+  header {
+    height: 36px;
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .realtime-monitor-video__body {
+    height: calc(100% - 36px);
+  }
+
+  .realtime-monitor-video-player,
+  .realtime-monitor-video-player__video {
+    cursor: zoom-out;
+  }
+}
+
+.realtime-monitor-video__body {
+  height: calc(100% - 32px);
+  background: #11171d;
+}
+
+.realtime-monitor-video-player {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #080c10;
+  cursor: zoom-in;
+
+  &__video {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #080c10;
+  }
+
+  &__message {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    color: #aebcc4;
+    font-size: 13px;
+    text-align: center;
+    pointer-events: none;
+
+    &.is-error {
+      color: #ffb3a7;
+    }
+  }
+}
+
+.realtime-monitor-task {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  z-index: 9;
+  width: clamp(330px, 26vw, 430px);
+  overflow: hidden;
+  color: #f6faf8;
+  background: rgba(10, 15, 12, 0.92);
+  border: 1px solid rgba(36, 48, 38, 0.94);
+  border-radius: 8px;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.28);
+
+  header {
+    height: 32px;
+    padding: 0 14px;
+    display: flex;
+    align-items: center;
+    font-weight: 600;
+  }
+}
+
+.realtime-monitor-task__body {
+  padding: 0 14px 12px;
+}
+
+.realtime-monitor-task__row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+
+  span {
+    color: #aebcb3;
+  }
+
+  strong {
+    min-width: 0;
+    overflow: hidden;
+    color: #ffffff;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.realtime-monitor-task__row--name {
+  margin-bottom: 4px;
+
+  strong {
+    overflow: visible;
+    color: #ffffff;
+    font-weight: 700;
+    line-height: 20px;
+    white-space: normal;
+    word-break: break-all;
+  }
+}
+
+.realtime-monitor-task__meta {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: 2px 14px;
+
+  .realtime-monitor-task__field:nth-child(3) {
+    grid-column: 1 / -1;
+  }
+}
+
+.realtime-monitor-task__field {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  line-height: 22px;
+
+  span {
+    flex: 0 0 auto;
+    color: #aebcb3;
+  }
+
+  strong {
+    min-width: 0;
+    overflow: hidden;
+    color: #ffffff;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.realtime-monitor-task__actions {
+  margin-top: 10px;
+  padding-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-top: 1px solid rgba(174, 188, 179, 0.15);
+
+  .realtime-monitor-task__action {
+    min-width: 0;
+    flex: 1;
+    height: 26px;
+    padding: 0 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    font-size: 12px;
+    line-height: 1;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+}
+
+.realtime-monitor-task__action {
+  appearance: none;
+  color: #ffffff !important;
+  background-clip: padding-box;
+  box-shadow: none;
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.42;
+  }
+}
+
+.realtime-monitor-task__action--pause {
+  color: #ffc44d !important;
+  background: #4d371c;
+  border-color: rgba(255, 190, 72, 0.48);
+
+  &:hover,
+  &:focus-visible {
+    color: #ffd67e !important;
+    background: #60451f;
+    border-color: rgba(255, 203, 98, 0.72);
+  }
+}
+
+.realtime-monitor-task__action--resume {
+  color: #63d547 !important;
+  background: #1e4b16;
+  border-color: rgba(93, 205, 70, 0.5);
+
+  &:hover,
+  &:focus-visible {
+    color: #7cec5d !important;
+    background: #265f1b;
+    border-color: rgba(118, 230, 92, 0.72);
+  }
+}
+
+.realtime-monitor-task__action--stop {
+  color: #ff7777 !important;
+  background: #5a2d2d;
+  border-color: rgba(255, 104, 104, 0.58);
+
+  &:hover,
+  &:focus-visible {
+    color: #ff9696 !important;
+    background: #6d3535;
+    border-color: rgba(255, 130, 130, 0.78);
+  }
+}
+
+.realtime-monitor-control {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  z-index: 9;
+  width: 148px;
+  height: 148px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(50, 64, 74, 0.95) 0 31%, transparent 32%),
+    linear-gradient(145deg, #303945 0%, #202935 58%, #1a212a 100%);
+  border: 1px solid rgba(154, 174, 184, 0.28);
+  box-shadow:
+    0 14px 28px rgba(0, 0, 0, 0.34),
+    inset 0 1px 1px rgba(255, 255, 255, 0.08),
+    inset 0 -12px 24px rgba(0, 0, 0, 0.2);
+
+  &.is-disabled {
+    opacity: 0.58;
+  }
+}
+
+.realtime-monitor-control__center {
+  position: absolute;
+  inset: 42%;
+  border-radius: 50%;
+  background: rgba(29, 38, 48, 0.8);
+  pointer-events: none;
+}
+
+.realtime-monitor-control__btn {
+  position: absolute;
+  z-index: 2;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  background: linear-gradient(145deg, #657078 0%, #46525b 100%);
+  border: 1px solid rgba(211, 224, 230, 0.28);
+  border-radius: 8px;
+  box-shadow:
+    0 3px 8px rgba(0, 0, 0, 0.28),
+    inset 0 1px 1px rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+
+  &:hover,
+  &.is-active {
+    background: linear-gradient(145deg, #76828a 0%, #52616c 100%);
+    border-color: rgba(221, 241, 248, 0.52);
+  }
+
+  &:active,
+  &.is-active {
+    transform: scale(0.95);
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+  }
+
+  .anticon {
+    font-size: 18px;
+  }
+}
+
+.realtime-monitor-control__btn--up {
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%) rotate(-90deg);
+
+  &:active,
+  &.is-active {
+    transform: translateX(-50%) rotate(-90deg) scale(0.95);
+  }
+}
+
+.realtime-monitor-control__btn--right {
+  top: 50%;
+  right: 16px;
+  transform: translateY(-50%);
+
+  &:active,
+  &.is-active {
+    transform: translateY(-50%) scale(0.95);
+  }
+}
+
+.realtime-monitor-control__btn--down {
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%) rotate(90deg);
+
+  &:active,
+  &.is-active {
+    transform: translateX(-50%) rotate(90deg) scale(0.95);
+  }
+}
+
+.realtime-monitor-control__btn--left {
+  top: 50%;
+  left: 16px;
+  transform: translateY(-50%) rotate(180deg);
+
+  &:active,
+  &.is-active {
+    transform: translateY(-50%) rotate(180deg) scale(0.95);
+  }
+}
+
+.realtime-monitor-loading,
+.realtime-monitor-empty {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 20;
+  min-width: 220px;
+  min-height: 48px;
+  padding: 0 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #f6faf8;
+  background: rgba(13, 19, 16, 0.92);
+  border: 1px solid rgba(89, 211, 212, 0.3);
+  border-radius: 6px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.3);
+  transform: translate(-50%, -50%);
+}
+
+.realtime-monitor-empty {
+  color: #dfe8e1;
+
+  .anticon {
+    color: #ffb65a;
+  }
+}
+
+.realtime-monitor-status-modal {
+  .ant-modal-content {
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .ant-modal-header {
+    margin: 0;
+    padding: 14px 18px;
+    border-bottom: 1px solid #eef0f2;
+  }
+
+  .ant-modal-title {
+    font-size: 14px;
+  }
+
+  .ant-modal-body {
+    padding: 0;
+  }
+}
+
+.realtime-monitor-status-panel {
+  height: min(560px, calc(100vh - 180px));
+  min-height: 360px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #f7f9fb;
+}
+
+.realtime-monitor-status-panel__tabs {
+  height: 48px;
+  padding: 0 18px;
+  display: flex;
+  align-items: stretch;
+  gap: 24px;
+  background: #ffffff;
+  border-bottom: 1px solid #edf1f5;
+
+  button {
+    position: relative;
+    padding: 0 2px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: #6b7280;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+
+    em {
+      min-width: 18px;
+      padding: 1px 6px;
+      color: #6b7280;
+      background: #eef2f7;
+      border-radius: 10px;
+      font-style: normal;
+      font-size: 12px;
+    }
+
+    &.is-active {
+      color: #1677ff;
+
+      &::after {
+        position: absolute;
+        right: 0;
+        bottom: -1px;
+        left: 0;
+        height: 2px;
+        background: #1677ff;
+        content: "";
+      }
+    }
+
+    &.is-abnormal em {
+      color: #cf1322;
+      background: #fff1f0;
+    }
+  }
+}
+
+.realtime-monitor-status-panel__content {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 188px minmax(0, 1fr);
+  overflow: hidden;
+
+  aside {
+    min-width: 0;
+    padding: 8px 0;
+    overflow-y: auto;
+    background: #f0f4f7;
+    border-right: 1px solid #e1e7ed;
+
+    button {
+      width: 100%;
+      min-height: 46px;
+      padding: 8px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      color: #3f4b57;
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-left: 2px solid transparent;
+      cursor: pointer;
+
+      &:hover,
+      &.is-active {
+        background: #e6f4ff;
+        border-left-color: #1677ff;
+      }
+
+      span {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      strong {
+        flex: 0 0 auto;
+        color: #7a8490;
+        font-weight: 600;
+
+        &.is-abnormal {
+          color: #cf1322;
+        }
+      }
+
+      em {
+        color: #9aa4b2;
+        font-style: normal;
+        font-weight: 400;
+      }
+    }
+  }
+
+  main {
+    min-width: 0;
+    min-height: 0;
+    padding: 14px 16px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
+  }
+}
+
+.realtime-monitor-status-panel__summary {
+  min-height: 34px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: #647181;
+  background: #ffffff;
+  border: 1px solid #e6ebf0;
+  border-radius: 6px;
+  white-space: nowrap;
+
+  .is-abnormal {
+    color: #cf1322;
+  }
+}
+
+.realtime-monitor-status-panel__empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #7a8490;
+  background: #ffffff;
+  border: 1px dashed #d9e0e7;
+  border-radius: 6px;
+}
+
+.realtime-monitor-status-panel__grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: 96px;
+  align-content: start;
+  gap: 12px;
+  overflow-y: auto;
+  padding-right: 6px;
+
+  article {
+    min-width: 0;
+    height: 96px;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background: #ffffff;
+    border: 1px solid #e6ebf0;
+    border-left: 3px solid #52c41a;
+    border-radius: 6px;
+    overflow: hidden;
+
+    &.is-abnormal {
+      border-left-color: #ff4d4f;
+    }
+
+    strong {
+      min-width: 0;
+      overflow: hidden;
+      color: #1f2933;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    span {
+      display: -webkit-box;
+      min-width: 0;
+      color: #5c6875;
+      line-height: 18px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: normal;
+      word-break: break-all;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 1;
+    }
+  }
+}
+
+@media (max-width: 900px) {
+  .realtime-monitor-status-panel__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 680px) {
+  .realtime-monitor-status-panel__content {
+    grid-template-columns: 132px minmax(0, 1fr);
+  }
+
+  .realtime-monitor-status-panel__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  .realtime-monitor-status-strip {
+    max-width: calc(100% - 350px);
+  }
+
+  .realtime-monitor-metrics {
+    max-width: 330px;
+    overflow: hidden;
+  }
+
+  .realtime-monitor-task {
+    width: 320px;
+  }
+}
+
+@media (max-width: 680px) {
+  .realtime-monitor-toolbar {
+    height: auto;
+    min-height: 44px;
+    padding: 6px 8px;
+    flex-wrap: wrap;
+  }
+
+  .realtime-monitor-status-strip {
+    right: 8px;
+    left: 8px;
+    max-width: none;
+    overflow-x: auto;
+  }
+
+  .realtime-monitor-metrics {
+    top: 46px;
+    right: 8px;
+    left: 8px;
+    justify-content: flex-start;
+  }
+
+  .realtime-monitor-camera--visible,
+  .realtime-monitor-camera--infrared {
+    top: 88px;
+  }
+
+  .realtime-monitor-task {
+    right: 8px;
+    bottom: 8px;
+    left: 8px;
+    width: auto;
+  }
+
+  .realtime-monitor-control {
+    right: 10px;
+    bottom: 138px;
+    width: 126px;
+    height: 126px;
+  }
+
+  .realtime-monitor-control__btn--up {
+    top: 12px;
+  }
+
+  .realtime-monitor-control__btn--right {
+    right: 12px;
+  }
+
+  .realtime-monitor-control__btn--down {
+    bottom: 12px;
+  }
+
+  .realtime-monitor-control__btn--left {
+    left: 12px;
+  }
+}

@@ -56,6 +56,11 @@ export function deleteRobot(id) {
   return http.get("/robot/tool/robot/delete", { id });
 }
 
+/** 下发相机内参/外参标定指令，type: 0 内参，1 外参 */
+export function cameraCalibrationDelivery(cameraId, type) {
+  return http.get("/robot/tool/camera/calibrationDelivery", { cameraId, type });
+}
+
 // ========== 地图 ==========
 
 /** 地图查询 */
@@ -74,8 +79,8 @@ export function deleteMap(id) {
 }
 
 /** 地图切换运行 */
-export function setCurrentMap(id) {
-  return http.get("/robot/tool/robotMap/setCurrentMap", { id });
+export function setCurrentMap(params) {
+  return http.get("/robot/tool/robotMap/setCurrentMap", params);
 }
 
 // ========== 后台 ==========
@@ -263,6 +268,88 @@ export function startTask(robotId, data) {
     robotId,
     ...data,
   });
+}
+
+// ========== 实时监控 ==========
+
+/** 按厂站获取机器人及摄像头信息 */
+export function queryCameraListByFacId(params) {
+  return http.get("/robot/cameraInfo/queryCameraListByFacId", params);
+}
+
+/** 获取机器人厂站地图 */
+export function findFacMap(params) {
+  return http.get("/robot/facInfo/getFacMap", params);
+}
+
+/** 根据地图编码获取机器人区域 */
+export function getRobotRegionByMapCode(params) {
+  return http.get("/robot/robot/getRobotRegionByMapCode", params);
+}
+
+/** 获取机器人路径 */
+export function getRobotRoad(params) {
+  return http.get("/robot/robot/getRobotRoad", params);
+}
+
+/** 获取机器人停靠点 */
+export function getRobotStopNode(params) {
+  return http.get("/robot/robot/getRobotStopNode", params);
+}
+
+/** 查询机器人当前实时任务 */
+export function queryRunningListV2(params) {
+  return http.get("/robot/taskPatrolled/robotMonitor/queryRunningListV2", params);
+}
+
+/** 暂停任务 */
+export function pauseRealtimeTask(params) {
+  return http.get("/robot/taskPatrolled/robotMonitor/pause", params);
+}
+
+/** 继续任务 */
+export function resumeRealtimeTask(params) {
+  return http.get("/robot/taskPatrolled/robotMonitor/resume", params);
+}
+
+/** 终止任务 */
+export function terminateRealtimeTask(params) {
+  return http.get("/robot/taskPatrolled/robotMonitor/terminate", params);
+}
+
+/** 获取机器人位置指标 */
+export function getRobotIndexData(params) {
+  return http.get("/robot/robotData/getRobotIndexData", params);
+}
+
+/** 获取机器人运行数据 */
+export function getRobotRunData(params) {
+  return http.get("/robot/robotData/getRobotRunData", params);
+}
+
+/** 获取机器人状态数据 */
+export function getRobotStatusData(params) {
+  return http.get("/robot/robotData/getRobotStatusData", params);
+}
+
+/** 获取机器人状态面板 */
+export function getRobotStatusPanel(params) {
+  return http.get("/robot/tool/panel/getAll", params);
+}
+
+/** 获取机器人辅助状态 */
+export function getRobotSupState(params) {
+  return http.get("/robot/robot/getRobotSupState", params);
+}
+
+/** 注册机器人摄像头 WebRTC 视频流 */
+export function registerCameraWebRtcSrs(params) {
+  return http.get("/robot/videoOperate/registerCameraWebRtcSrs", params);
+}
+
+/** 下发机器人车体/模式控制 */
+export function robotControlToRobotHost(data) {
+  return http.post("/robot/robotControl/bodyControl", data);
 }
 
 // ========== 导出 ==========

@@ -350,6 +350,23 @@ declare global {
   }
 
   interface Window {
+    ZLMRTCClient?: {
+      Endpoint: new (options: {
+        element: HTMLVideoElement;
+        debug?: boolean;
+        zlmsdpUrl: string;
+        simulecast: boolean;
+        useCamera: boolean;
+        audioEnable: boolean;
+        videoEnable: boolean;
+        recvOnly: boolean;
+        usedatachannel: boolean;
+      }) => {
+        on: (event: string, handler: (payload?: unknown) => void) => void;
+        close: () => void;
+      };
+      Events?: Record<string, string>;
+    };
     electronAPI?: {
       platform: string;
       minimize: () => void;
