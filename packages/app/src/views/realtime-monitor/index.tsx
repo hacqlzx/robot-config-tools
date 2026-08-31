@@ -27,6 +27,7 @@ import {
   findFacMap,
   getFacInfo,
   getRobotIndexData,
+  getRobotLog,
   getRobotRegionByMapCode,
   getRobotRoad,
   getRobotRunData,
@@ -265,6 +266,11 @@ function normalizeDateText(value: unknown): string {
   if (Number.isNaN(date.getTime())) return String(value);
   const pad = (part: number) => String(part).padStart(2, "0");
   return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function formatLogDateTime(date: Date): string {
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
 function getRobotId(robot: ResolvedRobot | null): number | undefined {
@@ -755,6 +761,7 @@ export default function RealtimeMonitor() {
   const [surveyPhotoMode, setSurveyPhotoMode] = useState<SurveyPhotoMode>("normal");
   const [cabinetPhotoOpen, setCabinetPhotoOpen] = useState(false);
   const [verifyTaskOpen, setVerifyTaskOpen] = useState(false);
+  const [robotLogLoading, setRobotLogLoading] = useState(false);
   const [surveyRunning, setSurveyRunning] = useState<SurveyRunningState | null>(null);
   const [taskModeName, setTaskModeName] = useState("任务模式");
   const loadMapKeyRef = useRef("");
@@ -1280,6 +1287,32 @@ export default function RealtimeMonitor() {
     setVerifyTaskOpen(true);
   }, [message, selectedProject]);
 
+  const handleRobotLog = useCallback(async () => {
+    if (robotLogLoading) return;
+    if (currentRobotId == null) {
+      message.warning("请先在顶部选择机器人");
+      return;
+    }
+
+    const now = new Date();
+    const startDate = formatLogDateTime(new Date(now.getTime() - 60 * 1000));
+    const endDate = formatLogDateTime(new Date(now.getTime() + 60 * 1000));
+    setRobotLogLoading(true);
+    try {
+      const res = await getRobotLog({ robotId: currentRobotId, startDate, endDate });
+      const body = (res.data || {}) as ApiResponse<string>;
+      if (!isOk(body)) {
+        message.error(body.message || "录制小包失败");
+        return;
+      }
+      message.success("录制小包请求已下发");
+    } catch (error) {
+      message.error(`录制小包失败: ${getRequestErrorMessage(error, "请求失败")}`);
+    } finally {
+      setRobotLogLoading(false);
+    }
+  }, [currentRobotId, message, robotLogLoading]);
+
   const refreshSurveyRunning = useCallback(async (options?: { silent?: boolean }) => {
     if (!pageActive) return;
     const robotId = currentRobotId;
@@ -1622,7 +1655,12 @@ export default function RealtimeMonitor() {
           >
             {hasRobotControl ? "控制权释放" : "控制权获取"}
           </Button>
-          <Button icon={<FileZipOutlined />} onClick={() => message.info("录制小包待接入")}>
+          <Button
+            icon={<FileZipOutlined />}
+            loading={robotLogLoading}
+            disabled={!currentRobotId || !hasBackendReady}
+            onClick={handleRobotLog}
+          >
             录制小包
           </Button>
         </div>

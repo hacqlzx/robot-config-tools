@@ -352,6 +352,11 @@ export function robotControlToRobotHost(data) {
   return http.post("/robot/robotControl/bodyControl", data);
 }
 
+/** 导出指定时间范围的机器人日志小包 */
+export function getRobotLog(params) {
+  return http.get("/robot/tool/file/getRobotLog", params);
+}
+
 // ========== 导出 ==========
 
 /**
