@@ -58,6 +58,7 @@ import ModelLoadingOverlay from "./components/ModelLoadingOverlay";
 import PotreeClipController from "./components/PotreeClipController";
 import PotreeRenderSettings from "./components/PotreeRenderSettings";
 import NormalAnnotationPanel from "./components/NormalAnnotationPanel";
+import MapCoordinateCorrectionPanel from "./components/MapCoordinateCorrectionPanel";
 import SpaceSceneHost from "./components/SpaceSceneHost";
 import SpaceShortcutHelp from "./components/SpaceShortcutHelp";
 import { PotreeSpaceSceneAdapter } from "./engine/PotreeSpaceSceneAdapter";
@@ -123,7 +124,7 @@ const DEFAULT_NORMAL_ANNOTATION_STATE: SpaceNormalAnnotationState = {
 };
 
 interface LoadingState {
-  kind: "model" | "clip";
+  kind: "model" | "clip" | "correction";
   modelPath: string | null;
   title: string;
   message: string;
@@ -266,6 +267,10 @@ export default function SpaceEditWorkspace() {
   const [clipBounds, setClipBounds] = useState<SpaceClipBounds | null>(null);
   const [clipSaving, setClipSaving] = useState(false);
   const [clipProgress, setClipProgress] = useState<number | undefined>();
+  const [correctionMode, setCorrectionMode] = useState(false);
+  const [correctionOrigin, setCorrectionOrigin] = useState<[number, number, number] | null>(null);
+  const [correctionSaving, setCorrectionSaving] = useState(false);
+  const [correctionProgress, setCorrectionProgress] = useState<number | undefined>();
   const [loading, setLoading] = useState<LoadingState | null>(null);
   const [treeKey, setTreeKey] = useState(0);
   const [pointImporting, setPointImporting] = useState(false);
@@ -457,6 +462,7 @@ export default function SpaceEditWorkspace() {
     adapter.clearPathDrawing();
     adapter.clearNormalAnnotations();
     adapter.clearDrawingLayers();
+    adapter.setCoordinateCorrectionMarker(null);
     setCabinetMode(false);
     setCabinetState(DEFAULT_CABINET_STATE);
     setCabinetSaving(false);
@@ -470,6 +476,10 @@ export default function SpaceEditWorkspace() {
     setPathMode(false);
     setPathState(DEFAULT_PATH_STATE);
     setPathSaving(false);
+    setCorrectionMode(false);
+    setCorrectionOrigin(null);
+    setCorrectionSaving(false);
+    setCorrectionProgress(undefined);
     setNormalMode(false);
     setNormalItems([]);
     setNormalState(DEFAULT_NORMAL_ANNOTATION_STATE);
@@ -489,6 +499,10 @@ export default function SpaceEditWorkspace() {
     setClipBounds(null);
     setClipSaving(false);
     setClipProgress(undefined);
+    setCorrectionMode(false);
+    setCorrectionOrigin(null);
+    setCorrectionSaving(false);
+    setCorrectionProgress(undefined);
     setLoading(null);
     clearDrawingVisibility();
   }, [adapter, clearDrawingVisibility]);
@@ -623,6 +637,14 @@ export default function SpaceEditWorkspace() {
     setNormalMode(false);
     setNormalState((current) => ({ ...current, active: false }));
   }, [adapter]);
+
+  const closeCorrectionMode = useCallback(() => {
+    if (correctionSaving) return;
+    adapter.setCoordinateCorrectionMarker(null);
+    setCorrectionMode(false);
+    setCorrectionOrigin(null);
+    setCorrectionProgress(undefined);
+  }, [adapter, correctionSaving]);
 
   const persistNormalAnnotations = useCallback(async (options: PersistOptions = {}): Promise<boolean> => {
     const silent = !!options.silent;
@@ -1696,13 +1718,13 @@ export default function SpaceEditWorkspace() {
   }, []);
 
   useEffect(() => {
-    const mode = cabinetMode ? "cabinet" : chargingMode ? "charging" : deviceAreaMode ? "device-area" : pathMode ? "path" : normalMode ? "normal" : "idle";
+    const mode = correctionMode ? "correction" : cabinetMode ? "cabinet" : chargingMode ? "charging" : deviceAreaMode ? "device-area" : pathMode ? "path" : normalMode ? "normal" : "idle";
     (window as Window & { __spaceEditInteractionMode?: string }).__spaceEditInteractionMode = mode;
     return () => {
       const state = window as Window & { __spaceEditInteractionMode?: string };
       if (state.__spaceEditInteractionMode === mode) state.__spaceEditInteractionMode = "idle";
     };
-  }, [cabinetMode, chargingMode, deviceAreaMode, normalMode, pathMode]);
+  }, [cabinetMode, chargingMode, correctionMode, deviceAreaMode, normalMode, pathMode]);
 
   useEffect(() => {
     adapter.setDrawingInteractionCallbacks({
@@ -1715,6 +1737,13 @@ export default function SpaceEditWorkspace() {
   useEffect(() => {
     if (!pageActive) return;
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && correctionMode) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        if (!event.repeat) closeCorrectionMode();
+        return;
+      }
       if (event.key === "Escape" && normalMode) {
         event.preventDefault();
         event.stopPropagation();
@@ -1765,6 +1794,8 @@ export default function SpaceEditWorkspace() {
     handleHistoryUndo,
     handleSaveAll,
     closeNormalMode,
+    closeCorrectionMode,
+    correctionMode,
     normalMode,
     pathMode,
     pageActive,
@@ -1781,6 +1812,19 @@ export default function SpaceEditWorkspace() {
       setLoading((current) => {
         if (current?.kind !== "model" || !current.modelPath || progress.projectName !== selectedProject) return current;
         if (loadedFileKey(current.modelPath) !== loadedFileKey(progress.modelPath)) return current;
+        return { ...current, message: progress.message, percent: progress.percent };
+      });
+    });
+  }, [selectedProject]);
+
+  useEffect(() => {
+    const api = window.electronAPI?.potree;
+    if (!api) return;
+    return api.onCorrectionProgress((progress) => {
+      setLoading((current) => {
+        if (current?.kind !== "correction" || !current.modelPath || progress.projectName !== selectedProject) return current;
+        if (loadedFileKey(current.modelPath) !== loadedFileKey(progress.modelPath)) return current;
+        setCorrectionProgress(progress.percent);
         return { ...current, message: progress.message, percent: progress.percent };
       });
     });
@@ -2043,6 +2087,103 @@ export default function SpaceEditWorkspace() {
     }
   }, [activeSourcePath, adapter, clipBounds, loadModel, message, selectedProject]);
 
+  const handleToggleCorrection = useCallback(async () => {
+    if (correctionMode) {
+      closeCorrectionMode();
+      return;
+    }
+    if (!activeModelPath || !activeSourcePath) {
+      message.warning("请先加载模型");
+      return;
+    }
+    if (modelBusyRef.current) {
+      message.warning("模型正在处理中，请稍后再试");
+      return;
+    }
+    if (!(await confirmUnsavedChanges("纠正地图坐标"))) return;
+    adapter.stopClipping();
+    setClipBounds(null);
+    setClipProgress(undefined);
+    closeCabinetMode();
+    closeChargingMode();
+    closeDeviceAreaMode();
+    closePathMode();
+    closeNormalMode();
+    adapter.setCoordinateCorrectionMarker(null);
+    setCorrectionOrigin(null);
+    setCorrectionProgress(undefined);
+    setCorrectionMode(true);
+  }, [
+    activeModelPath,
+    activeSourcePath,
+    adapter,
+    closeCabinetMode,
+    closeChargingMode,
+    closeCorrectionMode,
+    closeDeviceAreaMode,
+    closeNormalMode,
+    closePathMode,
+    confirmUnsavedChanges,
+    correctionMode,
+    message,
+  ]);
+
+  const handleCorrectionPointClick = useCallback((clientX: number, clientY: number) => {
+    if (!correctionMode || correctionSaving || loading) return;
+    const point = adapter.pickPointAt(clientX, clientY);
+    if (!point) {
+      message.warning("未选中点云，请重新选择");
+      return;
+    }
+    adapter.setCoordinateCorrectionMarker(point);
+    setCorrectionOrigin(point);
+  }, [adapter, correctionMode, correctionSaving, loading, message]);
+
+  const handleCorrectionConfirm = useCallback(async () => {
+    if (!correctionOrigin || !activeSourcePath || !selectedProject || modelBusyRef.current) return;
+    const api = window.electronAPI?.potree;
+    if (!api) {
+      message.error("坐标纠正仅支持 Electron 模式");
+      return;
+    }
+
+    const sourcePath = activeSourcePath;
+    const sourceMapName = mapNameFromModelPath(sourcePath);
+    modelBusyRef.current = true;
+    setCorrectionSaving(true);
+    setCorrectionProgress(0);
+    const version = ++operationVersion.current;
+    setLoading({
+      kind: "correction",
+      modelPath: sourcePath,
+      title: `正在生成 ${sourceMapName}_纠正`,
+      message: "正在准备纠正地图",
+      percent: 0,
+    });
+
+    try {
+      const result = await api.correctMap(selectedProject, sourcePath, correctionOrigin);
+      if (version !== operationVersion.current) return;
+      setTreeKey((value) => value + 1);
+      setCorrectionMode(false);
+      adapter.setCoordinateCorrectionMarker(null);
+      setCorrectionOrigin(null);
+      setCorrectionSaving(false);
+      setCorrectionProgress(undefined);
+      modelBusyRef.current = false;
+      setLoading(null);
+      message.success(`坐标纠正完成，已生成地图“${result.mapName}”`);
+      await loadModel({ mapName: result.mapName, modelPath: result.modelPath });
+    } catch (error) {
+      if (version === operationVersion.current) message.error(`坐标纠正失败: ${errorMessage(error)}`);
+    } finally {
+      if (version === operationVersion.current) setLoading(null);
+      setCorrectionSaving(false);
+      setCorrectionProgress(undefined);
+      modelBusyRef.current = false;
+    }
+  }, [activeSourcePath, adapter, correctionOrigin, loadModel, message, selectedProject]);
+
   return (
     <>
       <SpaceEditLayout
@@ -2053,6 +2194,8 @@ export default function SpaceEditWorkspace() {
           <Toolbar
             onOpenLoadModel={() => setImportOpen(true)}
             onClipModel={handleClip}
+            correctionMode={correctionMode}
+            onToggleCorrection={() => void handleToggleCorrection()}
             cabinetMode={cabinetMode}
             onToggleCabinet={() => void handleToggleCabinet()}
             chargingMode={chargingMode}
@@ -2094,6 +2237,8 @@ export default function SpaceEditWorkspace() {
         scene={(
           <SpaceSceneHost
             adapterFactory={adapterFactory}
+            picking={correctionMode && !correctionSaving}
+            onSceneClick={handleCorrectionPointClick}
             overlay={(sceneState) => (
               <>
                 {loading ? (
@@ -2117,6 +2262,20 @@ export default function SpaceEditWorkspace() {
                   </div>
                 ) : null}
                 <SpaceShortcutHelp normalMode={normalMode} />
+                {correctionMode && !correctionSaving && activeSourcePath && (
+                  <MapCoordinateCorrectionPanel
+                    mapName={mapNameFromModelPath(activeSourcePath)}
+                    origin={correctionOrigin}
+                    saving={correctionSaving}
+                    progress={correctionProgress}
+                    onReselect={() => {
+                      adapter.setCoordinateCorrectionMarker(null);
+                      setCorrectionOrigin(null);
+                    }}
+                    onConfirm={() => void handleCorrectionConfirm()}
+                    onCancel={closeCorrectionMode}
+                  />
+                )}
                 {normalMode && (
                   <NormalAnnotationPanel
                     items={normalItems}

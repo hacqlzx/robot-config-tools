@@ -7,6 +7,8 @@ import { useSpaceSceneHost } from "../engine/useSpaceSceneHost";
 interface SpaceSceneHostProps {
   adapterFactory: SpaceSceneAdapterFactory | null;
   overlay?: ReactNode | ((state: SpaceSceneLifecycleState) => ReactNode);
+  onSceneClick?: (clientX: number, clientY: number) => void;
+  picking?: boolean;
 }
 
 const stateText = {
@@ -16,8 +18,9 @@ const stateText = {
   failed: "三维场景初始化失败",
 } as const;
 
-export default function SpaceSceneHost({ adapterFactory, overlay }: SpaceSceneHostProps) {
+export default function SpaceSceneHost({ adapterFactory, overlay, onSceneClick, picking = false }: SpaceSceneHostProps) {
   const sectionRef = useRef<HTMLElement | null>(null);
+  const pointerDownRef = useRef<{ x: number; y: number } | null>(null);
   const active = useElementActive(sectionRef);
   const { hostRef, state, error } = useSpaceSceneHost(adapterFactory, active);
   const renderedOverlay = typeof overlay === "function" ? overlay(state) : overlay;
@@ -26,7 +29,23 @@ export default function SpaceSceneHost({ adapterFactory, overlay }: SpaceSceneHo
     <section
       ref={sectionRef}
       aria-label="三维场景"
-      style={{ flex: 1, minWidth: 0, position: "relative", overflow: "hidden", background: "#181a1f" }}
+      onPointerDownCapture={(event) => {
+        const target = event.target as Node;
+        if (event.button === 0 && hostRef.current?.contains(target)) {
+          pointerDownRef.current = { x: event.clientX, y: event.clientY };
+        } else {
+          pointerDownRef.current = null;
+        }
+      }}
+      onPointerUpCapture={(event) => {
+        const start = pointerDownRef.current;
+        pointerDownRef.current = null;
+        const target = event.target as Node;
+        if (!start || event.button !== 0 || !hostRef.current?.contains(target)) return;
+        if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
+        onSceneClick?.(event.clientX, event.clientY);
+      }}
+      style={{ flex: 1, minWidth: 0, position: "relative", overflow: "hidden", background: "#181a1f", cursor: picking ? "crosshair" : undefined }}
     >
       <div ref={hostRef} data-scene-state={state} style={{ position: "absolute", inset: 0 }} />
       {state !== "ready" && (

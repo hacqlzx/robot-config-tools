@@ -48,6 +48,20 @@ declare global {
     pointCount: number;
   }
 
+  interface MapCoordinateCorrectionProgress {
+    projectName: string;
+    modelPath: string;
+    phase: "preparing" | "transforming" | "annotations" | "potree" | "complete";
+    percent: number;
+    message: string;
+  }
+
+  interface MapCoordinateCorrectionResult {
+    mapName: string;
+    modelPath: string;
+    origin: [number, number, number];
+  }
+
   type ProjectMapPotreeStatus =
     | "missing"
     | "checking"
@@ -414,8 +428,10 @@ declare global {
       potree: {
         ensureModel: (projectName: string, modelPath: string) => Promise<PotreeModelResult>;
         clipModel: (projectName: string, modelPath: string, bounds: PotreeClipBounds) => Promise<PotreeClipResult>;
+        correctMap: (projectName: string, modelPath: string, origin: [number, number, number]) => Promise<MapCoordinateCorrectionResult>;
         onConversionProgress: (callback: (progress: PotreeConversionProgress) => void) => () => void;
         onClipProgress: (callback: (progress: PotreeClipProgress) => void) => () => void;
+        onCorrectionProgress: (callback: (progress: MapCoordinateCorrectionProgress) => void) => () => void;
       };
       selectDir: (title?: string) => Promise<string | null>;
       selectZipFile: () => Promise<string | null>;

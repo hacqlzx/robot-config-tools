@@ -61,6 +61,10 @@
             {
                 "from": "src/potree-core/PotreeConverter_2.1.3",
                 "to": "potree/PotreeConverter_2.1.3"
+            },
+            {
+                "from": "src/pdal-runtime",
+                "to": "pdal-runtime"
             }
         ],
         "win": {

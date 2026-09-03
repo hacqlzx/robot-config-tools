@@ -5,6 +5,7 @@ import {
   type PotreeGeometryNode,
   type PotreeNodeCache,
   type PotreePointCloud,
+  type PotreeThreeNamespace,
   type PotreeViewerInstance,
 } from "@/potree-core/potree-runtime";
 import type { ViewDirection } from "../../types";
@@ -100,6 +101,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   private host: HTMLElement | null = null;
   private viewer: PotreeViewerInstance | null = null;
   private potree: PotreeNamespace | null = null;
+  private three: PotreeThreeNamespace | null = null;
   private pointcloud: PotreePointCloud | null = null;
   private keyboardController: PotreeFlyKeyboardController | null = null;
   private depthZoomController: PotreeDepthZoomController | null = null;
@@ -130,6 +132,8 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   private hoverPointer: { x: number; y: number } | null = null;
   private hoverFrame: number | null = null;
   private hoverEventTarget: HTMLElement | null = null;
+  private correctionMarkerElement: HTMLDivElement | null = null;
+  private correctionMarkerPoint: [number, number, number] | null = null;
 
   mount(host: HTMLElement): Promise<void> {
     this.host = host;
@@ -153,8 +157,10 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     viewer.setBackground("black");
 
     this.potree = potree;
+    this.three = three;
     this.viewer = viewer;
     this.createHoverCoordinateOverlay(renderArea);
+    this.createCoordinateCorrectionMarker(renderArea);
     this.applyRenderSettings();
     this.keyboardController = new PotreeFlyKeyboardController(
       viewer,
@@ -194,6 +200,40 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   setActive(active: boolean): void {
     this.active = active;
     this.syncActiveState();
+  }
+
+  pickPointAt(clientX: number, clientY: number): [number, number, number] | null {
+    const viewer = this.viewer;
+    const potree = this.potree;
+    if (!this.active || !viewer || !potree || !this.pointcloud) return null;
+    const bounds = viewer.renderer.domElement.getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0) return null;
+    const camera = viewer.scene.getActiveCamera?.();
+    const pick = potree.Utils?.getMousePointCloudIntersection;
+    if (!camera || !pick || viewer.scene.pointclouds.length === 0) return null;
+
+    try {
+      const result = pick(
+        {
+          x: Math.min(bounds.width, Math.max(0, clientX - bounds.left)),
+          y: Math.min(bounds.height, Math.max(0, clientY - bounds.top)),
+        },
+        camera,
+        viewer,
+        viewer.scene.pointclouds,
+        { pickClipped: true },
+      );
+      const point = result?.location;
+      if (!point || ![point.x, point.y, point.z].every(Number.isFinite)) return null;
+      return [point.x, point.y, point.z];
+    } catch {
+      return null;
+    }
+  }
+
+  setCoordinateCorrectionMarker(point: [number, number, number] | null): void {
+    this.correctionMarkerPoint = point ? [...point] as [number, number, number] : null;
+    this.renderCoordinateCorrectionMarker();
   }
 
   getRenderSettings(): SpaceRenderSettings {
@@ -658,6 +698,59 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.hoverEventTarget = null;
   }
 
+  private createCoordinateCorrectionMarker(target: HTMLElement): void {
+    this.disposeCoordinateCorrectionMarker();
+    const element = document.createElement("div");
+    element.setAttribute("aria-label", "坐标纠正原点");
+    Object.assign(element.style, {
+      position: "absolute",
+      left: "0",
+      top: "0",
+      zIndex: "14",
+      display: "none",
+      width: "16px",
+      height: "16px",
+      border: "2px solid #fa8c16",
+      borderRadius: "50%",
+      background: "rgba(250, 140, 22, 0.22)",
+      boxShadow: "0 0 0 2px rgba(0, 0, 0, 0.45)",
+      transform: "translate(-50%, -50%)",
+      pointerEvents: "none",
+    });
+    target.appendChild(element);
+    this.correctionMarkerElement = element;
+    this.viewer?.addEventListener("render.pass.perspective_overlay", this.renderCoordinateCorrectionMarker);
+  }
+
+  private readonly renderCoordinateCorrectionMarker = (): void => {
+    const element = this.correctionMarkerElement;
+    const point = this.correctionMarkerPoint;
+    const viewer = this.viewer;
+    const three = this.three;
+    const camera = viewer?.scene.getActiveCamera?.();
+    if (!element || !point || !viewer || !three || !camera) {
+      if (element) element.style.display = "none";
+      return;
+    }
+    const projected = new three.Vector3(...point).project(camera);
+    const bounds = viewer.renderer.domElement.getBoundingClientRect();
+    if (![projected.x, projected.y, projected.z, bounds.width, bounds.height].every(Number.isFinite)
+      || projected.z < -1 || projected.z > 1 || bounds.width <= 0 || bounds.height <= 0) {
+      element.style.display = "none";
+      return;
+    }
+    element.style.left = `${(projected.x + 1) * 0.5 * bounds.width}px`;
+    element.style.top = `${(1 - projected.y) * 0.5 * bounds.height}px`;
+    element.style.display = "block";
+  };
+
+  private disposeCoordinateCorrectionMarker(): void {
+    this.viewer?.removeEventListener("render.pass.perspective_overlay", this.renderCoordinateCorrectionMarker);
+    this.correctionMarkerPoint = null;
+    this.correctionMarkerElement?.remove();
+    this.correctionMarkerElement = null;
+  }
+
   private getModelWorldBounds(): SpaceClipBounds | null {
     if (this.modelClipBounds) return { ...this.modelClipBounds };
     const pointcloud = this.pointcloud;
@@ -954,6 +1047,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   clearModel(): void {
     this.loadVersion += 1;
     this.clearHoverCoordinate();
+    this.setCoordinateCorrectionMarker(null);
     this.stopClipping();
     this.modelClipBounds = null;
     this.loadedPointCount = null;
@@ -1021,6 +1115,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.pathEditor = null;
     this.normalAnnotationEditor?.dispose();
     this.normalAnnotationEditor = null;
+    this.disposeCoordinateCorrectionMarker();
     this.disposeHoverCoordinateOverlay();
     this.clearModel();
     if (this.viewer) {
@@ -1030,6 +1125,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     }
     this.viewer = null;
     this.potree = null;
+    this.three = null;
     this.mountPromise = null;
     host?.replaceChildren();
   }

@@ -40,6 +40,11 @@ function finitePoint(point: Vec3 | undefined): point is Vec3 {
   return !!point && point.every(Number.isFinite);
 }
 
+function medianPointZ(points: Vec3[]): number {
+  const heights = points.map((point) => point[2]).sort((left, right) => left - right);
+  return heights[Math.floor(heights.length / 2)];
+}
+
 function distanceSquaredToSegment(
   px: number,
   py: number,
@@ -285,9 +290,7 @@ export class PotreeChargingAreaEditor {
     const before = this.snapshot();
     this.points.push(clonePoint(point));
     if (this.points.length === 3) {
-      const baseZ = Number.isFinite(this.groundZ)
-        ? this.groundZ
-        : Math.min(...this.points.map((value) => value[2]));
+      const baseZ = medianPointZ(this.points);
       const box = orthogonalBoxFromThreePoints(
         this.points[0],
         this.points[1],

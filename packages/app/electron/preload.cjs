@@ -76,6 +76,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.invoke("potree:ensure-model", projectName, modelPath),
     clipModel: (projectName, modelPath, bounds) =>
       ipcRenderer.invoke("potree:clip-model", projectName, modelPath, bounds),
+    correctMap: (projectName, modelPath, origin) =>
+      ipcRenderer.invoke("potree:correct-map", projectName, modelPath, origin),
     onConversionProgress: (callback) => {
       const handler = (_event, progress) => callback(progress);
       ipcRenderer.on("potree:conversion-progress", handler);
@@ -85,6 +87,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
       const handler = (_event, progress) => callback(progress);
       ipcRenderer.on("potree:clip-progress", handler);
       return () => ipcRenderer.removeListener("potree:clip-progress", handler);
+    },
+    onCorrectionProgress: (callback) => {
+      const handler = (_event, progress) => callback(progress);
+      ipcRenderer.on("potree:correction-progress", handler);
+      return () => ipcRenderer.removeListener("potree:correction-progress", handler);
     },
   },
   selectDir: (title) => ipcRenderer.invoke("dialog:select-dir", title),
