@@ -1,5 +1,5 @@
 ﻿import { useRef } from "react";
-import { UploadOutlined, TableOutlined, SaveOutlined, ScissorOutlined, BorderOutlined, ThunderboltOutlined, AppstoreOutlined, NodeIndexOutlined, ExportOutlined, ArrowLeftOutlined, ArrowRightOutlined } from "@ant-design/icons";
+import { UploadOutlined, TableOutlined, SaveOutlined, ScissorOutlined, BorderOutlined, ThunderboltOutlined, AppstoreOutlined, NodeIndexOutlined, CompassOutlined, ExportOutlined, ArrowLeftOutlined, ArrowRightOutlined } from "@ant-design/icons";
 import { POINT_TABLE_FILE_ACCEPT } from "../utils/space-paths";
 
 interface Props {
@@ -11,6 +11,10 @@ interface Props {
   onToggleDeviceArea?: () => void;
   pathMode?: boolean;
   onTogglePath?: () => void;
+  normalMode?: boolean;
+  normalCount?: number;
+  normalSaving?: boolean;
+  onToggleNormal?: () => void;
   onUndo?: () => void;
   onRedo?: () => void;
   canUndo?: boolean;
@@ -41,6 +45,7 @@ const BUTTONS = [
   { icon: <ThunderboltOutlined style={{ fontSize: 20 }} />, label: "绘制充电区域", action: "charging" as const },
   { icon: <AppstoreOutlined style={{ fontSize: 20 }} />, label: "绘制设备区域", action: "deviceArea" as const },
   { icon: <NodeIndexOutlined style={{ fontSize: 20 }} />, label: "可行路径设定", action: "path" as const },
+  { icon: <CompassOutlined style={{ fontSize: 20 }} />, label: "法线标注", action: "normal" as const },
   { icon: <ExportOutlined style={{ fontSize: 20 }} />, label: "导出模型", action: "export" as const },
 ];
 
@@ -53,7 +58,7 @@ const BUTTONS = [
  * - "点表加载"仍使用隐藏 input，因为点表导入不需要额外的弹窗交互。
  * - 绘制模式按钮互斥由父级 useDrawingModeToggles 控制，Toolbar 仅根据 mode 显示激活态。
  */
-export default function Toolbar({ onOpenLoadModel, onClipModel, cabinetMode, onToggleCabinet, chargingMode, onToggleCharging, deviceAreaMode, onToggleDeviceArea, pathMode, onTogglePath, onUndo, onRedo, canUndo, canRedo, onSaveAll, onImportPointTable, onExportModel, importing }: Props) {
+export default function Toolbar({ onOpenLoadModel, onClipModel, cabinetMode, onToggleCabinet, chargingMode, onToggleCharging, deviceAreaMode, onToggleDeviceArea, pathMode, onTogglePath, normalMode, normalCount = 0, normalSaving, onToggleNormal, onUndo, onRedo, canUndo, canRedo, onSaveAll, onImportPointTable, onExportModel, importing }: Props) {
   const pointInputRef = useRef<HTMLInputElement>(null);
 
   /** 点表文件选中后立即触发导入，清空 input 值防止同名文件无法重复选择 */
@@ -74,6 +79,7 @@ export default function Toolbar({ onOpenLoadModel, onClipModel, cabinetMode, onT
       case "charging": onToggleCharging?.(); break;
       case "deviceArea": onToggleDeviceArea?.(); break;
       case "path": onTogglePath?.(); break;
+      case "normal": onToggleNormal?.(); break;
       case "undo": onUndo?.(); break;
       case "redo": onRedo?.(); break;
       case "saveAll": onSaveAll?.(); break;
@@ -132,14 +138,16 @@ export default function Toolbar({ onOpenLoadModel, onClipModel, cabinetMode, onT
           const isActive = (action === "cabinet" && cabinetMode) ||
             (action === "charging" && chargingMode) ||
             (action === "deviceArea" && deviceAreaMode) ||
-            (action === "path" && pathMode);
+            (action === "path" && pathMode) ||
+            (action === "normal" && normalMode);
           return (
             <button
               key={label}
               className={`space-edit-toolbar-btn${isActive ? " active" : ""}`}
               onClick={() => handleClick(action)}
+              aria-label={`${label}${action === "normal" && normalCount > 0 ? `，已有 ${normalCount} 条` : ""}`}
               // 点表导入中禁用点表按钮；历史栈为空时禁用撤销/恢复
-              disabled={(action === "point" && importing) || (action === "undo" && !canUndo) || (action === "redo" && !canRedo)}
+              disabled={(action === "point" && importing) || (action === "undo" && !canUndo) || (action === "redo" && !canRedo) || (action === "normal" && normalSaving)}
             >
               {icon}
               <span>{label}{action === "point" && importing ? "..." : ""}</span>

@@ -1,5 +1,5 @@
 import type { ViewDirection } from "../../types";
-import type { DrawingItem, PathData } from "../../hooks/drawing/drawing-schema";
+import type { DrawingItem, NormalAnnotationItem, PathData } from "../../hooks/drawing/drawing-schema";
 
 export type SpaceSceneLifecycleState = "detached" | "mounting" | "ready" | "failed";
 
@@ -21,6 +21,19 @@ export interface SpaceRayItem {
   origin: [number, number, number];
   direction: [number, number, number];
   length?: number;
+}
+
+export type SpaceNormalAnnotation = NormalAnnotationItem;
+
+export interface SpaceNormalAnnotationState {
+  count: number;
+  selectedId: string | null;
+  active: boolean;
+}
+
+export interface SpaceNormalAnnotationCallbacks {
+  onChange: (state: SpaceNormalAnnotationState) => void;
+  onHistory?: SpaceDrawingHistoryCallback;
 }
 
 export interface SpaceDrawingSelection {
@@ -99,8 +112,6 @@ export interface SpacePathState {
   active: boolean;
   selectedPointId: string | null;
   selectedPathId: string | null;
-  canUndo: boolean;
-  canRedo: boolean;
 }
 
 export interface SpacePathCallbacks {
@@ -136,7 +147,7 @@ export const DEFAULT_SPACE_RENDER_SETTINGS: SpaceRenderSettings = {
   pointBudget: 500_000,
 };
 
-export type SpaceDrawingHistoryScope = "cabinet" | "charging" | "device-area" | "path";
+export type SpaceDrawingHistoryScope = "cabinet" | "charging" | "device-area" | "path" | "normal";
 export type SpaceDrawingHistorySnapshot = unknown;
 export type SpaceDrawingHistoryCallback = (
   before: SpaceDrawingHistorySnapshot,
@@ -214,9 +225,20 @@ export interface SpaceSceneAdapter {
   setEditablePathData(data: PathData | null): void;
   getPathData(): PathData | null;
   hasPathDraft(): boolean;
-  undoPath(): void;
-  redoPath(): void;
   clearPathDrawing(): void;
+  startNormalAnnotationEditing(callbacks: SpaceNormalAnnotationCallbacks): boolean;
+  setNormalAnnotationEnabled(enabled: boolean): void;
+  setNormalAnnotations(items: SpaceNormalAnnotation[]): void;
+  getNormalAnnotations(): SpaceNormalAnnotation[];
+  selectNormalAnnotation(id: string | null): void;
+  renameNormalAnnotation(id: string, name: string): void;
+  bindNormalAnnotationPoint(id: string, point: { pointCode: string; pointName?: string }): void;
+  unbindNormalAnnotationPoint(id: string): void;
+  deleteNormalAnnotation(id: string): void;
+  hasNormalAnnotationDraft(): boolean;
+  clearNormalAnnotations(): void;
+  undoNormalAnnotation(): void;
+  redoNormalAnnotation(): void;
   startClipping(onBoundsChange: (bounds: SpaceClipBounds) => void): SpaceClipBounds | null;
   setClipBounds(bounds: SpaceClipBounds): void;
   stopClipping(): void;

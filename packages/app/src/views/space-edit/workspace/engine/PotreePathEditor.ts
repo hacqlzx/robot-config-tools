@@ -139,8 +139,6 @@ export class PotreePathEditor {
   private pendingControl: { pathId: string; which: 1 | 2 } | null = null;
   private draggingControl: { pathId: string; which: 1 | 2 } | null = null;
   private controlDragBefore: PathSnapshot | null = null;
-  private undoStack: PathSnapshot[] = [];
-  private redoStack: PathSnapshot[] = [];
 
   constructor(
     private readonly viewer: PotreeViewerInstance,
@@ -167,7 +165,7 @@ export class PotreePathEditor {
 
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
-    if (!enabled) this.cancelDrag();
+    if (!enabled) this.cancelDragState(false);
     this.emitChange();
   }
 
@@ -180,7 +178,7 @@ export class PotreePathEditor {
     this.pendingPathId = null;
     this.pendingControl = null;
     this.lastConnectedPointId = null;
-    this.cancelDrag();
+    this.cancelDragState(false);
     this.rebuildVisuals();
     this.emitChange();
   }
@@ -188,7 +186,7 @@ export class PotreePathEditor {
   setPageActive(active: boolean): void {
     this.pageActive = active;
     if (!active) {
-      this.cancelDrag();
+      this.cancelDragState(false);
       this.viewer.controls?.stop?.();
     }
   }
@@ -202,9 +200,7 @@ export class PotreePathEditor {
     this.pendingPathId = null;
     this.pendingControl = null;
     this.lastConnectedPointId = null;
-    this.undoStack = [];
-    this.redoStack = [];
-    this.cancelDrag();
+    this.cancelDragState(false);
     this.rebuildVisuals();
     this.emitChange();
   }
@@ -215,20 +211,6 @@ export class PotreePathEditor {
 
   hasDraft(): boolean {
     return this.data.points.length > 0;
-  }
-
-  undo(): void {
-    const previous = this.undoStack.pop();
-    if (!previous) return;
-    this.redoStack.push(this.snapshot());
-    this.restore(previous);
-  }
-
-  redo(): void {
-    const next = this.redoStack.pop();
-    if (!next) return;
-    this.undoStack.push(this.snapshot());
-    this.restore(next);
   }
 
   restoreSnapshot(snapshot: unknown): void {
@@ -244,9 +226,7 @@ export class PotreePathEditor {
     this.pendingPointId = null;
     this.pendingPathId = null;
     this.pendingControl = null;
-    this.undoStack = [];
-    this.redoStack = [];
-    this.cancelDrag();
+    this.cancelDragState(false);
     this.rebuildVisuals();
     this.emitChange();
   }
@@ -284,11 +264,15 @@ export class PotreePathEditor {
   }
 
   private commit(before: PathSnapshot, label = "路径编辑"): void {
-    this.undoStack.push(before);
-    this.redoStack = [];
     this.callbacks?.onHistory?.(before, this.snapshot(), label);
     this.rebuildVisuals();
     this.emitChange();
+  }
+
+  private commitIfChanged(before: PathSnapshot, label = "路径编辑"): boolean {
+    if (JSON.stringify(before.data) === JSON.stringify(this.data)) return false;
+    this.commit(before, label);
+    return true;
   }
 
   private emitChange(): void {
@@ -298,8 +282,6 @@ export class PotreePathEditor {
       active: this.active,
       selectedPointId: this.selectedPointId,
       selectedPathId: this.selectedPathId,
-      canUndo: this.undoStack.length > 0,
-      canRedo: this.redoStack.length > 0,
     });
   }
 
@@ -328,6 +310,7 @@ export class PotreePathEditor {
   private connectToPoint(pointId: string): void {
     if (pointId === this.lastConnectedPointId) return;
     const before = this.snapshot();
+    const shouldCreateSegment = !!this.lastConnectedPointId;
     if (this.lastConnectedPointId) {
       this.data.paths.push({
         id: createId("path"),
@@ -339,7 +322,11 @@ export class PotreePathEditor {
     this.lastConnectedPointId = pointId;
     this.selectedPointId = null;
     this.selectedPathId = null;
-    this.commit(before, "连接路径点");
+    if (shouldCreateSegment) this.commit(before, "连接路径点");
+    else {
+      this.rebuildVisuals();
+      this.emitChange();
+    }
   }
 
   private movePoint(pointId: string, position: Vec3): void {
@@ -371,7 +358,7 @@ export class PotreePathEditor {
   }
 
   private handleKeyDown = (event: KeyboardEvent): void => {
-    if (!this.pageActive || !this.enabled || this.active || event.key !== "Delete") return;
+    if (!this.pageActive || !this.enabled || !this.active || event.key !== "Delete") return;
     if ((window as Window & { __clipDragging?: boolean }).__clipDragging) return;
     this.deleteSelected();
   };
@@ -394,18 +381,16 @@ export class PotreePathEditor {
     this.pendingControl = null;
     this.clearPathSelectionClaim();
 
-    if (!this.active) {
-      const control = this.hitTestControlPoint(mouse);
-      if (control) {
-        this.selectedPointId = null;
-        this.selectedPathId = control.pathId;
-        this.pendingControl = control;
-        this.setPathSelectionClaim();
-        this.rebuildVisuals();
-        this.emitChange();
-        this.consumePointer(event);
-        return;
-      }
+    const control = this.active ? this.hitTestControlPoint(mouse) : null;
+    if (control) {
+      this.selectedPointId = null;
+      this.selectedPathId = control.pathId;
+      this.pendingControl = control;
+      this.setPathSelectionClaim();
+      this.rebuildVisuals();
+      this.emitChange();
+      this.consumePointer(event);
+      return;
     }
 
     const point = this.hitTestPoint(mouse);
@@ -413,32 +398,31 @@ export class PotreePathEditor {
       this.selectedPointId = point.id;
       this.selectedPathId = null;
       this.pendingPointId = point.id;
-      if (!this.active) this.setPathSelectionClaim();
+      this.setPathSelectionClaim();
       this.rebuildVisuals();
       this.emitChange();
       this.consumePointer(event);
       return;
     }
 
-    if (!this.active) {
-      const path = this.hitTestPath(mouse);
-      if (path) {
-        this.pendingPathId = path.id;
-        this.setPathSelectionClaim();
-      }
-      else {
-        this.selectedPointId = null;
-        this.selectedPathId = null;
-        this.rebuildVisuals();
-        this.emitChange();
-      }
+    const path = this.hitTestPath(mouse);
+    if (path) {
+      this.pendingPathId = path.id;
+      this.setPathSelectionClaim();
+      this.consumePointer(event);
+      return;
     }
+
+    this.selectedPointId = null;
+    this.selectedPathId = null;
+    this.rebuildVisuals();
+    this.emitChange();
   };
 
   private readonly handleMouseMove = (event: MouseEvent): void => {
     if (!this.pageActive) return;
     const flags = window as Window & { __drawingDragging?: boolean };
-    if (!this.active && !this.draggingControl && this.pendingControl && this.mouseDown) {
+    if (this.active && !this.draggingControl && this.pendingControl && this.mouseDown) {
       const distance = Math.hypot(event.clientX - this.mouseDown.x, event.clientY - this.mouseDown.y);
       if (distance > CLICK_THRESHOLD) {
         this.draggingControl = this.pendingControl;
@@ -459,7 +443,7 @@ export class PotreePathEditor {
       return;
     }
 
-    if (!this.active && !this.draggingPointId && this.pendingPointId && this.mouseDown) {
+    if (this.active && !this.draggingPointId && this.pendingPointId && this.mouseDown) {
       const distance = Math.hypot(event.clientX - this.mouseDown.x, event.clientY - this.mouseDown.y);
       if (distance <= CLICK_THRESHOLD) return;
       this.draggingPointId = this.pendingPointId;
@@ -480,7 +464,7 @@ export class PotreePathEditor {
     if (event.button !== 0) return;
     // The drawing renderer runs on window capture before this document
     // listener, so keep the claim until it has yielded the mouseup.
-    this.clearPathSelectionClaim();
+    this.releasePathSelectionClaimSoon();
     const flags = window as Window & { __drawingDragging?: boolean };
 
     if (this.draggingControl && this.controlDragBefore) {
@@ -492,13 +476,10 @@ export class PotreePathEditor {
       this.controlDragBefore = null;
       this.mouseDown = null;
       flags.__drawingDragging = false;
-      if (JSON.stringify(before.data) !== JSON.stringify(this.data)) {
-        this.undoStack.push(before);
-        this.redoStack = [];
-        this.callbacks?.onHistory?.(before, this.snapshot(), "调整路径曲线");
+      if (!this.commitIfChanged(before, "调整路径曲线")) {
+        this.rebuildVisuals();
+        this.emitChange();
       }
-      this.rebuildVisuals();
-      this.emitChange();
       this.consumePointer(event);
       return;
     }
@@ -509,14 +490,12 @@ export class PotreePathEditor {
       if (snap) this.movePoint(this.draggingPointId, snap);
       this.draggingPointId = null;
       this.dragBefore = null;
+      this.mouseDown = null;
       flags.__drawingDragging = false;
-      if (JSON.stringify(before.data) !== JSON.stringify(this.data)) {
-        this.undoStack.push(before);
-        this.redoStack = [];
-        this.callbacks?.onHistory?.(before, this.snapshot(), "移动路径点");
+      if (!this.commitIfChanged(before, "移动路径点")) {
+        this.rebuildVisuals();
+        this.emitChange();
       }
-      this.rebuildVisuals();
-      this.emitChange();
       this.consumePointer(event);
       return;
     }
@@ -558,11 +537,31 @@ export class PotreePathEditor {
       return;
     }
 
-    const mouse = this.mousePosition(event);
-    const point = this.pendingPointId ? this.point(this.pendingPointId) : this.hitTestPoint(mouse);
-    if (point) this.connectToPoint(point.id);
-    else {
-      const picked = this.pickPoint(mouse);
+    if (this.pendingControl) {
+      this.pendingControl = null;
+      this.rebuildVisuals();
+      this.emitChange();
+      this.consumePointer(event);
+      return;
+    }
+
+    if (this.pendingPathId) {
+      this.selectedPointId = null;
+      this.selectedPathId = this.pendingPathId;
+      this.pendingPathId = null;
+      this.rebuildVisuals();
+      this.emitChange();
+      this.consumePointer(event);
+      return;
+    }
+
+    if (this.pendingPointId) {
+      const point = this.point(this.pendingPointId);
+      if (point) {
+        this.connectToPoint(point.id);
+      }
+    } else {
+      const picked = this.pickPoint(this.mousePosition(event));
       if (picked) this.addPoint(picked);
     }
     this.pendingPointId = null;
@@ -573,6 +572,18 @@ export class PotreePathEditor {
   };
 
   private cancelDrag = (): void => {
+    this.cancelDragState(true);
+  };
+
+  private cancelDragState(recordHistory: boolean): void {
+    const pointDragBefore = this.dragBefore;
+    const controlDragBefore = this.controlDragBefore;
+    if (recordHistory && pointDragBefore && this.draggingPointId) {
+      this.commitIfChanged(pointDragBefore, "移动路径点");
+    } else if (recordHistory && controlDragBefore && this.draggingControl) {
+      this.commitIfChanged(controlDragBefore, "调整路径曲线");
+    }
+
     this.clearPathSelectionClaim();
     this.mouseDown = null;
     this.pendingPointId = null;
@@ -583,7 +594,7 @@ export class PotreePathEditor {
     this.draggingControl = null;
     this.controlDragBefore = null;
     (window as Window & { __drawingDragging?: boolean }).__drawingDragging = false;
-  };
+  }
 
   private setPathSelectionClaim(): void {
     (window as Window & { __spaceEditPathSelectionPending?: boolean }).__spaceEditPathSelectionPending = true;
@@ -593,9 +604,14 @@ export class PotreePathEditor {
     (window as Window & { __spaceEditPathSelectionPending?: boolean }).__spaceEditPathSelectionPending = false;
   }
 
+  private releasePathSelectionClaimSoon(): void {
+    window.setTimeout(() => this.clearPathSelectionClaim(), 0);
+  }
+
   private consumePointer(event: MouseEvent): void {
     event.preventDefault();
     event.stopPropagation();
+    event.stopImmediatePropagation();
     this.viewer.controls?.stop?.();
   }
 
@@ -722,7 +738,7 @@ export class PotreePathEditor {
 
   private hitTestControlPoint(mouse: { x: number; y: number }): { pathId: string; which: 1 | 2 } | null {
     const camera = this.viewer.scene.getActiveCamera?.();
-    if (!camera || !this.selectedPathId) return null;
+    if (!this.active || !camera || !this.selectedPathId) return null;
     const segment = this.data.paths.find((item) => item.id === this.selectedPathId);
     if (!segment) return null;
     const from = this.point(segment.from);
@@ -867,7 +883,7 @@ export class PotreePathEditor {
         });
       }
     });
-    if (this.selectedPathId) {
+    if (this.active && this.selectedPathId) {
       const segment = this.data.paths.find((item) => item.id === this.selectedPathId);
       if (segment) {
         const from = this.point(segment.from);

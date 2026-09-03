@@ -49,6 +49,26 @@ export interface DeviceAreaItem {
   updatedAt: string;
 }
 
+/** 三维法线标注，坐标直接使用 Potree 当前的 LAS 绝对坐标。 */
+export interface NormalAnnotationItem {
+  id: string;
+  name?: string;
+  /** 一个法线最多绑定一个点位；绑定关系随 normal_annotations.json 保存。 */
+  pointCode?: string;
+  pointName?: string;
+  origin: [number, number, number];
+  direction: [number, number, number];
+  length: number;
+  /** 创建法线时的采样圆直径，使用当前点云的世界坐标单位。 */
+  diameter: number;
+  updatedAt: string;
+}
+
+export interface NormalAnnotationFile {
+  version: 2;
+  items: NormalAnnotationItem[];
+}
+
 export interface PathPoint {
   /** 路径拓扑通过稳定 id 关联，不依赖点在数组中的位置。 */
   id: string;
@@ -127,6 +147,7 @@ export interface RobotAreaRecord {
 }
 
 export const DRAWING_FILE_NAME = "description_file.json";
+export const NORMAL_ANNOTATIONS_FILE_NAME = "normal_annotations.json";
 export const PATH_FILE_NAME = "reference_path.txt";
 export const ROBOT_PATH_FILE_NAME = "path.json";
 export const ROBOT_STOP_POINTS_FILE_NAMES = ["stop_points.json", "stop_point.json"] as const;

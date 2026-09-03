@@ -11,6 +11,7 @@ import {
 } from "@ant-design/icons";
 import {
   DRAWING_FILE_NAME,
+  NORMAL_ANNOTATIONS_FILE_NAME,
   PATH_FILE_NAME,
   ROBOT_PATH_FILE_NAME,
   ROBOT_STOP_POINTS_FILE_NAMES,
@@ -121,7 +122,9 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
   const isLas = isLasOrLazFileName;
   const isDrawing = isDrawingDataFileName;
   const isPath = isReferencePathFileName;
-  const isHiddenFile = (name: string) => name === MAP_INFO_FILE_NAME || isRobotStopPointFileName(name);
+  const isHiddenFile = (name: string) => name === MAP_INFO_FILE_NAME
+    || name === NORMAL_ANNOTATIONS_FILE_NAME
+    || isRobotStopPointFileName(name);
   const isVisibleTreeNode = (node: SpaceTreeNode) => node.isDir || !isHiddenFile(node.name);
 
   const uniqueByPath = (items: SpaceTreeNode[]) => {
@@ -223,7 +226,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
         const pathNodes: SpaceTreeNode[] = [];
         const collect = (items: SpaceTreeNode[]) => {
           items.forEach((child) => {
-            if (!child.isDir && child.name === MAP_INFO_FILE_NAME) {
+            if (!child.isDir && isHiddenFile(child.name)) {
               return;
             }
             if (child.isDir && child.children) {

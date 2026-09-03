@@ -21,8 +21,6 @@ interface Props {
   loadedFiles: Set<string>;
   treeKey: number;
   loadingFile: string;
-  /** 屏柜树勾选变化（传出勾选的间隔 id，用于 3D 回显） */
-  onCabinetCheck?: (bayIds: number[]) => void;
   /** 已回显的绘制 json 路径集合 */
   mapDrawingShown?: Set<string>;
   /** 勾选/取消地图树里的绘制 json（回显屏柜） */
@@ -144,12 +142,13 @@ const TREE_CSS = `
   .side-tree .ant-tree-switcher { width: 16px; flex-shrink: 0; }
 `;
 
-export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUnloadMapFile, loadedFiles, treeKey, loadingFile, onCabinetCheck, mapDrawingShown, onToggleDrawing, mapPathShown, onTogglePath }: Props) {
+export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUnloadMapFile, loadedFiles, treeKey, loadingFile, mapDrawingShown, onToggleDrawing, mapPathShown, onTogglePath }: Props) {
   const selectedProject = useSelectedProject();
   const [sideTab, setSideTab] = useState("map");
   const [mapTreeData, setMapTreeData] = useState<SpaceTreeNode[]>([]);
   const [mapPotreeStatuses, setMapPotreeStatuses] = useState<Record<string, ProjectMapPotreeState>>({});
   const [cabinetTreeData, setCabinetTreeData] = useState<TreeDataNode[]>([]);
+  const [cabinetSelectedKeys, setCabinetSelectedKeys] = useState<React.Key[]>([]);
   const [deviceAreaTreeData, setDeviceAreaTreeData] = useState<TreeDataNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(false);
 
@@ -215,19 +214,11 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
     }
   }, [selectedProject]);
 
-  const handleCabinetTreeCheck: TreeProps["onCheck"] = useCallback((checkedKeys) => {
-    const keys = Array.isArray(checkedKeys) ? checkedKeys : checkedKeys.checked;
-    const bayIds = new Set<number>();
-    keys.forEach((key) => {
-      const text = String(key);
-      const bayText = text.startsWith("bay/")
-        ? text.slice("bay/".length)
-        : text.includes("/bay/") ? text.split("/bay/").at(-1) : "";
-      const id = Number(bayText);
-      if (Number.isSafeInteger(id) && id > 0) bayIds.add(id);
-    });
-    onCabinetCheck?.([...bayIds]);
-  }, [onCabinetCheck]);
+  const handleCabinetTreeSelect: TreeProps["onSelect"] = useCallback((selectedKeys) => {
+    // 屏柜树使用 Tree 默认的单选节点模式，避免复选框级联产生多选结果。
+    const keys = selectedKeys.slice(-1);
+    setCabinetSelectedKeys(keys);
+  }, []);
 
   useEffect(() => {
     if (sideTab === "map") {
@@ -364,8 +355,9 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
                   treeData={cabinetTreeData}
                   showLine
                   blockNode
-                  checkable
-                  onCheck={handleCabinetTreeCheck}
+                  multiple={false}
+                  selectedKeys={cabinetSelectedKeys}
+                  onSelect={handleCabinetTreeSelect}
                   defaultExpandAll
                 />
               </div>

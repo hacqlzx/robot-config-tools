@@ -16,6 +16,7 @@ import { PotreeDeviceAreaEditor } from "./PotreeDeviceAreaEditor";
 import { PotreeDrawingRenderer } from "./PotreeDrawingRenderer";
 import { PotreeFlyKeyboardController } from "./PotreeFlyKeyboardController";
 import { PotreePathEditor } from "./PotreePathEditor";
+import { PotreeNormalAnnotationEditor } from "./PotreeNormalAnnotationEditor";
 import { PotreeRotationPivotIndicator } from "./PotreeRotationPivotIndicator";
 import {
   DEFAULT_SPACE_RENDER_SETTINGS,
@@ -34,6 +35,8 @@ import {
   type SpaceDrawingHistorySnapshot,
   type SpaceDrawingInteractionCallbacks,
   type SpacePathCallbacks,
+  type SpaceNormalAnnotation,
+  type SpaceNormalAnnotationCallbacks,
   type SpaceSceneAdapter,
   type SpaceSceneModel,
 } from "./types";
@@ -41,18 +44,24 @@ import {
 const MODEL_LOAD_TIMEOUT_MS = 60_000;
 const FIT_PADDING = 1.05;
 const MIN_FIT_DISTANCE = 0.01;
-const DIRECTION_LOCATE_FORWARD_FACTOR = 0.65;
-const DIRECTION_LOCATE_BACK_FACTOR = 0.55;
-const DIRECTION_LOCATE_LIFT_FACTOR = 0.35;
-const DIRECTION_LOCATE_MIN_TOP_FACTOR = 0.25;
+const DIRECTION_LOCATE_TARGET_FACTOR = 0.35;
+const DIRECTION_LOCATE_CAMERA_FACTOR = 1.15;
+const DIRECTION_LOCATE_SIDE_FACTOR = 0.65;
 const INTERACTION_LOD_MULTIPLIER = 2;
-const INTERACTION_LOD_SETTLE_MS = 180;
+const FOCUS_INTERACTION_LOD_SETTLE_MS = 650;
+const INTERACTION_POINT_BUDGET = 250_000;
 const MIN_NODE_SIZE_BY_DETAIL: Record<SpaceRenderDetailLevel, number> = {
   1: 80,
   2: 30,
   3: 15,
   4: 8,
 };
+
+function formatHoverCoordinate(value: number): string {
+  if (!Number.isFinite(value)) return "-";
+  const fixed = value.toFixed(3);
+  return fixed === "-0.000" ? "0.000" : fixed;
+}
 
 const POTREE_VIEW_ANGLES: Record<ViewDirection, { yaw: number; pitch: number }> = {
   前: { yaw: 0, pitch: 0 },
@@ -100,6 +109,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   private cabinetEditor: PotreeCabinetEditor | null = null;
   private deviceAreaEditor: PotreeDeviceAreaEditor | null = null;
   private pathEditor: PotreePathEditor | null = null;
+  private normalAnnotationEditor: PotreeNormalAnnotationEditor | null = null;
   private mountPromise: Promise<void> | null = null;
   private fitTimer: number | null = null;
   private mountVersion = 0;
@@ -116,6 +126,10 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   private clipPreviousMethod: number | null = null;
   private interactionLodTimer: number | null = null;
   private interactionLodActive = false;
+  private hoverCoordinateElement: HTMLDivElement | null = null;
+  private hoverPointer: { x: number; y: number } | null = null;
+  private hoverFrame: number | null = null;
+  private hoverEventTarget: HTMLElement | null = null;
 
   mount(host: HTMLElement): Promise<void> {
     this.host = host;
@@ -140,12 +154,11 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
 
     this.potree = potree;
     this.viewer = viewer;
+    this.createHoverCoordinateOverlay(renderArea);
     this.applyRenderSettings();
     this.keyboardController = new PotreeFlyKeyboardController(
       viewer,
       renderArea,
-      this.beginInteractionLod,
-      this.scheduleInteractionLodRestore,
     );
     this.keyboardController.start();
     this.keyboardController.setActive(this.active);
@@ -153,12 +166,9 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
       viewer,
       potree,
       renderArea,
-      this.beginInteractionLod,
     );
     this.depthZoomController.start();
     this.depthZoomController.setActive(this.active);
-    viewer.controls?.addEventListener("start", this.beginInteractionLod);
-    viewer.controls?.addEventListener("end", this.scheduleInteractionLodRestore);
     this.rotationPivotIndicator = new PotreeRotationPivotIndicator(viewer, renderArea);
     this.rotationPivotIndicator.start();
     this.rotationPivotIndicator.setActive(this.active);
@@ -172,9 +182,11 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.deviceAreaEditor.setActive(this.active);
     this.pathEditor = new PotreePathEditor(viewer, potree, three, renderArea);
     this.pathEditor.setPageActive(this.active);
-    // Keep path interaction available outside placement mode, matching the
-    // legacy editor. Active mode only changes how a click is interpreted.
+    // Keep path selection available outside placement mode; dragging and
+    // destructive edits are gated by path drawing mode.
     this.pathEditor.setEnabled(true);
+    this.normalAnnotationEditor = new PotreeNormalAnnotationEditor(viewer, potree, three, renderArea);
+    this.normalAnnotationEditor.setActive(this.active);
     this.resize();
     this.syncActiveState();
   }
@@ -357,17 +369,65 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     return this.pathEditor?.hasDraft() ?? false;
   }
 
-  undoPath(): void {
-    this.pathEditor?.undo();
-  }
-
-  redoPath(): void {
-    this.pathEditor?.redo();
-  }
-
   clearPathDrawing(): void {
     this.pathEditor?.setActive(false);
     this.pathEditor?.clear();
+  }
+
+  startNormalAnnotationEditing(callbacks: SpaceNormalAnnotationCallbacks): boolean {
+    if (!this.normalAnnotationEditor || !this.pointcloud) return false;
+    this.stopClipping();
+    this.normalAnnotationEditor.start(callbacks);
+    this.normalAnnotationEditor.setEnabled(true);
+    return true;
+  }
+
+  setNormalAnnotationEnabled(enabled: boolean): void {
+    this.normalAnnotationEditor?.setEnabled(enabled);
+  }
+
+  setNormalAnnotations(items: SpaceNormalAnnotation[]): void {
+    this.normalAnnotationEditor?.setData(items);
+  }
+
+  getNormalAnnotations(): SpaceNormalAnnotation[] {
+    return this.normalAnnotationEditor?.getData() ?? [];
+  }
+
+  selectNormalAnnotation(id: string | null): void {
+    this.normalAnnotationEditor?.select(id);
+  }
+
+  renameNormalAnnotation(id: string, name: string): void {
+    this.normalAnnotationEditor?.rename(id, name);
+  }
+
+  bindNormalAnnotationPoint(id: string, point: { pointCode: string; pointName?: string }): void {
+    this.normalAnnotationEditor?.bindPoint(id, point);
+  }
+
+  unbindNormalAnnotationPoint(id: string): void {
+    this.normalAnnotationEditor?.unbindPoint(id);
+  }
+
+  deleteNormalAnnotation(id: string): void {
+    this.normalAnnotationEditor?.delete(id);
+  }
+
+  hasNormalAnnotationDraft(): boolean {
+    return this.normalAnnotationEditor?.hasDraft() ?? false;
+  }
+
+  clearNormalAnnotations(): void {
+    this.normalAnnotationEditor?.clear();
+  }
+
+  undoNormalAnnotation(): void {
+    this.normalAnnotationEditor?.undo();
+  }
+
+  redoNormalAnnotation(): void {
+    this.normalAnnotationEditor?.redo();
   }
 
   restoreDrawingHistorySnapshot(scope: SpaceDrawingHistoryScope, snapshot: SpaceDrawingHistorySnapshot): void {
@@ -383,6 +443,9 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
         break;
       case "path":
         this.pathEditor?.restoreSnapshot(snapshot);
+        break;
+      case "normal":
+        this.normalAnnotationEditor?.restoreSnapshot(snapshot);
         break;
     }
   }
@@ -409,21 +472,36 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     const ny = dy / len;
     const nz = dz / len;
     const baseDistance = Math.max(0.5, extent);
-    const horizontalLen = Math.hypot(nx, ny);
-    const hx = horizontalLen > 1e-6 ? nx / horizontalLen : 0;
-    const hy = horizontalLen > 1e-6 ? ny / horizontalLen : 1;
-    const forwardDistance = baseDistance * DIRECTION_LOCATE_FORWARD_FACTOR;
-    const backDistance = baseDistance * DIRECTION_LOCATE_BACK_FACTOR;
-    const liftHeight = baseDistance * DIRECTION_LOCATE_LIFT_FACTOR;
-    const minTopHeight = baseDistance * DIRECTION_LOCATE_MIN_TOP_FACTOR;
+    // Place the camera beyond the arrow head and look back toward the line's
+    // middle. A side offset keeps the line visible instead of viewing it
+    // head-on along its own axis.
+    const targetDistance = baseDistance * DIRECTION_LOCATE_TARGET_FACTOR;
+    const cameraDistance = baseDistance * DIRECTION_LOCATE_CAMERA_FACTOR;
+    const sideDistance = baseDistance * DIRECTION_LOCATE_SIDE_FACTOR;
+    const referenceX = Math.abs(nz) < 0.9 ? 0 : 1;
+    const referenceY = 0;
+    const referenceZ = Math.abs(nz) < 0.9 ? 1 : 0;
+    const sideX = ny * referenceZ - nz * referenceY;
+    const sideY = nz * referenceX - nx * referenceZ;
+    const sideZ = nx * referenceY - ny * referenceX;
+    const sideLength = Math.hypot(sideX, sideY, sideZ);
+    const sx = sideX / sideLength;
+    const sy = sideY / sideLength;
+    const sz = sideZ / sideLength;
 
-    const lookX = cx + nx * forwardDistance;
-    const lookY = cy + ny * forwardDistance;
-    const lookZ = cz + nz * forwardDistance;
-    const cameraX = cx - hx * backDistance;
-    const cameraY = cy - hy * backDistance;
-    const cameraZ = Math.max(cz + liftHeight, lookZ + minTopHeight);
+    const lookX = cx + nx * targetDistance;
+    const lookY = cy + ny * targetDistance;
+    const lookZ = cz + nz * targetDistance;
+    const cameraX = cx + nx * cameraDistance + sx * sideDistance;
+    const cameraY = cy + ny * cameraDistance + sy * sideDistance;
+    const cameraZ = cz + nz * cameraDistance + sz * sideDistance;
+    // A direct camera jump exposes a new point-cloud region immediately. Use a
+    // temporary coarse LOD until the new nodes have settled, otherwise the
+    // full point budget is requested in one frame.
+    this.beginInteractionLod();
+    this.viewer.setPointBudget(Math.min(this.configuredPointBudget(), INTERACTION_POINT_BUDGET));
     this.focusCamera(cameraX, cameraY, cameraZ, lookX, lookY, lookZ);
+    this.scheduleInteractionLodRestoreAfter(FOCUS_INTERACTION_LOD_SETTLE_MS);
   }
 
   private focusTopOn(cx: number, cy: number, cz: number, extent: number): void {
@@ -462,10 +540,122 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.cabinetEditor?.setActive(active);
     this.deviceAreaEditor?.setActive(active);
     this.pathEditor?.setPageActive(active);
+    this.normalAnnotationEditor?.setActive(active);
     if (!active) {
       this.viewer?.controls?.stop?.();
       this.resetInteractionLod();
+      this.clearHoverCoordinate();
     }
+  }
+
+  private createHoverCoordinateOverlay(target: HTMLElement): void {
+    this.disposeHoverCoordinateOverlay();
+
+    const element = document.createElement("div");
+    element.setAttribute("aria-label", "鼠标悬浮点坐标");
+    Object.assign(element.style, {
+      position: "absolute",
+      left: "14px",
+      bottom: "14px",
+      zIndex: "12",
+      display: "none",
+      maxWidth: "calc(100% - 28px)",
+      padding: "6px 10px",
+      border: "1px solid rgba(255,255,255,0.14)",
+      borderRadius: "5px",
+      background: "rgba(14, 16, 20, 0.82)",
+      color: "#f2f4f7",
+      fontFamily: "-apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+      fontSize: "12px",
+      lineHeight: "18px",
+      whiteSpace: "normal",
+      overflowWrap: "anywhere",
+      overflow: "hidden",
+      pointerEvents: "none",
+      userSelect: "none",
+    });
+    target.appendChild(element);
+    target.addEventListener("mousemove", this.handleHoverMove);
+    target.addEventListener("mouseleave", this.handleHoverLeave);
+    this.hoverCoordinateElement = element;
+    this.hoverEventTarget = target;
+  }
+
+  private readonly handleHoverMove = (event: MouseEvent): void => {
+    if (!this.active || !this.viewer || !this.pointcloud) {
+      this.clearHoverCoordinate();
+      return;
+    }
+
+    const bounds = this.viewer.renderer.domElement.getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0) {
+      this.clearHoverCoordinate();
+      return;
+    }
+    this.hoverPointer = {
+      x: Math.min(bounds.width, Math.max(0, event.clientX - bounds.left)),
+      y: Math.min(bounds.height, Math.max(0, event.clientY - bounds.top)),
+    };
+    // Point picking performs a WebGL readback; cap it at one lookup per frame.
+    if (this.hoverFrame === null) this.hoverFrame = window.requestAnimationFrame(this.updateHoverCoordinate);
+  };
+
+  private readonly handleHoverLeave = (): void => {
+    this.clearHoverCoordinate();
+  };
+
+  private readonly updateHoverCoordinate = (): void => {
+    this.hoverFrame = null;
+    const pointer = this.hoverPointer;
+    const viewer = this.viewer;
+    const potree = this.potree;
+    const element = this.hoverCoordinateElement;
+    if (!pointer || !viewer || !potree || !this.active || !this.pointcloud) {
+      this.clearHoverCoordinate();
+      return;
+    }
+
+    const camera = viewer.scene.getActiveCamera?.();
+    const pick = potree.Utils?.getMousePointCloudIntersection;
+    if (!camera || !pick || viewer.scene.pointclouds.length === 0) {
+      this.clearHoverCoordinate();
+      return;
+    }
+
+    try {
+      const result = pick(pointer, camera, viewer, viewer.scene.pointclouds, { pickClipped: true });
+      const point = result?.location;
+      if (!point || ![point.x, point.y, point.z].every(Number.isFinite)) {
+        this.clearHoverCoordinate();
+        return;
+      }
+      if (element) {
+        element.textContent = `坐标  X: ${formatHoverCoordinate(point.x)}  Y: ${formatHoverCoordinate(point.y)}  Z: ${formatHoverCoordinate(point.z)}`;
+        element.style.display = "block";
+      }
+    } catch {
+      this.clearHoverCoordinate();
+    }
+  };
+
+  private clearHoverCoordinate(): void {
+    this.hoverPointer = null;
+    if (this.hoverFrame !== null) {
+      window.cancelAnimationFrame(this.hoverFrame);
+      this.hoverFrame = null;
+    }
+    if (this.hoverCoordinateElement) this.hoverCoordinateElement.style.display = "none";
+  }
+
+  private disposeHoverCoordinateOverlay(): void {
+    this.clearHoverCoordinate();
+    if (this.hoverEventTarget) {
+      this.hoverEventTarget.removeEventListener("mousemove", this.handleHoverMove);
+      this.hoverEventTarget.removeEventListener("mouseleave", this.handleHoverLeave);
+    }
+    this.hoverCoordinateElement?.remove();
+    this.hoverCoordinateElement = null;
+    this.hoverEventTarget = null;
   }
 
   private getModelWorldBounds(): SpaceClipBounds | null {
@@ -669,12 +859,15 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     if (!this.interactionLodActive) {
       this.viewer.setMinNodeSize(this.baseMinNodeSize());
     }
+    this.viewer.setPointBudget(this.configuredPointBudget());
+  }
+
+  private configuredPointBudget(): number {
     // Use the model count once metadata is available. Before that, keep the
     // budget finite so Potree never receives an unbounded traversal request.
-    const pointBudget = this.renderSettings.pointBudget === SPACE_POINT_BUDGET_ALL
+    return this.renderSettings.pointBudget === SPACE_POINT_BUDGET_ALL
       ? this.loadedPointCount ?? SPACE_POINT_BUDGET_MAX
       : this.renderSettings.pointBudget;
-    this.viewer.setPointBudget(pointBudget);
   }
 
   private baseMinNodeSize(): number {
@@ -694,14 +887,14 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     }
   };
 
-  private readonly scheduleInteractionLodRestore = (): void => {
+  private scheduleInteractionLodRestoreAfter(delayMs: number): void {
     if (!this.viewer || !this.interactionLodActive) return;
     if (this.interactionLodTimer !== null) window.clearTimeout(this.interactionLodTimer);
     this.interactionLodTimer = window.setTimeout(() => {
       this.interactionLodTimer = null;
       this.interactionLodActive = false;
       this.applyRenderSettings();
-    }, INTERACTION_LOD_SETTLE_MS);
+    }, delayMs);
   };
 
   private resetInteractionLod(): void {
@@ -760,6 +953,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
 
   clearModel(): void {
     this.loadVersion += 1;
+    this.clearHoverCoordinate();
     this.stopClipping();
     this.modelClipBounds = null;
     this.loadedPointCount = null;
@@ -768,6 +962,8 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.cabinetEditor?.clear();
     this.deviceAreaEditor?.clear();
     this.pathEditor?.clear();
+    this.normalAnnotationEditor?.setEnabled(false);
+    this.normalAnnotationEditor?.clear();
     this.clearDrawingLayers();
     if (this.fitTimer !== null) {
       window.clearTimeout(this.fitTimer);
@@ -807,8 +1003,6 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     const host = this.host;
     this.mountVersion += 1;
     this.host = null;
-    this.viewer?.controls?.removeEventListener("start", this.beginInteractionLod);
-    this.viewer?.controls?.removeEventListener("end", this.scheduleInteractionLodRestore);
     this.keyboardController?.dispose();
     this.keyboardController = null;
     this.depthZoomController?.dispose();
@@ -825,6 +1019,9 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.deviceAreaEditor = null;
     this.pathEditor?.dispose();
     this.pathEditor = null;
+    this.normalAnnotationEditor?.dispose();
+    this.normalAnnotationEditor = null;
+    this.disposeHoverCoordinateOverlay();
     this.clearModel();
     if (this.viewer) {
       this.viewer.renderer.setAnimationLoop(null);

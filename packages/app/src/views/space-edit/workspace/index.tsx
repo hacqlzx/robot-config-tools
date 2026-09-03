@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { App, Button, Modal } from "antd";
 import { CloudOutlined } from "@ant-design/icons";
+import { createLocalExportTask } from "@/components/download-task/task-actions";
 import { useResizable } from "@/components/useResizable";
 import { useSelectedProject } from "@/stores/appContextStore";
 import { parsePointExcel } from "@/utils/excel-parser";
@@ -19,19 +20,23 @@ import { useElementActive } from "@/components/useElementActive";
 import {
   deleteCabinetItem,
   DRAWING_FILE_NAME,
+  NORMAL_ANNOTATIONS_FILE_NAME,
   PATH_FILE_NAME,
   ROBOT_PATH_FILE_NAME,
   loadAllItemsFromJsonInLasCoordinates,
   loadPathDrawingInLasCoordinates,
+  loadNormalAnnotations,
   getBoundBayIdsInProject,
   loadCabinetNameSequence,
   saveCabinetDrawingInLasCoordinates,
   saveChargingAreaInLasCoordinates,
   saveDeviceAreasInLasCoordinates,
   savePathDrawingInLasCoordinates,
+  saveNormalAnnotationsInLasCoordinates,
   type CabinetItem,
   type ChargingAreaItem,
   type DeviceAreaItem,
+  type NormalAnnotationItem,
   type PathData,
 } from "../hooks/drawing/drawing-storage";
 import {
@@ -52,7 +57,9 @@ import {
 import ModelLoadingOverlay from "./components/ModelLoadingOverlay";
 import PotreeClipController from "./components/PotreeClipController";
 import PotreeRenderSettings from "./components/PotreeRenderSettings";
+import NormalAnnotationPanel from "./components/NormalAnnotationPanel";
 import SpaceSceneHost from "./components/SpaceSceneHost";
+import SpaceShortcutHelp from "./components/SpaceShortcutHelp";
 import { PotreeSpaceSceneAdapter } from "./engine/PotreeSpaceSceneAdapter";
 import { useSpaceDrawingHistory } from "./hooks/useSpaceDrawingHistory";
 import {
@@ -67,6 +74,7 @@ import {
   type SpaceDrawingLayer,
   type SpaceDrawingSelection,
   type SpacePathState,
+  type SpaceNormalAnnotationState,
   type SpaceRenderSettings,
 } from "./engine/types";
 
@@ -106,8 +114,12 @@ const DEFAULT_PATH_STATE: SpacePathState = {
   active: false,
   selectedPointId: null,
   selectedPathId: null,
-  canUndo: false,
-  canRedo: false,
+};
+
+const DEFAULT_NORMAL_ANNOTATION_STATE: SpaceNormalAnnotationState = {
+  count: 0,
+  selectedId: null,
+  active: false,
 };
 
 interface LoadingState {
@@ -165,6 +177,10 @@ interface SaveAllOptions extends PersistOptions {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function normalizePointCode(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase();
 }
 
 function loadRenderSettings(): SpaceRenderSettings {
@@ -271,12 +287,16 @@ export default function SpaceEditWorkspace() {
   const [pathMode, setPathMode] = useState(false);
   const [pathState, setPathState] = useState<SpacePathState>(DEFAULT_PATH_STATE);
   const [, setPathSaving] = useState(false);
+  const [normalMode, setNormalMode] = useState(false);
+  const [normalItems, setNormalItems] = useState<NormalAnnotationItem[]>([]);
+  const [normalState, setNormalState] = useState<SpaceNormalAnnotationState>(DEFAULT_NORMAL_ANNOTATION_STATE);
+  const [normalSaving, setNormalSaving] = useState(false);
+  const [normalExporting, setNormalExporting] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [projectBoundBayIds, setProjectBoundBayIds] = useState<Set<number>>(new Set());
   const drawingLifecycleVersion = useRef(0);
   const drawingLayerVersions = useRef(new Map<string, number>());
   const drawingLayerData = useRef(new Map<string, SpaceDrawingLayer>());
-  const cabinetBayFilter = useRef<Set<number> | null>(null);
   const cabinetSession = useRef<CabinetSession | null>(null);
   const cabinetSavingRef = useRef(false);
   const cabinetDraftRef = useRef<CabinetSaveData | null>(null);
@@ -288,6 +308,7 @@ export default function SpaceEditWorkspace() {
   const deviceAreaDeleteHandler = useRef<() => void>(() => undefined);
   const pathSession = useRef<PathSession | null>(null);
   const pathSavingRef = useRef(false);
+  const normalSavingRef = useRef(false);
   const dirtyScopesRef = useRef<Set<SpaceDrawingHistoryScope>>(new Set());
   const saveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoSaveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -337,6 +358,7 @@ export default function SpaceEditWorkspace() {
       charging: "充电区域",
       "device-area": "设备区域",
       path: "可行路径",
+      normal: "法线标注",
     };
     return [...dirtyScopesRef.current].map((scope) => labels[scope]).join("、") || "空间编辑";
   }, []);
@@ -417,7 +439,6 @@ export default function SpaceEditWorkspace() {
     drawingLifecycleVersion.current += 1;
     drawingLayerVersions.current.clear();
     drawingLayerData.current.clear();
-    cabinetBayFilter.current = null;
     cabinetSession.current = null;
     cabinetSavingRef.current = false;
     cabinetDraftRef.current = null;
@@ -427,12 +448,14 @@ export default function SpaceEditWorkspace() {
     deviceAreaSavingRef.current = false;
     pathSession.current = null;
     pathSavingRef.current = false;
+    normalSavingRef.current = false;
     dirtyScopesRef.current.clear();
     drawingHistory.clear();
     adapter.clearCabinetDrawing();
     adapter.clearChargingAreaDrawing();
     adapter.clearDeviceAreaDrawing();
     adapter.clearPathDrawing();
+    adapter.clearNormalAnnotations();
     adapter.clearDrawingLayers();
     setCabinetMode(false);
     setCabinetState(DEFAULT_CABINET_STATE);
@@ -447,6 +470,10 @@ export default function SpaceEditWorkspace() {
     setPathMode(false);
     setPathState(DEFAULT_PATH_STATE);
     setPathSaving(false);
+    setNormalMode(false);
+    setNormalItems([]);
+    setNormalState(DEFAULT_NORMAL_ANNOTATION_STATE);
+    setNormalSaving(false);
     setProjectBoundBayIds(new Set());
     setDrawingShown(new Set());
     setPathShown(new Set());
@@ -503,13 +530,7 @@ export default function SpaceEditWorkspace() {
       deviceArea.sourceData = data;
       editingTypes.add("device-area");
     }
-    const cabinetFilter = cabinetBayFilter.current;
-    const areas = (data.areas ?? [])
-      .filter((item) => !editingTypes.has(item.type))
-      .filter((item) => {
-        if (item.type !== "cabinet" || !cabinetFilter) return true;
-        return !!item.bay && cabinetFilter.has(item.bay.id);
-      });
+    const areas = (data.areas ?? []).filter((item) => !editingTypes.has(item.type));
     adapter.setDrawingLayer(filePath, { ...data, areas });
   }, [adapter]);
 
@@ -534,39 +555,6 @@ export default function SpaceEditWorkspace() {
       renderDrawingLayer(filePath, data);
     updateLayerVisibility("drawing", filePath, true);
   }, [adapter, nextLayerVersion, renderDrawingLayer, updateLayerVisibility]);
-
-  const handleCabinetCheck = useCallback(async (bayIds: number[]) => {
-    cabinetBayFilter.current = new Set(bayIds);
-    const api = window.electronAPI;
-    const targetPaths = new Set(drawingLayerData.current.keys());
-    const expectedPath = activeSourcePath ? mapSiblingFilePath(activeSourcePath, DRAWING_FILE_NAME) : "";
-    if (expectedPath) {
-      const cachedPath = [...drawingLayerData.current.keys()].find((filePath) => sameFilePath(filePath, expectedPath));
-      if (cachedPath) {
-        targetPaths.add(cachedPath);
-      } else if (api && bayIds.length > 0) {
-        try {
-          const items = await loadAllItemsFromJsonInLasCoordinates(api, expectedPath);
-          const data: SpaceDrawingLayer = { areas: items };
-          drawingLayerData.current.set(expectedPath, data);
-          targetPaths.add(expectedPath);
-        } catch {
-          return;
-        }
-      }
-    }
-
-    for (const filePath of targetPaths) {
-      const data = drawingLayerData.current.get(filePath);
-      if (!data) continue;
-      const mapLayerVisible = [...drawingShown].some((shownPath) => sameFilePath(shownPath, filePath));
-      if (bayIds.length === 0 && !mapLayerVisible) {
-        adapter.removeDrawingLayer(filePath);
-        continue;
-      }
-      renderDrawingLayer(filePath, data);
-    }
-  }, [activeSourcePath, adapter, drawingShown, renderDrawingLayer]);
 
   const handleTogglePath = useCallback(async (filePath: string, checked: boolean) => {
     const layerVersion = nextLayerVersion("path", filePath);
@@ -597,13 +585,18 @@ export default function SpaceEditWorkspace() {
       const tree = await window.electronAPI.project.listTree(selectedProject, subDir) as SpaceFileNode[];
       const drawingFile = findFilesByName(tree, [DRAWING_FILE_NAME])[0];
       if (drawingFile) await handleToggleDrawing(drawingFile, true);
+      const normalFile = findFilesByName(tree, [NORMAL_ANNOTATIONS_FILE_NAME])[0];
+      const normalItems = normalFile ? await loadNormalAnnotations(window.electronAPI, normalFile) : [];
+      adapter.setNormalAnnotations(normalItems);
+      setNormalItems(normalItems);
+      setNormalState({ ...DEFAULT_NORMAL_ANNOTATION_STATE, count: normalItems.length });
       const pathFiles = findFilesByName(tree, [PATH_FILE_NAME, ROBOT_PATH_FILE_NAME])
         .sort((left, right) => left.localeCompare(right));
       for (const pathFile of pathFiles) await handleTogglePath(pathFile, true);
     } catch (error) {
       console.warn("[space-edit] 自动加载区域/路径失败", { modelPath, error });
     }
-  }, [handleToggleDrawing, handleTogglePath, selectedProject]);
+  }, [adapter, handleToggleDrawing, handleTogglePath, selectedProject]);
 
   const closeCabinetMode = useCallback(() => {
     adapter.setCabinetDrawingEnabled(false);
@@ -624,6 +617,188 @@ export default function SpaceEditWorkspace() {
     adapter.setPathDrawingActive(false);
     setPathMode(false);
   }, [adapter]);
+
+  const closeNormalMode = useCallback(() => {
+    adapter.setNormalAnnotationEnabled(false);
+    setNormalMode(false);
+    setNormalState((current) => ({ ...current, active: false }));
+  }, [adapter]);
+
+  const persistNormalAnnotations = useCallback(async (options: PersistOptions = {}): Promise<boolean> => {
+    const silent = !!options.silent;
+    const closeAfterSave = options.closeAfterSave !== false;
+    const clearHistory = options.clearHistory !== false && closeAfterSave;
+    const api = window.electronAPI;
+    const modelPath = activeSourcePath;
+    if (!api) {
+      if (!silent) message.warning("法线标注保存仅支持 Electron 模式");
+      return false;
+    }
+    if (!selectedProject) {
+      if (!silent) message.warning("请先选择项目");
+      return false;
+    }
+    if (!modelPath) {
+      if (!silent) message.warning("请先加载模型");
+      return false;
+    }
+    if (normalSavingRef.current) return false;
+
+    const version = operationVersion.current;
+    const items = adapter.getNormalAnnotations().map((item: NormalAnnotationItem) => ({
+      ...item,
+      updatedAt: new Date().toISOString(),
+    }));
+    normalSavingRef.current = true;
+    setNormalSaving(true);
+    try {
+      await saveNormalAnnotationsInLasCoordinates({
+        api,
+        projectName: selectedProject,
+        modelPath,
+        items,
+      });
+      if (version !== operationVersion.current) return false;
+      if (closeAfterSave) closeNormalMode();
+      setNormalState((current) => ({
+        ...current,
+        count: items.length,
+        active: closeAfterSave ? false : current.active,
+      }));
+      dirtyScopesRef.current.delete("normal");
+      if (clearHistory) drawingHistory.clearScope("normal");
+      if (!silent) message.success(items.length > 0 ? "法线标注保存成功" : "法线标注已清空");
+      return true;
+    } catch (error) {
+      if (!silent) message.error(`保存法线标注失败: ${errorMessage(error)}`);
+      return false;
+    } finally {
+      normalSavingRef.current = false;
+      if (version === operationVersion.current) setNormalSaving(false);
+    }
+  }, [activeSourcePath, adapter, closeNormalMode, drawingHistory.clearScope, message, selectedProject]);
+
+  const handleToggleNormal = useCallback(() => {
+    if (normalMode) {
+      closeNormalMode();
+      return;
+    }
+    if (!activeSourcePath) {
+      message.warning("请先加载模型");
+      return;
+    }
+    if (modelBusyRef.current || normalSavingRef.current) {
+      message.warning("模型或法线标注正在处理中，请稍后再试");
+      return;
+    }
+    if (!window.electronAPI) {
+      message.warning("法线标注仅支持 Electron 模式");
+      return;
+    }
+    if (clipBounds) {
+      adapter.stopClipping();
+      setClipBounds(null);
+      setClipProgress(undefined);
+    }
+    closeCabinetMode();
+    closeChargingMode();
+    closeDeviceAreaMode();
+    closePathMode();
+    closeNormalMode();
+    const started = adapter.startNormalAnnotationEditing({
+      onChange: (state) => {
+        setNormalState(state);
+        setNormalItems(adapter.getNormalAnnotations());
+      },
+      onHistory: (before, after, label) => recordDrawingHistory("normal", before, after, label),
+    });
+    if (!started) {
+      message.error("法线标注编辑器初始化失败");
+      return;
+    }
+    setNormalMode(true);
+  }, [activeSourcePath, adapter, clipBounds, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, message, normalMode, recordDrawingHistory]);
+
+  const handleNormalSelect = useCallback((item: NormalAnnotationItem) => {
+    const current = adapter.getNormalAnnotations().find((candidate) => candidate.id === item.id) ?? item;
+    adapter.selectNormalAnnotation(current.id);
+    adapter.focusAlongDirection(
+      current.origin[0],
+      current.origin[1],
+      current.origin[2],
+      current.direction[0],
+      current.direction[1],
+      current.direction[2],
+      Math.max(0.5, current.length * 1.5, current.diameter * 1.2),
+    );
+  }, [adapter]);
+
+  const handleNormalRename = useCallback((normalId: string, name: string) => {
+    adapter.renameNormalAnnotation(normalId, name);
+  }, [adapter]);
+
+  const handleNormalBindPoint = useCallback((normalId: string, point: { pointCode: string; pointName: string }) => {
+    const pointCodeKey = normalizePointCode(point.pointCode);
+    const alreadyBound = normalItems.some((item) => item.id !== normalId && normalizePointCode(item.pointCode) === pointCodeKey);
+    if (alreadyBound) {
+      message.warning("该点位已绑定其他法线");
+      return;
+    }
+    adapter.bindNormalAnnotationPoint(normalId, point);
+  }, [adapter, message, normalItems]);
+
+  const handleNormalUnbindPoint = useCallback((normalId: string) => {
+    adapter.unbindNormalAnnotationPoint(normalId);
+  }, [adapter]);
+
+  const handleNormalDelete = useCallback((normalId: string) => {
+    adapter.deleteNormalAnnotation(normalId);
+  }, [adapter]);
+
+  const handleNormalExport = useCallback(async (triggerElement?: HTMLElement) => {
+    if (!selectedProject) {
+      message.warning("请先选择项目");
+      return;
+    }
+    const unbound = normalItems
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => !normalizePointCode(item.pointCode));
+    if (unbound.length > 0) {
+      const names = unbound.map(({ item, index }) => item.name?.trim() || `第 ${index + 1} 个法线`);
+      message.warning(`请先为以下法线绑定点位：${names.join("、")}`);
+      return;
+    }
+
+    const boundByCode = new Map<string, number>();
+    for (let index = 0; index < normalItems.length; index += 1) {
+      const pointCode = normalizePointCode(normalItems[index].pointCode);
+      const firstIndex = boundByCode.get(pointCode);
+      if (firstIndex !== undefined) {
+        message.warning(`点位“${normalItems[index].pointCode}”已绑定多个法线（第 ${firstIndex + 1} 个和第 ${index + 1} 个）`);
+        return;
+      }
+      boundByCode.set(pointCode, index);
+    }
+
+    setNormalExporting(true);
+    try {
+      const result = await createLocalExportTask({
+        name: "法线标注导出",
+        operation: "normal-annotations",
+        destTitle: "选择法线标注保存目录",
+        payload: {
+          projectName: selectedProject,
+          items: normalItems,
+        },
+        triggerElement,
+      });
+      if (!result.success) message.error(result.error || "创建法线标注导出任务失败");
+    } catch (error) {
+      message.error(`创建法线标注导出任务失败：${errorMessage(error)}`);
+    } finally {
+      setNormalExporting(false);
+    }
+  }, [message, normalItems, selectedProject]);
 
   const persistPath = useCallback(async (options: PersistOptions = {}): Promise<boolean> => {
     const silent = !!options.silent;
@@ -711,6 +886,7 @@ export default function SpaceEditWorkspace() {
     closeCabinetMode();
     closeChargingMode();
     closeDeviceAreaMode();
+    closeNormalMode();
     adapter.setEditablePathData(data);
     pathSession.current = { filePath: pathFilePath };
     const started = adapter.startPathDrawing({
@@ -723,15 +899,7 @@ export default function SpaceEditWorkspace() {
       return;
     }
     setPathMode(true);
-  }, [activeSourcePath, adapter, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closePathMode, message, pathMode, recordDrawingHistory]);
-
-  const handlePathUndo = useCallback(() => {
-    adapter.undoPath();
-  }, [adapter]);
-
-  const handlePathRedo = useCallback(() => {
-    adapter.redoPath();
-  }, [adapter]);
+  }, [activeSourcePath, adapter, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, message, pathMode, recordDrawingHistory]);
 
   const persistCabinet = useCallback(async (data: CabinetSaveData | null, options: PersistOptions = {}): Promise<boolean> => {
     const silent = !!options.silent;
@@ -891,6 +1059,7 @@ export default function SpaceEditWorkspace() {
     closeChargingMode();
     closeDeviceAreaMode();
     closePathMode();
+    closeNormalMode();
     const wasVisible = [...drawingShown].some((filePath) => sameFilePath(filePath, drawingFilePath));
     const sourceData: SpaceDrawingLayer = { areas: items };
     cabinetSession.current = { filePath: drawingFilePath, sourceData, wasVisible };
@@ -915,7 +1084,7 @@ export default function SpaceEditWorkspace() {
       setCabinetNameSequence({ cabinetRowStart: 1, cabinetStart: 1 });
     }
     setCabinetMode(true);
-  }, [activeSourcePath, adapter, cabinetMode, clipBounds, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closePathMode, drawingShown, message, recordDrawingHistory, renderDrawingLayer]);
+  }, [activeSourcePath, adapter, cabinetMode, clipBounds, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, drawingShown, message, recordDrawingHistory, renderDrawingLayer]);
 
   const handleCabinetUndo = useCallback(() => {
     adapter.undoCabinet();
@@ -1116,6 +1285,7 @@ export default function SpaceEditWorkspace() {
     closeCabinetMode();
     closeDeviceAreaMode();
     closePathMode();
+    closeNormalMode();
     const wasVisible = [...drawingShown].some((filePath) => sameFilePath(filePath, drawingFilePath));
     const sourceData: SpaceDrawingLayer = { areas: items };
     chargingSession.current = { filePath: drawingFilePath, sourceData, wasVisible };
@@ -1136,7 +1306,7 @@ export default function SpaceEditWorkspace() {
       return;
     }
     setChargingMode(true);
-  }, [activeSourcePath, adapter, chargingMode, clipBounds, closeCabinetMode, closeDeviceAreaMode, closeChargingMode, closePathMode, drawingShown, message, recordDrawingHistory, renderDrawingLayer]);
+  }, [activeSourcePath, adapter, chargingMode, clipBounds, closeCabinetMode, closeDeviceAreaMode, closeChargingMode, closeNormalMode, closePathMode, drawingShown, message, recordDrawingHistory, renderDrawingLayer]);
 
   const handleChargingHeightChange = useCallback((height: number) => {
     adapter.setChargingAreaHeight(height);
@@ -1268,6 +1438,7 @@ export default function SpaceEditWorkspace() {
     closeCabinetMode();
     closeChargingMode();
     closePathMode();
+    closeNormalMode();
     const wasVisible = [...drawingShown].some((filePath) => sameFilePath(filePath, drawingFilePath));
     const sourceData: SpaceDrawingLayer = { areas: items };
     deviceAreaSession.current = { filePath: drawingFilePath, sourceData, wasVisible };
@@ -1314,7 +1485,7 @@ export default function SpaceEditWorkspace() {
         if (version === operationVersion.current) setProjectBoundBayIds(new Set());
       }
     }
-  }, [activeSourcePath, adapter, clipBounds, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closePathMode, deviceAreaMode, drawingShown, message, recordDrawingHistory, renderDrawingLayer, selectedProject]);
+  }, [activeSourcePath, adapter, clipBounds, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, deviceAreaMode, drawingShown, message, recordDrawingHistory, renderDrawingLayer, selectedProject]);
 
   const handleDeviceAreaHeightChange = useCallback((height: number) => {
     adapter.setDeviceAreaHeight(height);
@@ -1403,6 +1574,7 @@ export default function SpaceEditWorkspace() {
     const shouldSaveDevice = !silent || dirty.has("device-area");
     const pathData = adapter.getPathData();
     const shouldSavePath = dirty.has("path") || (!silent && (pathMode || adapter.hasPathDraft()));
+    const shouldSaveNormal = dirty.has("normal") || (!silent && normalMode);
 
     if (!silent && chargingState.pointCount > 0 && !chargingVerts) {
       message.warning("充电区域请先完成 3 个点的绘制");
@@ -1450,6 +1622,12 @@ export default function SpaceEditWorkspace() {
       savedAny = true;
     }
 
+    if (shouldSaveNormal) {
+      const saved = await persistNormalAnnotations(persistOptions);
+      if (!saved) return false;
+      savedAny = true;
+    }
+
     if (!savedAny) {
       if (!silent) message.info("没有需要保存的编辑内容");
       return false;
@@ -1464,11 +1642,13 @@ export default function SpaceEditWorkspace() {
     deviceAreaState.pointCount,
     drawingHistory.clear,
     message,
+    normalMode,
     pathMode,
     persistCabinet,
     persistChargingArea,
     persistDeviceAreas,
     persistPath,
+    persistNormalAnnotations,
     validatePathBeforeSave,
   ]);
   saveAllRef.current = saveAll;
@@ -1516,13 +1696,13 @@ export default function SpaceEditWorkspace() {
   }, []);
 
   useEffect(() => {
-    const mode = cabinetMode ? "cabinet" : chargingMode ? "charging" : deviceAreaMode ? "device-area" : pathMode ? "path" : "idle";
+    const mode = cabinetMode ? "cabinet" : chargingMode ? "charging" : deviceAreaMode ? "device-area" : pathMode ? "path" : normalMode ? "normal" : "idle";
     (window as Window & { __spaceEditInteractionMode?: string }).__spaceEditInteractionMode = mode;
     return () => {
       const state = window as Window & { __spaceEditInteractionMode?: string };
       if (state.__spaceEditInteractionMode === mode) state.__spaceEditInteractionMode = "idle";
     };
-  }, [cabinetMode, chargingMode, deviceAreaMode, pathMode]);
+  }, [cabinetMode, chargingMode, deviceAreaMode, normalMode, pathMode]);
 
   useEffect(() => {
     adapter.setDrawingInteractionCallbacks({
@@ -1535,6 +1715,13 @@ export default function SpaceEditWorkspace() {
   useEffect(() => {
     if (!pageActive) return;
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && normalMode) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        if (!event.repeat) closeNormalMode();
+        return;
+      }
       const target = event.target as HTMLElement | null;
       if (target?.closest("input,textarea,select,[contenteditable='true']")) return;
       const isMod = event.ctrlKey || event.metaKey;
@@ -1558,6 +1745,7 @@ export default function SpaceEditWorkspace() {
         || adapter.hasDeviceAreaDraft()
         || adapter.hasChargingAreaDraft()
         || pathMode
+        || normalMode
         || dirtyScopesRef.current.size > 0;
       if (!saveShortcut || !hasDraft) return;
       event.preventDefault();
@@ -1576,6 +1764,8 @@ export default function SpaceEditWorkspace() {
     handleHistoryRedo,
     handleHistoryUndo,
     handleSaveAll,
+    closeNormalMode,
+    normalMode,
     pathMode,
     pageActive,
   ]);
@@ -1790,6 +1980,7 @@ export default function SpaceEditWorkspace() {
     closeChargingMode();
     closeDeviceAreaMode();
     closePathMode();
+    closeNormalMode();
     const initialBounds = adapter.startClipping((bounds) => setClipBounds(bounds));
     if (!initialBounds) {
       message.error("无法读取当前模型范围");
@@ -1797,7 +1988,7 @@ export default function SpaceEditWorkspace() {
     }
     setClipBounds(initialBounds);
     setClipProgress(undefined);
-  }, [activeModelPath, activeSourcePath, adapter, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closePathMode, confirmUnsavedChanges, message]);
+  }, [activeModelPath, activeSourcePath, adapter, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, confirmUnsavedChanges, message]);
 
   const handleClipBoundsChange = useCallback((bounds: SpaceClipBounds) => {
     setClipBounds(bounds);
@@ -1870,6 +2061,10 @@ export default function SpaceEditWorkspace() {
             onToggleDeviceArea={() => void handleToggleDeviceArea()}
             pathMode={pathMode}
             onTogglePath={() => void handleTogglePathMode()}
+            normalMode={normalMode}
+            normalCount={normalState.count}
+            normalSaving={normalSaving || normalExporting}
+            onToggleNormal={handleToggleNormal}
             onUndo={handleHistoryUndo}
             onRedo={handleHistoryRedo}
             canUndo={drawingHistory.canUndo}
@@ -1890,7 +2085,6 @@ export default function SpaceEditWorkspace() {
             onUnloadMapFile={clearModel}
             loadedFiles={loadedFiles}
             loadingFile={loading?.kind === "model" ? loading.modelPath || "" : ""}
-            onCabinetCheck={(bayIds) => { void handleCabinetCheck(bayIds); }}
             mapDrawingShown={drawingShown}
             onToggleDrawing={(filePath, checked) => void handleToggleDrawing(filePath, checked)}
             mapPathShown={pathShown}
@@ -1922,6 +2116,22 @@ export default function SpaceEditWorkspace() {
                     </div>
                   </div>
                 ) : null}
+                <SpaceShortcutHelp normalMode={normalMode} />
+                {normalMode && (
+                  <NormalAnnotationPanel
+                    items={normalItems}
+                    selectedId={normalState.selectedId}
+                    saving={normalSaving || normalExporting}
+                    exporting={normalExporting}
+                    onClose={closeNormalMode}
+                    onSelect={handleNormalSelect}
+                    onRename={handleNormalRename}
+                    onBindPoint={handleNormalBindPoint}
+                    onUnbindPoint={handleNormalUnbindPoint}
+                    onDelete={handleNormalDelete}
+                    onExport={handleNormalExport}
+                  />
+                )}
                 <SaveStatusBadge status={saveStatus} />
                 <PotreeRenderSettings settings={renderSettings} onChange={setRenderSettings} />
                 {cabinetMode && (

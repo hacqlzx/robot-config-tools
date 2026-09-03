@@ -21,6 +21,7 @@ import {
   AREA_TYPE_CHARGING,
   AREA_TYPE_DEVICE,
   DRAWING_FILE_NAME,
+  NORMAL_ANNOTATIONS_FILE_NAME,
   PATH_FILE_NAME,
   ROBOT_PATH_FILE_NAME,
   ROBOT_STOP_POINTS_FILE_NAMES,
@@ -30,6 +31,8 @@ import {
   type DrawingItem,
   type PathData,
   type PathPoint,
+  type NormalAnnotationItem,
+  type NormalAnnotationFile,
   type RobotAreaRecord,
 } from "./drawing-schema";
 import {
@@ -71,6 +74,7 @@ import {
 
 export {
   DRAWING_FILE_NAME,
+  NORMAL_ANNOTATIONS_FILE_NAME,
   PATH_FILE_NAME,
   ROBOT_PATH_FILE_NAME,
   ROBOT_STOP_POINTS_FILE_NAMES,
@@ -87,6 +91,8 @@ export type {
   PathItem,
   PathPoint,
   PathSegment,
+  NormalAnnotationFile,
+  NormalAnnotationItem,
   RobotAreaRecord,
 } from "./drawing-schema";
 
@@ -135,6 +141,78 @@ async function readJsonFile(api: ElectronAPI, filePath: string): Promise<unknown
 async function readTextFile(api: ElectronAPI, filePath: string): Promise<string> {
   const buf = await api.readLargeFile(filePath);
   return new TextDecoder("utf-8").decode(buf);
+}
+
+function normalAnnotationTuple(value: unknown): [number, number, number] | null {
+  if (!Array.isArray(value) || value.length < 3) return null;
+  const tuple: [number, number, number] = [Number(value[0]), Number(value[1]), Number(value[2])];
+  return tuple.every(Number.isFinite) ? tuple : null;
+}
+
+function normalAnnotationRecords(data: unknown): NormalAnnotationItem[] {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return [];
+  const payload = data as { version?: unknown; items?: unknown };
+  if (payload.version !== 2 || !Array.isArray(payload.items)) return [];
+
+  const source = payload.items;
+  return source.flatMap((value, index) => {
+    if (!value || typeof value !== "object") return [];
+    const record = value as Record<string, unknown>;
+    const origin = normalAnnotationTuple(record.origin);
+    const direction = normalAnnotationTuple(record.direction);
+    if (!origin || !direction) return [];
+    const length = Number(record.length);
+    const diameter = Number(record.diameter);
+    if (!Number.isFinite(length) || length <= 0 || !Number.isFinite(diameter) || diameter <= 0) return [];
+    return [{
+      id: typeof record.id === "string" && record.id ? record.id : `normal:${index + 1}`,
+      name: typeof record.name === "string" ? record.name : undefined,
+      pointCode: typeof record.pointCode === "string" && record.pointCode.trim() ? record.pointCode : undefined,
+      pointName: typeof record.pointName === "string" && record.pointName.trim() ? record.pointName : undefined,
+      origin,
+      direction,
+      length,
+      diameter,
+      updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : "",
+    }];
+  });
+}
+
+/** 读取当前地图的法线标注；文件不存在时返回空数组。 */
+export async function loadNormalAnnotations(api: ElectronAPI, modelPath: string): Promise<NormalAnnotationItem[]> {
+  try {
+    const filePath = mapSiblingFilePath(modelPath, NORMAL_ANNOTATIONS_FILE_NAME);
+    return normalAnnotationRecords(await readJsonFile(api, filePath));
+  } catch {
+    return [];
+  }
+}
+
+/** 保存当前地图的法线标注，坐标保持 Potree 使用的 LAS 绝对坐标。 */
+export async function saveNormalAnnotationsInLasCoordinates(params: {
+  api: ElectronAPI;
+  projectName: string;
+  modelPath: string;
+  items: NormalAnnotationItem[];
+}): Promise<void> {
+  const { api, projectName, modelPath, items } = params;
+  const payload: NormalAnnotationFile = {
+    version: 2,
+    items: items.map((item) => ({
+      ...item,
+      origin: [...item.origin] as [number, number, number],
+      direction: [...item.direction] as [number, number, number],
+      diameter: item.diameter,
+      updatedAt: item.updatedAt || new Date().toISOString(),
+    })),
+  };
+  const bytes = new TextEncoder().encode(JSON.stringify(payload, null, 2));
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  await api.project.writeFile(
+    projectName,
+    mapSiblingSubPath(modelPath, NORMAL_ANNOTATIONS_FILE_NAME),
+    buffer,
+  );
 }
 
 async function readAreaRecords(api: ElectronAPI, modelPath: string): Promise<RobotAreaRecord[]> {

@@ -20,6 +20,7 @@ import {
   prepareDeviceVerificationCorrectionData,
   prepareMarkedDeviceVerificationPoints,
 } from "./device-verify-ipc";
+import { exportNormalAnnotationExcel, prepareNormalAnnotationExport } from "../normal-annotation-export";
 
 type ExportTaskStatus = "pending" | "running" | "success" | "failed" | "cancelled";
 type LocalExportOperation =
@@ -29,7 +30,8 @@ type LocalExportOperation =
   | "cabinet-point-table"
   | "cabinet-annotation-params"
   | "device-correction-data"
-  | "device-marked-points";
+  | "device-marked-points"
+  | "normal-annotations";
 
 interface RemoteExportTaskRequest {
   type: "remote-export";
@@ -647,6 +649,11 @@ async function prepareLocalExport(request: LocalExportPrepareRequest): Promise<v
       prepareMarkedDeviceVerificationPoints(projectName);
       return;
     }
+    case "normal-annotations": {
+      const projectName = asString(request.payload?.projectName);
+      prepareNormalAnnotationExport(projectName, request.payload?.items);
+      return;
+    }
     default:
       throw new Error("不支持的本地导出类型");
   }
@@ -696,6 +703,11 @@ async function executeLocalExport(
       const projectName = asString(request.payload?.projectName);
       onProgress?.("准备导出标记点位", 20);
       return { success: true, ...exportMarkedDeviceVerificationPoints(projectName, request.destDir) };
+    }
+    case "normal-annotations": {
+      const projectName = asString(request.payload?.projectName);
+      onProgress?.("准备导出法线标注", 20);
+      return { success: true, ...exportNormalAnnotationExcel(projectName, request.destDir, request.payload?.items) };
     }
     default:
       throw new Error("不支持的本地导出类型");
@@ -769,4 +781,5 @@ const LOCAL_EXPORT_OPERATIONS = new Set<LocalExportOperation>([
   "cabinet-annotation-params",
   "device-correction-data",
   "device-marked-points",
+  "normal-annotations",
 ]);

@@ -307,7 +307,8 @@ declare global {
     | "cabinet-point-table"
     | "cabinet-annotation-params"
     | "device-correction-data"
-    | "device-marked-points";
+    | "device-marked-points"
+    | "normal-annotations";
 
   interface RemoteExportTaskCreateRequest {
     type: "remote-export";

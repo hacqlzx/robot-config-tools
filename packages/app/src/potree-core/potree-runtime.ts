@@ -32,13 +32,49 @@ export interface PotreePointCloud {
       };
     };
   };
+  visibleNodes?: PotreeVisibleNode[];
+  pick?: (
+    viewer: PotreeViewerInstance,
+    camera: PotreeCamera,
+    ray: PotreeRay,
+    params?: {
+      pickClipped?: boolean;
+      x?: number;
+      y?: number;
+      pickWindowSize?: number;
+      all?: boolean;
+    },
+  ) => unknown;
   getAttribute?: (name: string) => unknown;
+}
+
+export interface PotreeGeometryAttribute {
+  array?: ArrayLike<number>;
+  itemSize?: number;
+  potree?: { scale?: number; offset?: number };
+}
+
+export interface PotreeGeometryData {
+  attributes?: Record<string, PotreeGeometryAttribute>;
+}
+
+export interface PotreeVisibleNode {
+  geometryNode?: {
+    geometry?: PotreeGeometryData;
+    boundingBox?: { min: PotreeVector3; max: PotreeVector3 };
+    spacing?: number;
+  };
+  sceneNode?: {
+    position?: PotreeVector3;
+    matrixWorld?: { elements?: ArrayLike<number> };
+  };
 }
 
 export interface PotreePointCloudIntersection {
   location: PotreeVector3;
   distance: number;
   pointcloud: PotreePointCloud;
+  point?: Record<string, unknown>;
 }
 
 export interface PotreeRay {
@@ -126,6 +162,7 @@ export interface PotreeThreeObject3D {
   position: { set: (x: number, y: number, z: number) => void };
   scale: { set: (x: number, y: number, z: number) => void };
   up: { set: (x: number, y: number, z: number) => void };
+  matrixWorld?: { elements?: ArrayLike<number> };
   geometry?: PotreeThreeDisposable;
   material?: PotreeThreeDisposable | PotreeThreeDisposable[];
   add: (...objects: PotreeThreeObject3D[]) => void;
@@ -324,7 +361,8 @@ export function loadPotreeThreeRuntime(): Promise<PotreeThreeNamespace> {
   const url = resolvePotreeAssetUrl(POTREE_THREE_MODULE, document.baseURI);
   threeRuntimePromise = import(/* @vite-ignore */ url)
     .then((module) => {
-      if (!module.Scene || !module.Group || !module.Mesh || !module.BoxGeometry || !module.SphereGeometry) {
+      if (!module.Scene || !module.Group || !module.Mesh || !module.BoxGeometry || !module.SphereGeometry
+        || !module.BufferGeometry || !module.Float32BufferAttribute || !module.LineBasicMaterial || !module.LineSegments) {
         throw new Error("Potree Three.js 运行时初始化失败");
       }
       return module as unknown as PotreeThreeNamespace;
