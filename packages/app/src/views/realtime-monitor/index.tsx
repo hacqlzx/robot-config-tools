@@ -65,6 +65,7 @@ import VerifyTaskModal, {
   type VerifyTaskBayItem,
   type VerifyTaskPointItem,
 } from "@/views/image-edit/components/VerifyTaskModal";
+import { startDownloadTaskFlyAnimation } from "@/components/download-task";
 import RealtimeMapCanvas, { DirectMapData, RobotPosition } from "./RealtimeMapCanvas";
 import RealtimeVideoPlayer from "./RealtimeVideoPlayer";
 import "./index.scss";
@@ -271,6 +272,42 @@ function normalizeDateText(value: unknown): string {
 function formatLogDateTime(date: Date): string {
   const pad = (part: number) => String(part).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function getRobotLogFileUrl(data: unknown): string {
+  if (typeof data === "string") return data.trim();
+  if (!data || typeof data !== "object" || Array.isArray(data)) return "";
+  const record = data as Record<string, unknown>;
+  const value = record.fileUrl || record.downloadUrl || record.url || record.filePath || record.path;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function buildBackendFileUrl(fileUrl: string, backendIp: string): string {
+  if (/^https?:\/\//i.test(fileUrl)) return fileUrl;
+  const backendOrigin = backendIp.trim().replace(/\/+$/, "");
+  if (!backendOrigin) return fileUrl;
+  const origin = /^https?:\/\//i.test(backendOrigin) ? backendOrigin : `https://${backendOrigin}`;
+  return `${origin}/${fileUrl.replace(/^\/+/, "")}`;
+}
+
+function getRobotLogFileName(fileUrl: string): string {
+  const path = fileUrl.split(/[?#]/)[0];
+  const rawName = path.split(/[\\/]/).pop() || "机器人日志小包.zip";
+  try {
+    return decodeURIComponent(rawName).replace(/[<>:"/\\|?*]/g, "-") || "机器人日志小包.zip";
+  } catch {
+    return rawName.replace(/[<>:"/\\|?*]/g, "-") || "机器人日志小包.zip";
+  }
+}
+
+function startBrowserDownload(fileUrl: string, fileName: string): void {
+  const link = document.createElement("a");
+  link.style.display = "none";
+  link.href = fileUrl;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
 
 function getRobotId(robot: ResolvedRobot | null): number | undefined {
@@ -534,6 +571,226 @@ function formatStatusPanelValue(value: any): string {
   } catch {
     return String(value);
   }
+}
+
+interface WeatherMetric {
+  key: string;
+  label: string;
+  value: string;
+}
+
+const WEATHER_METRIC_DEFINITIONS = [
+  { key: "temperature", label: "温度", aliases: ["temperature", "温度"] },
+  { key: "humidity", label: "湿度", aliases: ["humidness", "humidity", "湿度"] },
+  { key: "windSpeed", label: "风速", aliases: ["windSpeed", "风速"] },
+  { key: "rainfall", label: "雨量", aliases: ["hyetal", "rainfall", "降雨量", "雨量"] },
+  { key: "windDirection", label: "风向", aliases: ["windDirection", "风向"] },
+  { key: "airPressure", label: "气压", aliases: ["atmosphericPressure", "airPressure", "气压"] },
+] as const;
+
+function getWeatherMetricDefinition(key: string) {
+  const normalizedKey = key.trim().toLowerCase();
+  return WEATHER_METRIC_DEFINITIONS.find((item) => item.aliases.some((alias) => alias.toLowerCase() === normalizedKey));
+}
+
+function getWeatherMetricSources(value: unknown): string[] {
+  if (value === null || value === undefined || value === "") return [];
+  if (typeof value === "object" && !Array.isArray(value)) {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, itemValue]) => {
+        const definition = getWeatherMetricDefinition(key);
+        return definition ? `${definition.label}:${formatStatusPanelValue(itemValue)}` : "";
+      })
+      .filter(Boolean);
+  }
+  return [formatStatusPanelValue(value)];
+}
+
+function parseWeatherMetrics(item: StatusPanelItem): WeatherMetric[] {
+  const source = [
+    ...getWeatherMetricSources(item.statusText),
+    ...getWeatherMetricSources(item.params),
+  ].join(" ");
+  if (!source || source === "--") return [];
+
+  const labels = WEATHER_METRIC_DEFINITIONS.flatMap((definition) => definition.aliases.filter((alias) => /[\u4e00-\u9fa5]/.test(alias)));
+  const labelPattern = labels.join("|");
+  const metrics = new Map<string, WeatherMetric>();
+  const matcher = new RegExp(`(${labelPattern})\\s*[:：]?\\s*(.*?)(?=\\s*(?:${labelPattern})\\s*[:：]?|$)`, "g");
+  let match: RegExpExecArray | null;
+  while ((match = matcher.exec(source)) !== null) {
+    const definition = getWeatherMetricDefinition(match[1]);
+    const value = match[2].trim();
+    if (definition && value && value !== "--" && !metrics.has(definition.key)) {
+      metrics.set(definition.key, { key: definition.key, label: definition.label, value });
+    }
+  }
+  return WEATHER_METRIC_DEFINITIONS
+    .map((definition) => metrics.get(definition.key))
+    .filter((metric): metric is WeatherMetric => Boolean(metric));
+}
+
+function isWeatherCategory(categoryName: string): boolean {
+  return /气象/.test(categoryName);
+}
+
+function isWeatherCommunicationItem(item: StatusPanelItem): boolean {
+  return /通讯|通信/.test(String(item.displayName || item.name || item.code || ""));
+}
+
+interface CoordinateValue {
+  axis: "X" | "Y" | "Z";
+  value: string;
+}
+
+function parseCoordinateValues(item: StatusPanelItem): CoordinateValue[] {
+  const coordinatePattern = "[-+]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?";
+  const stringSources = [item.statusText, item.params]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ");
+  const match = stringSources.match(new RegExp(
+    `坐标\\s*\\(\\s*x\\s*[,，]\\s*y\\s*[,，]\\s*z\\s*\\)\\s*[:：]?\\s*(${coordinatePattern})\\s*[,，]\\s*(${coordinatePattern})\\s*[,，]\\s*(${coordinatePattern})`,
+    "i",
+  ));
+  if (match) {
+    return ["X", "Y", "Z"].map((axis, index) => ({ axis: axis as CoordinateValue["axis"], value: match[index + 1] }));
+  }
+
+  const sourceObjects = [item.params, item.statusText].filter(
+    (value): value is Record<string, unknown> => Boolean(value && typeof value === "object" && !Array.isArray(value)),
+  );
+  const values = ["x", "y", "z"].map((axis) => {
+    for (const source of sourceObjects) {
+      const key = Object.keys(source).find((itemKey) => itemKey.toLowerCase() === axis);
+      if (key && source[key] !== null && source[key] !== undefined && source[key] !== "") {
+        return { axis: axis.toUpperCase() as CoordinateValue["axis"], value: formatStatusPanelValue(source[key]) };
+      }
+    }
+    return null;
+  });
+  return values.filter((value): value is CoordinateValue => Boolean(value));
+}
+
+function isCoordinateItem(item: StatusPanelItem): boolean {
+  const text = [item.displayName, item.name, item.code, item.statusText, formatStatusPanelValue(item.params)]
+    .map((value) => String(value || ""))
+    .join(" ");
+  return /定位状态|坐标/.test(text);
+}
+
+interface ServiceMetric {
+  key: string;
+  label: string;
+  value: string;
+}
+
+const SERVICE_METRIC_DEFINITIONS = [
+  { key: "speed", label: "速度", aliases: ["速度"] },
+  { key: "mileage", label: "里程", aliases: ["里程"] },
+  { key: "cpu", label: "CPU使用率", aliases: ["当前CPU使用率", "CPU使用率"] },
+  { key: "memory", label: "内存使用率", aliases: ["当前内存使用率", "内存使用率"] },
+] as const;
+
+function getServiceMetricDefinition(key: string) {
+  const normalizedKey = key.trim().toLowerCase();
+  return SERVICE_METRIC_DEFINITIONS.find((item) => item.aliases.some((alias) => alias.toLowerCase() === normalizedKey));
+}
+
+function parseServiceMetrics(item: StatusPanelItem): ServiceMetric[] {
+  const sources = [item.statusText, item.params]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ");
+  if (!sources || sources === "--") return [];
+
+  const labels = SERVICE_METRIC_DEFINITIONS.flatMap((definition) => definition.aliases).sort((a, b) => b.length - a.length);
+  const labelPattern = labels.join("|");
+  const metrics = new Map<string, ServiceMetric>();
+  const matcher = new RegExp(`(${labelPattern})\\s*[:：]?\\s*(.*?)(?=\\s*(?:${labelPattern})\\s*[:：]?|$)`, "g");
+  let match: RegExpExecArray | null;
+  while ((match = matcher.exec(sources)) !== null) {
+    const definition = getServiceMetricDefinition(match[1]);
+    const value = match[2].trim();
+    if (definition && value && value !== "--" && !metrics.has(definition.key)) {
+      metrics.set(definition.key, { key: definition.key, label: definition.label, value });
+    }
+  }
+  return SERVICE_METRIC_DEFINITIONS
+    .map((definition) => metrics.get(definition.key))
+    .filter((metric): metric is ServiceMetric => Boolean(metric));
+}
+
+function isServiceResourceCategory(categoryName: string): boolean {
+  return /服务资源/.test(categoryName);
+}
+
+function isPercentValue(value: unknown): boolean {
+  return /^[-+]?\d+(?:\.\d+)?\s*%$/.test(String(value || "").trim());
+}
+
+interface PowerMetric {
+  key: string;
+  label: string;
+  value: string;
+}
+
+const POWER_METRIC_DEFINITIONS = [
+  { key: "battery", label: "当前电量", aliases: ["当前电量", "电量"] },
+  { key: "voltage", label: "当前电压", aliases: ["当前电压", "电压"] },
+  { key: "chargingCurrent", label: "充电电流", aliases: ["充电电流"] },
+  { key: "bodyTemperature", label: "机身温度", aliases: ["机身温度"] },
+] as const;
+
+function getPowerMetricDefinition(key: string) {
+  const normalizedKey = key.trim().toLowerCase();
+  return POWER_METRIC_DEFINITIONS.find((item) => item.aliases.some((alias) => alias.toLowerCase() === normalizedKey));
+}
+
+function parsePowerMetrics(item: StatusPanelItem): PowerMetric[] {
+  const stringSources = [item.params, item.statusText]
+    .filter((value): value is string => typeof value === "string");
+  const objectSources = [item.params, item.statusText].filter(
+    (value): value is Record<string, unknown> => Boolean(value && typeof value === "object" && !Array.isArray(value)),
+  );
+  const labels = POWER_METRIC_DEFINITIONS.flatMap((definition) => definition.aliases).sort((a, b) => b.length - a.length);
+  const labelPattern = labels.join("|");
+  const metrics = new Map<string, PowerMetric>();
+  const matcher = new RegExp(`(${labelPattern})\\s*[:：]?\\s*(.*?)(?=\\s*(?:${labelPattern})\\s*[:：]?|$)`, "g");
+
+  const collect = (source: string) => {
+    if (!source || source === "--") return;
+    matcher.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = matcher.exec(source)) !== null) {
+      const definition = getPowerMetricDefinition(match[1]);
+      const value = match[2].trim();
+      const statusOnly = /^(?:正常|异常|成功|失败|连接正常|连接异常|开门|关门|打开|关闭)$/.test(value);
+      if (definition && value && value !== "--" && !statusOnly && !metrics.has(definition.key)) {
+        metrics.set(definition.key, { key: definition.key, label: definition.label, value });
+      }
+    }
+  };
+
+  stringSources.forEach(collect);
+  objectSources.forEach((source) => {
+    Object.entries(source).forEach(([key, value]) => {
+      const definition = getPowerMetricDefinition(key);
+      if (definition && value !== null && value !== undefined && value !== "" && !metrics.has(definition.key)) {
+        metrics.set(definition.key, {
+          key: definition.key,
+          label: definition.label,
+          value: formatStatusPanelValue(value),
+        });
+      }
+    });
+  });
+
+  return POWER_METRIC_DEFINITIONS
+    .map((definition) => metrics.get(definition.key))
+    .filter((metric): metric is PowerMetric => Boolean(metric));
+}
+
+function isPowerCategory(categoryName: string): boolean {
+  return /电源充电/.test(categoryName);
 }
 
 function createWsClientId(length = 32): string {
@@ -1287,7 +1544,7 @@ export default function RealtimeMonitor() {
     setVerifyTaskOpen(true);
   }, [message, selectedProject]);
 
-  const handleRobotLog = useCallback(async () => {
+  const handleRobotLog = useCallback(async (triggerElement?: HTMLElement) => {
     if (robotLogLoading) return;
     if (currentRobotId == null) {
       message.warning("请先在顶部选择机器人");
@@ -1300,18 +1557,51 @@ export default function RealtimeMonitor() {
     setRobotLogLoading(true);
     try {
       const res = await getRobotLog({ robotId: currentRobotId, startDate, endDate });
-      const body = (res.data || {}) as ApiResponse<string>;
+      const body = (res.data || {}) as ApiResponse<unknown>;
       if (!isOk(body)) {
         message.error(body.message || "录制小包失败");
         return;
       }
-      message.success("录制小包请求已下发");
+      const fileUrl = getRobotLogFileUrl(body.data);
+      if (!fileUrl) {
+        message.error("录制小包已完成，但未获取到文件地址");
+        return;
+      }
+
+      const fileName = getRobotLogFileName(fileUrl);
+      const downloadTasks = window.electronAPI?.downloadTasks;
+      if (downloadTasks && window.electronAPI?.selectDir) {
+        const tasks = await downloadTasks.list().catch(() => []);
+        if (tasks.some((task) => task.status === "pending" || task.status === "running")) {
+          message.warning("已有下载任务进行中，请稍后再试");
+          return;
+        }
+
+        const destDir = await window.electronAPI.selectDir("选择录制小包保存目录");
+        if (!destDir) return;
+        const result = await downloadTasks.create({
+          type: "remote-download",
+          name: "机器人日志小包",
+          backendIp,
+          downloadPath: fileUrl,
+          destDir,
+          preferredFileName: fileName,
+        });
+        if (!result.success) {
+          message.error(result.error || "创建下载任务失败");
+          return;
+        }
+        if (triggerElement) startDownloadTaskFlyAnimation(triggerElement);
+        return;
+      }
+
+      startBrowserDownload(buildBackendFileUrl(fileUrl, backendIp), getRobotLogFileName(fileUrl));
     } catch (error) {
       message.error(`录制小包失败: ${getRequestErrorMessage(error, "请求失败")}`);
     } finally {
       setRobotLogLoading(false);
     }
-  }, [currentRobotId, message, robotLogLoading]);
+  }, [backendIp, currentRobotId, message, robotLogLoading]);
 
   const refreshSurveyRunning = useCallback(async (options?: { silent?: boolean }) => {
     if (!pageActive) return;
@@ -1579,6 +1869,10 @@ export default function RealtimeMonitor() {
   }, []);
 
   const positionNormal = Number.isFinite(Number(robotPosition.x)) && Number.isFinite(Number(robotPosition.y));
+  const statusPanelCategoryName = String(currentStatusPanelCategory?.categoryName || "");
+  const statusPanelIsWeather = isWeatherCategory(statusPanelCategoryName);
+  const statusPanelIsService = isServiceResourceCategory(statusPanelCategoryName);
+  const statusPanelIsPower = isPowerCategory(statusPanelCategoryName);
   const statusChips = [
     {
       key: "battery",
@@ -1659,7 +1953,7 @@ export default function RealtimeMonitor() {
             icon={<FileZipOutlined />}
             loading={robotLogLoading}
             disabled={!currentRobotId || !hasBackendReady}
-            onClick={handleRobotLog}
+            onClick={(event) => handleRobotLog(event.currentTarget)}
           >
             录制小包
           </Button>
@@ -1928,15 +2222,115 @@ export default function RealtimeMonitor() {
                 </div>
               ) : (
                 <div className="realtime-monitor-status-panel__grid">
-                  {currentStatusPanelItems.map((item, index) => (
-                    <article key={item.code || index} className={item.abnormal ? "is-abnormal" : ""}>
-                      <strong title={item.displayName || item.name || item.code || "--"}>
-                        {item.displayName || item.name || item.code || "--"}
-                      </strong>
-                      <span title={formatValue(item.statusText)}>{formatValue(item.statusText)}</span>
-                      <span title={formatStatusPanelValue(item.params)}>{formatStatusPanelValue(item.params)}</span>
-                    </article>
-                  ))}
+                  {currentStatusPanelItems.map((item, index) => {
+                    const weatherMetrics = statusPanelIsWeather ? parseWeatherMetrics(item) : [];
+                    const coordinateValues = isCoordinateItem(item) ? parseCoordinateValues(item) : [];
+                    const serviceMetrics = statusPanelIsService ? parseServiceMetrics(item) : [];
+                    const powerMetrics = statusPanelIsPower ? parsePowerMetrics(item) : [];
+                    const servicePercentValue = statusPanelIsService && isPercentValue(item.statusText)
+                      ? String(item.statusText).trim()
+                      : "";
+                    const isCoordinate = coordinateValues.length > 0;
+                    const isGenericStatus = !isCoordinate && !statusPanelIsService && !statusPanelIsPower && !statusPanelIsWeather;
+                    const genericStatusText = formatValue(item.statusText);
+                    const genericParamsText = formatStatusPanelValue(item.params);
+                    return (
+                      <article
+                        key={item.code || index}
+                        className={`${item.abnormal ? "is-abnormal" : ""} ${statusPanelIsWeather ? "is-weather" : ""} ${statusPanelIsService ? "is-service" : ""} ${statusPanelIsPower ? "is-power" : ""} ${isCoordinate ? "is-coordinate" : ""} ${isGenericStatus ? "is-generic" : ""}`}
+                      >
+                        <strong title={item.displayName || item.name || item.code || "--"}>
+                          {item.displayName || item.name || item.code || "--"}
+                        </strong>
+                        {isCoordinate ? (
+                          <>
+                            <div className={`realtime-monitor-coordinate-status ${item.abnormal ? "is-abnormal" : "is-good"}`}>
+                              <i />
+                              <span>{formatValue(item.statusText)}</span>
+                            </div>
+                            <div className="realtime-monitor-coordinate-values">
+                              {coordinateValues.map((coordinate) => (
+                                <div className="realtime-monitor-coordinate-row" key={coordinate.axis}>
+                                  <span>{coordinate.axis}</span>
+                                  <strong>{coordinate.value}</strong>
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        ) : statusPanelIsService ? (
+                          <>
+                            {!servicePercentValue && item.statusText && item.statusText !== "--" && (
+                              <div className={`realtime-monitor-service-status ${item.abnormal ? "is-abnormal" : "is-good"}`}>
+                                <i />
+                                <span>{formatValue(item.statusText)}</span>
+                              </div>
+                            )}
+                            {servicePercentValue ? (
+                              <div className="realtime-monitor-service-primary-value">{servicePercentValue}</div>
+                            ) : serviceMetrics.length ? (
+                              <div className="realtime-monitor-service-metrics">
+                                {serviceMetrics.map((metric) => (
+                                  <div className="realtime-monitor-service-metric" key={metric.key}>
+                                    <span>{metric.label}</span>
+                                    <strong>{metric.value}</strong>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
+                          </>
+                        ) : statusPanelIsPower ? (
+                          <>
+                            {item.statusText && item.statusText !== "--" && (
+                              <div className={`realtime-monitor-power-status ${item.abnormal ? "is-abnormal" : "is-good"}`}>
+                                <i />
+                                <span>{formatValue(item.statusText)}</span>
+                              </div>
+                            )}
+                            {powerMetrics.length > 0 && (
+                              <div className="realtime-monitor-power-metrics">
+                                {powerMetrics.map((metric) => (
+                                  <div className="realtime-monitor-power-metric" key={metric.key}>
+                                    <span>{metric.label}</span>
+                                    <strong>{metric.value}</strong>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </>
+                        ) : statusPanelIsWeather && isWeatherCommunicationItem(item) ? (
+                          <div className={`realtime-monitor-weather-status ${item.abnormal ? "is-abnormal" : "is-good"}`}>
+                            <i />
+                            <span>{formatValue(item.statusText)}</span>
+                          </div>
+                        ) : statusPanelIsWeather ? (
+                          <div className="realtime-monitor-weather-metrics">
+                            {weatherMetrics.map((metric) => (
+                              <div className="realtime-monitor-weather-metric" key={metric.key}>
+                                <span>{metric.label}</span>
+                                <strong>{metric.value}</strong>
+                              </div>
+                            ))}
+                            {!weatherMetrics.length && (
+                              <span className="realtime-monitor-weather-empty">暂无气象数据</span>
+                            )}
+                          </div>
+                        ) : (
+                          <>
+                            <div className={`realtime-monitor-generic-status ${item.abnormal ? "is-abnormal" : genericStatusText === "--" ? "is-muted" : "is-good"}`}>
+                              <i />
+                              <span title={genericStatusText}>{genericStatusText === "--" ? "暂无状态" : genericStatusText}</span>
+                            </div>
+                            {genericParamsText !== "--" && (
+                              <div className="realtime-monitor-generic-params" title={genericParamsText}>
+                                <span>参数</span>
+                                <strong>{genericParamsText}</strong>
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </article>
+                    );
+                  })}
                 </div>
               )}
             </main>

@@ -795,9 +795,8 @@
 
       span {
         min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        overflow-wrap: anywhere;
+        white-space: normal;
       }
 
       strong {
@@ -834,12 +833,13 @@
   padding: 0 12px;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 14px;
   color: #647181;
   background: #ffffff;
   border: 1px solid #e6ebf0;
   border-radius: 6px;
-  white-space: nowrap;
+  line-height: 20px;
 
   .is-abnormal {
     color: #cf1322;
@@ -863,7 +863,7 @@
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-auto-rows: 96px;
+  grid-auto-rows: minmax(96px, auto);
   align-content: start;
   gap: 12px;
   overflow-y: auto;
@@ -871,7 +871,7 @@
 
   article {
     min-width: 0;
-    height: 96px;
+    min-height: 96px;
     box-sizing: border-box;
     padding: 10px 12px;
     display: flex;
@@ -881,7 +881,7 @@
     border: 1px solid #e6ebf0;
     border-left: 3px solid #52c41a;
     border-radius: 6px;
-    overflow: hidden;
+    overflow: visible;
 
     &.is-abnormal {
       border-left-color: #ff4d4f;
@@ -889,23 +889,391 @@
 
     strong {
       min-width: 0;
-      overflow: hidden;
+      overflow-wrap: anywhere;
       color: #1f2933;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      line-height: 20px;
+      white-space: normal;
     }
 
     span {
-      display: -webkit-box;
+      display: block;
       min-width: 0;
       color: #5c6875;
       line-height: 18px;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      overflow-wrap: anywhere;
+      overflow: visible;
+      text-overflow: clip;
       white-space: normal;
       word-break: break-all;
-      -webkit-box-orient: vertical;
-      -webkit-line-clamp: 1;
+    }
+
+    &.is-weather {
+      min-height: 124px;
+      padding: 12px 14px;
+
+      .realtime-monitor-weather-status {
+        min-height: 24px;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        margin-top: 4px;
+
+        i {
+          width: 7px;
+          height: 7px;
+          flex: 0 0 7px;
+          border-radius: 50%;
+          background: #52c41a;
+        }
+
+        span {
+          color: #389e0d;
+          font-size: 13px;
+          line-height: 20px;
+          overflow: visible;
+        }
+
+        &.is-abnormal {
+          i {
+            background: #ff4d4f;
+          }
+
+          span {
+            color: #cf1322;
+          }
+        }
+      }
+
+      .realtime-monitor-weather-metrics {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 9px 14px;
+        margin-top: 7px;
+      }
+
+      .realtime-monitor-weather-metric {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+
+        span {
+          color: #8a96a3;
+          font-size: 11px;
+          line-height: 15px;
+          white-space: nowrap;
+        }
+
+        strong {
+          color: #374452;
+          font-size: 13px;
+          font-weight: 600;
+          line-height: 18px;
+          overflow-wrap: anywhere;
+          white-space: normal;
+        }
+      }
+
+      .realtime-monitor-weather-empty {
+        grid-column: 1 / -1;
+        color: #9aa4b2;
+      }
+    }
+
+    &.is-coordinate {
+      min-height: 142px;
+      padding: 12px 14px;
+
+      .realtime-monitor-coordinate-status {
+        min-height: 22px;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        margin-top: 3px;
+
+        i {
+          width: 7px;
+          height: 7px;
+          flex: 0 0 7px;
+          border-radius: 50%;
+          background: #52c41a;
+        }
+
+        span {
+          color: #389e0d;
+          font-size: 13px;
+          line-height: 18px;
+          overflow: visible;
+        }
+
+        &.is-abnormal {
+          i {
+            background: #ff4d4f;
+          }
+
+          span {
+            color: #cf1322;
+          }
+        }
+      }
+
+      .realtime-monitor-coordinate-values {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        margin-top: 4px;
+      }
+
+      .realtime-monitor-coordinate-row {
+        min-width: 0;
+        display: grid;
+        grid-template-columns: 20px minmax(0, 1fr);
+        align-items: baseline;
+        gap: 6px;
+
+        > span {
+          color: #8a96a3;
+          font-size: 11px;
+          line-height: 17px;
+        }
+
+        > strong {
+          min-width: 0;
+          color: #374452;
+          font-family: Consolas, "Cascadia Mono", monospace;
+          font-size: 12px;
+          font-weight: 600;
+          line-height: 17px;
+          overflow-wrap: anywhere;
+          white-space: normal;
+        }
+      }
+    }
+
+    &.is-service {
+      min-height: 104px;
+      padding: 12px 14px;
+
+      .realtime-monitor-service-status {
+        min-height: 22px;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        margin-top: 3px;
+
+        i {
+          width: 7px;
+          height: 7px;
+          flex: 0 0 7px;
+          border-radius: 50%;
+          background: #52c41a;
+        }
+
+        span {
+          color: #389e0d;
+          font-size: 13px;
+          line-height: 18px;
+          overflow: visible;
+        }
+
+        &.is-abnormal {
+          i {
+            background: #ff4d4f;
+          }
+
+          span {
+            color: #cf1322;
+          }
+        }
+      }
+
+      .realtime-monitor-service-primary-value {
+        margin-top: 7px;
+        color: #374452;
+        font-family: Consolas, "Cascadia Mono", monospace;
+        font-size: 20px;
+        font-weight: 600;
+        line-height: 24px;
+      }
+
+      .realtime-monitor-service-metrics {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 7px 14px;
+        margin-top: 6px;
+      }
+
+      .realtime-monitor-service-metric {
+        min-width: 0;
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+
+        span {
+          flex: 0 0 auto;
+          color: #8a96a3;
+          font-size: 11px;
+          line-height: 17px;
+          white-space: nowrap;
+        }
+
+        strong {
+          min-width: 0;
+          color: #374452;
+          font-family: Consolas, "Cascadia Mono", monospace;
+          font-size: 12px;
+          font-weight: 600;
+          line-height: 17px;
+          overflow-wrap: anywhere;
+          white-space: normal;
+        }
+      }
+    }
+
+    &.is-power {
+      min-height: 104px;
+      padding: 12px 14px;
+
+      .realtime-monitor-power-status {
+        min-height: 22px;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        margin-top: 3px;
+
+        i {
+          width: 7px;
+          height: 7px;
+          flex: 0 0 7px;
+          border-radius: 50%;
+          background: #52c41a;
+        }
+
+        span {
+          color: #389e0d;
+          font-size: 13px;
+          line-height: 18px;
+          overflow: visible;
+        }
+
+        &.is-abnormal {
+          i {
+            background: #ff4d4f;
+          }
+
+          span {
+            color: #cf1322;
+          }
+        }
+      }
+
+      .realtime-monitor-power-metrics {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 7px 14px;
+        margin-top: 6px;
+      }
+
+      .realtime-monitor-power-metric {
+        min-width: 0;
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+
+        span {
+          flex: 0 0 auto;
+          color: #8a96a3;
+          font-size: 11px;
+          line-height: 17px;
+          white-space: nowrap;
+        }
+
+        strong {
+          min-width: 0;
+          color: #374452;
+          font-family: Consolas, "Cascadia Mono", monospace;
+          font-size: 13px;
+          font-weight: 600;
+          line-height: 17px;
+          overflow-wrap: anywhere;
+          white-space: normal;
+        }
+      }
+    }
+
+    &.is-generic {
+      min-height: 104px;
+      padding: 12px 14px;
+
+      .realtime-monitor-generic-status {
+        min-height: 22px;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        margin-top: 3px;
+
+        i {
+          width: 7px;
+          height: 7px;
+          flex: 0 0 7px;
+          border-radius: 50%;
+          background: #52c41a;
+        }
+
+        span {
+          color: #389e0d;
+          font-size: 13px;
+          line-height: 18px;
+          overflow: visible;
+        }
+
+        &.is-abnormal {
+          i {
+            background: #ff4d4f;
+          }
+
+          span {
+            color: #cf1322;
+          }
+        }
+
+        &.is-muted {
+          i {
+            background: #b7c0ca;
+          }
+
+          span {
+            color: #8a96a3;
+          }
+        }
+      }
+
+      .realtime-monitor-generic-params {
+        min-width: 0;
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: baseline;
+        gap: 6px;
+        margin-top: 6px;
+
+        > span {
+          color: #8a96a3;
+          font-size: 11px;
+          line-height: 17px;
+          white-space: nowrap;
+        }
+
+        > strong {
+          min-width: 0;
+          color: #374452;
+          font-family: Consolas, "Cascadia Mono", monospace;
+          font-size: 12px;
+          font-weight: 600;
+          line-height: 17px;
+          overflow-wrap: anywhere;
+          white-space: normal;
+        }
+      }
     }
   }
 }
@@ -922,6 +1290,14 @@
   }
 
   .realtime-monitor-status-panel__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .realtime-monitor-status-panel__grid article.is-weather .realtime-monitor-weather-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .realtime-monitor-status-panel__grid article.is-power .realtime-monitor-power-metrics {
     grid-template-columns: minmax(0, 1fr);
   }
 }

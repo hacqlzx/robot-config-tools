@@ -42,6 +42,164 @@ interface CanvasState {
   dragOriginY: number;
 }
 
+interface RegionBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+interface LabelCandidate {
+  x: number;
+  y: number;
+  align: CanvasTextAlign;
+  baseline: CanvasTextBaseline;
+}
+
+interface LabelBox {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+const REGION_COLOR_BY_TYPE: Record<string, string> = {
+  "1": "rgba(34, 197, 94",
+  "2": "rgba(34, 197, 94",
+  "4": "rgba(255, 140, 0",
+  "8": "rgba(30, 144, 255",
+};
+
+interface RegionColors {
+  fill: string;
+  stroke: string;
+}
+
+function getRegionColors(region: any): RegionColors {
+  const regionType = String(region?.type || "");
+  const regionText = [
+    region?.name,
+    region?.regionName,
+    region?.areaName,
+    region?.typeName,
+    region?.regionTypeName,
+    region?.code,
+    region?.regionType,
+    region?.type,
+  ]
+    .filter((value) => value !== undefined && value !== null)
+    .join(" ")
+    .toLowerCase();
+
+  if (regionType === "4" || regionText.includes("充电") || regionText.includes("charge")) {
+    return {
+      fill: "rgba(245, 158, 11, 0.22)",
+      stroke: "rgba(245, 158, 11, 0.95)",
+    };
+  }
+
+  const isCabinetRegion = ["1", "2"].includes(regionType)
+    || regionText.includes("屏柜")
+    || regionText.includes("柜排")
+    || regionText.includes("cabinet");
+  if (isCabinetRegion) {
+    return {
+      fill: "rgba(34, 197, 94, 0.22)",
+      stroke: "rgba(34, 197, 94, 0.95)",
+    };
+  }
+
+  const isBlueRegion = regionType === "8"
+    || regionText.includes("设备")
+    || regionText.includes("device");
+  if (isBlueRegion) {
+    return {
+      fill: "rgba(30, 144, 255, 0.22)",
+      stroke: "rgba(30, 144, 255, 0.95)",
+    };
+  }
+
+  const fallbackColor = REGION_COLOR_BY_TYPE[regionType] || REGION_COLOR_BY_TYPE["2"];
+  return {
+    fill: `${fallbackColor}, 0.16)`,
+    stroke: `${fallbackColor}, 0.82)`,
+  };
+}
+
+function getRegionBounds(points: [number, number][]): RegionBounds {
+  return {
+    minX: Math.min(...points.map((point) => point[0])),
+    minY: Math.min(...points.map((point) => point[1])),
+    maxX: Math.max(...points.map((point) => point[0])),
+    maxY: Math.max(...points.map((point) => point[1])),
+  };
+}
+
+function getLabelBox(
+  context: CanvasRenderingContext2D,
+  text: string,
+  candidate: LabelCandidate,
+  padding: number,
+): LabelBox {
+  const width = context.measureText(text).width;
+  const fontSize = Number.parseFloat(context.font) || 13;
+  const height = fontSize * 1.2;
+  let left = candidate.x;
+  let top = candidate.y;
+
+  if (candidate.align === "center") left -= width / 2;
+  if (candidate.align === "right" || candidate.align === "end") left -= width;
+  if (candidate.baseline === "middle") top -= height / 2;
+  if (candidate.baseline === "bottom" || candidate.baseline === "alphabetic") top -= height;
+
+  return {
+    left: left - padding,
+    top: top - padding,
+    right: left + width + padding,
+    bottom: top + height + padding,
+  };
+}
+
+function labelBoxesOverlap(first: LabelBox, second: LabelBox): boolean {
+  return first.left < second.right
+    && first.right > second.left
+    && first.top < second.bottom
+    && first.bottom > second.top;
+}
+
+function getRegionLabelCandidates(bounds: RegionBounds, type: string): LabelCandidate[] {
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerY = (bounds.minY + bounds.maxY) / 2;
+  const gap = 10;
+  const inset = 8;
+
+  if (type === "1") {
+    return [
+      { x: centerX, y: bounds.minY - gap, align: "center", baseline: "bottom" },
+      { x: centerX, y: bounds.maxY + gap, align: "center", baseline: "top" },
+      { x: bounds.minX - gap, y: centerY, align: "right", baseline: "middle" },
+      { x: bounds.maxX + gap, y: centerY, align: "left", baseline: "middle" },
+      { x: bounds.minX + inset, y: bounds.minY + inset, align: "left", baseline: "top" },
+    ];
+  }
+
+  if (type === "2") {
+    return [
+      { x: bounds.minX + inset, y: bounds.minY + inset, align: "left", baseline: "top" },
+      { x: bounds.maxX - inset, y: bounds.minY + inset, align: "right", baseline: "top" },
+      { x: centerX, y: bounds.minY + inset, align: "center", baseline: "top" },
+      { x: bounds.minX + inset, y: bounds.maxY - inset, align: "left", baseline: "bottom" },
+      { x: centerX, y: centerY, align: "center", baseline: "middle" },
+    ];
+  }
+
+  return [
+    { x: bounds.minX + inset, y: bounds.minY + inset, align: "left", baseline: "top" },
+    { x: centerX, y: bounds.minY + inset, align: "center", baseline: "top" },
+    { x: centerX, y: centerY, align: "center", baseline: "middle" },
+  ];
+}
+
 function parseRoadPoint(value: unknown): [number, number] | null {
   if (Array.isArray(value)) {
     const point = value.slice(0, 2).map((coordinate) => Number(coordinate));
@@ -178,37 +336,73 @@ export default function RealtimeMapCanvas({
     }
 
     const regions = Array.isArray(mapData.regions) ? mapData.regions : [];
-    regions.forEach((region) => {
-      const points = parseRegionPoints(region?.pose || region?.coordinatePixel);
-      if (points.length < 3) return;
+    const regionLabelItems = regions
+      .map((region) => {
+        const points = parseRegionPoints(region?.pose || region?.coordinatePixel);
+        if (points.length < 3) return null;
+        return {
+          region,
+          points,
+          type: String(region?.type || ""),
+          name: String(region?.name || region?.regionName || "").trim(),
+          bounds: getRegionBounds(points),
+        };
+      })
+      .filter(Boolean) as Array<{
+        region: any;
+        points: [number, number][];
+        type: string;
+        name: string;
+        bounds: RegionBounds;
+      }>;
+
+    regionLabelItems.forEach(({ region, points }) => {
       context.save();
       context.beginPath();
       context.moveTo(points[0][0], points[0][1]);
       points.slice(1).forEach((point) => context.lineTo(point[0], point[1]));
       context.closePath();
-      const isChargingRegion = String(region?.type) === "4";
-      const regionColor = isChargingRegion ? "rgba(255, 140, 0" : "rgba(30, 144, 255";
-      context.fillStyle = `${regionColor}, 0.16)`;
-      context.strokeStyle = `${regionColor}, 0.82)`;
+      const colors = getRegionColors(region);
+      context.fillStyle = colors.fill;
+      context.strokeStyle = colors.stroke;
       context.lineWidth = 1.5;
       context.fill();
       context.stroke();
       context.restore();
+    });
 
-      const name = String(region?.name || region?.regionName || "").trim();
-      if (name) {
-        const minX = Math.min(...points.map((point) => point[0]));
-        const minY = Math.min(...points.map((point) => point[1]));
+    const placedRegionLabelBoxes: LabelBox[] = [];
+    regionLabelItems
+      .filter(({ name }) => Boolean(name))
+      .sort((first, second) => (first.type === "2" ? -1 : 0) - (second.type === "2" ? -1 : 0))
+      .forEach(({ name, type, bounds }) => {
         context.save();
-        context.font = "13px Arial";
+        context.font = type === "1" ? "12px Arial" : "13px Arial";
+        context.textAlign = "left";
+        context.textBaseline = "top";
+
+        const candidates = getRegionLabelCandidates(bounds, type);
+        const scoredCandidates = candidates.map((candidate) => {
+          const box = getLabelBox(context, name, candidate, 3);
+          const overlapCount = placedRegionLabelBoxes.reduce(
+            (count, placedBox) => count + (labelBoxesOverlap(box, placedBox) ? 1 : 0),
+            0,
+          );
+          const outsideScene = box.left < 0 || box.top < 0 || box.right > state.sceneWidth || box.bottom > state.sceneHeight;
+          return { candidate, box, score: overlapCount * 100 + (outsideScene ? 1 : 0) };
+        });
+        const selected = scoredCandidates.reduce((best, current) => current.score < best.score ? current : best);
+
+        context.textAlign = selected.candidate.align;
+        context.textBaseline = selected.candidate.baseline;
         context.lineWidth = 4 / Math.max(state.zoom, 0.05);
         context.strokeStyle = "rgba(0, 0, 0, 0.8)";
         context.fillStyle = "#dffefe";
-        context.strokeText(name, minX + 8, minY + 8);
-        context.fillText(name, minX + 8, minY + 8);
+        context.strokeText(name, selected.candidate.x, selected.candidate.y);
+        context.fillText(name, selected.candidate.x, selected.candidate.y);
         context.restore();
-      }
-    });
+        placedRegionLabelBoxes.push(selected.box);
+      });
 
     const roads = Array.isArray(mapData.roads) ? mapData.roads : [];
     roads.forEach((road) => {
@@ -286,19 +480,6 @@ export default function RealtimeMapCanvas({
       }
       context.restore();
 
-      const label = String(robot.name || "").trim();
-      if (label) {
-        context.save();
-        context.font = "14px Arial";
-        context.textAlign = "center";
-        context.textBaseline = "top";
-        context.lineWidth = 4 / Math.max(state.zoom, 0.05);
-        context.strokeStyle = "rgba(0, 0, 0, 0.88)";
-        context.fillStyle = "#8ecbff";
-        context.strokeText(label, robotX, robotY + 24);
-        context.fillText(label, robotX, robotY + 24);
-        context.restore();
-      }
     }
 
     context.restore();
