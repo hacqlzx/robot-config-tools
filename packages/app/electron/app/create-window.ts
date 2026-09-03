@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -89,7 +89,7 @@ export function createWindow(): BrowserWindow {
     win.isMaximized() ? win.unmaximize() : win.maximize();
   });
   ipcMain.handle("win:get-state", () => getWindowState());
-  ipcMain.on("win:close", () => win.close());
+  ipcMain.on("win:close", () => app.quit());
 
   // 渲染进程崩溃时记录日志，便于排查 GPU/内存问题
   win.webContents.on("render-process-gone", (_event, details) => {

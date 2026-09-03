@@ -9,7 +9,8 @@
         "dev:electron": "cross-env ELECTRON=true vite",
         "build:electron": "cross-env ELECTRON=true vite build",
         "preview": "vite preview",
-        "package": "pnpm build:electron && electron-builder --win"
+        "package:prepare": "node scripts/prepare-package.mjs",
+        "package": "pnpm package:prepare && pnpm build:electron && electron-builder --win"
     },
     "dependencies": {
         "@ant-design/icons": "^6.2.5",
@@ -78,6 +79,7 @@
         "electronDownload": {
             "mirror": "https://npmmirror.com/mirrors/electron/"
         },
+        "electronDist": "node_modules/electron/dist",
         "npmRebuild": false,
         "nodeGypRebuild": false,
         "asar": false

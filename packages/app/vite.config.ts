@@ -1,11 +1,42 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import fs from 'node:fs';
 import path from 'path';
 import { fileURLToPath } from 'node:url';
 import electron from 'vite-plugin-electron';
 import { potreeAssetsPlugin } from './src/potree-core/vite-potree-assets';
 
 const appRoot = fileURLToPath(new URL('.', import.meta.url));
+const devProcessStateDir = path.join(appRoot, 'node_modules', '.cache', 'robot-config-tools', 'dev-processes');
+
+function devProcessTrackerPlugin() {
+  return {
+    name: 'robot-config-tools-dev-process-tracker',
+    apply: 'serve' as const,
+    configureServer() {
+      const statePath = path.join(devProcessStateDir, `${process.pid}.json`);
+      const state = {
+        version: 1,
+        pid: process.pid,
+        startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+        executable: process.execPath,
+        appRoot,
+      };
+
+      fs.mkdirSync(devProcessStateDir, { recursive: true });
+      fs.writeFileSync(statePath, JSON.stringify(state), 'utf8');
+
+      process.once('exit', () => {
+        try {
+          const current = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+          if (current?.pid === process.pid) fs.rmSync(statePath, { force: true });
+        } catch {
+          // The package preparation step also removes stale state files.
+        }
+      });
+    },
+  };
+}
 
 export default defineConfig(() => {
   const isElectron = process.env.ELECTRON === 'true';
@@ -54,6 +85,7 @@ export default defineConfig(() => {
     },
 
     plugins: [
+      devProcessTrackerPlugin(),
       potreeAssetsPlugin({ sourceRoot: path.resolve(appRoot, 'src/potree-core') }),
       react(),
       {

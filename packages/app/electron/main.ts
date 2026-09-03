@@ -34,6 +34,10 @@ app.whenReady().then(async () => {
   createWindow();
 });
 
+app.on("before-quit", () => {
+  closeDbIpc();
+});
+
 app.on("window-all-closed", () => {
   closeDbIpc();
   if (process.platform !== "darwin") app.quit();
