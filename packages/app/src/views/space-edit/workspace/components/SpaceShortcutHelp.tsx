@@ -100,56 +100,47 @@ function renderContent(): ReactNode {
   );
 }
 
-interface Props {
-  normalMode?: boolean;
+interface ButtonProps {
+  inverse?: boolean;
 }
 
-export default function SpaceShortcutHelp({ normalMode = false }: Props) {
+export function SpaceShortcutHelpButton({ inverse = false }: ButtonProps) {
+  return (
+    <Popover
+      title="快捷操作"
+      content={renderContent()}
+      trigger="hover"
+      placement={inverse ? "leftTop" : "bottomRight"}
+      mouseEnterDelay={0.12}
+    >
+      <Button
+        type={inverse ? "text" : "default"}
+        size={inverse ? "small" : "middle"}
+        aria-label="快捷操作说明"
+        title="快捷操作说明"
+        shape="circle"
+        icon={<QuestionCircleOutlined />}
+        style={inverse ? {
+          width: 24,
+          height: 24,
+          padding: 0,
+          color: "#fff",
+        } : {
+          width: 32,
+          height: 32,
+          color: "#1f2937",
+          background: "rgba(255, 255, 255, 0.94)",
+          boxShadow: "0 2px 10px rgba(0, 0, 0, 0.3)",
+        }}
+      />
+    </Popover>
+  );
+}
+
+export default function SpaceShortcutHelp() {
   return (
     <div style={rootStyle}>
-      {normalMode && (
-        <div
-          role="status"
-          style={{
-            position: "absolute",
-            top: 42,
-            right: 0,
-            width: 260,
-            padding: "8px 10px",
-            color: "#f9fafb",
-            background: "rgba(17, 24, 39, 0.9)",
-            border: "1px solid rgba(255, 255, 255, 0.16)",
-            borderRadius: 4,
-            boxShadow: "0 4px 14px rgba(0, 0, 0, 0.28)",
-            fontSize: 12,
-            lineHeight: 1.55,
-            pointerEvents: "none",
-          }}
-        >
-          法线模式：新建圆形区域需按住 <strong>Alt + 鼠标左键</strong> 拖动；已有标注可直接用鼠标左键拖动圆心、圆环或箭头编辑。
-        </div>
-      )}
-      <Popover
-        title="快捷操作"
-        content={renderContent()}
-        trigger="hover"
-        placement="bottomRight"
-        mouseEnterDelay={0.12}
-      >
-        <Button
-          aria-label="快捷操作说明"
-          title="快捷操作说明"
-          shape="circle"
-          icon={<QuestionCircleOutlined />}
-          style={{
-            width: 32,
-            height: 32,
-            color: "#1f2937",
-            background: "rgba(255, 255, 255, 0.94)",
-            boxShadow: "0 2px 10px rgba(0, 0, 0, 0.3)",
-          }}
-        />
-      </Popover>
+      <SpaceShortcutHelpButton />
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import type { ViewDirection } from "../../types";
+import type { SpaceInteractionMode } from "./SpaceInteractionCoordinator";
 import type { DrawingItem, NormalAnnotationItem, PathData } from "../../hooks/drawing/drawing-schema";
 
 export type SpaceSceneLifecycleState = "detached" | "mounting" | "ready" | "failed";
@@ -184,6 +185,7 @@ export function normalizeSpaceRenderSettings(settings: Partial<SpaceRenderSettin
 export interface SpaceSceneAdapter {
   mount(host: HTMLElement): void | Promise<void>;
   setActive(active: boolean): void;
+  setInteractionMode(mode: SpaceInteractionMode): void;
   loadModel(model: SpaceSceneModel): void | Promise<void>;
   pickPointAt(clientX: number, clientY: number): [number, number, number] | null;
   setCoordinateCorrectionMarker(point: [number, number, number] | null): void;

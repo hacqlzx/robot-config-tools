@@ -9,6 +9,7 @@ interface SpaceSceneHostProps {
   overlay?: ReactNode | ((state: SpaceSceneLifecycleState) => ReactNode);
   onSceneClick?: (clientX: number, clientY: number) => void;
   picking?: boolean;
+  busy?: boolean;
 }
 
 const stateText = {
@@ -18,7 +19,7 @@ const stateText = {
   failed: "三维场景初始化失败",
 } as const;
 
-export default function SpaceSceneHost({ adapterFactory, overlay, onSceneClick, picking = false }: SpaceSceneHostProps) {
+export default function SpaceSceneHost({ adapterFactory, overlay, onSceneClick, picking = false, busy = false }: SpaceSceneHostProps) {
   const sectionRef = useRef<HTMLElement | null>(null);
   const pointerDownRef = useRef<{ x: number; y: number } | null>(null);
   const active = useElementActive(sectionRef);
@@ -29,6 +30,7 @@ export default function SpaceSceneHost({ adapterFactory, overlay, onSceneClick, 
     <section
       ref={sectionRef}
       aria-label="三维场景"
+      data-space-edit-busy={busy ? "true" : "false"}
       onPointerDownCapture={(event) => {
         const target = event.target as Node;
         if (event.button === 0 && hostRef.current?.contains(target)) {

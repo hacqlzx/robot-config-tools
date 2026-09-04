@@ -170,6 +170,7 @@ interface PersistOptions {
   closeAfterSave?: boolean;
   markFileShown?: boolean;
   clearHistory?: boolean;
+  dirtyVersion?: number;
 }
 
 interface SaveAllOptions extends PersistOptions {
@@ -315,9 +316,11 @@ export default function SpaceEditWorkspace() {
   const pathSavingRef = useRef(false);
   const normalSavingRef = useRef(false);
   const dirtyScopesRef = useRef<Set<SpaceDrawingHistoryScope>>(new Set());
+  const dirtyScopeVersionsRef = useRef<Map<SpaceDrawingHistoryScope, number>>(new Map());
   const saveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoSaveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoSaveInFlightRef = useRef(false);
+  const saveOperationInFlightRef = useRef(false);
   const saveAllRef = useRef<(options?: SaveAllOptions) => Promise<boolean>>(async () => false);
   const discardUnsavedChangesRef = useRef<() => void>(() => undefined);
   const { width: panelWidth, resizing, onMouseDown: onResizeStart } = useResizable({
@@ -329,7 +332,13 @@ export default function SpaceEditWorkspace() {
   });
 
   const markDirty = useCallback((scope: SpaceDrawingHistoryScope) => {
+    dirtyScopeVersionsRef.current.set(scope, (dirtyScopeVersionsRef.current.get(scope) ?? 0) + 1);
     dirtyScopesRef.current.add(scope);
+    if (saveStatusTimerRef.current) {
+      clearTimeout(saveStatusTimerRef.current);
+      saveStatusTimerRef.current = null;
+    }
+    setSaveStatus((current) => current === "saving" ? current : "dirty");
   }, []);
 
   const drawingHistory = useSpaceDrawingHistory({
@@ -344,18 +353,62 @@ export default function SpaceEditWorkspace() {
     label: string,
   ) => {
     if (drawingHistory.record(scope, before, after, label)) {
-      dirtyScopesRef.current.add(scope);
+      markDirty(scope);
     }
-  }, [drawingHistory.record]);
+  }, [drawingHistory.record, markDirty]);
 
   const showSavedStatus = useCallback(() => {
+    if (dirtyScopesRef.current.size > 0) {
+      setSaveStatus("dirty");
+      return;
+    }
     setSaveStatus("saved");
     if (saveStatusTimerRef.current) clearTimeout(saveStatusTimerRef.current);
     saveStatusTimerRef.current = setTimeout(() => {
-      setSaveStatus("idle");
+      setSaveStatus(dirtyScopesRef.current.size > 0 ? "dirty" : "idle");
       saveStatusTimerRef.current = null;
     }, 2000);
   }, []);
+
+  const showSavingStatus = useCallback(() => {
+    if (saveStatusTimerRef.current) {
+      clearTimeout(saveStatusTimerRef.current);
+      saveStatusTimerRef.current = null;
+    }
+    setSaveStatus("saving");
+  }, []);
+
+  const clearDirtyScope = useCallback((scope: SpaceDrawingHistoryScope, savedVersion: number): boolean => {
+    if ((dirtyScopeVersionsRef.current.get(scope) ?? 0) !== savedVersion) return false;
+    dirtyScopesRef.current.delete(scope);
+    return true;
+  }, []);
+
+  const showSaveFailedStatus = useCallback(() => {
+    if (saveStatusTimerRef.current) {
+      clearTimeout(saveStatusTimerRef.current);
+      saveStatusTimerRef.current = null;
+    }
+    setSaveStatus(dirtyScopesRef.current.size > 0 ? "failed" : "idle");
+  }, []);
+
+  const runSaveOperation = useCallback(async (operation: () => Promise<boolean>): Promise<boolean> => {
+    if (saveOperationInFlightRef.current) return false;
+    saveOperationInFlightRef.current = true;
+    showSavingStatus();
+    try {
+      const saved = await operation();
+      if (saved) showSavedStatus();
+      else showSaveFailedStatus();
+      return saved;
+    } catch (error) {
+      showSaveFailedStatus();
+      message.error(`保存失败: ${errorMessage(error)}`);
+      return false;
+    } finally {
+      saveOperationInFlightRef.current = false;
+    }
+  }, [message, showSaveFailedStatus, showSavedStatus, showSavingStatus]);
 
   const dirtyScopeText = useCallback(() => {
     const labels: Record<SpaceDrawingHistoryScope, string> = {
@@ -397,44 +450,42 @@ export default function SpaceEditWorkspace() {
         okText: "保存并继续",
         cancelText: "取消",
         onOk: async () => {
-          setSaveStatus("saving");
-          const saved = await saveAllRef.current({
+          const saved = await runSaveOperation(() => saveAllRef.current({
             silent: false,
             closeAfterSave: true,
             markFileShown: true,
             includeCabinet: true,
-          });
+          }));
           if (saved) {
-            showSavedStatus();
             settle(true);
             return;
           }
-          setSaveStatus("idle");
           return Promise.reject(new Error("保存未完成"));
         },
         onCancel: () => settle(false),
       });
     });
-  }, [dirtyScopeText, showSavedStatus]);
+  }, [dirtyScopeText, runSaveOperation]);
 
   const startAutoSaveTimer = useCallback(() => {
     if (autoSaveTimerRef.current) clearInterval(autoSaveTimerRef.current);
     autoSaveTimerRef.current = null;
     if (!selectedProject || !activeSourcePath) return;
     autoSaveTimerRef.current = setInterval(() => {
-      if (autoSaveInFlightRef.current || dirtyScopesRef.current.size === 0) return;
+      const hasAutoSavableChanges = [...dirtyScopesRef.current].some((scope) => scope !== "cabinet");
+      if (autoSaveInFlightRef.current || !hasAutoSavableChanges) return;
       autoSaveInFlightRef.current = true;
-      void saveAllRef.current({
+      void runSaveOperation(() => saveAllRef.current({
         silent: true,
         closeAfterSave: false,
         markFileShown: false,
         clearHistory: false,
         includeCabinet: false,
-      }).finally(() => {
+      })).finally(() => {
         autoSaveInFlightRef.current = false;
       });
     }, 30_000);
-  }, [activeSourcePath, selectedProject]);
+  }, [activeSourcePath, runSaveOperation, selectedProject]);
 
   const loadedFiles = useMemo(
     () => new Set(activeModelPath ? [loadedFileKey(activeModelPath)] : []),
@@ -455,6 +506,8 @@ export default function SpaceEditWorkspace() {
     pathSavingRef.current = false;
     normalSavingRef.current = false;
     dirtyScopesRef.current.clear();
+    dirtyScopeVersionsRef.current.clear();
+    setSaveStatus("idle");
     drawingHistory.clear();
     adapter.clearCabinetDrawing();
     adapter.clearChargingAreaDrawing();
@@ -671,6 +724,7 @@ export default function SpaceEditWorkspace() {
       ...item,
       updatedAt: new Date().toISOString(),
     }));
+    const dirtyVersion = options.dirtyVersion ?? dirtyScopeVersionsRef.current.get("normal") ?? 0;
     normalSavingRef.current = true;
     setNormalSaving(true);
     try {
@@ -687,8 +741,8 @@ export default function SpaceEditWorkspace() {
         count: items.length,
         active: closeAfterSave ? false : current.active,
       }));
-      dirtyScopesRef.current.delete("normal");
-      if (clearHistory) drawingHistory.clearScope("normal");
+      const scopeSaved = clearDirtyScope("normal", dirtyVersion);
+      if (clearHistory && scopeSaved) drawingHistory.clearScope("normal");
       if (!silent) message.success(items.length > 0 ? "法线标注保存成功" : "法线标注已清空");
       return true;
     } catch (error) {
@@ -698,7 +752,7 @@ export default function SpaceEditWorkspace() {
       normalSavingRef.current = false;
       if (version === operationVersion.current) setNormalSaving(false);
     }
-  }, [activeSourcePath, adapter, closeNormalMode, drawingHistory.clearScope, message, selectedProject]);
+  }, [activeSourcePath, adapter, clearDirtyScope, closeNormalMode, drawingHistory.clearScope, message, selectedProject]);
 
   const handleToggleNormal = useCallback(() => {
     if (normalMode) {
@@ -844,6 +898,7 @@ export default function SpaceEditWorkspace() {
     if (pathSavingRef.current) return false;
 
     const version = operationVersion.current;
+    const dirtyVersion = options.dirtyVersion ?? dirtyScopeVersionsRef.current.get("path") ?? 0;
     const pathFilePath = pathSession.current?.filePath || mapSiblingFilePath(modelPath, PATH_FILE_NAME);
     pathSavingRef.current = true;
     setPathSaving(true);
@@ -869,8 +924,8 @@ export default function SpaceEditWorkspace() {
         updateLayerVisibility("path", pathFilePath, true);
         setTreeKey((value) => value + 1);
       }
-      dirtyScopesRef.current.delete("path");
-      if (clearHistory) drawingHistory.clearScope("path");
+      const scopeSaved = clearDirtyScope("path", dirtyVersion);
+      if (clearHistory && scopeSaved) drawingHistory.clearScope("path");
       if (!silent) message.success("可行路径保存成功");
       return true;
     } catch (error) {
@@ -880,7 +935,7 @@ export default function SpaceEditWorkspace() {
       pathSavingRef.current = false;
       if (version === operationVersion.current) setPathSaving(false);
     }
-  }, [activeSourcePath, adapter, drawingHistory.clearScope, message, selectedProject, updateLayerVisibility]);
+  }, [activeSourcePath, adapter, clearDirtyScope, drawingHistory.clearScope, message, selectedProject, updateLayerVisibility]);
 
   const handleTogglePathMode = useCallback(async () => {
     if (pathMode) {
@@ -985,6 +1040,7 @@ export default function SpaceEditWorkspace() {
 
     const version = operationVersion.current;
     const session = cabinetSession.current;
+    const dirtyVersion = options.dirtyVersion ?? dirtyScopeVersionsRef.current.get("cabinet") ?? 0;
     const drawingFilePath = session?.filePath || mapSiblingFilePath(modelPath, DRAWING_FILE_NAME);
     const item: CabinetItem = {
       id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
@@ -1029,8 +1085,8 @@ export default function SpaceEditWorkspace() {
       } catch {
         setCabinetNameSequence({ cabinetRowStart: 1, cabinetStart: 1 });
       }
-      dirtyScopesRef.current.delete("cabinet");
-      if (clearHistory) drawingHistory.clearScope("cabinet");
+      const scopeSaved = clearDirtyScope("cabinet", dirtyVersion);
+      if (clearHistory && scopeSaved) drawingHistory.clearScope("cabinet");
       setTreeKey((value) => value + 1);
       if (!silent) message.success("屏柜保存成功");
       return true;
@@ -1041,7 +1097,7 @@ export default function SpaceEditWorkspace() {
       cabinetSavingRef.current = false;
       if (version === operationVersion.current) setCabinetSaving(false);
     }
-  }, [activeSourcePath, adapter, drawingHistory.clearScope, message, renderDrawingLayer, selectedProject, updateLayerVisibility]);
+  }, [activeSourcePath, adapter, clearDirtyScope, drawingHistory.clearScope, message, renderDrawingLayer, selectedProject, updateLayerVisibility]);
 
   const handleCabinetDraftChange = useCallback((data: CabinetSaveData | null) => {
     cabinetDraftRef.current = data;
@@ -1206,6 +1262,7 @@ export default function SpaceEditWorkspace() {
 
     const version = operationVersion.current;
     const session = chargingSession.current;
+    const dirtyVersion = options.dirtyVersion ?? dirtyScopeVersionsRef.current.get("charging") ?? 0;
     const drawingFilePath = session?.filePath || mapSiblingFilePath(modelPath, DRAWING_FILE_NAME);
     chargingSavingRef.current = true;
     setChargingSaving(true);
@@ -1235,8 +1292,8 @@ export default function SpaceEditWorkspace() {
         setChargingMode(false);
         setChargingState(DEFAULT_CHARGING_STATE);
       }
-      dirtyScopesRef.current.delete("charging");
-      if (clearHistory) drawingHistory.clearScope("charging");
+      const scopeSaved = clearDirtyScope("charging", dirtyVersion);
+      if (clearHistory && scopeSaved) drawingHistory.clearScope("charging");
       if (markFileShown) setTreeKey((value) => value + 1);
       if (!silent) message.success(item ? "充电区域保存成功" : "充电区域已删除");
       return true;
@@ -1247,7 +1304,7 @@ export default function SpaceEditWorkspace() {
       chargingSavingRef.current = false;
       if (version === operationVersion.current) setChargingSaving(false);
     }
-  }, [activeSourcePath, adapter, drawingHistory.clearScope, message, renderDrawingLayer, selectedProject, updateLayerVisibility]);
+  }, [activeSourcePath, adapter, clearDirtyScope, drawingHistory.clearScope, message, renderDrawingLayer, selectedProject, updateLayerVisibility]);
 
   const handleSaveChargingArea = useCallback(async (): Promise<boolean> => {
     const verts = adapter.getChargingAreaVerts();
@@ -1265,7 +1322,7 @@ export default function SpaceEditWorkspace() {
   }, [adapter, message, persistChargingArea]);
 
   chargingDeleteHandler.current = () => {
-    void persistChargingArea(null);
+    void runSaveOperation(() => persistChargingArea(null));
   };
 
   const handleToggleCharging = useCallback(async () => {
@@ -1365,6 +1422,7 @@ export default function SpaceEditWorkspace() {
 
     const version = operationVersion.current;
     const session = deviceAreaSession.current;
+    const dirtyVersion = options.dirtyVersion ?? dirtyScopeVersionsRef.current.get("device-area") ?? 0;
     const drawingFilePath = session?.filePath || mapSiblingFilePath(modelPath, DRAWING_FILE_NAME);
     const items: DeviceAreaItem[] = boxes.map((box) => ({
       id: box.id,
@@ -1404,8 +1462,8 @@ export default function SpaceEditWorkspace() {
         setDeviceAreaState(DEFAULT_DEVICE_AREA_STATE);
       }
       if (closeAfterSave) setProjectBoundBayIds(new Set());
-      dirtyScopesRef.current.delete("device-area");
-      if (clearHistory) drawingHistory.clearScope("device-area");
+      const scopeSaved = clearDirtyScope("device-area", dirtyVersion);
+      if (clearHistory && scopeSaved) drawingHistory.clearScope("device-area");
       if (markFileShown) setTreeKey((value) => value + 1);
       if (!silent) message.success(items.length > 0 ? "设备区域保存成功" : "设备区域已删除");
       return true;
@@ -1416,14 +1474,14 @@ export default function SpaceEditWorkspace() {
       deviceAreaSavingRef.current = false;
       if (version === operationVersion.current) setDeviceAreaSaving(false);
     }
-  }, [activeSourcePath, adapter, drawingHistory.clearScope, message, renderDrawingLayer, selectedProject, updateLayerVisibility]);
+  }, [activeSourcePath, adapter, clearDirtyScope, drawingHistory.clearScope, message, renderDrawingLayer, selectedProject, updateLayerVisibility]);
 
   const handleSaveDeviceAreas = useCallback(async (): Promise<boolean> => {
     return persistDeviceAreas(adapter.getDeviceAreaBoxes());
   }, [adapter, persistDeviceAreas]);
 
   deviceAreaDeleteHandler.current = () => {
-    void persistDeviceAreas(adapter.getDeviceAreaBoxes());
+    void runSaveOperation(() => persistDeviceAreas(adapter.getDeviceAreaBoxes()));
   };
 
   const handleToggleDeviceArea = useCallback(async () => {
@@ -1576,7 +1634,8 @@ export default function SpaceEditWorkspace() {
     const silent = !!options.silent;
     const includeCabinet = options.includeCabinet !== false;
     const closeAfterSave = options.closeAfterSave !== false;
-    const dirty = dirtyScopesRef.current;
+    const dirty = new Set(dirtyScopesRef.current);
+    const saveStartedVersions = new Map(dirtyScopeVersionsRef.current);
     if (!activeSourcePath) {
       if (!silent) message.warning("请先加载模型");
       return false;
@@ -1613,7 +1672,10 @@ export default function SpaceEditWorkspace() {
     }
 
     if (includeCabinet && adapter.hasCabinetDraft() && (!silent || dirty.has("cabinet"))) {
-      const saved = await persistCabinet(cabinetDraftRef.current, persistOptions);
+      const saved = await persistCabinet(cabinetDraftRef.current, {
+        ...persistOptions,
+        dirtyVersion: saveStartedVersions.get("cabinet") ?? 0,
+      });
       if (!saved) return false;
       savedAny = true;
     }
@@ -1625,27 +1687,39 @@ export default function SpaceEditWorkspace() {
         geometry: { verts: chargingVerts },
         updatedAt: new Date().toISOString(),
       };
-      const saved = await persistChargingArea(item, persistOptions);
+      const saved = await persistChargingArea(item, {
+        ...persistOptions,
+        dirtyVersion: saveStartedVersions.get("charging") ?? 0,
+      });
       if (!saved) return false;
       savedAny = true;
     }
 
     if (shouldSaveDevice) {
       if (deviceBoxes.length > 0 || dirty.has("device-area")) {
-        const saved = await persistDeviceAreas(deviceBoxes, persistOptions);
+        const saved = await persistDeviceAreas(deviceBoxes, {
+          ...persistOptions,
+          dirtyVersion: saveStartedVersions.get("device-area") ?? 0,
+        });
         if (!saved) return false;
         savedAny = true;
       }
     }
 
     if (shouldSavePath) {
-      const saved = await persistPath(persistOptions);
+      const saved = await persistPath({
+        ...persistOptions,
+        dirtyVersion: saveStartedVersions.get("path") ?? 0,
+      });
       if (!saved) return false;
       savedAny = true;
     }
 
     if (shouldSaveNormal) {
-      const saved = await persistNormalAnnotations(persistOptions);
+      const saved = await persistNormalAnnotations({
+        ...persistOptions,
+        dirtyVersion: saveStartedVersions.get("normal") ?? 0,
+      });
       if (!saved) return false;
       savedAny = true;
     }
@@ -1655,7 +1729,10 @@ export default function SpaceEditWorkspace() {
       return false;
     }
 
-    if (options.clearHistory !== false && closeAfterSave) drawingHistory.clear();
+    const changedDuringSave = [...saveStartedVersions.entries()].some(
+      ([scope, version]) => (dirtyScopeVersionsRef.current.get(scope) ?? 0) !== version,
+    );
+    if (options.clearHistory !== false && closeAfterSave && !changedDuringSave) drawingHistory.clear();
     return true;
   }, [
     activeSourcePath,
@@ -1676,12 +1753,9 @@ export default function SpaceEditWorkspace() {
   saveAllRef.current = saveAll;
 
   const handleSaveAll = useCallback(async () => {
-    setSaveStatus("saving");
-    const saved = await saveAll({ silent: false, closeAfterSave: true, markFileShown: true, includeCabinet: true });
-    if (saved) showSavedStatus();
-    else setSaveStatus("idle");
+    await runSaveOperation(() => saveAll({ silent: false, closeAfterSave: true, markFileShown: true, includeCabinet: true }));
     startAutoSaveTimer();
-  }, [saveAll, showSavedStatus, startAutoSaveTimer]);
+  }, [runSaveOperation, saveAll, startAutoSaveTimer]);
 
   useEffect(() => {
     adapter.setRenderSettings(renderSettings);
@@ -1718,13 +1792,11 @@ export default function SpaceEditWorkspace() {
   }, []);
 
   useEffect(() => {
-    const mode = correctionMode ? "correction" : cabinetMode ? "cabinet" : chargingMode ? "charging" : deviceAreaMode ? "device-area" : pathMode ? "path" : normalMode ? "normal" : "idle";
-    (window as Window & { __spaceEditInteractionMode?: string }).__spaceEditInteractionMode = mode;
-    return () => {
-      const state = window as Window & { __spaceEditInteractionMode?: string };
-      if (state.__spaceEditInteractionMode === mode) state.__spaceEditInteractionMode = "idle";
-    };
-  }, [cabinetMode, chargingMode, correctionMode, deviceAreaMode, normalMode, pathMode]);
+    const busy = saveStatus === "saving" || !!loading || correctionSaving || clipSaving;
+    const mode = busy ? "busy" : clipBounds ? "clip" : correctionMode ? "correction" : cabinetMode ? "cabinet" : chargingMode ? "charging" : deviceAreaMode ? "device-area" : pathMode ? "path" : normalMode ? "normal" : "idle";
+    adapter.setInteractionMode(mode);
+    return () => adapter.setInteractionMode("idle");
+  }, [adapter, cabinetMode, chargingMode, clipBounds, clipSaving, correctionMode, correctionSaving, deviceAreaMode, loading, normalMode, pathMode, saveStatus]);
 
   useEffect(() => {
     adapter.setDrawingInteractionCallbacks({
@@ -2238,6 +2310,7 @@ export default function SpaceEditWorkspace() {
           <SpaceSceneHost
             adapterFactory={adapterFactory}
             picking={correctionMode && !correctionSaving}
+            busy={saveStatus === "saving" || !!loading || correctionSaving || clipSaving}
             onSceneClick={handleCorrectionPointClick}
             overlay={(sceneState) => (
               <>
@@ -2261,7 +2334,7 @@ export default function SpaceEditWorkspace() {
                     </div>
                   </div>
                 ) : null}
-                <SpaceShortcutHelp normalMode={normalMode} />
+                {!normalMode && <SpaceShortcutHelp />}
                 {correctionMode && !correctionSaving && activeSourcePath && (
                   <MapCoordinateCorrectionPanel
                     mapName={mapNameFromModelPath(activeSourcePath)}
@@ -2299,7 +2372,7 @@ export default function SpaceEditWorkspace() {
                     cabinetCount={cabinetState.cabinetCount}
                     nameSequence={cabinetNameSequence}
                     onClose={closeCabinetMode}
-                    onSave={(data) => void persistCabinet(data)}
+                    onSave={(data) => { void runSaveOperation(() => persistCabinet(data)); }}
                     onDraftChange={handleCabinetDraftChange}
                     onNamesChange={(names) => adapter.setCabinetNames(names)}
                     saving={cabinetSaving}
@@ -2310,7 +2383,7 @@ export default function SpaceEditWorkspace() {
                     pointCount={chargingState.pointCount}
                     height={chargingState.height}
                     onClose={closeChargingMode}
-                    onSave={() => void handleSaveChargingArea()}
+                    onSave={() => { void runSaveOperation(handleSaveChargingArea); }}
                     onSetHeight={handleChargingHeightChange}
                     saving={chargingSaving}
                   />
@@ -2326,7 +2399,7 @@ export default function SpaceEditWorkspace() {
                       ...projectBoundBayIds,
                     ])}
                     onClose={closeDeviceAreaMode}
-                    onSave={() => void handleSaveDeviceAreas()}
+                    onSave={() => { void runSaveOperation(handleSaveDeviceAreas); }}
                     onSetHeight={handleDeviceAreaHeightChange}
                     onBindBay={handleDeviceAreaBindBay}
                     onUnbind={handleDeviceAreaUnbind}

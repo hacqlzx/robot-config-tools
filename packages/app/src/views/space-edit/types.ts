@@ -1,4 +1,4 @@
-export type SaveStatus = "idle" | "saving" | "saved";
+export type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "failed";
 
 export type ViewDirection = "前" | "后" | "左" | "右" | "上" | "下";
 

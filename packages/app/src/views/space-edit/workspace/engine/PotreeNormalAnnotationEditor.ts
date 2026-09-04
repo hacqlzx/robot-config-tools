@@ -13,6 +13,7 @@ import {
 } from "@/potree-core/potree-runtime";
 import type { NormalAnnotationItem } from "../../hooks/drawing/drawing-schema";
 import type { SpaceNormalAnnotationCallbacks } from "./types";
+import type { SpaceInteractionCoordinator } from "./SpaceInteractionCoordinator";
 
 type Vec3 = [number, number, number];
 
@@ -349,6 +350,7 @@ export class PotreeNormalAnnotationEditor {
     private readonly potree: PotreeNamespace,
     private readonly three: PotreeThreeNamespace,
     private readonly host: HTMLElement,
+    private readonly interactions: SpaceInteractionCoordinator,
   ) {
     this.scene = new three.Scene();
     this.labelContainer = this.createLabelContainer(host);
@@ -531,16 +533,8 @@ export class PotreeNormalAnnotationEditor {
 
   private canHandlePointer(): boolean {
     if (!this.pageActive || !this.enabled) return false;
-    const flags = window as Window & {
-      __clipDragging?: boolean;
-      __drawingDragging?: boolean;
-      __spaceEditPathSelectionPending?: boolean;
-    };
-    const mode = (window as Window & { __spaceEditInteractionMode?: string }).__spaceEditInteractionMode;
-    return (!mode || mode === "normal")
-      && !flags.__clipDragging
-      && !flags.__drawingDragging
-      && !flags.__spaceEditPathSelectionPending
+    return this.interactions.isMode("normal")
+      && !this.interactions.hasAnyClaim("drawing-drag", "path-selection")
       && !this.host.closest("[data-space-edit-busy='true']");
   }
 
@@ -574,7 +568,7 @@ export class PotreeNormalAnnotationEditor {
       this.draggingHandle = this.pendingHandle;
       this.pendingHandle = null;
       this.dragBefore = this.snapshot();
-      (window as Window & { __drawingDragging?: boolean }).__drawingDragging = true;
+      this.interactions.setClaim("drawing-drag", true);
     }
     if (this.draggingHandle) {
       const item = this.items.find((candidate) => candidate.id === this.draggingHandle?.id);
@@ -603,7 +597,7 @@ export class PotreeNormalAnnotationEditor {
       const radius = Math.hypot(event.clientX - this.mouseDown.x, event.clientY - this.mouseDown.y);
       if (radius > CLICK_THRESHOLD) {
         this.drawingCircle = true;
-        (window as Window & { __drawingDragging?: boolean }).__drawingDragging = true;
+        this.interactions.setClaim("drawing-drag", true);
       }
     }
 
@@ -617,7 +611,6 @@ export class PotreeNormalAnnotationEditor {
 
   private readonly handleMouseUp = (event: MouseEvent): void => {
     if (event.button !== 0 || !this.pageActive) return;
-    const flags = window as Window & { __drawingDragging?: boolean };
     if (this.draggingHandle && this.dragBefore) {
       const item = this.items.find((candidate) => candidate.id === this.draggingHandle?.id);
       if (item) {
@@ -643,7 +636,7 @@ export class PotreeNormalAnnotationEditor {
       this.draggingHandle = null;
       this.dragBefore = null;
       this.mouseDown = null;
-      flags.__drawingDragging = false;
+      this.interactions.setClaim("drawing-drag", false);
       if (!this.commitIfChanged(before, label)) {
         this.rebuildVisuals();
         this.emitChange();
@@ -665,7 +658,7 @@ export class PotreeNormalAnnotationEditor {
     this.selectionCircle = null;
     this.drawingCircle = false;
     this.hideSelectionCircle();
-    flags.__drawingDragging = false;
+    this.interactions.setClaim("drawing-drag", false);
     if (!start || !this.canHandlePointer()) {
       return;
     }
@@ -678,12 +671,12 @@ export class PotreeNormalAnnotationEditor {
     }
 
     if (circle && circle.radius >= MIN_CIRCLE_RADIUS) {
-      flags.__drawingDragging = false;
+      this.interactions.setClaim("drawing-drag", false);
       this.createNormalFromCircle(circle);
       this.consumePointer(event);
       return;
     }
-    flags.__drawingDragging = false;
+    this.interactions.setClaim("drawing-drag", false);
   };
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
@@ -722,7 +715,7 @@ export class PotreeNormalAnnotationEditor {
     this.selectionCircle = null;
     this.drawingCircle = false;
     this.hideSelectionCircle();
-    (window as Window & { __drawingDragging?: boolean }).__drawingDragging = false;
+    this.interactions.setClaim("drawing-drag", false);
   }
 
   private consumePointer(event: MouseEvent): void {

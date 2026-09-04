@@ -10,6 +10,7 @@ import type {
 } from "@/potree-core/potree-runtime";
 import type { DrawingItem, PathData, PathPoint } from "../../hooks/drawing/drawing-schema";
 import type { SpaceDrawingInteractionCallbacks, SpaceDrawingLayer, SpaceDrawingSelection } from "./types";
+import type { SpaceInteractionCoordinator } from "./SpaceInteractionCoordinator";
 
 type Vec3 = [number, number, number];
 
@@ -430,6 +431,7 @@ export class PotreeDrawingRenderer {
     private readonly potree: PotreeNamespace,
     private readonly three: PotreeThreeNamespace,
     private readonly host: HTMLElement,
+    private readonly interactions: SpaceInteractionCoordinator,
   ) {
     this.scene = new three.Scene();
     this.labelContainer = this.createLabelContainer(host);
@@ -447,7 +449,7 @@ export class PotreeDrawingRenderer {
     this.active = active;
     this.mouseDown = null;
     this.pendingSelection = null;
-    (window as Window & { __spaceEditSelectionPending?: boolean }).__spaceEditSelectionPending = false;
+    this.interactions.setClaim("drawing-selection", false);
     if (!active) this.viewer.controls?.stop?.();
   }
 
@@ -489,7 +491,7 @@ export class PotreeDrawingRenderer {
     this.viewer.removeEventListener("render.pass.perspective_overlay", this.renderOverlay);
     this.clear();
     this.labelContainer.remove();
-    (window as Window & { __spaceEditSelectionPending?: boolean }).__spaceEditSelectionPending = false;
+    this.interactions.setClaim("drawing-selection", false);
     this.interactionCallbacks = null;
   }
 
@@ -550,32 +552,22 @@ export class PotreeDrawingRenderer {
 
   private canHandlePointer(): boolean {
     if (!this.active) return false;
-    const flags = window as Window & {
-      __clipDragging?: boolean;
-      __drawingDragging?: boolean;
-      __spaceEditPathSelectionPending?: boolean;
-    };
-    const mode = (window as Window & { __spaceEditInteractionMode?: string }).__spaceEditInteractionMode;
-    return (!mode || mode === "idle")
-      && !flags.__clipDragging
-      && !flags.__drawingDragging
-      && !flags.__spaceEditPathSelectionPending
+    return this.interactions.isMode("idle")
+      && !this.interactions.hasAnyClaim("drawing-drag", "path-selection")
       && !this.host.closest("[data-space-edit-busy='true']");
   }
 
   private readonly handleMouseDown = (event: MouseEvent): void => {
     if (event.button !== 0 || !this.canHandlePointer()) return;
-    const flags = window as Window & { __spaceEditSelectionPending?: boolean };
     this.mouseDown = { x: event.clientX, y: event.clientY };
     this.pendingSelection = this.hitTest(this.mousePosition(event));
-    flags.__spaceEditSelectionPending = !!this.pendingSelection;
+    this.interactions.setClaim("drawing-selection", !!this.pendingSelection);
   };
 
   private readonly handleMouseUp = (event: MouseEvent): void => {
-    const flags = window as Window & { __spaceEditSelectionPending?: boolean };
     const pendingSelection = this.pendingSelection;
     this.pendingSelection = null;
-    flags.__spaceEditSelectionPending = false;
+    this.interactions.setClaim("drawing-selection", false);
     const start = this.mouseDown;
     this.mouseDown = null;
     if (event.button !== 0 || !start || !this.canHandlePointer()) return;

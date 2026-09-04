@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, Empty, Input, Select, Spin } from "antd";
-import { CloseOutlined, CompassOutlined, DeleteOutlined, DownloadOutlined } from "@ant-design/icons";
+import { CloseOutlined, CompassOutlined, DeleteOutlined, DownloadOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import type { DevicePoint } from "@robot/database";
 import { useSelectedProject } from "@/stores/appContextStore";
 import type { NormalAnnotationItem } from "../../hooks/drawing/drawing-schema";
+import { SpaceShortcutHelpButton } from "./SpaceShortcutHelp";
 
 interface NormalPoint {
   pointCode: string;
@@ -29,7 +30,7 @@ function formatCoordinate(value: number): string {
 }
 
 function pointLabel(point: NormalPoint): string {
-  return point.pointName || point.pointCode;
+  return point.pointName.trim() || point.pointCode.trim();
 }
 
 export default function NormalAnnotationPanel({
@@ -105,6 +106,10 @@ export default function NormalAnnotationPanel({
     () => new Set(items.map((item) => normalizePointCode(item.pointCode)).filter(Boolean)),
     [items],
   );
+  const boundCount = useMemo(
+    () => items.filter((item) => normalizePointCode(item.pointCode)).length,
+    [items],
+  );
 
   return (
     <div
@@ -116,6 +121,9 @@ export default function NormalAnnotationPanel({
         right: 16,
         width: 420,
         maxWidth: "calc(100% - 32px)",
+        maxHeight: "calc(100% - 32px)",
+        display: "flex",
+        flexDirection: "column",
         background: "#fff",
         border: "1px solid #d9d9d9",
         borderRadius: 8,
@@ -128,8 +136,19 @@ export default function NormalAnnotationPanel({
       onMouseDown={(event) => event.stopPropagation()}
     >
       <style>{`
-        .normal-annotation-panel-row:hover { background: #fafcff !important; }
-        .normal-annotation-panel-row.selected:hover { background: #f0f7ff !important; }
+        .normal-annotation-panel-row {
+          transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+        }
+        .normal-annotation-panel-row:hover,
+        .normal-annotation-panel-row.selected {
+          background: #f0f7ff !important;
+          border-color: #91caff !important;
+          box-shadow: inset 3px 0 #1677ff, 0 3px 10px rgba(22, 119, 255, 0.1) !important;
+        }
+        .normal-annotation-panel-row:hover .normal-annotation-index,
+        .normal-annotation-panel-row.selected .normal-annotation-index {
+          color: #1677ff !important;
+        }
         .normal-annotation-panel-row:focus-visible { outline: 2px solid #91caff; outline-offset: -2px; }
         .normal-annotation-panel .normal-name-input.ant-input,
         .normal-annotation-panel .normal-name-input.ant-input-affix-wrapper {
@@ -160,6 +179,7 @@ export default function NormalAnnotationPanel({
           background: "#1677ff",
           fontSize: 13,
           fontWeight: 600,
+          flexShrink: 0,
         }}
       >
         <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
@@ -167,15 +187,39 @@ export default function NormalAnnotationPanel({
           <span>法线标注</span>
           <span style={{ fontSize: 12, fontWeight: 400, opacity: 0.86 }}>({items.length})</span>
         </span>
-        <Button
-          type="text"
-          size="small"
-          aria-label="关闭法线标注列表"
-          title="关闭法线标注"
-          icon={<CloseOutlined />}
-          onClick={onClose}
-          style={{ color: "#fff", width: 24, height: 24, padding: 0 }}
-        />
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+          <SpaceShortcutHelpButton inverse />
+          <Button
+            type="text"
+            size="small"
+            aria-label="关闭法线标注列表"
+            title="关闭法线标注"
+            icon={<CloseOutlined />}
+            onClick={onClose}
+            style={{ color: "#fff", width: 24, height: 24, padding: 0 }}
+          />
+        </span>
+      </div>
+
+      <div
+        role="note"
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 8,
+          padding: "9px 12px",
+          color: "#4b5563",
+          background: "#f6f9ff",
+          borderBottom: "1px solid #e6efff",
+          fontSize: 12,
+          lineHeight: 1.55,
+          flexShrink: 0,
+        }}
+      >
+        <InfoCircleOutlined style={{ marginTop: 2, color: "#1677ff", flexShrink: 0 }} />
+        <span>
+          按住 <strong style={{ color: "#1f2937" }}>Alt + 鼠标左键</strong> 拖动新建区域；直接拖动圆心、圆环或箭头可调整标注。
+        </span>
       </div>
 
       {loading ? (
@@ -185,7 +229,7 @@ export default function NormalAnnotationPanel({
       ) : items.length === 0 ? (
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无法线标注" style={{ margin: "28px 0" }} />
       ) : (
-        <div style={{ maxHeight: 470, overflowY: "auto", padding: "8px 12px 10px" }}>
+        <div style={{ display: "grid", gap: 8, flex: "1 1 auto", minHeight: 0, maxHeight: 470, overflowY: "auto", padding: "10px 12px 12px" }}>
           {items.map((item, index) => {
             const selected = item.id === selectedId;
             const currentPoint = item.pointCode
@@ -201,6 +245,7 @@ export default function NormalAnnotationPanel({
               <div
                 key={item.id}
                 role="button"
+                aria-pressed={selected}
                 tabIndex={0}
                 onClick={() => onSelect(item)}
                 onKeyDown={(event) => {
@@ -214,16 +259,17 @@ export default function NormalAnnotationPanel({
                 style={{
                   display: "grid",
                   gap: 8,
-                  padding: "11px 4px 12px",
-                  borderBottom: "1px solid #f0f0f0",
-                  borderLeft: selected ? "3px solid #1677ff" : "3px solid transparent",
-                  background: selected ? "#f0f7ff" : "transparent",
+                  padding: "11px 10px 12px 12px",
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 8,
+                  background: "#fff",
+                  boxShadow: "0 1px 3px rgba(15, 23, 42, 0.05)",
                   cursor: "pointer",
                   outline: "none",
                 }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                  <span style={{ color: selected ? "#1677ff" : "#8c8c8c", fontSize: 12, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
+                  <span className="normal-annotation-index" style={{ color: "#8c8c8c", fontSize: 12, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
                     {String(index + 1).padStart(2, "0")}
                   </span>
                   <Input
@@ -257,19 +303,45 @@ export default function NormalAnnotationPanel({
                     style={{ width: 24, height: 24, padding: 0, marginLeft: item.pointCode ? 0 : "auto" }}
                   />
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, color: "#8c8c8c", fontSize: 11, fontVariantNumeric: "tabular-nums" }}>
-                  <span>X {formatCoordinate(item.origin[0])}</span>
-                  <span>Y {formatCoordinate(item.origin[1])}</span>
-                  <span>Z {formatCoordinate(item.origin[2])}</span>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "56px repeat(3, minmax(0, 1fr))",
+                    alignItems: "center",
+                    gap: 8,
+                    paddingTop: 8,
+                    borderTop: "1px solid rgba(148, 163, 184, 0.22)",
+                    fontSize: 11,
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  <span style={{ color: "#8c8c8c" }}>中心坐标</span>
+                  {item.origin.map((value, coordinateIndex) => {
+                    const text = `${["X", "Y", "Z"][coordinateIndex]} ${formatCoordinate(value)}`;
+                    return (
+                      <span
+                        key={coordinateIndex}
+                        title={text}
+                        style={{ minWidth: 0, overflow: "hidden", color: "#4b5563", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                      >
+                        {text}
+                      </span>
+                    );
+                  })}
                 </div>
-                <div onClick={(event) => event.stopPropagation()}>
+                <div
+                  onClick={(event) => event.stopPropagation()}
+                  style={{ display: "grid", gridTemplateColumns: "56px minmax(0, 1fr)", alignItems: "center", gap: 8 }}
+                >
+                  <span style={{ color: "#8c8c8c", fontSize: 11 }}>绑定点位</span>
                   <Select
                     size="small"
                     allowClear
                     showSearch
                     optionFilterProp="label"
+                    aria-label={`${item.name?.trim() || `法线 ${index + 1}`}绑定点位`}
                     value={currentValue}
-                    placeholder="选择绑定点位"
+                    placeholder="选择点位（可搜索）"
                     options={options}
                     loading={loading}
                     disabled={saving}
@@ -301,12 +373,18 @@ export default function NormalAnnotationPanel({
       <div
         style={{
           display: "flex",
-          justifyContent: "flex-end",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
           padding: "10px 12px 12px",
           borderTop: "1px solid #f0f0f0",
           background: "#fff",
+          flexShrink: 0,
         }}
       >
+        <span style={{ color: "#8c8c8c", fontSize: 12, fontVariantNumeric: "tabular-nums" }}>
+          已绑定 {boundCount} / {items.length}
+        </span>
         <Button
           type="primary"
           size="small"
@@ -318,7 +396,7 @@ export default function NormalAnnotationPanel({
             onExport(event.currentTarget);
           }}
         >
-          导出
+          导出标注
         </Button>
       </div>
     </div>

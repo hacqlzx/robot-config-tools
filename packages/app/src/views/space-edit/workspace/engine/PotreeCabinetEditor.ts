@@ -9,6 +9,7 @@ import type {
   PotreeViewerInstance,
 } from "@/potree-core/potree-runtime";
 import type { SpaceCabinetCallbacks, SpaceCabinetState } from "./types";
+import type { SpaceInteractionCoordinator } from "./SpaceInteractionCoordinator";
 
 type Vec3 = [number, number, number];
 
@@ -166,6 +167,7 @@ export class PotreeCabinetEditor {
     private readonly potree: PotreeNamespace,
     private readonly three: PotreeThreeNamespace,
     private readonly host: HTMLElement,
+    private readonly interactions: SpaceInteractionCoordinator,
   ) {
     this.scene = new three.Scene();
     this.labelContainer = this.createLabelContainer();
@@ -187,7 +189,7 @@ export class PotreeCabinetEditor {
     this.mouseDown = null;
     this.dragBefore = null;
     this.selectedVertex = -1;
-    (window as Window & { __drawingDragging?: boolean }).__drawingDragging = false;
+    this.interactions.setClaim("drawing-drag", false);
     this.rebuildVisuals();
     this.emitChange();
   }
@@ -196,7 +198,7 @@ export class PotreeCabinetEditor {
     this.active = active;
     this.mouseDown = null;
     this.dragBefore = null;
-    (window as Window & { __drawingDragging?: boolean }).__drawingDragging = false;
+    this.interactions.setClaim("drawing-drag", false);
     if (!active) this.viewer.controls?.stop?.();
   }
 
@@ -339,13 +341,12 @@ export class PotreeCabinetEditor {
   }
 
   private canHandlePointer(): boolean {
-    return this.active && this.enabled && !this.host.closest("[data-space-edit-busy='true']");
+    return this.active && this.enabled && this.interactions.isMode("cabinet") && !this.host.closest("[data-space-edit-busy='true']");
   }
 
   private readonly handleMouseDown = (event: MouseEvent): void => {
     if (event.button !== 0 || !this.canHandlePointer()) return;
-    const flags = window as Window & { __clipDragging?: boolean; __drawingDragging?: boolean };
-    if (flags.__clipDragging || flags.__drawingDragging) return;
+    if (this.interactions.hasClaim("drawing-drag")) return;
     this.mouseDown = { x: event.clientX, y: event.clientY };
     if (!this.verts) return;
 
@@ -353,7 +354,7 @@ export class PotreeCabinetEditor {
     if (vertex < 0) return;
     this.selectedVertex = vertex;
     this.dragBefore = this.snapshot();
-    flags.__drawingDragging = true;
+    this.interactions.setClaim("drawing-drag", true);
     this.consumePointer(event);
   };
 
@@ -371,8 +372,6 @@ export class PotreeCabinetEditor {
     const start = this.mouseDown;
     this.mouseDown = null;
     if (event.button !== 0) return;
-    const flags = window as Window & { __drawingDragging?: boolean };
-
     if (this.selectedVertex >= 0 && this.dragBefore) {
       const before = this.dragBefore;
       const mouse = this.mousePosition(event);
@@ -380,7 +379,7 @@ export class PotreeCabinetEditor {
       if (snap) this.moveVertex(this.selectedVertex, snap);
       this.selectedVertex = -1;
       this.dragBefore = null;
-      flags.__drawingDragging = false;
+      this.interactions.setClaim("drawing-drag", false);
       const after = this.snapshot();
       if (JSON.stringify(before) !== JSON.stringify(after)) {
         this.undoStack.push(before);
@@ -392,7 +391,7 @@ export class PotreeCabinetEditor {
       this.consumePointer(event);
       return;
     }
-    flags.__drawingDragging = false;
+    this.interactions.setClaim("drawing-drag", false);
     if (!start || !this.canHandlePointer()) return;
     if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > CLICK_THRESHOLD) return;
 

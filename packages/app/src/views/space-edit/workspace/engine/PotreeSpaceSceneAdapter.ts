@@ -19,6 +19,7 @@ import { PotreeFlyKeyboardController } from "./PotreeFlyKeyboardController";
 import { PotreePathEditor } from "./PotreePathEditor";
 import { PotreeNormalAnnotationEditor } from "./PotreeNormalAnnotationEditor";
 import { PotreeRotationPivotIndicator } from "./PotreeRotationPivotIndicator";
+import { SpaceInteractionCoordinator, type SpaceInteractionMode } from "./SpaceInteractionCoordinator";
 import {
   DEFAULT_SPACE_RENDER_SETTINGS,
   normalizeSpaceRenderSettings,
@@ -98,6 +99,7 @@ function disposeGeometryTree(root?: PotreeGeometryNode, cache?: PotreeNodeCache)
 }
 
 export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
+  private readonly interactions = new SpaceInteractionCoordinator();
   private host: HTMLElement | null = null;
   private viewer: PotreeViewerInstance | null = null;
   private potree: PotreeNamespace | null = null;
@@ -175,24 +177,24 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     );
     this.depthZoomController.start();
     this.depthZoomController.setActive(this.active);
-    this.rotationPivotIndicator = new PotreeRotationPivotIndicator(viewer, renderArea);
-    this.rotationPivotIndicator.start();
-    this.rotationPivotIndicator.setActive(this.active);
-    this.drawingRenderer = new PotreeDrawingRenderer(viewer, potree, three, renderArea);
+    this.drawingRenderer = new PotreeDrawingRenderer(viewer, potree, three, renderArea, this.interactions);
     this.drawingRenderer.setActive(this.active);
-    this.chargingAreaEditor = new PotreeChargingAreaEditor(viewer, potree, three, renderArea);
+    this.chargingAreaEditor = new PotreeChargingAreaEditor(viewer, potree, three, renderArea, this.interactions);
     this.chargingAreaEditor.setActive(this.active);
-    this.cabinetEditor = new PotreeCabinetEditor(viewer, potree, three, renderArea);
+    this.cabinetEditor = new PotreeCabinetEditor(viewer, potree, three, renderArea, this.interactions);
     this.cabinetEditor.setActive(this.active);
-    this.deviceAreaEditor = new PotreeDeviceAreaEditor(viewer, potree, three, renderArea);
+    this.deviceAreaEditor = new PotreeDeviceAreaEditor(viewer, potree, three, renderArea, this.interactions);
     this.deviceAreaEditor.setActive(this.active);
-    this.pathEditor = new PotreePathEditor(viewer, potree, three, renderArea);
+    this.pathEditor = new PotreePathEditor(viewer, potree, three, renderArea, this.interactions);
     this.pathEditor.setPageActive(this.active);
     // Keep path selection available outside placement mode; dragging and
     // destructive edits are gated by path drawing mode.
     this.pathEditor.setEnabled(true);
-    this.normalAnnotationEditor = new PotreeNormalAnnotationEditor(viewer, potree, three, renderArea);
+    this.normalAnnotationEditor = new PotreeNormalAnnotationEditor(viewer, potree, three, renderArea, this.interactions);
     this.normalAnnotationEditor.setActive(this.active);
+    this.rotationPivotIndicator = new PotreeRotationPivotIndicator(viewer, potree, three, renderArea, this.interactions);
+    this.rotationPivotIndicator.start();
+    this.rotationPivotIndicator.setActive(this.active);
     this.resize();
     this.syncActiveState();
   }
@@ -200,6 +202,10 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   setActive(active: boolean): void {
     this.active = active;
     this.syncActiveState();
+  }
+
+  setInteractionMode(mode: SpaceInteractionMode): void {
+    this.interactions.setMode(mode);
   }
 
   pickPointAt(clientX: number, clientY: number): [number, number, number] | null {
@@ -1052,6 +1058,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.modelClipBounds = null;
     this.loadedPointCount = null;
     this.resetInteractionLod();
+    this.interactions.reset();
     this.chargingAreaEditor?.clear();
     this.cabinetEditor?.clear();
     this.deviceAreaEditor?.clear();
@@ -1095,6 +1102,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
 
   dispose(): void {
     const host = this.host;
+    this.interactions.reset();
     this.mountVersion += 1;
     this.host = null;
     this.keyboardController?.dispose();

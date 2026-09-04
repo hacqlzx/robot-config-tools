@@ -10,6 +10,7 @@ import {
 } from "@/potree-core/potree-runtime";
 import type { PathData, PathPoint, PathSegment } from "../../hooks/drawing/drawing-schema";
 import type { SpacePathCallbacks } from "./types";
+import type { SpaceInteractionCoordinator } from "./SpaceInteractionCoordinator";
 
 type Vec3 = [number, number, number];
 
@@ -145,6 +146,7 @@ export class PotreePathEditor {
     private readonly potree: PotreeNamespace,
     private readonly three: PotreeThreeNamespace,
     private readonly host: HTMLElement,
+    private readonly interactions: SpaceInteractionCoordinator,
   ) {
     this.scene = new three.Scene();
     this.labelContainer = this.createLabelContainer(host);
@@ -359,20 +361,18 @@ export class PotreePathEditor {
 
   private handleKeyDown = (event: KeyboardEvent): void => {
     if (!this.pageActive || !this.enabled || !this.active || event.key !== "Delete") return;
-    if ((window as Window & { __clipDragging?: boolean }).__clipDragging) return;
+    if (!this.interactions.isMode("path") || this.interactions.hasClaim("drawing-drag")) return;
     this.deleteSelected();
   };
 
   private canHandlePointer(): boolean {
     if (!this.pageActive) return false;
-    const mode = (window as Window & { __spaceEditInteractionMode?: string }).__spaceEditInteractionMode;
-    return !mode || mode === "idle" || mode === "path";
+    return this.interactions.isMode("idle", "path");
   }
 
   private readonly handleMouseDown = (event: MouseEvent): void => {
     if (event.button !== 0 || !this.enabled || !this.canHandlePointer()) return;
-    const flags = window as Window & { __clipDragging?: boolean; __drawingDragging?: boolean };
-    if (flags.__clipDragging || flags.__drawingDragging) return;
+    if (this.interactions.hasClaim("drawing-drag")) return;
 
     const mouse = this.mousePosition(event);
     this.mouseDown = { x: event.clientX, y: event.clientY };
@@ -421,7 +421,6 @@ export class PotreePathEditor {
 
   private readonly handleMouseMove = (event: MouseEvent): void => {
     if (!this.pageActive) return;
-    const flags = window as Window & { __drawingDragging?: boolean };
     if (this.active && !this.draggingControl && this.pendingControl && this.mouseDown) {
       const distance = Math.hypot(event.clientX - this.mouseDown.x, event.clientY - this.mouseDown.y);
       if (distance > CLICK_THRESHOLD) {
@@ -430,7 +429,7 @@ export class PotreePathEditor {
         this.pendingControl = null;
         this.pendingPointId = null;
         this.pendingPathId = null;
-        flags.__drawingDragging = true;
+        this.interactions.setClaim("drawing-drag", true);
       }
     }
 
@@ -450,7 +449,7 @@ export class PotreePathEditor {
       this.dragBefore = this.snapshot();
       this.pendingPointId = null;
       this.pendingPathId = null;
-      flags.__drawingDragging = true;
+      this.interactions.setClaim("drawing-drag", true);
     }
 
     if (!this.draggingPointId || !this.dragBefore) return;
@@ -465,8 +464,6 @@ export class PotreePathEditor {
     // The drawing renderer runs on window capture before this document
     // listener, so keep the claim until it has yielded the mouseup.
     this.releasePathSelectionClaimSoon();
-    const flags = window as Window & { __drawingDragging?: boolean };
-
     if (this.draggingControl && this.controlDragBefore) {
       const before = this.controlDragBefore;
       const dragging = this.draggingControl;
@@ -475,7 +472,7 @@ export class PotreePathEditor {
       this.draggingControl = null;
       this.controlDragBefore = null;
       this.mouseDown = null;
-      flags.__drawingDragging = false;
+      this.interactions.setClaim("drawing-drag", false);
       if (!this.commitIfChanged(before, "调整路径曲线")) {
         this.rebuildVisuals();
         this.emitChange();
@@ -491,7 +488,7 @@ export class PotreePathEditor {
       this.draggingPointId = null;
       this.dragBefore = null;
       this.mouseDown = null;
-      flags.__drawingDragging = false;
+      this.interactions.setClaim("drawing-drag", false);
       if (!this.commitIfChanged(before, "移动路径点")) {
         this.rebuildVisuals();
         this.emitChange();
@@ -507,7 +504,7 @@ export class PotreePathEditor {
       this.pendingPointId = null;
       this.pendingPathId = null;
       this.pendingControl = null;
-      flags.__drawingDragging = false;
+      this.interactions.setClaim("drawing-drag", false);
       return;
     }
 
@@ -567,7 +564,7 @@ export class PotreePathEditor {
     this.pendingPointId = null;
     this.pendingPathId = null;
     this.pendingControl = null;
-    flags.__drawingDragging = false;
+    this.interactions.setClaim("drawing-drag", false);
     this.consumePointer(event);
   };
 
@@ -593,15 +590,15 @@ export class PotreePathEditor {
     this.dragBefore = null;
     this.draggingControl = null;
     this.controlDragBefore = null;
-    (window as Window & { __drawingDragging?: boolean }).__drawingDragging = false;
+    this.interactions.setClaim("drawing-drag", false);
   }
 
   private setPathSelectionClaim(): void {
-    (window as Window & { __spaceEditPathSelectionPending?: boolean }).__spaceEditPathSelectionPending = true;
+    this.interactions.setClaim("path-selection", true);
   }
 
   private clearPathSelectionClaim(): void {
-    (window as Window & { __spaceEditPathSelectionPending?: boolean }).__spaceEditPathSelectionPending = false;
+    this.interactions.setClaim("path-selection", false);
   }
 
   private releasePathSelectionClaimSoon(): void {

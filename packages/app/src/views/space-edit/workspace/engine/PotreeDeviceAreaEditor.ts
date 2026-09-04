@@ -13,6 +13,7 @@ import type {
   SpaceDeviceAreaCallbacks,
   SpaceDeviceAreaState,
 } from "./types";
+import type { SpaceInteractionCoordinator } from "./SpaceInteractionCoordinator";
 
 type Vec3 = [number, number, number];
 
@@ -170,6 +171,7 @@ export class PotreeDeviceAreaEditor {
     private readonly potree: PotreeNamespace,
     private readonly three: PotreeThreeNamespace,
     private readonly host: HTMLElement,
+    private readonly interactions: SpaceInteractionCoordinator,
   ) {
     this.scene = new three.Scene();
     this.labelContainer = this.createLabelContainer();
@@ -426,15 +428,13 @@ export class PotreeDeviceAreaEditor {
 
   private canHandlePointer(): boolean {
     if (!this.active) return false;
-    if (this.enabled) return true;
-    const mode = (window as Window & { __spaceEditInteractionMode?: string }).__spaceEditInteractionMode;
-    return this.boxes.length > 0 && (!mode || mode === "idle");
+    if (this.enabled) return this.interactions.isMode("device-area");
+    return this.boxes.length > 0 && this.interactions.isMode("idle");
   }
 
   private readonly handleMouseDown = (event: MouseEvent): void => {
     if (event.button !== 0 || !this.canHandlePointer()) return;
-    const flags = window as Window & { __clipDragging?: boolean; __drawingDragging?: boolean };
-    if (flags.__clipDragging || flags.__drawingDragging) return;
+    if (this.interactions.hasClaim("drawing-drag")) return;
     this.mouseDown = { x: event.clientX, y: event.clientY };
   };
 
@@ -443,8 +443,7 @@ export class PotreeDeviceAreaEditor {
     const start = this.mouseDown;
     this.mouseDown = null;
     if (event.button !== 0 || !start || !this.canHandlePointer()) return;
-    const flags = window as Window & { __clipDragging?: boolean; __drawingDragging?: boolean };
-    if (flags.__clipDragging || flags.__drawingDragging) return;
+    if (this.interactions.hasClaim("drawing-drag")) return;
     if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > CLICK_THRESHOLD) return;
 
     const mouse = this.mousePosition(event);
@@ -464,6 +463,7 @@ export class PotreeDeviceAreaEditor {
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
     if (!this.active) return;
+    if (!this.canHandlePointer()) return;
     const selected = this.selectedBox();
     if (!selected) return;
     const target = event.target as HTMLElement | null;

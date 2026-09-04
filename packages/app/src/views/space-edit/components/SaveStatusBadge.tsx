@@ -7,7 +7,12 @@ interface SaveStatusBadgeProps {
 export default function SaveStatusBadge({ status }: SaveStatusBadgeProps) {
   if (status === "idle") return null;
 
-  const isSaved = status === "saved";
+  const presentation = {
+    dirty: { text: "有未保存修改", color: "#ad6800", background: "rgba(255,251,230,0.96)", border: "#ffc53d" },
+    saving: { text: "保存中...", color: "#fff", background: "rgba(0,0,0,0.72)", border: "rgba(255,255,255,0.12)" },
+    saved: { text: "已保存", color: "#237804", background: "rgba(246,255,237,0.96)", border: "#52c41a" },
+    failed: { text: "保存失败，请重试", color: "#a8071a", background: "rgba(255,241,240,0.97)", border: "#ff7875" },
+  }[status];
 
   return (
     <div
@@ -15,24 +20,21 @@ export default function SaveStatusBadge({ status }: SaveStatusBadgeProps) {
         position: "absolute",
         top: 10,
         left: 10,
-        background: isSaved ? "rgba(246,255,237,0.96)" : "rgba(0,0,0,0.72)",
-        border: isSaved ? "1px solid #52c41a" : "1px solid rgba(255,255,255,0.12)",
+        background: presentation.background,
+        border: `1px solid ${presentation.border}`,
         borderRadius: 6,
-        padding: isSaved ? "7px 14px" : "5px 12px",
+        padding: "6px 12px",
         display: "flex",
         alignItems: "center",
         gap: 8,
         zIndex: 10,
         pointerEvents: "none",
-        boxShadow: isSaved ? "0 4px 14px rgba(82,196,26,0.28)" : "0 2px 8px rgba(0,0,0,0.22)",
-        transform: isSaved ? "scale(1.02)" : "none",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.22)",
       }}
     >
-      {status === "saving" ? (
-        <span style={{ color: "#fff", fontSize: 13, fontWeight: 500 }}>保存中...</span>
-      ) : (
-        <span style={{ color: "#237804", fontSize: 15, fontWeight: 700 }}>&#10003; 已保存</span>
-      )}
+      <span style={{ color: presentation.color, fontSize: 13, fontWeight: 600 }}>
+        {status === "saved" ? "\u2713 " : ""}{presentation.text}
+      </span>
     </div>
   );
 }
