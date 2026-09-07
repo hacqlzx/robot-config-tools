@@ -24,6 +24,7 @@ import {
   PATH_FILE_NAME,
   ROBOT_PATH_FILE_NAME,
   loadAllItemsFromJsonInLasCoordinates,
+  loadDrawingItemsByTypeInLasCoordinates,
   loadPathDrawingInLasCoordinates,
   loadNormalAnnotations,
   getBoundBayIdsInProject,
@@ -263,6 +264,7 @@ export default function SpaceEditWorkspace() {
   const pageActive = useElementActive(containerRef);
   const operationVersion = useRef(0);
   const modelBusyRef = useRef(false);
+  const [modelOperationBusy, setModelOperationBusy] = useState(false);
   const [activeModelPath, setActiveModelPath] = useState<string | null>(null);
   const [activeSourcePath, setActiveSourcePath] = useState<string | null>(null);
   const [clipBounds, setClipBounds] = useState<SpaceClipBounds | null>(null);
@@ -279,6 +281,7 @@ export default function SpaceEditWorkspace() {
   const [exportOpen, setExportOpen] = useState(false);
   const [renderSettings, setRenderSettings] = useState(loadRenderSettings);
   const [drawingShown, setDrawingShown] = useState<Set<string>>(new Set());
+  const [drawingAvailableTypes, setDrawingAvailableTypes] = useState<Map<string, Set<"cabinet" | "charging" | "device">>>(new Map());
   const [pathShown, setPathShown] = useState<Set<string>>(new Set());
   const [cabinetMode, setCabinetMode] = useState(false);
   const [cabinetState, setCabinetState] = useState<SpaceCabinetState>(DEFAULT_CABINET_STATE);
@@ -546,6 +549,7 @@ export default function SpaceEditWorkspace() {
   const clearLoadedModelState = useCallback(() => {
     operationVersion.current += 1;
     modelBusyRef.current = false;
+    setModelOperationBusy(false);
     adapter.clearModel();
     setActiveModelPath(null);
     setActiveSourcePath(null);
@@ -601,26 +605,116 @@ export default function SpaceEditWorkspace() {
     adapter.setDrawingLayer(filePath, { ...data, areas });
   }, [adapter]);
 
-  const handleToggleDrawing = useCallback(async (filePath: string, checked: boolean) => {
-    const layerVersion = nextLayerVersion("drawing", filePath);
+  // 预扫描区域文件，检测其包含的类型（不加载渲染）
+  const scanDrawingFileTypes = useCallback(async (filePath: string) => {
+    const api = window.electronAPI;
+    if (!api) return;
+    
+    try {
+      // 加载完整数据仅用于类型检测
+      const items = await loadAllItemsFromJsonInLasCoordinates(api, filePath);
+      
+      const availableTypes = new Set<"cabinet" | "charging" | "device">();
+      if (items.some(item => item.type === "cabinet")) availableTypes.add("cabinet");
+      if (items.some(item => item.type === "charging-area")) availableTypes.add("charging");
+      if (items.some(item => item.type === "device-area")) availableTypes.add("device");
+      
+      setDrawingAvailableTypes(prev => new Map(prev).set(filePath, availableTypes));
+      console.log(`[区域扫描] ${filePath} 包含类型:`, Array.from(availableTypes));
+    } catch (error) {
+      console.warn(`[区域扫描] 无法读取文件 ${filePath}`, error);
+      // 扫描失败时设置为空集合
+      setDrawingAvailableTypes(prev => new Map(prev).set(filePath, new Set()));
+    }
+  }, []);
+
+  // 地图树加载完成后，扫描所有区域文件
+  const handleMapTreeLoaded = useCallback((nodes: SpaceTreeNode[]) => {
+    const findDrawingFiles = (list: SpaceTreeNode[]): string[] => {
+      const result: string[] = [];
+      for (const node of list) {
+        if (!node.isDir && node.name === DRAWING_FILE_NAME) {
+          result.push(node.path);
+        }
+        if (node.isDir && node.children) {
+          result.push(...findDrawingFiles(node.children));
+        }
+      }
+      return result;
+    };
+    
+    const drawingFiles = findDrawingFiles(nodes);
+    console.log(`[地图树加载] 发现 ${drawingFiles.length} 个区域文件，开始扫描`);
+    
+    // 并发扫描所有区域文件
+    drawingFiles.forEach(filePath => {
+      scanDrawingFileTypes(filePath);
+    });
+  }, [scanDrawingFileTypes]);
+
+
+  const handleToggleDrawing = useCallback(async (virtualPath: string, checked: boolean) => {
+    // 解析虚拟路径: filePath#type 或直接 filePath
+    const match = virtualPath.match(/^(.+)#(cabinet|charging|device)$/);
+    const filePath = match ? match[1] : virtualPath;
+    const filterType = match ? match[2] as "cabinet" | "charging" | "device" : null;
+    
+    const layerVersion = nextLayerVersion("drawing", virtualPath);
     const lifecycleVersion = drawingLifecycleVersion.current;
     if (!checked) {
-      adapter.removeDrawingLayer(filePath);
+      adapter.removeDrawingLayer(virtualPath);
       for (const cachedPath of drawingLayerData.current.keys()) {
-        if (sameFilePath(cachedPath, filePath)) drawingLayerData.current.delete(cachedPath);
+        if (sameFilePath(cachedPath, virtualPath)) drawingLayerData.current.delete(cachedPath);
       }
-      updateLayerVisibility("drawing", filePath, false);
+      updateLayerVisibility("drawing", virtualPath, false);
       return;
     }
     const api = window.electronAPI;
     if (!api) return;
-    const items = await loadAllItemsFromJsonInLasCoordinates(api, filePath);
-      if (lifecycleVersion !== drawingLifecycleVersion.current
-        || layerVersion !== drawingLayerVersions.current.get(`drawing:${loadedFileKey(filePath)}`)) return;
-      const data: SpaceDrawingLayer = { areas: items };
-      drawingLayerData.current.set(filePath, data);
-      renderDrawingLayer(filePath, data);
-    updateLayerVisibility("drawing", filePath, true);
+    
+    // 如果有类型过滤，使用按类型加载函数
+    const items = filterType 
+      ? await loadDrawingItemsByTypeInLasCoordinates(api, filePath, filterType)
+      : await loadAllItemsFromJsonInLasCoordinates(api, filePath);
+    
+    // 如果是虚拟节点且没有数据，则不显示
+    if (filterType && items.length === 0) {
+      console.log(`[绘制加载] ${filterType} 类型无数据，跳过显示`);
+      return;
+    }
+    
+    // 检测并记录该 JSON 文件包含哪些类型（仅在首次加载完整数据时）
+    if (!filterType) {
+      const availableTypes = new Set<"cabinet" | "charging" | "device">();
+      if (items.some(item => item.type === "cabinet")) availableTypes.add("cabinet");
+      if (items.some(item => item.type === "charging-area")) availableTypes.add("charging");
+      if (items.some(item => item.type === "device-area")) availableTypes.add("device");
+      setDrawingAvailableTypes(prev => new Map(prev).set(filePath, availableTypes));
+      
+      // 检测完类型后，如果是勾选操作且有可用类型，自动加载各个类型
+      if (checked && availableTypes.size > 0) {
+        // 不渲染完整数据，而是触发各个子类型的加载
+        console.log(`[绘制加载] 检测到 ${availableTypes.size} 种区域类型，准备分类加载`);
+        // 异步加载各个子类型（不阻塞当前函数）
+        availableTypes.forEach(type => {
+          handleToggleDrawing(`${filePath}#${type}`, true);
+        });
+        return;
+      }
+      
+      // 如果没有任何类型或是取消勾选，继续原有逻辑（不做任何操作）
+      if (availableTypes.size === 0) {
+        console.log(`[绘制加载] 区域文件为空，不显示`);
+        return;
+      }
+    }
+    
+    if (lifecycleVersion !== drawingLifecycleVersion.current
+      || layerVersion !== drawingLayerVersions.current.get(`drawing:${loadedFileKey(virtualPath)}`)) return;
+    const data: SpaceDrawingLayer = { areas: items };
+    drawingLayerData.current.set(virtualPath, data);
+    renderDrawingLayer(virtualPath, data);
+    updateLayerVisibility("drawing", virtualPath, true);
   }, [adapter, nextLayerVersion, renderDrawingLayer, updateLayerVisibility]);
 
   const handleTogglePath = useCallback(async (filePath: string, checked: boolean) => {
@@ -651,7 +745,11 @@ export default function SpaceEditWorkspace() {
     try {
       const tree = await window.electronAPI.project.listTree(selectedProject, subDir) as SpaceFileNode[];
       const drawingFile = findFilesByName(tree, [DRAWING_FILE_NAME])[0];
-      if (drawingFile) await handleToggleDrawing(drawingFile, true);
+      // 先检测类型，再按实际类型加载
+      if (drawingFile) {
+        // 先加载完整数据以检测类型（handleToggleDrawing 会自动触发子类型加载）
+        await handleToggleDrawing(drawingFile, true);
+      }
       const normalFile = findFilesByName(tree, [NORMAL_ANNOTATIONS_FILE_NAME])[0];
       const normalItems = normalFile ? await loadNormalAnnotations(window.electronAPI, normalFile) : [];
       adapter.setNormalAnnotations(normalItems);
@@ -1923,16 +2021,15 @@ export default function SpaceEditWorkspace() {
     adapter.setViewDirection(direction);
   }, [adapter]);
 
-  const loadModel = useCallback(async (item: MapModelItem) => {
+  const loadModel = useCallback(async (item: MapModelItem, skipUnsavedConfirmation = false) => {
     if (!selectedProject) {
       message.warning("请先选择项目");
       return;
     }
     if (modelBusyRef.current) {
-      message.warning("模型正在导入或加载中，请稍后再试");
+      message.warning({ key: "space-model-busy", content: "模型正在处理中，请稍后再试" });
       return;
     }
-    if (!(await confirmUnsavedChanges("加载地图"))) return;
     const api = window.electronAPI?.potree;
     if (!api) {
       message.error("点云转换仅支持 Electron 模式");
@@ -1940,12 +2037,15 @@ export default function SpaceEditWorkspace() {
     }
 
     modelBusyRef.current = true;
-    adapter.stopClipping();
-    setClipBounds(null);
-    const version = ++operationVersion.current;
-    setLoading({ kind: "model", modelPath: item.modelPath, title: item.mapName, message: "正在检查 Potree 数据", percent: 2 });
+    setModelOperationBusy(true);
+    let version = operationVersion.current;
 
     try {
+      if (!skipUnsavedConfirmation && !(await confirmUnsavedChanges("加载地图"))) return;
+      adapter.stopClipping();
+      setClipBounds(null);
+      version = ++operationVersion.current;
+      setLoading({ kind: "model", modelPath: item.modelPath, title: item.mapName, message: "正在检查 Potree 数据", percent: 2 });
       const result = await api.ensureModel(selectedProject, item.modelPath);
       if (version !== operationVersion.current) return;
       clearDrawingVisibility();
@@ -1961,13 +2061,15 @@ export default function SpaceEditWorkspace() {
     } finally {
       if (version === operationVersion.current) setLoading(null);
       modelBusyRef.current = false;
+      setModelOperationBusy(false);
     }
   }, [adapter, clearDrawingVisibility, confirmUnsavedChanges, loadModelCompanionFiles, message, selectedProject]);
 
-  const clearModel = useCallback(async (modelPath?: string) => {
-    if (modelPath && activeModelPath && loadedFileKey(modelPath) !== loadedFileKey(activeModelPath)) return;
-    if (!(await confirmUnsavedChanges("卸载地图"))) return;
+  const clearModel = useCallback(async (modelPath?: string): Promise<boolean> => {
+    if (modelPath && activeModelPath && loadedFileKey(modelPath) !== loadedFileKey(activeModelPath)) return false;
+    if (!(await confirmUnsavedChanges("卸载地图"))) return false;
     clearLoadedModelState();
+    return true;
   }, [activeModelPath, clearLoadedModelState, confirmUnsavedChanges]);
 
   const handleLoadFromTree = useCallback(async (modelPath: string) => {
@@ -1985,10 +2087,9 @@ export default function SpaceEditWorkspace() {
   const handleImport = useCallback(async (file: File) => {
     if (!selectedProject) return;
     if (modelBusyRef.current) {
-      message.warning("模型正在导入或加载中，请稍后再试");
+      message.warning({ key: "space-model-busy", content: "模型正在处理中，请稍后再试" });
       return;
     }
-    if (!(await confirmUnsavedChanges("导入模型"))) return;
     const electronApi = window.electronAPI;
     const sourcePath = electronApi?.getFilePath(file);
     if (!electronApi?.project || !sourcePath) {
@@ -1997,9 +2098,12 @@ export default function SpaceEditWorkspace() {
     }
 
     modelBusyRef.current = true;
-    const version = ++operationVersion.current;
-    setLoading({ kind: "model", modelPath: null, title: file.name, message: "正在导入模型" });
+    setModelOperationBusy(true);
+    let version = operationVersion.current;
     try {
+      if (!(await confirmUnsavedChanges("导入模型"))) return;
+      version = ++operationVersion.current;
+      setLoading({ kind: "model", modelPath: null, title: file.name, message: "正在导入模型" });
       let modelPath: string;
       let mapName: string;
       if (isZipFileName(file.name)) {
@@ -2026,12 +2130,14 @@ export default function SpaceEditWorkspace() {
       if (version !== operationVersion.current) return;
       setTreeKey((value) => value + 1);
       modelBusyRef.current = false;
-      await loadModel({ mapName, modelPath });
+      setModelOperationBusy(false);
+      await loadModel({ mapName, modelPath }, true);
     } catch (error) {
       if (version === operationVersion.current) message.error(errorMessage(error));
     } finally {
       if (version === operationVersion.current) setLoading(null);
       modelBusyRef.current = false;
+      setModelOperationBusy(false);
     }
   }, [adapter, clearDrawingVisibility, confirmUnsavedChanges, loadModel, message, selectedProject]);
 
@@ -2088,7 +2194,7 @@ export default function SpaceEditWorkspace() {
       return;
     }
     if (modelBusyRef.current) {
-      message.warning("模型正在处理中，请稍后再试");
+      message.warning({ key: "space-model-busy", content: "模型正在处理中，请稍后再试" });
       return;
     }
     if (!(await confirmUnsavedChanges("裁切模型"))) return;
@@ -2128,6 +2234,7 @@ export default function SpaceEditWorkspace() {
     if (modelBusyRef.current) return;
 
     modelBusyRef.current = true;
+    setModelOperationBusy(true);
     setClipSaving(true);
     setClipProgress(0);
     const version = ++operationVersion.current;
@@ -2146,6 +2253,7 @@ export default function SpaceEditWorkspace() {
       setClipBounds(null);
       setTreeKey((value) => value + 1);
       modelBusyRef.current = false;
+      setModelOperationBusy(false);
       setLoading(null);
       await loadModel({ mapName: result.mapName, modelPath: result.modelPath });
       message.success(`裁切完成，保留 ${result.pointCount.toLocaleString()} 个点`);
@@ -2156,6 +2264,7 @@ export default function SpaceEditWorkspace() {
       setClipSaving(false);
       setClipProgress(undefined);
       modelBusyRef.current = false;
+      setModelOperationBusy(false);
     }
   }, [activeSourcePath, adapter, clipBounds, loadModel, message, selectedProject]);
 
@@ -2169,7 +2278,7 @@ export default function SpaceEditWorkspace() {
       return;
     }
     if (modelBusyRef.current) {
-      message.warning("模型正在处理中，请稍后再试");
+      message.warning({ key: "space-model-busy", content: "模型正在处理中，请稍后再试" });
       return;
     }
     if (!(await confirmUnsavedChanges("纠正地图坐标"))) return;
@@ -2222,6 +2331,7 @@ export default function SpaceEditWorkspace() {
     const sourcePath = activeSourcePath;
     const sourceMapName = mapNameFromModelPath(sourcePath);
     modelBusyRef.current = true;
+    setModelOperationBusy(true);
     setCorrectionSaving(true);
     setCorrectionProgress(0);
     const version = ++operationVersion.current;
@@ -2243,6 +2353,7 @@ export default function SpaceEditWorkspace() {
       setCorrectionSaving(false);
       setCorrectionProgress(undefined);
       modelBusyRef.current = false;
+      setModelOperationBusy(false);
       setLoading(null);
       message.success(`坐标纠正完成，已生成地图“${result.mapName}”`);
       await loadModel({ mapName: result.mapName, modelPath: result.modelPath });
@@ -2253,6 +2364,7 @@ export default function SpaceEditWorkspace() {
       setCorrectionSaving(false);
       setCorrectionProgress(undefined);
       modelBusyRef.current = false;
+      setModelOperationBusy(false);
     }
   }, [activeSourcePath, adapter, correctionOrigin, loadModel, message, selectedProject]);
 
@@ -2288,6 +2400,7 @@ export default function SpaceEditWorkspace() {
             onImportPointTable={handleImportPointTable}
             onExportModel={() => setExportOpen(true)}
             importing={pointImporting}
+            modelBusy={modelOperationBusy}
           />
         )}
         viewControls={<ViewCube onViewChange={handleViewChange} />}
@@ -2301,16 +2414,19 @@ export default function SpaceEditWorkspace() {
             loadedFiles={loadedFiles}
             loadingFile={loading?.kind === "model" ? loading.modelPath || "" : ""}
             mapDrawingShown={drawingShown}
+            mapDrawingAvailableTypes={drawingAvailableTypes}
             onToggleDrawing={(filePath, checked) => void handleToggleDrawing(filePath, checked)}
             mapPathShown={pathShown}
             onTogglePath={(filePath, checked) => void handleTogglePath(filePath, checked)}
+            modelBusy={modelOperationBusy}
+            onMapTreeLoaded={handleMapTreeLoaded}
           />
         )}
         scene={(
           <SpaceSceneHost
             adapterFactory={adapterFactory}
             picking={correctionMode && !correctionSaving}
-            busy={saveStatus === "saving" || !!loading || correctionSaving || clipSaving}
+            busy={modelOperationBusy || saveStatus === "saving" || !!loading || correctionSaving || clipSaving}
             onSceneClick={handleCorrectionPointClick}
             overlay={(sceneState) => (
               <>

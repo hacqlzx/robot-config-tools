@@ -29,6 +29,8 @@ interface Props {
   onExportModel?: () => void;
   /** 点表导入进行中，禁用点表加载按钮防止重复触发 */
   importing?: boolean;
+  /** 模型导入、转换、加载或替换进行中，暂时锁定工具栏 */
+  modelBusy?: boolean;
 }
 
 /**
@@ -61,7 +63,7 @@ const BUTTONS = [
  * - "点表加载"仍使用隐藏 input，因为点表导入不需要额外的弹窗交互。
  * - 绘制模式按钮互斥由父级 useDrawingModeToggles 控制，Toolbar 仅根据 mode 显示激活态。
  */
-export default function Toolbar({ onOpenLoadModel, onClipModel, correctionMode, onToggleCorrection, cabinetMode, onToggleCabinet, chargingMode, onToggleCharging, deviceAreaMode, onToggleDeviceArea, pathMode, onTogglePath, normalMode, normalCount = 0, normalSaving, onToggleNormal, onUndo, onRedo, canUndo, canRedo, onSaveAll, onImportPointTable, onExportModel, importing }: Props) {
+export default function Toolbar({ onOpenLoadModel, onClipModel, correctionMode, onToggleCorrection, cabinetMode, onToggleCabinet, chargingMode, onToggleCharging, deviceAreaMode, onToggleDeviceArea, pathMode, onTogglePath, normalMode, normalCount = 0, normalSaving, onToggleNormal, onUndo, onRedo, canUndo, canRedo, onSaveAll, onImportPointTable, onExportModel, importing, modelBusy }: Props) {
   const pointInputRef = useRef<HTMLInputElement>(null);
 
   /** 点表文件选中后立即触发导入，清空 input 值防止同名文件无法重复选择 */
@@ -152,7 +154,7 @@ export default function Toolbar({ onOpenLoadModel, onClipModel, correctionMode, 
               onClick={() => handleClick(action)}
               aria-label={`${label}${action === "normal" && normalCount > 0 ? `，已有 ${normalCount} 条` : ""}`}
               // 点表导入中禁用点表按钮；历史栈为空时禁用撤销/恢复
-              disabled={(action === "point" && importing) || (action === "undo" && !canUndo) || (action === "redo" && !canRedo) || (action === "normal" && normalSaving)}
+              disabled={modelBusy || (action === "point" && importing) || (action === "undo" && !canUndo) || (action === "redo" && !canRedo) || (action === "normal" && normalSaving)}
             >
               {icon}
               <span>{label}{action === "point" && importing ? "..." : ""}</span>

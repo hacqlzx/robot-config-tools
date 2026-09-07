@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Tree, Modal, message } from "antd";
 import type { TreeProps, TreeDataNode } from "antd";
 import TreeView from "./TreeView";
@@ -17,18 +17,24 @@ interface Props {
   panelWidth: number;
   onLoadLas?: (filePath: string) => Promise<void>;
   onToggleVisible?: (filePath: string) => void;
-  onUnloadMapFile?: (filePath: string) => void;
+  onUnloadMapFile?: (filePath: string) => Promise<boolean>;
   loadedFiles: Set<string>;
   treeKey: number;
   loadingFile: string;
   /** 已回显的绘制 json 路径集合 */
   mapDrawingShown?: Set<string>;
+  /** 每个 JSON 文件可用的区域类型 */
+  mapDrawingAvailableTypes?: Map<string, Set<"cabinet" | "charging" | "device">>;
   /** 勾选/取消地图树里的绘制 json（回显屏柜） */
   onToggleDrawing?: (path: string, checked: boolean) => void;
   /** 已回显的路径 json 集合 */
   mapPathShown?: Set<string>;
   /** 勾选/取消可行驶路径 json */
   onTogglePath?: (path: string, checked: boolean) => void;
+  /** 模型操作进行中，禁止地图树触发新的加载或删除 */
+  modelBusy?: boolean;
+  /** 地图树加载完成后的回调，用于扫描区域文件 */
+  onMapTreeLoaded?: (nodes: SpaceTreeNode[]) => void;
 }
 
 const TABS = [
@@ -42,6 +48,30 @@ function isDirectMapDirNode(node: SpaceTreeNode): boolean {
   if (!node.isDir) return false;
   const parts = node.path.split(/[\\/]+/).filter(Boolean);
   return parts.length >= 2 && parts[parts.length - 2] === MAP_DIR_NAME;
+}
+
+type DeleteStage = "unload" | "database" | "filesystem";
+
+function deleteErrorMessage(error: unknown, isMapDir: boolean, stage: DeleteStage): string {
+  const raw = (error instanceof Error ? error.message : String(error ?? ""))
+    .replace(/^Error invoking remote method '[^']+':\s*/i, "")
+    .replace(/^Error:\s*/i, "")
+    .trim();
+
+  if (stage === "database") {
+    const target = isMapDir ? "地图关联的屏柜和点位数据" : "区域关联的屏柜和点位数据";
+    return `无法清理${target}，文件尚未删除。请重试；如持续失败，请重启应用后再操作。`;
+  }
+  if (/EBUSY|EPERM|EACCES|permission|access is denied|文件.*占用|拒绝访问/i.test(raw)) {
+    return `${isMapDir ? "地图目录" : "文件"}正在被占用或没有访问权限，请关闭相关程序后重试。`;
+  }
+  if (/ENOENT|not found|文件不存在/i.test(raw)) {
+    return "目标已不存在，地图列表已刷新。";
+  }
+  if (stage === "unload") {
+    return "无法卸载当前地图，已停止删除。请稍后重试。";
+  }
+  return isMapDir ? "地图目录删除失败，请稍后重试。" : "删除失败，请稍后重试。";
 }
 
 /** 屏柜/设备区树：电压 → 指定类型的间隔 */
@@ -142,7 +172,7 @@ const TREE_CSS = `
   .side-tree .ant-tree-switcher { width: 16px; flex-shrink: 0; }
 `;
 
-export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUnloadMapFile, loadedFiles, treeKey, loadingFile, mapDrawingShown, onToggleDrawing, mapPathShown, onTogglePath }: Props) {
+export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUnloadMapFile, loadedFiles, treeKey, loadingFile, mapDrawingShown, mapDrawingAvailableTypes, onToggleDrawing, mapPathShown, onTogglePath, modelBusy = false, onMapTreeLoaded }: Props) {
   const selectedProject = useSelectedProject();
   const [sideTab, setSideTab] = useState("map");
   const [mapTreeData, setMapTreeData] = useState<SpaceTreeNode[]>([]);
@@ -151,6 +181,8 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
   const [cabinetSelectedKeys, setCabinetSelectedKeys] = useState<React.Key[]>([]);
   const [deviceAreaTreeData, setDeviceAreaTreeData] = useState<TreeDataNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(false);
+  const deleteLockedRef = useRef(false);
+  const [deletingPath, setDeletingPath] = useState<string | null>(null);
 
   const loadMapTree = useCallback(async () => {
     if (!selectedProject || !window.electronAPI) {
@@ -167,11 +199,13 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
       ]);
       setMapTreeData(nodes);
       setMapPotreeStatuses(buildMapPotreeStatuses(projectRoot || "", manifest));
+      // 通知 workspace 扫描区域文件
+      onMapTreeLoaded?.(nodes);
     } catch {
       setMapTreeData([]);
       setMapPotreeStatuses({});
     }
-  }, [selectedProject]);
+  }, [selectedProject, onMapTreeLoaded]);
 
   const loadBayTypeTree = useCallback(async (bayType: string, setter: React.Dispatch<React.SetStateAction<TreeDataNode[]>>) => {
     if (!selectedProject || !window.electronAPI) {
@@ -247,44 +281,77 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
 
   /** 右键-删除：直接删除文件/目录并刷新地图树 */
   const handleRequestDelete = useCallback((node: SpaceTreeNode) => {
+    if (modelBusy) {
+      message.info({ key: "space-model-busy", content: "模型正在处理中，请稍后再试" });
+      return;
+    }
+    if (deleteLockedRef.current) {
+      message.info({ key: "space-map-delete-busy", content: "正在处理另一项删除，请稍后再试" });
+      return;
+    }
+    deleteLockedRef.current = true;
+    setDeletingPath(node.path);
     const isMapDir = isDirectMapDirNode(node);
     Modal.confirm({
       title: "删除确认",
       content: isMapDir
-        ? `确定删除地图「${node.name}」？将同步删除勘察图片数据/${node.name} 及该地图的图像标识记录。`
+        ? `确定删除地图「${node.name}」？将同步清理该地图的屏柜及关联点位、勘察图片和图像标识，且不可恢复。`
         : `确定删除「${node.name}」？`,
       okText: "删除",
       okButtonProps: { danger: true },
       cancelText: "取消",
+      afterClose: () => {
+        deleteLockedRef.current = false;
+        setDeletingPath(null);
+      },
       onOk: async () => {
+        let stage: DeleteStage = "unload";
         try {
-          // 删除前先清除页面上的模型、绘制和路径回显（含子目录）
+          // 删除前先完成模型卸载，再清除绘制和路径回显（含子目录）。
+          const loadedModelFiles: string[] = [];
           const drawingFiles: string[] = [];
           const walkClear = (n: SpaceTreeNode) => {
-            if (!n.isDir && isLasOrLazFileName(n.name) && loadedFiles.has(loadedFileKey(n.path))) onUnloadMapFile?.(n.path);
-            else if (isDrawingDataFileName(n.name)) {
-              drawingFiles.push(n.path);
-              onToggleDrawing?.(n.path, false);
-            }
-            else if (isReferencePathFileName(n.name)) onTogglePath?.(n.path, false);
+            if (!n.isDir && isLasOrLazFileName(n.name) && loadedFiles.has(loadedFileKey(n.path))) loadedModelFiles.push(n.path);
+            else if (isDrawingDataFileName(n.name)) drawingFiles.push(n.path);
             n.children?.forEach(walkClear);
           };
           walkClear(node);
+
+          for (const modelPath of loadedModelFiles) {
+            const unloaded = await onUnloadMapFile?.(modelPath);
+            if (unloaded === false) {
+              message.info("已取消删除地图");
+              return;
+            }
+          }
+
+          const clearOverlays = (n: SpaceTreeNode) => {
+            if (isDrawingDataFileName(n.name)) onToggleDrawing?.(n.path, false);
+            else if (isReferencePathFileName(n.name)) onTogglePath?.(n.path, false);
+            n.children?.forEach(clearOverlays);
+          };
+          clearOverlays(node);
+
           const api = window.electronAPI;
+          if (!api?.project) throw new Error("项目文件服务不可用");
+          stage = "database";
           if (selectedProject && api) {
             for (const jsonPath of drawingFiles) {
               await deleteCabinetDevicesFromJson(api, selectedProject, jsonPath);
             }
           }
-          await window.electronAPI?.project.deletePath(node.path);
-          message.success(isMapDir ? "已删除，并同步清理对应勘察图片数据" : "已删除");
-          loadMapTree();
-        } catch (e: any) {
-          message.error("删除失败: " + (e?.message || e));
+          stage = "filesystem";
+          await api.project.deletePath(node.path);
+          message.success(isMapDir ? "地图已删除，关联数据已同步清理" : "已删除");
+          await loadMapTree();
+        } catch (error: unknown) {
+          console.error("[地图树删除] 删除失败", { path: node.path, isMapDir, stage, error });
+          message.error(deleteErrorMessage(error, isMapDir, stage));
+          await loadMapTree();
         }
       },
     });
-  }, [loadMapTree, loadedFiles, onToggleDrawing, onTogglePath, onUnloadMapFile, selectedProject]);
+  }, [loadMapTree, loadedFiles, modelBusy, onToggleDrawing, onTogglePath, onUnloadMapFile, selectedProject]);
 
   /** 渲染 antd Tree（设备台账或屏柜共用） */
 
@@ -334,10 +401,12 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
                 onRequestDelete={handleRequestDelete}
                 onRequestOpenDir={handleRequestOpenDir}
                 drawingShown={mapDrawingShown}
+                drawingAvailableTypes={mapDrawingAvailableTypes}
                 onToggleDrawing={onToggleDrawing}
                 pathShown={mapPathShown}
                 onTogglePath={onTogglePath}
                 mapPotreeStatuses={mapPotreeStatuses}
+                modelBusy={modelBusy || deletingPath !== null}
               />
             )
           ) : sideTab === "device" ? (

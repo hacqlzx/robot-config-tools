@@ -488,6 +488,29 @@ export async function loadAllItemsFromJsonInLasCoordinates(api: ElectronAPI, jso
   }
 }
 
+/** 按类型加载区域，保留 LAS 绝对坐标。支持独立控制屏柜、充电区域、设备区域的显示。 */
+export async function loadDrawingItemsByTypeInLasCoordinates(
+  api: ElectronAPI,
+  jsonPath: string,
+  type: "cabinet" | "charging" | "device"
+): Promise<DrawingItem[]> {
+  try {
+    const allItems = robotAreasToLasDrawingItems(await readAreaRecordsFromPath(api, jsonPath));
+    switch (type) {
+      case "cabinet":
+        return allItems.filter((item) => item.type === "cabinet");
+      case "charging":
+        return allItems.filter((item) => item.type === "charging-area");
+      case "device":
+        return allItems.filter((item) => item.type === "device-area");
+      default:
+        return [];
+    }
+  } catch {
+    return [];
+  }
+}
+
 /** 直接按绘制 JSON 的绝对路径读取充电区域记录（地图树勾选 json 时用） */
 export async function loadChargingAreaFromJson(api: ElectronAPI, jsonPath: string): Promise<ChargingAreaItem | null> {
   try {
