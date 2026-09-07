@@ -15,7 +15,8 @@ import {
   removeManifestAssetsUnderPath,
   updateManifestForWrittenFile,
 } from "../project-core/project-manifest";
-import { readLasModelBounds } from "./las-clip";
+import { readLasHeader } from "./las-clip";
+import type { LasClipBounds, LasHeader } from "./las-clip";
 import { ensurePotreeModel } from "./potree-converter";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -28,6 +29,9 @@ const REFERENCE_PATH_FILE_NAME = "reference_path.txt";
 const ROBOT_PATH_FILE_NAME = "path.json";
 const ROBOT_STOP_POINT_FILE_NAMES = new Set(["stop_points.json", "stop_point.json"]);
 const SKIPPED_DIRECTORY_NAMES = new Set([".potree"]);
+const LAS_INT32_LIMIT = 2_147_483_647;
+const LAS_INT32_MARGIN = 1024;
+const DEFAULT_LAS_SCALE = 0.001;
 const activeCorrections = new Map<string, Promise<MapCoordinateCorrectionResult>>();
 
 export type MapCoordinateCorrectionPhase =
@@ -241,7 +245,7 @@ async function shiftReferencePath(filePath: string, origin: Vec3): Promise<void>
   await fs.promises.writeFile(filePath, source.endsWith("\n") ? `${next.replace(/\n*$/, "")}\n` : next, "utf8");
 }
 
-function shiftedBounds(bounds: Awaited<ReturnType<typeof readLasModelBounds>>, origin: Vec3) {
+function shiftedBounds(bounds: LasClipBounds, origin: Vec3): LasClipBounds {
   return {
     minX: bounds.minX - origin[0],
     maxX: bounds.maxX - origin[0],
@@ -250,6 +254,93 @@ function shiftedBounds(bounds: Awaited<ReturnType<typeof readLasModelBounds>>, o
     minZ: bounds.minZ - origin[2],
     maxZ: bounds.maxZ - origin[2],
   };
+}
+
+function boundsFromLasHeader(header: LasHeader): LasClipBounds {
+  const bounds = {
+    minX: header.minX,
+    maxX: header.maxX,
+    minY: header.minY,
+    maxY: header.maxY,
+    minZ: header.minZ,
+    maxZ: header.maxZ,
+  };
+  if (Object.values(bounds).some((value) => !Number.isFinite(value))) {
+    throw new Error("LAS 文件的坐标范围无效，无法执行坐标纠正");
+  }
+  if (bounds.minX > bounds.maxX || bounds.minY > bounds.maxY || bounds.minZ > bounds.maxZ) {
+    throw new Error("LAS 文件的坐标范围无效，无法执行坐标纠正");
+  }
+  return bounds;
+}
+
+function assertOriginNearBounds(
+  origin: Vec3,
+  bounds: LasClipBounds,
+): void {
+  const diagonal = Math.hypot(
+    bounds.maxX - bounds.minX,
+    bounds.maxY - bounds.minY,
+    bounds.maxZ - bounds.minZ,
+  );
+  const tolerance = Math.max(0.01, Math.min(10, diagonal * 0.01));
+  const outside = [
+    origin[0] < bounds.minX - tolerance || origin[0] > bounds.maxX + tolerance,
+    origin[1] < bounds.minY - tolerance || origin[1] > bounds.maxY + tolerance,
+    origin[2] < bounds.minZ - tolerance || origin[2] > bounds.maxZ + tolerance,
+  ];
+  if (outside.some(Boolean)) {
+    throw new Error("所选纠正点不在当前点云范围内，请在当前地图点云上重新选择");
+  }
+}
+
+interface LasAxisEncoding {
+  scale: number;
+  offset: number;
+}
+
+/** Pick a stable LAS encoding for translated coordinates while retaining source precision. */
+function chooseAxisEncoding(
+  min: number,
+  max: number,
+  preferredScale: number,
+): LasAxisEncoding {
+  const span = Math.max(0, max - min);
+  const sourceScale = Number.isFinite(preferredScale) && preferredScale > 0
+    ? preferredScale
+    : DEFAULT_LAS_SCALE;
+  const usableInt32Range = LAS_INT32_LIMIT - LAS_INT32_MARGIN;
+  const minimumScale = span > 0 ? span / (2 * usableInt32Range) : 0;
+  const scale = Math.max(sourceScale, minimumScale);
+  const offset = (min + max) / 2;
+  return { scale, offset: Number.isFinite(offset) ? offset : 0 };
+}
+
+function outputLasEncoding(
+  bounds: LasClipBounds,
+  sourceHeader: LasHeader,
+): Record<string, number> {
+  const x = chooseAxisEncoding(bounds.minX, bounds.maxX, sourceHeader.scaleX);
+  const y = chooseAxisEncoding(bounds.minY, bounds.maxY, sourceHeader.scaleY);
+  const z = chooseAxisEncoding(bounds.minZ, bounds.maxZ, sourceHeader.scaleZ);
+  return {
+    scale_x: x.scale,
+    scale_y: y.scale,
+    scale_z: z.scale,
+    offset_x: x.offset,
+    offset_y: y.offset,
+    offset_z: z.offset,
+  };
+}
+
+function formatPdalError(error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/Unable to convert scaled value/i.test(message) && /int32/i.test(message)) {
+    return new Error(
+      "坐标纠正后的点云超出 LAS 坐标编码范围，请确认选中的点是当前地图中的点，并检查地图坐标系",
+    );
+  }
+  return error instanceof Error ? error : new Error(message);
 }
 
 function formatMapInfoTime(date = new Date()): string {
@@ -329,8 +420,13 @@ async function correctMapInternal(
   try {
     notify({ projectName, modelPath, phase: "preparing", percent: 3, message: "正在准备纠正地图" });
     await fs.promises.mkdir(tempDir, { recursive: true });
-    const sourceBounds = await readLasModelBounds(sourcePath);
+    const sourceHeader = await readLasHeader(sourcePath);
+    // The LAS header is the source of truth here. map_info.json can be stale after
+    // an interrupted import or an older conversion and must not affect validation.
+    const sourceBounds = boundsFromLasHeader(sourceHeader);
+    assertOriginNearBounds(origin, sourceBounds);
     const outputBounds = shiftedBounds(sourceBounds, origin);
+    const outputEncoding = outputLasEncoding(outputBounds, sourceHeader);
     await copyCompanionFiles(sourceDir, tempDir, sourcePath);
 
     const outputModelPath = path.join(tempDir, MAP_MODEL_FILE_NAME);
@@ -342,7 +438,12 @@ async function correctMapInternal(
           type: "filters.transformation",
           matrix: `1 0 0 ${formatCoordinate(-origin[0])} 0 1 0 ${formatCoordinate(-origin[1])} 0 0 1 ${formatCoordinate(-origin[2])} 0 0 0 1`,
         },
-        { type: "writers.las", filename: outputModelPath, forward: "all" },
+        {
+          type: "writers.las",
+          filename: outputModelPath,
+          forward: "all",
+          ...outputEncoding,
+        },
       ],
     };
     await fs.promises.writeFile(pipelinePath, JSON.stringify(pipeline, null, 2), "utf8");
@@ -384,7 +485,7 @@ async function correctMapInternal(
         console.warn("[map-coordinate-correction] failed to clean manifest", cleanupError);
       }
     }
-    throw error;
+    throw formatPdalError(error);
   }
 }
 

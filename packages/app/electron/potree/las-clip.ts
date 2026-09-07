@@ -34,7 +34,7 @@ export interface LasClipResult {
   pointCount: number;
 }
 
-interface LasHeader {
+export interface LasHeader {
   source: Buffer;
   headerSize: number;
   pointDataOffset: number;
@@ -105,6 +105,19 @@ function readHeader(source: Buffer): LasHeader {
   };
 }
 
+/** Read the LAS header without loading the point records. */
+export async function readLasHeader(modelPath: string): Promise<LasHeader> {
+  const stat = await fs.promises.stat(modelPath);
+  const file = await fs.promises.open(modelPath, "r");
+  try {
+    const buffer = Buffer.alloc(Math.min(4096, stat.size));
+    const bytesRead = await readExact(file, buffer, buffer.length, 0);
+    return readHeader(buffer.subarray(0, bytesRead));
+  } finally {
+    await file.close();
+  }
+}
+
 function validateBounds(bounds: LasClipBounds): LasClipBounds {
   const values = Object.values(bounds);
   if (values.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
@@ -125,23 +138,15 @@ export async function readLasModelBounds(modelPath: string): Promise<LasClipBoun
     // Older maps do not contain point_bounds; their LAS header is the fallback.
   }
 
-  const stat = await fs.promises.stat(modelPath);
-  const file = await fs.promises.open(modelPath, "r");
-  try {
-    const buffer = Buffer.alloc(Math.min(4096, stat.size));
-    const bytesRead = await readExact(file, buffer, buffer.length, 0);
-    const header = readHeader(buffer.subarray(0, bytesRead));
-    return validateBounds({
-      minX: header.minX,
-      maxX: header.maxX,
-      minY: header.minY,
-      maxY: header.maxY,
-      minZ: header.minZ,
-      maxZ: header.maxZ,
-    });
-  } finally {
-    await file.close();
-  }
+  const header = await readLasHeader(modelPath);
+  return validateBounds({
+    minX: header.minX,
+    maxX: header.maxX,
+    minY: header.minY,
+    maxY: header.maxY,
+    minZ: header.minZ,
+    maxZ: header.maxZ,
+  });
 }
 
 function rgbOffset(format: number, pointLength: number): number | null {
