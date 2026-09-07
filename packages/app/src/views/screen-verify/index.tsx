@@ -186,9 +186,20 @@ function validateCabinetPointVerification(rows: CabinetPointRow[]): { valid: boo
 
   const emptyNameCount = rows.filter((row) => !String(row.name || "").trim()).length;
   const emptyTypeCount = rows.filter((row) => !getCabinetPointRowDisplayType(row)).length;
+  
+  // 检测重名
+  const nameMap = new Map<string, number>();
+  for (const row of rows) {
+    const name = String(row.name || "").trim();
+    if (!name) continue;
+    nameMap.set(name, (nameMap.get(name) || 0) + 1);
+  }
+  const duplicateCount = Array.from(nameMap.values()).filter(count => count > 1).length;
+  
   const issues = [
     emptyNameCount ? `${emptyNameCount} 条名称为空` : "",
     emptyTypeCount ? `${emptyTypeCount} 条类型为空` : "",
+    duplicateCount ? `${duplicateCount} 个名称重复` : "",
   ].filter(Boolean);
 
   return issues.length

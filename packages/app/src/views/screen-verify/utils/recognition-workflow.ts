@@ -1781,12 +1781,44 @@ function createPointRowFromLabelAndDevice(
 }
 
 function applyCabinetGeneratedPointNames(rows: CabinetPointRow[]): CabinetPointRow[] {
-  return rows.map((row, index) => {
+  // 第一遍：生成基础名称（标签名称，不带类型和序号）
+  const rowsWithBaseNames = rows.map((row, index) => {
     const recNum = index + 1;
     return {
       ...row,
       index: recNum,
       name: buildCabinetGeneratedPointName(row.name, row.recognitionLabel, row.recognitionLabelDesc || row.type, recNum),
+    };
+  });
+
+  // 第二遍：检测重名并添加后缀
+  const nameCountMap = new Map<string, number>();
+  const nameOccurrenceMap = new Map<string, number>();
+
+  // 统计每个名称出现的次数
+  for (const row of rowsWithBaseNames) {
+    const name = String(row.name || "").trim();
+    if (!name) continue;
+    nameCountMap.set(name, (nameCountMap.get(name) || 0) + 1);
+  }
+
+  // 为重名的点位添加后缀
+  return rowsWithBaseNames.map((row) => {
+    const name = String(row.name || "").trim();
+    if (!name) return row;
+
+    const totalCount = nameCountMap.get(name) || 1;
+    if (totalCount <= 1) {
+      // 没有重名，保持原名
+      return row;
+    }
+
+    // 有重名，添加序号后缀
+    const occurrence = (nameOccurrenceMap.get(name) || 0) + 1;
+    nameOccurrenceMap.set(name, occurrence);
+    return {
+      ...row,
+      name: `${name}_${occurrence}`,
     };
   });
 }

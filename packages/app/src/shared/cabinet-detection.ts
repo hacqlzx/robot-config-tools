@@ -165,10 +165,50 @@ export function buildCabinetGeneratedPointName(
 ): string {
   const baseName = stripCabinetGeneratedPointNameSuffix(ocrName);
   if (!baseName) return "";
-  const typeDesc = getCabinetPointTypeDescription(label, labelDesc);
-  if (!typeDesc) return baseName;
-  const safeRecNum = Number.isFinite(recNum) && recNum > 0 ? Math.floor(recNum) : 1;
-  return `${baseName}_${typeDesc}_${safeRecNum}`;
+  // 新逻辑：默认使用标签名称，不拼接类型和序号
+  // recNum 只在需要区分重名时使用（由调用方判断）
+  return baseName;
+}
+
+/**
+ * 构建带去重后缀的点位名称（当存在重名时）
+ * @param baseName 基础名称（标签名称）
+ * @param suffix 后缀序号（1、2、3...）
+ */
+export function buildCabinetPointNameWithSuffix(baseName: string, suffix: number): string {
+  if (!baseName) return "";
+  if (suffix <= 1) return baseName;
+  return `${baseName}_${suffix}`;
+}
+
+/**
+ * 检测并解决点位名称重名问题
+ * @param rows 所有点位行
+ * @returns 包含重名信息的结果
+ */
+export function detectDuplicateCabinetPointNames(rows: Array<{ name: string }>): {
+  hasDuplicates: boolean;
+  duplicateNames: Set<string>;
+  nameCounts: Map<string, number>;
+} {
+  const nameCounts = new Map<string, number>();
+  const duplicateNames = new Set<string>();
+
+  for (const row of rows) {
+    const name = valueText(row.name);
+    if (!name) continue;
+    const count = nameCounts.get(name) || 0;
+    nameCounts.set(name, count + 1);
+    if (count > 0) {
+      duplicateNames.add(name);
+    }
+  }
+
+  return {
+    hasDuplicates: duplicateNames.size > 0,
+    duplicateNames,
+    nameCounts,
+  };
 }
 
 export function resolveCabinetPointExcelColumns(label?: unknown, labelDesc?: unknown): Record<string, string> {
