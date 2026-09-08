@@ -265,6 +265,198 @@ function getDirectMapSize(data: DirectMapData | null): { width: number; height: 
   };
 }
 
+type MapCoordinateTransform = {
+  scaleX: number;
+  scaleY: number;
+  offsetX: number;
+  offsetY: number;
+};
+
+function median(values: number[]): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((first, second) => first - second);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1
+    ? sorted[middle]
+    : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function parseWaypointPoint(value: unknown): [number, number] | null {
+  if (Array.isArray(value)) {
+    const x = Number(value[0]);
+    const y = Number(value[1]);
+    return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null;
+  }
+
+  if (value && typeof value === "object") {
+    const point = value as Record<string, unknown>;
+    const x = Number(point.x ?? point.poseX ?? point.pose_x);
+    const y = Number(point.y ?? point.poseY ?? point.pose_y);
+    return Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null;
+  }
+
+  if (typeof value !== "string" || !value.trim()) return null;
+  const numbers = value
+    .trim()
+    .replace(/^\[|\]$/g, "")
+    .split(/[,_\s]+/)
+    .map((coordinate) => Number(coordinate))
+    .filter(Number.isFinite);
+  return numbers.length >= 2 ? [numbers[0], numbers[1]] : null;
+}
+
+function parseWaypoints(value: unknown): [number, number][] {
+  if (Array.isArray(value)) {
+    const firstValue = value[0];
+    if (
+      value.length > 0
+      && (
+        Array.isArray(firstValue)
+        || (firstValue && typeof firstValue === "object")
+        || (typeof firstValue === "string" && /[,;_\s]/.test(firstValue))
+      )
+    ) {
+      return value
+        .map((point) => parseWaypointPoint(point))
+        .filter((point): point is [number, number] => point !== null);
+    }
+    const point = parseWaypointPoint(value);
+    return point ? [point] : [];
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const nested = record.points ?? record.waypoints ?? record.items ?? record.data;
+    if (nested !== undefined) return parseWaypoints(nested);
+    const point = parseWaypointPoint(value);
+    return point ? [point] : [];
+  }
+
+  if (typeof value !== "string" || !value.trim()) return [];
+  const text = value.trim();
+  if (text.startsWith("[") || text.startsWith("{")) {
+    try {
+      return parseWaypoints(JSON.parse(text));
+    } catch {
+      // Fall through to the protocol's semicolon-delimited form.
+    }
+  }
+
+  return text
+    .split(";")
+    .map((point) => parseWaypointPoint(point))
+    .filter((point): point is [number, number] => point !== null);
+}
+
+function getRoadWaypoints(road: any): [number, number][] {
+  return parseWaypoints(road?.waypoints ?? road?.waypoint ?? road?.wayPoints);
+}
+
+function distanceBetweenPoints(first: [number, number], second: [number, number]): number {
+  return Math.hypot(first[0] - second[0], first[1] - second[1]);
+}
+
+/**
+ * 从起止点和 waypoint 拟合局部米制坐标到地图像素坐标的转换。
+ *
+ * 实时监控地图是俯视图：waypoint 的 z 只属于三维高度，绘制时投影到 x/y 平面。
+ * 地图像素 Y 轴向下，而机器人坐标 y 轴向上，所以 scaleY 必须为负值。
+ */
+function estimateCoordinateTransform(roads: any[]): MapCoordinateTransform {
+  const scaleXs: number[] = [];
+  const scaleYs: number[] = [];
+  const xAnchors: Array<[number, number]> = [];
+  const yAnchors: Array<[number, number]> = [];
+
+  roads.forEach((road) => {
+    const startPoint = parseRoadPoint(road?.startIndex);
+    const endPoint = parseRoadPoint(road?.endIndex);
+    const waypoints = getRoadWaypoints(road);
+    if (!startPoint || !endPoint || !waypoints.length) return;
+
+    const first = waypoints[0];
+    const last = waypoints[waypoints.length - 1];
+    const localDeltaX = last[0] - first[0];
+    const localDeltaY = last[1] - first[1];
+    const mapDeltaX = endPoint[0] - startPoint[0];
+    const mapDeltaY = endPoint[1] - startPoint[1];
+
+    if (Math.abs(localDeltaX) > 1e-6) {
+      const scaleX = mapDeltaX / localDeltaX;
+      if (Number.isFinite(scaleX) && Math.abs(scaleX) < 1000) scaleXs.push(scaleX);
+    }
+    if (Math.abs(localDeltaY) > 1e-6) {
+      const scaleY = mapDeltaY / localDeltaY;
+      if (Number.isFinite(scaleY) && Math.abs(scaleY) < 1000) scaleYs.push(scaleY);
+    }
+
+    xAnchors.push([startPoint[0], first[0]]);
+    yAnchors.push([startPoint[1], first[1]]);
+  });
+
+  const scaleX = median(scaleXs) ?? 100;
+  const scaleY = median(scaleYs) ?? -100;
+  return {
+    scaleX,
+    scaleY,
+    offsetX: median(xAnchors.map(([mapCoordinate, localCoordinate]) => mapCoordinate - localCoordinate * scaleX)) ?? 0,
+    offsetY: median(yAnchors.map(([mapCoordinate, localCoordinate]) => mapCoordinate - localCoordinate * scaleY)) ?? 0,
+  };
+}
+
+/**
+ * 将 waypoint 投影到地图像素，并用路线端点做渐进式锚定。
+ *
+ * 个别后台路线的 waypoint 首尾会因采样或四舍五入与 startIndex/endIndex 相差几个像素。
+ * 直接绘制会在路线开头或结尾产生短回折；按路径进度分摊误差可以保留中间曲线形状，
+ * 同时保证路线准确接到地图上的两个端点。
+ */
+function getRoadWaypointPixels(
+  road: any,
+  transform: MapCoordinateTransform,
+): [number, number][] {
+  const waypoints = getRoadWaypoints(road);
+  const startPoint = parseRoadPoint(road?.startIndex);
+  const endPoint = parseRoadPoint(road?.endIndex);
+  if (waypoints.length < 2 || !startPoint || !endPoint) {
+    return waypoints.map((point) => [
+      point[0] * transform.scaleX + transform.offsetX,
+      point[1] * transform.scaleY + transform.offsetY,
+    ] as [number, number]);
+  }
+
+  const mapped = waypoints.map((point) => [
+    point[0] * transform.scaleX + transform.offsetX,
+    point[1] * transform.scaleY + transform.offsetY,
+  ] as [number, number]);
+  const startCorrection: [number, number] = [
+    startPoint[0] - mapped[0][0],
+    startPoint[1] - mapped[0][1],
+  ];
+  const endCorrection: [number, number] = [
+    endPoint[0] - mapped[mapped.length - 1][0],
+    endPoint[1] - mapped[mapped.length - 1][1],
+  ];
+
+  const cumulativeDistances = [0];
+  for (let index = 1; index < mapped.length; index += 1) {
+    cumulativeDistances.push(
+      cumulativeDistances[index - 1] + distanceBetweenPoints(mapped[index - 1], mapped[index]),
+    );
+  }
+  const totalDistance = cumulativeDistances[cumulativeDistances.length - 1];
+
+  return mapped.map((point, index) => {
+    const progress = totalDistance > 1e-6
+      ? cumulativeDistances[index] / totalDistance
+      : index / (mapped.length - 1);
+    return [
+      point[0] + startCorrection[0] * (1 - progress) + endCorrection[0] * progress,
+      point[1] + startCorrection[1] * (1 - progress) + endCorrection[1] * progress,
+    ];
+  });
+}
+
 export default function RealtimeMapCanvas({
   directMapData,
   robotPosition,
@@ -405,21 +597,47 @@ export default function RealtimeMapCanvas({
       });
 
     const roads = Array.isArray(mapData.roads) ? mapData.roads : [];
+    // 当前接口已直接返回地图二维坐标，暂时不做局部坐标到地图像素的换算。
+    // 保留下面的转换逻辑，后续如果接口恢复返回局部米制坐标，可以直接恢复使用：
+    // const transform = estimateCoordinateTransform(roads);
+
     roads.forEach((road) => {
       const startPoint = parseRoadPoint(road?.startIndex);
       const endPoint = parseRoadPoint(road?.endIndex);
       if (!startPoint || !endPoint) return;
-      const controlPointA = parseRoadPoint(road?.controlPointA);
-      const controlPointB = parseRoadPoint(road?.controlPointB);
+
+      // 解析结果直接作为地图像素坐标使用；如果返回三维数据，parseWaypointPoint 只取 x/y。
+      const waypointsList = getRoadWaypoints(road);
+      // 旧的局部坐标换算入口暂时保留：
+      // const waypointsList = getRoadWaypointPixels(road, estimateCoordinateTransform(roads));
 
       context.save();
       context.beginPath();
       context.moveTo(startPoint[0], startPoint[1]);
-      if (controlPointA && controlPointB) {
-        context.bezierCurveTo(controlPointA[0], controlPointA[1], controlPointB[0], controlPointB[1], endPoint[0], endPoint[1]);
+
+      if (waypointsList.length > 0) {
+        // 使用 waypoints 绘制多段折线
+        let lastPoint = startPoint;
+        waypointsList.forEach((point) => {
+          if (distanceBetweenPoints(lastPoint, point) < 0.01) return;
+          context.lineTo(point[0], point[1]);
+          lastPoint = point;
+        });
+        // 最后连接到终点
+        if (distanceBetweenPoints(lastPoint, endPoint) >= 0.01) {
+          context.lineTo(endPoint[0], endPoint[1]);
+        }
       } else {
-        context.lineTo(endPoint[0], endPoint[1]);
+        // 回退到原有逻辑：贝塞尔曲线或直线
+        const controlPointA = parseRoadPoint(road?.controlPointA);
+        const controlPointB = parseRoadPoint(road?.controlPointB);
+        if (controlPointA && controlPointB) {
+          context.bezierCurveTo(controlPointA[0], controlPointA[1], controlPointB[0], controlPointB[1], endPoint[0], endPoint[1]);
+        } else {
+          context.lineTo(endPoint[0], endPoint[1]);
+        }
       }
+
       context.strokeStyle = "#03e903";
       context.lineWidth = 4;
       context.lineJoin = "round";
