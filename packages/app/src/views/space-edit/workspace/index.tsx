@@ -287,6 +287,7 @@ export default function SpaceEditWorkspace() {
   const [cabinetState, setCabinetState] = useState<SpaceCabinetState>(DEFAULT_CABINET_STATE);
   const [cabinetSaving, setCabinetSaving] = useState(false);
   const [cabinetNameSequence, setCabinetNameSequence] = useState({ cabinetRowStart: 1, cabinetStart: 1 });
+  const [existingCabinetNames, setExistingCabinetNames] = useState<string[]>([]);
   const [chargingMode, setChargingMode] = useState(false);
   const [chargingState, setChargingState] = useState<SpaceChargingAreaState>(DEFAULT_CHARGING_STATE);
   const [chargingSaving, setChargingSaving] = useState(false);
@@ -995,6 +996,12 @@ export default function SpaceEditWorkspace() {
     }
     if (pathSavingRef.current) return false;
 
+    const pathData = adapter.getPathData();
+    // 如果没有路径点和路径段，直接返回成功，不显示提示
+    if ((!pathData?.points || pathData.points.length === 0) && (!pathData?.paths || pathData.paths.length === 0) && closeAfterSave) {
+      return true;
+    }
+
     const version = operationVersion.current;
     const dirtyVersion = options.dirtyVersion ?? dirtyScopeVersionsRef.current.get("path") ?? 0;
     const pathFilePath = pathSession.current?.filePath || mapSiblingFilePath(modelPath, PATH_FILE_NAME);
@@ -1005,7 +1012,7 @@ export default function SpaceEditWorkspace() {
         api,
         projectName: selectedProject,
         modelPath,
-        data: adapter.getPathData(),
+        data: pathData,
       });
       if (version !== operationVersion.current) return false;
 
@@ -1101,8 +1108,8 @@ export default function SpaceEditWorkspace() {
 
     const geometry = adapter.getCabinetGeometry();
     if (!geometry) {
-      if (!silent) message.warning("请先完成屏柜绘制（四点成体）");
-      return false;
+      // 没有几何体，直接返回成功，不提示
+      return true;
     }
     const rows = data.rows.map((row) => ({ ...row, code: row.code.trim(), name: row.name.trim() }));
     const requiresCabinetRow = geometry.splits.length > 0 || rows.length > 1;
@@ -1110,8 +1117,8 @@ export default function SpaceEditWorkspace() {
       ? { ...data.cabinetRow, code: data.cabinetRow.code.trim(), name: data.cabinetRow.name.trim() }
       : null;
     if (rows.length === 0) {
-      if (!silent) message.warning("请先完成屏柜分隔");
-      return false;
+      // 没有完成分隔，直接返回成功，不提示
+      return true;
     }
     if (requiresCabinetRow && !cabinetRow?.name) {
       if (!silent) message.warning("柜排名称不能为空");
@@ -1128,6 +1135,12 @@ export default function SpaceEditWorkspace() {
     const duplicateName = rows.find((row, index) => rows.findIndex((item) => item.name === row.name) !== index);
     if (duplicateName) {
       if (!silent) message.warning(`屏柜名称重复：${duplicateName.name}`);
+      return false;
+    }
+    // 检查与当前地图已有屏柜名称重复
+    const existingDuplicate = rows.find((row) => existingCabinetNames.includes(row.name));
+    if (existingDuplicate) {
+      if (!silent) message.warning(`当前地图已存在同名屏柜：${existingDuplicate.name}`);
       return false;
     }
     const duplicateCode = rows.find((row, index) => rows.findIndex((item) => item.code === row.code) !== index);
@@ -1183,6 +1196,10 @@ export default function SpaceEditWorkspace() {
       } catch {
         setCabinetNameSequence({ cabinetRowStart: 1, cabinetStart: 1 });
       }
+      // 更新已有屏柜名称列表
+      const cabinetItems = items.filter((item): item is CabinetItem => item.type === "cabinet");
+      const updatedNames = cabinetItems.flatMap((item) => item.cabinets?.map((c: any) => c.name) || []).filter(Boolean);
+      setExistingCabinetNames(updatedNames);
       const scopeSaved = clearDirtyScope("cabinet", dirtyVersion);
       if (clearHistory && scopeSaved) drawingHistory.clearScope("cabinet");
       setTreeKey((value) => value + 1);
@@ -1195,7 +1212,7 @@ export default function SpaceEditWorkspace() {
       cabinetSavingRef.current = false;
       if (version === operationVersion.current) setCabinetSaving(false);
     }
-  }, [activeSourcePath, adapter, clearDirtyScope, drawingHistory.clearScope, message, renderDrawingLayer, selectedProject, updateLayerVisibility]);
+  }, [activeSourcePath, adapter, clearDirtyScope, drawingHistory.clearScope, existingCabinetNames, message, renderDrawingLayer, selectedProject, updateLayerVisibility]);
 
   const handleCabinetDraftChange = useCallback((data: CabinetSaveData | null) => {
     cabinetDraftRef.current = data;
@@ -1218,6 +1235,21 @@ export default function SpaceEditWorkspace() {
     if (!api) {
       message.warning("屏柜绘制仅支持 Electron 模式");
       return;
+    }
+
+    // 检查是否有屏柜区间隔
+    if (selectedProject) {
+      try {
+        const bayList = await api.db.bay.list(selectedProject);
+        const hasCabinetBay = bayList.some((b: any) => b.bayType === "屏柜区");
+        if (!hasCabinetBay) {
+          message.warning("当前项目没有可用的屏柜区间隔，请先加载点表");
+          return;
+        }
+      } catch (error) {
+        message.error("检查间隔失败，请重试");
+        return;
+      }
     }
 
     const version = operationVersion.current;
@@ -1259,8 +1291,12 @@ export default function SpaceEditWorkspace() {
     } catch {
       setCabinetNameSequence({ cabinetRowStart: 1, cabinetStart: 1 });
     }
+    // 加载当前地图已有的屏柜名称
+    const cabinetItems = items.filter((item): item is CabinetItem => item.type === "cabinet");
+    const existingNames = cabinetItems.flatMap((item) => item.cabinets?.map((c: any) => c.name) || []).filter(Boolean);
+    setExistingCabinetNames(existingNames);
     setCabinetMode(true);
-  }, [activeSourcePath, adapter, cabinetMode, clipBounds, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, drawingShown, message, recordDrawingHistory, renderDrawingLayer]);
+  }, [activeSourcePath, adapter, cabinetMode, clipBounds, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, drawingShown, message, recordDrawingHistory, renderDrawingLayer, selectedProject]);
 
   const handleCabinetUndo = useCallback(() => {
     adapter.undoCabinet();
@@ -1291,6 +1327,10 @@ export default function SpaceEditWorkspace() {
         const data: SpaceDrawingLayer = { areas: items };
         drawingLayerData.current.set(selection.layerId, data);
         renderDrawingLayer(selection.layerId, data);
+        // 更新已有屏柜名称列表
+        const cabinetItems = items.filter((item): item is CabinetItem => item.type === "cabinet");
+        const updatedNames = cabinetItems.flatMap((item) => item.cabinets?.map((c: any) => c.name) || []).filter(Boolean);
+        setExistingCabinetNames(updatedNames);
         setTreeKey((value) => value + 1);
         message.success("屏柜已删除");
       } catch (error) {
@@ -1518,6 +1558,11 @@ export default function SpaceEditWorkspace() {
     }
     if (deviceAreaSavingRef.current) return false;
 
+    // 如果没有设备区域，直接返回成功，不显示提示
+    if (boxes.length === 0 && closeAfterSave) {
+      return true;
+    }
+
     const version = operationVersion.current;
     const session = deviceAreaSession.current;
     const dirtyVersion = options.dirtyVersion ?? dirtyScopeVersionsRef.current.get("device-area") ?? 0;
@@ -1575,8 +1620,14 @@ export default function SpaceEditWorkspace() {
   }, [activeSourcePath, adapter, clearDirtyScope, drawingHistory.clearScope, message, renderDrawingLayer, selectedProject, updateLayerVisibility]);
 
   const handleSaveDeviceAreas = useCallback(async (): Promise<boolean> => {
-    return persistDeviceAreas(adapter.getDeviceAreaBoxes());
-  }, [adapter, persistDeviceAreas]);
+    const boxes = adapter.getDeviceAreaBoxes();
+    const unboundBoxes = boxes.filter(box => !box.bay);
+    if (unboundBoxes.length > 0) {
+      message.warning(`还有 ${unboundBoxes.length} 个设备区域未绑定间隔，请先绑定后再保存`);
+      return false;
+    }
+    return persistDeviceAreas(boxes);
+  }, [adapter, message, persistDeviceAreas]);
 
   deviceAreaDeleteHandler.current = () => {
     void runSaveOperation(() => persistDeviceAreas(adapter.getDeviceAreaBoxes()));
@@ -1599,6 +1650,21 @@ export default function SpaceEditWorkspace() {
     if (!api) {
       message.warning("设备区域绘制仅支持 Electron 模式");
       return;
+    }
+
+    // 检查是否有设备区间隔
+    if (selectedProject) {
+      try {
+        const bayList = await api.db.bay.list(selectedProject);
+        const hasDeviceAreaBay = bayList.some((b: any) => b.bayType === "设备区");
+        if (!hasDeviceAreaBay) {
+          message.warning("当前项目没有可用的设备区间隔，请先加载点表");
+          return;
+        }
+      } catch (error) {
+        message.error("检查间隔失败，请重试");
+        return;
+      }
     }
 
     const version = operationVersion.current;
@@ -2487,6 +2553,7 @@ export default function SpaceEditWorkspace() {
                     cornerCount={cabinetState.cornerCount}
                     cabinetCount={cabinetState.cabinetCount}
                     nameSequence={cabinetNameSequence}
+                    existingCabinetNames={existingCabinetNames}
                     onClose={closeCabinetMode}
                     onSave={(data) => { void runSaveOperation(() => persistCabinet(data)); }}
                     onDraftChange={handleCabinetDraftChange}
@@ -2507,6 +2574,7 @@ export default function SpaceEditWorkspace() {
                 {deviceAreaMode && (
                   <DeviceAreaPanel
                     boxCount={deviceAreaState.boxCount}
+                    boundBoxCount={deviceAreaState.boundBayIds.length}
                     height={deviceAreaState.height}
                     selectedBoxId={deviceAreaState.selectedBoxId}
                     selectedBoxBay={deviceAreaState.selectedBoxBay}

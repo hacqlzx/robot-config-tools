@@ -6,6 +6,7 @@ import { useSelectedProject } from "@/stores/appContextStore";
 
 interface Props {
   boxCount: number;
+  boundBoxCount: number;
   height: number;
   selectedBoxId: string | null;
   selectedBoxBay: { id: number; name: string; code: string } | null;
@@ -20,7 +21,7 @@ interface Props {
 }
 
 export default function DeviceAreaPanel({
-  boxCount, height, selectedBoxId, selectedBoxBay,
+  boxCount, boundBoxCount, height, selectedBoxId, selectedBoxBay,
   onClose, onSave, onSetHeight, onBindBay, onUnbind, boundBayIds, saving = false,
 }: Props) {
   const projectName = useSelectedProject();
@@ -137,7 +138,7 @@ export default function DeviceAreaPanel({
           locale={{ emptyText: "暂无可绑定间隔" }}
         />
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 12, color: "#666" }}>
-          <span>已绘制 {boxCount} 个区域 | {selectedBoxId ? (selectedBoxBay ? `已绑定: ${selectedBoxBay.name}` : "选中框未绑定") : "点击框选中"}</span>
+          <span>已绘制 {boxCount} 个区域，已绑定 {boundBoxCount} 个 | {selectedBoxId ? (selectedBoxBay ? `已绑定: ${selectedBoxBay.name}` : "选中框未绑定") : "点击框选中"}</span>
           <span style={{ color: "#1677ff", cursor: "help" }} title="方向键平移选中框 / Delete 键删除选中框">ⓘ</span>
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>

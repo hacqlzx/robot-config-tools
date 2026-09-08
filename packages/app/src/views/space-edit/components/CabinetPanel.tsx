@@ -10,6 +10,8 @@ interface Props {
   cabinetCount: number;
   /** 当前地图内新增柜排、屏柜的默认名称起始序号 */
   nameSequence?: { cabinetRowStart: number; cabinetStart: number };
+  /** 当前地图已有的屏柜名称列表（用于重复校验） */
+  existingCabinetNames?: string[];
   /** 关闭绘制屏柜 */
   onClose: () => void;
   /** 保存：传出当前面板数据 */
@@ -44,7 +46,7 @@ function gen18(): string {
 }
 
 /** 绘制屏柜操作小窗（可拖动，提示 + 区域/间隔选择 + 屏柜表格） */
-export default function CabinetPanel({ cornerCount, cabinetCount, nameSequence, onClose, onSave, onDraftChange, onNamesChange, saving }: Props) {
+export default function CabinetPanel({ cornerCount, cabinetCount, nameSequence, existingCabinetNames = [], onClose, onSave, onDraftChange, onNamesChange, saving }: Props) {
   const projectName = useSelectedProject();
   const cabinetRowNameStart = nameSequence?.cabinetRowStart ?? 1;
   const cabinetNameStart = nameSequence?.cabinetStart ?? 1;
@@ -203,11 +205,18 @@ export default function CabinetPanel({ cornerCount, cabinetCount, nameSequence, 
       message.warning("屏柜编码不能为空");
       return;
     }
+    // 检查当前提交批次内的名称重复
     const duplicateName = nextRows.find((row, index) =>
       nextRows.findIndex((item) => item.name === row.name) !== index
     );
     if (duplicateName) {
       message.warning(`屏柜名称重复：${duplicateName.name}`);
+      return;
+    }
+    // 检查与当前地图已有屏柜名称重复
+    const existingDuplicate = nextRows.find((row) => existingCabinetNames.includes(row.name));
+    if (existingDuplicate) {
+      message.warning(`当前地图已存在同名屏柜：${existingDuplicate.name}`);
       return;
     }
     const duplicateCode = nextRows.find((row, index) =>
@@ -222,7 +231,7 @@ export default function CabinetPanel({ cornerCount, cabinetCount, nameSequence, 
     const area = { id: areaId, name: v?.voltName || "", code: v?.voltCode || "" };
     const bay = { id: bayId, name: b?.bayName || "", code: b?.bayCode || "" };
     onSave?.({ area, bay, cabinetRow: nextCabinetRow, rows: nextRows });
-  }, [areaId, bayId, voltList, bayList, rows, cabinetRow, isSplit, onSave]);
+  }, [areaId, bayId, voltList, bayList, rows, cabinetRow, isSplit, existingCabinetNames, onSave]);
 
   const tip = cornerCount < 4
     ? `点击屏柜【${STEP_LABELS[cornerCount]}】（${cornerCount + 1}/4）`
