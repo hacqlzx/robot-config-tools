@@ -5,6 +5,9 @@ const SELECTED_ROBOT_KEY = "selectedRobot";
 const BACKEND_IP_KEY = "backend_current_ip";
 const CACHED_ROBOT_LIST_KEY = "cachedRobotList";
 const CACHED_ROBOT_RECORDS_KEY = "cachedRobotRecords";
+const OCR_API_KEYS_KEY = "ocr_api_keys";
+const SELECTED_OCR_API_KEY_INDEX_KEY = "selected_ocr_api_key_index";
+const DEFECT_DETECTION_IP_KEY = "defect_detection_ip";
 
 export type ConnectionStatus = "disconnected" | "connected" | "failed";
 
@@ -319,4 +322,87 @@ export function useRobotOptions(): RobotOption[] {
 
 export function useRobotRecords(): RobotRecordCacheItem[] {
   return useSyncExternalStore(subscribeRobotRecords, getRobotRecords, getRobotRecords);
+}
+
+/** 获取所有已保存的 OCR API Key 列表 */
+export function getOcrApiKeys(): string[] {
+  try {
+    const stored = localStorage.getItem(OCR_API_KEYS_KEY);
+    if (!stored) return [];
+    const parsed = JSON.parse(stored);
+    return Array.isArray(parsed) ? parsed.filter((key) => typeof key === "string" && key.trim()) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 设置 OCR API Key 列表 */
+export function setOcrApiKeys(keys: string[]): void {
+  const uniqueKeys = [...new Set(keys.filter((key) => typeof key === "string" && key.trim()))];
+  writeStorage(OCR_API_KEYS_KEY, uniqueKeys.length > 0 ? JSON.stringify(uniqueKeys) : null);
+}
+
+/** 获取当前选中的 OCR API Key 索引 */
+export function getSelectedOcrApiKeyIndex(): number {
+  try {
+    const stored = localStorage.getItem(SELECTED_OCR_API_KEY_INDEX_KEY);
+    if (!stored) return 0;
+    const index = Number(stored);
+    return Number.isFinite(index) && index >= 0 ? index : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** 设置当前选中的 OCR API Key 索引 */
+export function setSelectedOcrApiKeyIndex(index: number): void {
+  const value = Number.isFinite(index) && index >= 0 ? index : 0;
+  writeStorage(SELECTED_OCR_API_KEY_INDEX_KEY, String(value));
+}
+
+/** 获取当前选中的 OCR API Key */
+export function getOcrApiKey(): string {
+  const keys = getOcrApiKeys();
+  const index = getSelectedOcrApiKeyIndex();
+  const selectedKey = keys[index] || "";
+  console.log("[OCR API Key] 获取配置:", { keys, index, selectedKey });
+  return selectedKey;
+}
+
+/** 添加新的 OCR API Key */
+export function addOcrApiKey(key: string): void {
+  const trimmedKey = key.trim();
+  if (!trimmedKey) return;
+  const keys = getOcrApiKeys();
+  if (!keys.includes(trimmedKey)) {
+    keys.push(trimmedKey);
+    setOcrApiKeys(keys);
+  }
+}
+
+/** 删除指定索引的 OCR API Key */
+export function deleteOcrApiKey(index: number): void {
+  const keys = getOcrApiKeys();
+  if (index >= 0 && index < keys.length) {
+    keys.splice(index, 1);
+    setOcrApiKeys(keys);
+    // 如果删除的是当前选中的，调整选中索引
+    const currentIndex = getSelectedOcrApiKeyIndex();
+    if (currentIndex >= keys.length && keys.length > 0) {
+      setSelectedOcrApiKeyIndex(keys.length - 1);
+    } else if (keys.length === 0) {
+      setSelectedOcrApiKeyIndex(0);
+    }
+  }
+}
+
+/** 获取缺陷识别服务 IP 地址 */
+export function getDefectDetectionIp(): string {
+  return readStorage(DEFECT_DETECTION_IP_KEY) || "";
+}
+
+/** 设置缺陷识别服务 IP 地址 */
+export function setDefectDetectionIp(ip: string): void {
+  const value = ip.trim();
+  writeStorage(DEFECT_DETECTION_IP_KEY, value || null);
 }
