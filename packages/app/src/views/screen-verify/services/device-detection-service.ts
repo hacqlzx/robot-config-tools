@@ -1,8 +1,18 @@
 import { requestRecognitionText } from "./recognition-request";
 import type { RecognitionRequestOptions } from "./recognition-request";
+import { getDefectDetectionIp } from "@/stores/appContextStore";
 
-const DEVICE_DETECTION_URL = "http://192.168.0.139:52002/api/imageDetection";
+const DEFAULT_DEVICE_DETECTION_IP = "192.168.0.139:52002";
 const DEVICE_DETECTION_TASK_IDS = [1];
+
+/** 获取当前配置的设备检测服务地址 */
+function getDeviceDetectionUrl(): string {
+  const configuredIp = getDefectDetectionIp();
+  const ip = configuredIp || DEFAULT_DEVICE_DETECTION_IP;
+  // 确保 IP 格式正确，添加 http:// 前缀和 /api/imageDetection 后缀
+  const baseUrl = ip.startsWith("http://") || ip.startsWith("https://") ? ip : `http://${ip}`;
+  return `${baseUrl}/api/imageDetection`;
+}
 
 export interface DlBoundingRect {
   x: number;
@@ -89,7 +99,7 @@ async function requestImageDetection(
   }
 
   const { response, text: payloadText } = await requestRecognitionText(
-    DEVICE_DETECTION_URL,
+    getDeviceDetectionUrl(),
     {
       method: "POST",
       body: formData,

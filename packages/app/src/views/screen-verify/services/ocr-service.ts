@@ -2,6 +2,7 @@ import { requestRecognitionText } from "./recognition-request";
 import type { RecognitionRequestOptions } from "./recognition-request";
 import { detectLabelPlateRects } from "./label-plate-detector";
 import type { LabelPlatePixelRect } from "./label-plate-detector";
+import { getOcrApiKey } from "@/stores/appContextStore";
 
 export interface CabinetOcrResult {
   rawText: string;
@@ -112,8 +113,16 @@ const DASH_SCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
 const DASH_SCOPE_OCR_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
 const DASH_SCOPE_MODEL = import.meta.env.VITE_DASHSCOPE_MODEL || "qwen3.7-plus";
 const DASH_SCOPE_OCR_MODEL = import.meta.env.VITE_DASHSCOPE_OCR_MODEL || "qwen3.5-ocr";
-const DASH_SCOPE_API_KEY = import.meta.env.VITE_DASHSCOPE_API_KEY || "sk-84dbc87f36d84977b4164e165a73687b";
+const DEFAULT_DASH_SCOPE_API_KEY = "sk-84dbc87f36d84977b4164e165a73687b";
 export const CABINET_OCR_NORMALIZED_COORDINATE_MAX = 999;
+
+/** 获取当前配置的 DashScope API Key，优先使用用户设置，否则使用默认值 */
+function getDashScopeApiKey(): string {
+  const configuredKey = getOcrApiKey();
+  const finalKey = configuredKey || import.meta.env.VITE_DASHSCOPE_API_KEY || DEFAULT_DASH_SCOPE_API_KEY;
+  console.log("[OCR Service] 获取 API Key:", { configuredKey, finalKey: finalKey.slice(0, 8) + "..." });
+  return finalKey;
+}
 
 export const CABINET_LABEL_OCR_PROMPT = [
   "你是屏柜验证图像的标签文字识别助手。",
@@ -250,14 +259,14 @@ async function recognizeCabinetLabelsWithQwenOcr(
   const sourceGroups = groupOcrSourcesByImage(resolvedSources);
   const results = await Promise.all(sourceGroups.map(async (sourceGroup) => {
     const requestSource = sourceGroup[0];
-    const { response, text: payloadText } = await requestRecognitionText(
-      DASH_SCOPE_OCR_URL,
-      {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${DASH_SCOPE_API_KEY}`,
-          "Content-Type": "application/json",
-        },
+  const { response, text: payloadText } = await requestRecognitionText(
+    `${DASH_SCOPE_BASE_URL}/chat/completions`,
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${getDashScopeApiKey()}`,
+        "Content-Type": "application/json",
+      },
         body: JSON.stringify({
           model: DASH_SCOPE_OCR_MODEL,
           input: {
