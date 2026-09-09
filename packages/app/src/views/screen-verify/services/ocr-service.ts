@@ -113,15 +113,23 @@ const DASH_SCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
 const DASH_SCOPE_OCR_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
 const DASH_SCOPE_MODEL = import.meta.env.VITE_DASHSCOPE_MODEL || "qwen3.7-plus";
 const DASH_SCOPE_OCR_MODEL = import.meta.env.VITE_DASHSCOPE_OCR_MODEL || "qwen3.5-ocr";
-const DEFAULT_DASH_SCOPE_API_KEY = "sk-84dbc87f36d84977b4164e165a73687b";
 export const CABINET_OCR_NORMALIZED_COORDINATE_MAX = 999;
 
-/** 获取当前配置的 DashScope API Key，优先使用用户设置，否则使用默认值 */
+/** 获取当前配置的 DashScope API Key。 */
 function getDashScopeApiKey(): string {
-  const configuredKey = getOcrApiKey();
-  const finalKey = configuredKey || import.meta.env.VITE_DASHSCOPE_API_KEY || DEFAULT_DASH_SCOPE_API_KEY;
-  console.log("[OCR Service] 获取 API Key:", { configuredKey, finalKey: finalKey.slice(0, 8) + "..." });
-  return finalKey;
+  return getOcrApiKey().trim();
+}
+
+export function getCabinetOcrConfigIssue(): string | null {
+  return getDashScopeApiKey() ? null : "请先在设置-图像标注中配置 API Key";
+}
+
+function requireDashScopeApiKey(): string {
+  const apiKey = getDashScopeApiKey();
+  if (!apiKey) {
+    throw new Error("请先在设置-图像标注中配置 API Key");
+  }
+  return apiKey;
 }
 
 export const CABINET_LABEL_OCR_PROMPT = [
@@ -264,7 +272,7 @@ async function recognizeCabinetLabelsWithQwenOcr(
     {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${getDashScopeApiKey()}`,
+        "Authorization": `Bearer ${requireDashScopeApiKey()}`,
         "Content-Type": "application/json",
       },
         body: JSON.stringify({
@@ -394,7 +402,7 @@ async function recognizeCabinetLabelsWithPrompt(
     {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${DASH_SCOPE_API_KEY}`,
+        "Authorization": `Bearer ${requireDashScopeApiKey()}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -739,7 +747,7 @@ export async function recognizeCabinetName(
     {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${DASH_SCOPE_API_KEY}`,
+        "Authorization": `Bearer ${requireDashScopeApiKey()}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
