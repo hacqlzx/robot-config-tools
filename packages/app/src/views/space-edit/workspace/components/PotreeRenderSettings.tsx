@@ -1,6 +1,7 @@
 import { Button, Popover, Segmented, Slider } from "antd";
 import { SettingOutlined } from "@ant-design/icons";
 import {
+  DEFAULT_SPACE_RENDER_SETTINGS,
   SPACE_POINT_BUDGET_MAX,
   SPACE_POINT_BUDGET_ALL,
   SPACE_POINT_BUDGET_MIN,
@@ -30,7 +31,12 @@ function formatPointBudget(pointBudget: SpaceRenderSettings["pointBudget"]): str
 }
 
 export default function PotreeRenderSettings({ settings, onChange }: PotreeRenderSettingsProps) {
-  const limitedPointBudget = typeof settings.pointBudget === "number" ? settings.pointBudget : 500_000;
+  const defaultLimitedPointBudget = typeof DEFAULT_SPACE_RENDER_SETTINGS.pointBudget === "number"
+    ? DEFAULT_SPACE_RENDER_SETTINGS.pointBudget
+    : SPACE_POINT_BUDGET_MAX;
+  const limitedPointBudget = typeof settings.pointBudget === "number"
+    ? settings.pointBudget
+    : defaultLimitedPointBudget;
   const content = (
     <div style={{ width: 280, display: "grid", gap: 18, padding: "4px 2px" }}>
       <div style={{ display: "grid", gap: 8 }}>
@@ -63,7 +69,7 @@ export default function PotreeRenderSettings({ settings, onChange }: PotreeRende
             ...settings,
             pointBudget: value === SPACE_POINT_BUDGET_ALL
               ? SPACE_POINT_BUDGET_ALL
-              : (typeof settings.pointBudget === "number" ? settings.pointBudget : 500_000),
+              : (typeof settings.pointBudget === "number" ? settings.pointBudget : defaultLimitedPointBudget),
           })}
         />
         {settings.pointBudget !== SPACE_POINT_BUDGET_ALL && (

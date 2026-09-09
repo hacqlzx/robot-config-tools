@@ -66,6 +66,7 @@ import { PotreeSpaceSceneAdapter } from "./engine/PotreeSpaceSceneAdapter";
 import { useSpaceDrawingHistory } from "./hooks/useSpaceDrawingHistory";
 import {
   DEFAULT_SPACE_RENDER_SETTINGS,
+  migrateSpaceRenderSettings,
   normalizeSpaceRenderSettings,
   type SpaceCabinetState,
   type SpaceChargingAreaState,
@@ -189,9 +190,10 @@ function normalizePointCode(value: unknown): string {
 function loadRenderSettings(): SpaceRenderSettings {
   try {
     const saved = window.localStorage.getItem(RENDER_SETTINGS_STORAGE_KEY);
-    return saved
-      ? normalizeSpaceRenderSettings(JSON.parse(saved) as Partial<SpaceRenderSettings>)
-      : { ...DEFAULT_SPACE_RENDER_SETTINGS };
+    if (!saved) return { ...DEFAULT_SPACE_RENDER_SETTINGS };
+    return migrateSpaceRenderSettings(
+      normalizeSpaceRenderSettings(JSON.parse(saved) as Partial<SpaceRenderSettings>),
+    );
   } catch {
     return { ...DEFAULT_SPACE_RENDER_SETTINGS };
   }
