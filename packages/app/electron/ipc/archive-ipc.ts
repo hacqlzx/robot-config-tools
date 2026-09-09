@@ -90,6 +90,10 @@ interface PointCalibrationRecord {
   cruise_id: string;
 }
 
+interface CabinetPointCalibrationRecord extends PointCalibrationRecord {
+  thermal_region: string;
+}
+
 interface CabinetImageSource {
   id: string;
   mime: string;
@@ -181,7 +185,7 @@ interface CabinetExportPoint {
 
 interface CabinetPointTableExportBuildResult {
   rows: PointExcelExportRow[];
-  calibrationRecords: PointCalibrationRecord[];
+  calibrationRecords: CabinetPointCalibrationRecord[];
   pointCount: number;
   componentCount: number;
 }
@@ -1003,7 +1007,7 @@ export function prepareCabinetPointTableExport(projectName: string): CabinetPoin
   };
 }
 
-async function writeCabinetPointTableZip(zipPath: string, xlsxBuffer: Buffer, calibrationRecords: PointCalibrationRecord[]): Promise<void> {
+async function writeCabinetPointTableZip(zipPath: string, xlsxBuffer: Buffer, calibrationRecords: CabinetPointCalibrationRecord[]): Promise<void> {
   const output = fs.createWriteStream(zipPath);
   const archive = new ZipArchive({ zlib: { level: 0 } });
   const completed = new Promise<void>((resolve, reject) => {
@@ -1058,7 +1062,7 @@ function buildCabinetPointTableRows(
   usedPointCodes: Set<string>,
 ): CabinetPointTableExportBuildResult {
   const rows: PointExcelExportRow[] = [];
-  const calibrationRecords: PointCalibrationRecord[] = [];
+  const calibrationRecords: CabinetPointCalibrationRecord[] = [];
   let pointCount = 0;
   let componentCount = 0;
   const cruiseState = createCabinetCruiseExportState();
@@ -1115,7 +1119,7 @@ function cabinetGeneratedPointRows(
 ): Pick<CabinetPointTableExportBuildResult, "rows" | "calibrationRecords"> {
   const baseRow = cabinetComponentExportRow(record);
   const rows: PointExcelExportRow[] = [];
-  const calibrationRecords: PointCalibrationRecord[] = [];
+  const calibrationRecords: CabinetPointCalibrationRecord[] = [];
   const points: CabinetExportPoint[] = [
     ...(ocrRows || []).map((row) => ({
       name: valueText(row?.name),
@@ -1137,14 +1141,51 @@ function cabinetGeneratedPointRows(
     })),
   ];
 
-  for (const point of sortCabinetExportPoints(points, annotations)) {
+  const normalizedAnnotations = normalizeCabinetAnnotationData(annotations);
+  for (const point of sortCabinetExportPoints(points, normalizedAnnotations)) {
     const pointRow = cabinetPointExportRow(baseRow, point, usedPointCodes, rows.length + 1);
     const pointCode = valueText(pointRow["点位编码"]);
     rows.push(pointRow);
-    if (pointCode) calibrationRecords.push(cabinetPointCalibrationRecord(record, pointCode, cruiseState));
+    if (pointCode) {
+      calibrationRecords.push(cabinetPointCalibrationRecord(
+        record,
+        pointCode,
+        cruiseState,
+        resolveCabinetThermalRegion(point, normalizedAnnotations),
+      ));
+    }
   }
 
   return { rows, calibrationRecords };
+}
+
+function resolveCabinetThermalRegion(point: CabinetExportPoint, annotations: any): string {
+  const deviceRect = resolveCabinetDeviceBoxRect(point, annotations);
+  if (!deviceRect || deviceRect.w <= 0 || deviceRect.h <= 0) return "";
+
+  const corners = [
+    [deviceRect.x, deviceRect.y],
+    [deviceRect.x + deviceRect.w, deviceRect.y],
+    [deviceRect.x + deviceRect.w, deviceRect.y + deviceRect.h],
+    [deviceRect.x, deviceRect.y + deviceRect.h],
+  ];
+  return corners
+    .map(([x, y]) => `${Math.round(x)},${Math.round(y)}`)
+    .join(";");
+}
+
+function resolveCabinetDeviceBoxRect(point: CabinetExportPoint, annotations: any): CabinetExportRect | null {
+  const references = [
+    { id: point.relatedRectId, tool: point.relatedRectTool },
+    { id: point.boundRectId, tool: point.boundRectTool },
+  ];
+
+  for (const reference of references) {
+    if (reference.tool !== "deviceBox" || !reference.id) continue;
+    const rect = findCabinetAnnotationRect(annotations, "deviceBox", reference.id);
+    if (rect) return rect;
+  }
+  return null;
 }
 
 /**
@@ -1178,13 +1219,14 @@ function createCabinetCruiseExportState(): CabinetCruiseExportState {
  *
  * calibration_id 使用导入屏柜部件表里的部件标定 id；
  * cruise_id 以该标定 id 为前缀，按点位顺序追加 0001/0002...，不再追加业务后缀。
- * 每个点位只写入 point_code、calibration_id、cruise_id。
+ * 每个点位只写入 point_code、calibration_id、cruise_id、thermal_region。
  */
 function cabinetPointCalibrationRecord(
   record: CabinetImagePackageRecord,
   pointCode: string,
   state: CabinetCruiseExportState,
-): PointCalibrationRecord {
+  thermalRegion: string,
+): CabinetPointCalibrationRecord {
   const calibrationId = valueText(record.calibrationId);
   if (!calibrationId) {
     throw new Error(`部件 ${valueText(record.componentName) || valueText(record.componentCode)} 缺少标定id`);
@@ -1193,6 +1235,7 @@ function cabinetPointCalibrationRecord(
     point_code: pointCode,
     calibration_id: calibrationId,
     cruise_id: generateCabinetPointCruiseId(calibrationId, state),
+    thermal_region: thermalRegion,
   };
 }
 
