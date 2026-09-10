@@ -126,7 +126,7 @@ const DEFAULT_NORMAL_ANNOTATION_STATE: SpaceNormalAnnotationState = {
 };
 
 interface LoadingState {
-  kind: "model" | "clip" | "correction";
+  kind: "model" | "correction";
   modelPath: string | null;
   title: string;
   message: string;
@@ -269,9 +269,12 @@ export default function SpaceEditWorkspace() {
   const [modelOperationBusy, setModelOperationBusy] = useState(false);
   const [activeModelPath, setActiveModelPath] = useState<string | null>(null);
   const [activeSourcePath, setActiveSourcePath] = useState<string | null>(null);
-  const [clipBounds, setClipBounds] = useState<SpaceClipBounds | null>(null);
-  const [clipSaving, setClipSaving] = useState(false);
-  const [clipProgress, setClipProgress] = useState<number | undefined>();
+  const [hideDraftBounds, setHideDraftBounds] = useState<SpaceClipBounds | null>(null);
+  const [hiddenModelBounds, setHiddenModelBounds] = useState<SpaceClipBounds | null>(null);
+  const hideDraftBoundsRef = useRef<SpaceClipBounds | null>(null);
+  const hiddenModelBoundsRef = useRef<SpaceClipBounds | null>(null);
+  hideDraftBoundsRef.current = hideDraftBounds;
+  hiddenModelBoundsRef.current = hiddenModelBounds;
   const [correctionMode, setCorrectionMode] = useState(false);
   const [correctionOrigin, setCorrectionOrigin] = useState<[number, number, number] | null>(null);
   const [correctionSaving, setCorrectionSaving] = useState(false);
@@ -497,6 +500,25 @@ export default function SpaceEditWorkspace() {
     () => new Set(activeModelPath ? [loadedFileKey(activeModelPath)] : []),
     [activeModelPath],
   );
+
+  const cancelHideDraft = useCallback(() => {
+    if (!hideDraftBoundsRef.current) return;
+    const committed = hiddenModelBoundsRef.current;
+    if (committed) {
+      adapter.setClipBounds(committed);
+      adapter.commitClipping();
+    } else {
+      adapter.stopClipping();
+    }
+    setHideDraftBounds(null);
+  }, [adapter]);
+
+  const clearHideState = useCallback(() => {
+    adapter.stopClipping();
+    setHideDraftBounds(null);
+    setHiddenModelBounds(null);
+  }, [adapter]);
+
   const clearDrawingVisibility = useCallback(() => {
     drawingLifecycleVersion.current += 1;
     drawingLayerVersions.current.clear();
@@ -556,9 +578,8 @@ export default function SpaceEditWorkspace() {
     adapter.clearModel();
     setActiveModelPath(null);
     setActiveSourcePath(null);
-    setClipBounds(null);
-    setClipSaving(false);
-    setClipProgress(undefined);
+    setHideDraftBounds(null);
+    setHiddenModelBounds(null);
     setCorrectionMode(false);
     setCorrectionOrigin(null);
     setCorrectionSaving(false);
@@ -872,11 +893,7 @@ export default function SpaceEditWorkspace() {
       message.warning("法线标注仅支持 Electron 模式");
       return;
     }
-    if (clipBounds) {
-      adapter.stopClipping();
-      setClipBounds(null);
-      setClipProgress(undefined);
-    }
+    cancelHideDraft();
     closeCabinetMode();
     closeChargingMode();
     closeDeviceAreaMode();
@@ -894,7 +911,7 @@ export default function SpaceEditWorkspace() {
       return;
     }
     setNormalMode(true);
-  }, [activeSourcePath, adapter, clipBounds, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, message, normalMode, recordDrawingHistory]);
+  }, [activeSourcePath, adapter, cancelHideDraft, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, message, normalMode, recordDrawingHistory]);
 
   const handleNormalSelect = useCallback((item: NormalAnnotationItem) => {
     const current = adapter.getNormalAnnotations().find((candidate) => candidate.id === item.id) ?? item;
@@ -1067,6 +1084,7 @@ export default function SpaceEditWorkspace() {
     const pathFilePath = mapSiblingFilePath(activeSourcePath, PATH_FILE_NAME);
     const data = await loadPathDrawingInLasCoordinates(api, pathFilePath);
     if (version !== operationVersion.current) return;
+    cancelHideDraft();
     closeCabinetMode();
     closeChargingMode();
     closeDeviceAreaMode();
@@ -1083,7 +1101,7 @@ export default function SpaceEditWorkspace() {
       return;
     }
     setPathMode(true);
-  }, [activeSourcePath, adapter, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, message, pathMode, recordDrawingHistory]);
+  }, [activeSourcePath, adapter, cancelHideDraft, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, message, pathMode, recordDrawingHistory]);
 
   const persistCabinet = useCallback(async (data: CabinetSaveData | null, options: PersistOptions = {}): Promise<boolean> => {
     const silent = !!options.silent;
@@ -1261,11 +1279,7 @@ export default function SpaceEditWorkspace() {
     const drawingFilePath = cachedPath || expectedPath;
     const items = await loadAllItemsFromJsonInLasCoordinates(api, drawingFilePath);
     if (version !== operationVersion.current) return;
-    if (clipBounds) {
-      adapter.stopClipping();
-      setClipBounds(null);
-      setClipProgress(undefined);
-    }
+    cancelHideDraft();
     closeChargingMode();
     closeDeviceAreaMode();
     closePathMode();
@@ -1298,7 +1312,7 @@ export default function SpaceEditWorkspace() {
     const existingNames = cabinetItems.flatMap((item) => item.cabinets?.map((c: any) => c.name) || []).filter(Boolean);
     setExistingCabinetNames(existingNames);
     setCabinetMode(true);
-  }, [activeSourcePath, adapter, cabinetMode, clipBounds, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, drawingShown, message, recordDrawingHistory, renderDrawingLayer, selectedProject]);
+  }, [activeSourcePath, adapter, cabinetMode, cancelHideDraft, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, drawingShown, message, recordDrawingHistory, renderDrawingLayer, selectedProject]);
 
   const handleCabinetUndo = useCallback(() => {
     adapter.undoCabinet();
@@ -1496,11 +1510,7 @@ export default function SpaceEditWorkspace() {
     if (hasExisting && !(await confirmReplaceChargingArea())) return;
     if (version !== operationVersion.current) return;
 
-    if (clipBounds) {
-      adapter.stopClipping();
-      setClipBounds(null);
-      setClipProgress(undefined);
-    }
+    cancelHideDraft();
     closeCabinetMode();
     closeDeviceAreaMode();
     closePathMode();
@@ -1525,7 +1535,7 @@ export default function SpaceEditWorkspace() {
       return;
     }
     setChargingMode(true);
-  }, [activeSourcePath, adapter, chargingMode, clipBounds, closeCabinetMode, closeDeviceAreaMode, closeChargingMode, closeNormalMode, closePathMode, drawingShown, message, recordDrawingHistory, renderDrawingLayer]);
+  }, [activeSourcePath, adapter, chargingMode, cancelHideDraft, closeCabinetMode, closeDeviceAreaMode, closeChargingMode, closeNormalMode, closePathMode, drawingShown, message, recordDrawingHistory, renderDrawingLayer]);
 
   const handleChargingHeightChange = useCallback((height: number) => {
     adapter.setChargingAreaHeight(height);
@@ -1676,11 +1686,7 @@ export default function SpaceEditWorkspace() {
     const drawingFilePath = cachedPath || expectedPath;
     const items = await loadAllItemsFromJsonInLasCoordinates(api, drawingFilePath);
     if (version !== operationVersion.current) return;
-    if (clipBounds) {
-      adapter.stopClipping();
-      setClipBounds(null);
-      setClipProgress(undefined);
-    }
+    cancelHideDraft();
     closeCabinetMode();
     closeChargingMode();
     closePathMode();
@@ -1731,7 +1737,7 @@ export default function SpaceEditWorkspace() {
         if (version === operationVersion.current) setProjectBoundBayIds(new Set());
       }
     }
-  }, [activeSourcePath, adapter, clipBounds, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, deviceAreaMode, drawingShown, message, recordDrawingHistory, renderDrawingLayer, selectedProject]);
+  }, [activeSourcePath, adapter, cancelHideDraft, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, deviceAreaMode, drawingShown, message, recordDrawingHistory, renderDrawingLayer, selectedProject]);
 
   const handleDeviceAreaHeightChange = useCallback((height: number) => {
     adapter.setDeviceAreaHeight(height);
@@ -1958,11 +1964,11 @@ export default function SpaceEditWorkspace() {
   }, []);
 
   useEffect(() => {
-    const busy = saveStatus === "saving" || !!loading || correctionSaving || clipSaving;
-    const mode = busy ? "busy" : clipBounds ? "clip" : correctionMode ? "correction" : cabinetMode ? "cabinet" : chargingMode ? "charging" : deviceAreaMode ? "device-area" : pathMode ? "path" : normalMode ? "normal" : "idle";
+    const busy = saveStatus === "saving" || !!loading || correctionSaving;
+    const mode = busy ? "busy" : hideDraftBounds ? "clip" : correctionMode ? "correction" : cabinetMode ? "cabinet" : chargingMode ? "charging" : deviceAreaMode ? "device-area" : pathMode ? "path" : normalMode ? "normal" : "idle";
     adapter.setInteractionMode(mode);
     return () => adapter.setInteractionMode("idle");
-  }, [adapter, cabinetMode, chargingMode, clipBounds, clipSaving, correctionMode, correctionSaving, deviceAreaMode, loading, normalMode, pathMode, saveStatus]);
+  }, [adapter, cabinetMode, chargingMode, hideDraftBounds, correctionMode, correctionSaving, deviceAreaMode, loading, normalMode, pathMode, saveStatus]);
 
   useEffect(() => {
     adapter.setDrawingInteractionCallbacks({
@@ -2068,19 +2074,6 @@ export default function SpaceEditWorkspace() {
     });
   }, [selectedProject]);
 
-  useEffect(() => {
-    const api = window.electronAPI?.potree;
-    if (!api) return;
-    return api.onClipProgress((progress) => {
-      setLoading((current) => {
-        if (current?.kind !== "clip" || !current.modelPath || progress.projectName !== selectedProject) return current;
-        if (loadedFileKey(current.modelPath) !== loadedFileKey(progress.modelPath)) return current;
-        setClipProgress(progress.percent);
-        return { ...current, message: progress.message, percent: progress.percent };
-      });
-    });
-  }, [selectedProject]);
-
   const notifyPending = useCallback((feature: string) => {
     message.info(`${feature}正在迁移到 Potree`);
   }, [message]);
@@ -2110,8 +2103,7 @@ export default function SpaceEditWorkspace() {
 
     try {
       if (!skipUnsavedConfirmation && !(await confirmUnsavedChanges("加载地图"))) return;
-      adapter.stopClipping();
-      setClipBounds(null);
+      clearHideState();
       version = ++operationVersion.current;
       setLoading({ kind: "model", modelPath: item.modelPath, title: item.mapName, message: "正在检查 Potree 数据", percent: 2 });
       const result = await api.ensureModel(selectedProject, item.modelPath);
@@ -2131,7 +2123,7 @@ export default function SpaceEditWorkspace() {
       modelBusyRef.current = false;
       setModelOperationBusy(false);
     }
-  }, [adapter, clearDrawingVisibility, confirmUnsavedChanges, loadModelCompanionFiles, message, selectedProject]);
+  }, [adapter, clearDrawingVisibility, clearHideState, confirmUnsavedChanges, loadModelCompanionFiles, message, selectedProject]);
 
   const clearModel = useCallback(async (modelPath?: string): Promise<boolean> => {
     if (modelPath && activeModelPath && loadedFileKey(modelPath) !== loadedFileKey(activeModelPath)) return false;
@@ -2181,7 +2173,7 @@ export default function SpaceEditWorkspace() {
         clearDrawingVisibility();
         setActiveModelPath(null);
         setActiveSourcePath(null);
-        setClipBounds(null);
+        clearHideState();
         const result = await electronApi.project.importModelZip(selectedProject, sourcePath);
         modelPath = result.modelPath;
         mapName = result.mapName;
@@ -2190,7 +2182,7 @@ export default function SpaceEditWorkspace() {
         clearDrawingVisibility();
         setActiveModelPath(null);
         setActiveSourcePath(null);
-        setClipBounds(null);
+        clearHideState();
         mapName = stripModelExtension(file.name);
         modelPath = await electronApi.project.importFile(selectedProject, sourcePath, file.name);
       }
@@ -2207,7 +2199,7 @@ export default function SpaceEditWorkspace() {
       modelBusyRef.current = false;
       setModelOperationBusy(false);
     }
-  }, [adapter, clearDrawingVisibility, confirmUnsavedChanges, loadModel, message, selectedProject]);
+  }, [adapter, clearDrawingVisibility, clearHideState, confirmUnsavedChanges, loadModel, message, selectedProject]);
 
   const handleImportPointTable = useCallback(async (file: File) => {
     setPointImporting(true);
@@ -2256,7 +2248,7 @@ export default function SpaceEditWorkspace() {
     }
   }, [message, selectedProject]);
 
-  const handleClip = useCallback(async () => {
+  const handleHide = useCallback(() => {
     if (!activeModelPath || !activeSourcePath) {
       message.warning("请先加载模型");
       return;
@@ -2265,76 +2257,45 @@ export default function SpaceEditWorkspace() {
       message.warning({ key: "space-model-busy", content: "模型正在处理中，请稍后再试" });
       return;
     }
-    if (!(await confirmUnsavedChanges("裁切模型"))) return;
     closeCabinetMode();
     closeChargingMode();
     closeDeviceAreaMode();
     closePathMode();
     closeNormalMode();
-    const initialBounds = adapter.startClipping((bounds) => setClipBounds(bounds));
+    closeCorrectionMode();
+    const initialBounds = adapter.startClipping(
+      (bounds) => setHideDraftBounds(bounds),
+      hideDraftBoundsRef.current ?? hiddenModelBoundsRef.current,
+    );
     if (!initialBounds) {
       message.error("无法读取当前模型范围");
       return;
     }
-    setClipBounds(initialBounds);
-    setClipProgress(undefined);
-  }, [activeModelPath, activeSourcePath, adapter, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, confirmUnsavedChanges, message]);
+    setHideDraftBounds(initialBounds);
+  }, [activeModelPath, activeSourcePath, adapter, closeCabinetMode, closeChargingMode, closeCorrectionMode, closeDeviceAreaMode, closeNormalMode, closePathMode, message]);
 
-  const handleClipBoundsChange = useCallback((bounds: SpaceClipBounds) => {
-    setClipBounds(bounds);
+  const handleHideBoundsChange = useCallback((bounds: SpaceClipBounds) => {
+    setHideDraftBounds(bounds);
     adapter.setClipBounds(bounds);
   }, [adapter]);
 
-  const handleClipCancel = useCallback(() => {
-    if (clipSaving) return;
-    adapter.stopClipping();
-    setClipBounds(null);
-    setClipProgress(undefined);
-  }, [adapter, clipSaving]);
+  const handleHideCancel = useCallback(() => {
+    cancelHideDraft();
+  }, [cancelHideDraft]);
 
-  const handleClipConfirm = useCallback(async () => {
-    if (!clipBounds || !activeSourcePath || !selectedProject) return;
-    const api = window.electronAPI?.potree;
-    if (!api) {
-      message.error("模型裁切仅支持 Electron 模式");
+  const handleHideConfirm = useCallback(() => {
+    const bounds = adapter.commitClipping() ?? hideDraftBoundsRef.current;
+    if (!bounds) {
+      message.error("无法保存隐藏范围");
       return;
     }
-    if (modelBusyRef.current) return;
+    setHiddenModelBounds(bounds);
+    setHideDraftBounds(null);
+  }, [adapter, message]);
 
-    modelBusyRef.current = true;
-    setModelOperationBusy(true);
-    setClipSaving(true);
-    setClipProgress(0);
-    const version = ++operationVersion.current;
-    setLoading({
-      kind: "clip",
-      modelPath: activeSourcePath,
-      title: "正在裁切模型",
-      message: "正在读取 LAS 点数据",
-      percent: 0,
-    });
-
-    try {
-      const result = await api.clipModel(selectedProject, activeSourcePath, clipBounds);
-      if (version !== operationVersion.current) return;
-      adapter.stopClipping();
-      setClipBounds(null);
-      setTreeKey((value) => value + 1);
-      modelBusyRef.current = false;
-      setModelOperationBusy(false);
-      setLoading(null);
-      await loadModel({ mapName: result.mapName, modelPath: result.modelPath });
-      message.success(`裁切完成，保留 ${result.pointCount.toLocaleString()} 个点`);
-    } catch (error) {
-      if (version === operationVersion.current) message.error(`裁切失败: ${errorMessage(error)}`);
-    } finally {
-      if (version === operationVersion.current) setLoading(null);
-      setClipSaving(false);
-      setClipProgress(undefined);
-      modelBusyRef.current = false;
-      setModelOperationBusy(false);
-    }
-  }, [activeSourcePath, adapter, clipBounds, loadModel, message, selectedProject]);
+  const handleRestoreModel = useCallback(() => {
+    clearHideState();
+  }, [clearHideState]);
 
   const handleToggleCorrection = useCallback(async () => {
     if (correctionMode) {
@@ -2350,9 +2311,7 @@ export default function SpaceEditWorkspace() {
       return;
     }
     if (!(await confirmUnsavedChanges("纠正地图坐标"))) return;
-    adapter.stopClipping();
-    setClipBounds(null);
-    setClipProgress(undefined);
+    cancelHideDraft();
     closeCabinetMode();
     closeChargingMode();
     closeDeviceAreaMode();
@@ -2366,6 +2325,7 @@ export default function SpaceEditWorkspace() {
     activeModelPath,
     activeSourcePath,
     adapter,
+    cancelHideDraft,
     closeCabinetMode,
     closeChargingMode,
     closeCorrectionMode,
@@ -2445,7 +2405,10 @@ export default function SpaceEditWorkspace() {
         toolbar={(
           <Toolbar
             onOpenLoadModel={() => setImportOpen(true)}
-            onClipModel={handleClip}
+            hideMode={!!hideDraftBounds}
+            onToggleHide={handleHide}
+            modelHidden={!!(hideDraftBounds || hiddenModelBounds)}
+            onRestoreModel={handleRestoreModel}
             correctionMode={correctionMode}
             onToggleCorrection={() => void handleToggleCorrection()}
             cabinetMode={cabinetMode}
@@ -2494,7 +2457,7 @@ export default function SpaceEditWorkspace() {
           <SpaceSceneHost
             adapterFactory={adapterFactory}
             picking={correctionMode && !correctionSaving}
-            busy={modelOperationBusy || saveStatus === "saving" || !!loading || correctionSaving || clipSaving}
+            busy={modelOperationBusy || saveStatus === "saving" || !!loading || correctionSaving}
             onSceneClick={handleCorrectionPointClick}
             overlay={(sceneState) => (
               <>
@@ -2592,14 +2555,13 @@ export default function SpaceEditWorkspace() {
                     saving={deviceAreaSaving}
                   />
                 )}
-                {clipBounds && (
+                {hideDraftBounds && (
                   <PotreeClipController
-                    bounds={clipBounds}
-                    saving={clipSaving}
-                    progress={clipProgress}
-                    onChange={handleClipBoundsChange}
-                    onConfirm={() => void handleClipConfirm()}
-                    onCancel={handleClipCancel}
+                    bounds={hideDraftBounds}
+                    saving={false}
+                    onChange={handleHideBoundsChange}
+                    onConfirm={handleHideConfirm}
+                    onCancel={handleHideCancel}
                   />
                 )}
               </>

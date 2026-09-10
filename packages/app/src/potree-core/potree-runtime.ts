@@ -114,6 +114,7 @@ export interface PotreeBoxVolume {
   visible: boolean;
   clip: boolean;
   frame?: {
+    visible?: boolean;
     material?: {
       color?: { setHex: (value: number) => void };
       depthTest?: boolean;

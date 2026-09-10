@@ -125,6 +125,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   private clipVolume: NonNullable<PotreeViewerInstance["scene"]["volumes"]>[number] | null = null;
   private clipBoundsListener: ((bounds: SpaceClipBounds) => void) | null = null;
   private clipVolumeListener: ((event: unknown) => void) | null = null;
+  private clipOrientationListener: ((event: unknown) => void) | null = null;
   private clipOverlayRenderer: ((event: unknown) => void) | null = null;
   private clipPreviousTask: number | null = null;
   private clipPreviousMethod: number | null = null;
@@ -270,7 +271,6 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   startChargingAreaDrawing(callbacks: SpaceChargingAreaCallbacks): boolean {
     const bounds = this.getModelWorldBounds();
     if (!this.chargingAreaEditor || !this.pointcloud || !bounds) return false;
-    this.stopClipping();
     this.chargingAreaEditor.start(callbacks, bounds.minZ);
     return true;
   }
@@ -306,7 +306,6 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   startDeviceAreaDrawing(callbacks: SpaceDeviceAreaCallbacks): boolean {
     const bounds = this.getModelWorldBounds();
     if (!this.deviceAreaEditor || !this.pointcloud || !bounds) return false;
-    this.stopClipping();
     this.deviceAreaEditor.start(callbacks, bounds.minZ);
     return true;
   }
@@ -353,7 +352,6 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
 
   startCabinetDrawing(callbacks: SpaceCabinetCallbacks): boolean {
     if (!this.cabinetEditor || !this.pointcloud) return false;
-    this.stopClipping();
     this.cabinetEditor.start(callbacks);
     return true;
   }
@@ -388,7 +386,6 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
 
   startPathDrawing(callbacks: SpacePathCallbacks): boolean {
     if (!this.pathEditor || !this.pointcloud) return false;
-    this.stopClipping();
     this.pathEditor.start(callbacks);
     this.pathEditor.setEnabled(true);
     this.pathEditor.setActive(true);
@@ -422,7 +419,6 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
 
   startNormalAnnotationEditing(callbacks: SpaceNormalAnnotationCallbacks): boolean {
     if (!this.normalAnnotationEditor || !this.pointcloud) return false;
-    this.stopClipping();
     this.normalAnnotationEditor.start(callbacks);
     this.normalAnnotationEditor.setEnabled(true);
     return true;
@@ -843,114 +839,154 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     }
   }
 
-  startClipping(onBoundsChange: (bounds: SpaceClipBounds) => void): SpaceClipBounds | null {
+  startClipping(onBoundsChange: (bounds: SpaceClipBounds) => void, initialBounds?: SpaceClipBounds | null): SpaceClipBounds | null {
     const viewer = this.viewer;
     const potree = this.potree;
     const modelBounds = this.getModelWorldBounds();
     if (!viewer || !potree || !modelBounds) return null;
 
-    this.stopClipping();
     this.chargingAreaEditor?.setEnabled(false);
     this.cabinetEditor?.setEnabled(false);
     this.deviceAreaEditor?.setEnabled(false);
-    const volume = new potree.BoxVolume();
-    const centerX = (modelBounds.minX + modelBounds.maxX) / 2;
-    const centerY = (modelBounds.minY + modelBounds.maxY) / 2;
-    const centerZ = (modelBounds.minZ + modelBounds.maxZ) / 2;
-    this.setVector(volume.position, centerX, centerY, centerZ);
-    this.setVector(
-      volume.scale,
-      Math.max(modelBounds.maxX - modelBounds.minX, 1e-6),
-      Math.max(modelBounds.maxY - modelBounds.minY, 1e-6),
-      Math.max(modelBounds.maxZ - modelBounds.minZ, 1e-6),
-    );
-    volume.rotation.set(0, 0, 0);
-    volume.clip = true;
-    volume.visible = true;
-    volume.frame?.material?.color?.setHex(0x39d98a);
-    if (volume.frame?.material) {
-      volume.frame.material.depthTest = false;
-      volume.frame.material.depthWrite = false;
+
+    const bounds = initialBounds ?? this.getVolumeBounds() ?? modelBounds;
+    if (!this.clipVolume) {
+      const volume = new potree.BoxVolume();
+      volume.rotation.set(0, 0, 0);
+      volume.clip = true;
+      volume.frame?.material?.color?.setHex(0x39d98a);
+      if (volume.frame?.material) {
+        volume.frame.material.depthTest = false;
+        volume.frame.material.depthWrite = false;
+      }
+      this.clipPreviousTask = viewer.clipTask ?? potree.ClipTask.NONE;
+      this.clipPreviousMethod = viewer.clipMethod ?? potree.ClipMethod.INSIDE_ANY;
+      this.clipVolume = volume;
+      this.applyVolumeBounds(volume, bounds);
+      viewer.scene.addVolume(volume);
+      viewer.setClipMethod(potree.ClipMethod.INSIDE_ALL);
+      viewer.setClipTask(potree.ClipTask.SHOW_INSIDE);
+    } else {
+      this.applyVolumeBounds(this.clipVolume, bounds);
     }
 
-    this.clipPreviousTask = viewer.clipTask ?? potree.ClipTask.NONE;
-    this.clipPreviousMethod = viewer.clipMethod ?? potree.ClipMethod.INSIDE_ANY;
-    this.clipVolume = volume;
+    this.enterClipEditMode(onBoundsChange);
+    return this.getVolumeBounds() ?? bounds;
+  }
+
+  setClipBounds(bounds: SpaceClipBounds): void {
+    const volume = this.clipVolume;
+    if (!volume) return;
+    this.applyVolumeBounds(volume, bounds);
+    this.clipBoundsListener?.(bounds);
+  }
+
+  commitClipping(): SpaceClipBounds | null {
+    const bounds = this.getVolumeBounds();
+    if (!this.clipVolume || !bounds) return null;
+    this.leaveClipEditMode();
+    this.setClipVolumeVisible(false);
+    return bounds;
+  }
+
+  stopClipping(): void {
+    this.leaveClipEditMode();
+    const viewer = this.viewer;
+    const volume = this.clipVolume;
+    if (viewer && volume) {
+      viewer.inputHandler?.deselect(volume);
+      viewer.scene.removeVolume(volume);
+      viewer.setClipTask(this.clipPreviousTask ?? viewer.clipTask ?? 0);
+      viewer.setClipMethod(this.clipPreviousMethod ?? viewer.clipMethod ?? 0);
+    }
+    this.clipVolume = null;
+    this.clipPreviousTask = null;
+    this.clipPreviousMethod = null;
+  }
+
+  private applyVolumeBounds(
+    volume: NonNullable<PotreeViewerInstance["scene"]["volumes"]>[number],
+    bounds: SpaceClipBounds,
+  ): void {
+    this.setVector(
+      volume.position,
+      (bounds.minX + bounds.maxX) / 2,
+      (bounds.minY + bounds.maxY) / 2,
+      (bounds.minZ + bounds.maxZ) / 2,
+    );
+    this.setVector(
+      volume.scale,
+      Math.max(bounds.maxX - bounds.minX, 1e-6),
+      Math.max(bounds.maxY - bounds.minY, 1e-6),
+      Math.max(bounds.maxZ - bounds.minZ, 1e-6),
+    );
+    volume.rotation.set(0, 0, 0);
+    volume.update?.();
+  }
+
+  private setClipVolumeVisible(visible: boolean): void {
+    const volume = this.clipVolume;
+    if (!volume) return;
+    volume.visible = visible;
+    if (volume.frame) volume.frame.visible = visible;
+  }
+
+  private setRotationHandlesVisible(visible: boolean): void {
+    const rotationHandles = this.viewer?.transformationTool?.rotationHandles;
+    if (!rotationHandles) return;
+    Object.values(rotationHandles).forEach((handle) => {
+      if (handle.node) handle.node.visible = visible;
+    });
+  }
+
+  private enterClipEditMode(onBoundsChange: (bounds: SpaceClipBounds) => void): void {
+    const viewer = this.viewer;
+    const volume = this.clipVolume;
+    if (!viewer || !volume) return;
+    this.leaveClipEditMode();
+    this.setClipVolumeVisible(true);
+    volume.clip = true;
     this.clipBoundsListener = onBoundsChange;
     this.clipVolumeListener = () => {
-      const bounds = this.getVolumeBounds();
-      if (bounds) this.clipBoundsListener?.(bounds);
+      const next = this.getVolumeBounds();
+      if (next) this.clipBoundsListener?.(next);
+    };
+    this.clipOrientationListener = () => {
+      volume.rotation.set(0, 0, 0);
     };
     volume.addEventListener?.("position_changed", this.clipVolumeListener);
     volume.addEventListener?.("scale_changed", this.clipVolumeListener);
-    volume.addEventListener?.("orientation_changed", () => volume.rotation.set(0, 0, 0));
-    viewer.scene.addVolume(volume);
-    viewer.setClipMethod(potree.ClipMethod.INSIDE_ALL);
-    viewer.setClipTask(potree.ClipTask.SHOW_INSIDE);
+    volume.addEventListener?.("orientation_changed", this.clipOrientationListener);
     this.clipOverlayRenderer = () => {
       const toolScene = viewer.transformationTool?.scene;
       const camera = viewer.scene.getActiveCamera?.();
       if (toolScene && camera) viewer.renderer.render(toolScene, camera);
     };
     viewer.addEventListener("render.pass.perspective_overlay", this.clipOverlayRenderer);
-
-    // Potree's scale handles provide the six-face editing behavior. Rotation
-    // would produce an oriented box that cannot be represented by LAS bounds.
-    const rotationHandles = viewer.transformationTool?.rotationHandles;
-    if (rotationHandles) {
-      Object.values(rotationHandles).forEach((handle) => {
-        if (handle.node) handle.node.visible = false;
-      });
-    }
+    this.setRotationHandlesVisible(false);
     viewer.inputHandler?.deselectAll();
     viewer.inputHandler?.toggleSelection(volume);
-    return modelBounds;
   }
 
-  setClipBounds(bounds: SpaceClipBounds): void {
-    const volume = this.clipVolume;
-    if (!volume) return;
-    this.setVector(volume.position,
-      (bounds.minX + bounds.maxX) / 2,
-      (bounds.minY + bounds.maxY) / 2,
-      (bounds.minZ + bounds.maxZ) / 2);
-    this.setVector(volume.scale,
-      Math.max(bounds.maxX - bounds.minX, 1e-6),
-      Math.max(bounds.maxY - bounds.minY, 1e-6),
-      Math.max(bounds.maxZ - bounds.minZ, 1e-6));
-    volume.rotation.set(0, 0, 0);
-    volume.update?.();
-    this.clipBoundsListener?.(bounds);
-  }
-
-  stopClipping(): void {
+  private leaveClipEditMode(): void {
     const viewer = this.viewer;
     const volume = this.clipVolume;
-    if (viewer && volume) {
-      if (this.clipOverlayRenderer) {
-        viewer.removeEventListener("render.pass.perspective_overlay", this.clipOverlayRenderer);
-      }
-      viewer.inputHandler?.deselect(volume);
-      viewer.scene.removeVolume(volume);
-      viewer.setClipTask(this.clipPreviousTask ?? viewer.clipTask ?? 0);
-      viewer.setClipMethod(this.clipPreviousMethod ?? viewer.clipMethod ?? 0);
-      const rotationHandles = viewer.transformationTool?.rotationHandles;
-      if (rotationHandles) {
-        Object.values(rotationHandles).forEach((handle) => {
-          if (handle.node) handle.node.visible = true;
-        });
-      }
+    if (viewer && this.clipOverlayRenderer) {
+      viewer.removeEventListener("render.pass.perspective_overlay", this.clipOverlayRenderer);
     }
+    if (viewer && volume) viewer.inputHandler?.deselect(volume);
     if (volume && this.clipVolumeListener) {
       volume.removeEventListener?.("position_changed", this.clipVolumeListener);
       volume.removeEventListener?.("scale_changed", this.clipVolumeListener);
     }
-    this.clipVolume = null;
+    if (volume && this.clipOrientationListener) {
+      volume.removeEventListener?.("orientation_changed", this.clipOrientationListener);
+    }
+    this.setRotationHandlesVisible(true);
     this.clipBoundsListener = null;
     this.clipVolumeListener = null;
+    this.clipOrientationListener = null;
     this.clipOverlayRenderer = null;
-    this.clipPreviousTask = null;
-    this.clipPreviousMethod = null;
   }
 
   private applyRenderSettings(): void {

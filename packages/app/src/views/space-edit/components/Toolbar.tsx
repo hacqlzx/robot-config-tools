@@ -1,5 +1,5 @@
 ﻿import { useRef } from "react";
-import { UploadOutlined, TableOutlined, SaveOutlined, ScissorOutlined, BorderOutlined, ThunderboltOutlined, AppstoreOutlined, NodeIndexOutlined, CompassOutlined, ExportOutlined, ArrowLeftOutlined, ArrowRightOutlined, AimOutlined } from "@ant-design/icons";
+import { UploadOutlined, TableOutlined, SaveOutlined, EyeInvisibleOutlined, EyeOutlined, BorderOutlined, ThunderboltOutlined, AppstoreOutlined, NodeIndexOutlined, CompassOutlined, ExportOutlined, ArrowLeftOutlined, ArrowRightOutlined, AimOutlined } from "@ant-design/icons";
 import { POINT_TABLE_FILE_ACCEPT } from "../utils/space-paths";
 
 interface Props {
@@ -22,7 +22,10 @@ interface Props {
   onSaveAll?: () => void;
   /** 点击"空间模型加载"按钮时的回调，由父级控制弹窗的打开 */
   onOpenLoadModel?: () => void;
-  onClipModel?: () => void;
+  hideMode?: boolean;
+  onToggleHide?: () => void;
+  modelHidden?: boolean;
+  onRestoreModel?: () => void;
   correctionMode?: boolean;
   onToggleCorrection?: () => void;
   onImportPointTable?: (file: File) => void;
@@ -44,7 +47,8 @@ const BUTTONS = [
   { icon: <SaveOutlined style={{ fontSize: 20 }} />, label: "保存全部", action: "saveAll" as const },
   { icon: <ArrowLeftOutlined style={{ fontSize: 20 }} />, label: "撤销", action: "undo" as const },
   { icon: <ArrowRightOutlined style={{ fontSize: 20 }} />, label: "恢复", action: "redo" as const },
-  { icon: <ScissorOutlined style={{ fontSize: 20 }} />, label: "裁切模型", action: "clip" as const },
+  { icon: <EyeInvisibleOutlined style={{ fontSize: 20 }} />, label: "隐藏模型", action: "hide" as const },
+  { icon: <EyeOutlined style={{ fontSize: 20 }} />, label: "恢复模型", action: "restore" as const },
   { icon: <AimOutlined style={{ fontSize: 20 }} />, label: "坐标纠正", action: "correction" as const },
   { icon: <BorderOutlined style={{ fontSize: 20 }} />, label: "绘制屏柜", action: "cabinet" as const },
   { icon: <ThunderboltOutlined style={{ fontSize: 20 }} />, label: "绘制充电区域", action: "charging" as const },
@@ -63,7 +67,7 @@ const BUTTONS = [
  * - "点表加载"仍使用隐藏 input，因为点表导入不需要额外的弹窗交互。
  * - 绘制模式按钮互斥由父级 useDrawingModeToggles 控制，Toolbar 仅根据 mode 显示激活态。
  */
-export default function Toolbar({ onOpenLoadModel, onClipModel, correctionMode, onToggleCorrection, cabinetMode, onToggleCabinet, chargingMode, onToggleCharging, deviceAreaMode, onToggleDeviceArea, pathMode, onTogglePath, normalMode, normalCount = 0, normalSaving, onToggleNormal, onUndo, onRedo, canUndo, canRedo, onSaveAll, onImportPointTable, onExportModel, importing, modelBusy }: Props) {
+export default function Toolbar({ onOpenLoadModel, hideMode, onToggleHide, modelHidden, onRestoreModel, correctionMode, onToggleCorrection, cabinetMode, onToggleCabinet, chargingMode, onToggleCharging, deviceAreaMode, onToggleDeviceArea, pathMode, onTogglePath, normalMode, normalCount = 0, normalSaving, onToggleNormal, onUndo, onRedo, canUndo, canRedo, onSaveAll, onImportPointTable, onExportModel, importing, modelBusy }: Props) {
   const pointInputRef = useRef<HTMLInputElement>(null);
 
   /** 点表文件选中后立即触发导入，清空 input 值防止同名文件无法重复选择 */
@@ -79,7 +83,8 @@ export default function Toolbar({ onOpenLoadModel, onClipModel, correctionMode, 
     switch (action) {
       case "file": onOpenLoadModel?.(); break;       // 打开空间模型加载弹窗
       case "point": pointInputRef.current?.click(); break; // 触发点表文件选择
-      case "clip": onClipModel?.(); break;
+      case "hide": onToggleHide?.(); break;
+      case "restore": onRestoreModel?.(); break;
       case "correction": onToggleCorrection?.(); break;
       case "cabinet": onToggleCabinet?.(); break;
       case "charging": onToggleCharging?.(); break;
@@ -141,7 +146,8 @@ export default function Toolbar({ onOpenLoadModel, onClipModel, correctionMode, 
         <input ref={pointInputRef} type="file" accept={POINT_TABLE_FILE_ACCEPT} onChange={handlePointFile} style={{ display: "none" }} />
         {BUTTONS.map(({ icon, label, action }) => {
           // 绘制模式按钮激活态判断
-          const isActive = (action === "cabinet" && cabinetMode) ||
+          const isActive = (action === "hide" && hideMode) ||
+            (action === "cabinet" && cabinetMode) ||
             (action === "charging" && chargingMode) ||
             (action === "deviceArea" && deviceAreaMode) ||
             (action === "path" && pathMode) ||
@@ -154,7 +160,7 @@ export default function Toolbar({ onOpenLoadModel, onClipModel, correctionMode, 
               onClick={() => handleClick(action)}
               aria-label={`${label}${action === "normal" && normalCount > 0 ? `，已有 ${normalCount} 条` : ""}`}
               // 点表导入中禁用点表按钮；历史栈为空时禁用撤销/恢复
-              disabled={modelBusy || (action === "point" && importing) || (action === "undo" && !canUndo) || (action === "redo" && !canRedo) || (action === "normal" && normalSaving)}
+              disabled={modelBusy || (action === "point" && importing) || (action === "undo" && !canUndo) || (action === "redo" && !canRedo) || (action === "normal" && normalSaving) || (action === "restore" && !modelHidden)}
             >
               {icon}
               <span>{label}{action === "point" && importing ? "..." : ""}</span>

@@ -253,8 +253,9 @@ export interface SpaceSceneAdapter {
   clearNormalAnnotations(): void;
   undoNormalAnnotation(): void;
   redoNormalAnnotation(): void;
-  startClipping(onBoundsChange: (bounds: SpaceClipBounds) => void): SpaceClipBounds | null;
+  startClipping(onBoundsChange: (bounds: SpaceClipBounds) => void, initialBounds?: SpaceClipBounds | null): SpaceClipBounds | null;
   setClipBounds(bounds: SpaceClipBounds): void;
+  commitClipping(): SpaceClipBounds | null;
   stopClipping(): void;
   clearModel(): void;
   resize(): void;

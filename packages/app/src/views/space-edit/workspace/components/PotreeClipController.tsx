@@ -54,7 +54,7 @@ export default function PotreeClipController({
 
   const confirm = () => {
     if (!valid) {
-      setError("裁切范围必须大于零");
+      setError("隐藏范围必须大于零");
       return;
     }
     onConfirm();
@@ -99,7 +99,7 @@ export default function PotreeClipController({
         {saving ? <Spin size="small" /> : (
           <>
             <Button size="small" type="primary" icon={<CheckOutlined />} onClick={confirm} disabled={!valid}>
-              导出
+              保存
             </Button>
             <Button size="small" icon={<CloseOutlined />} onClick={onCancel}>
               取消
