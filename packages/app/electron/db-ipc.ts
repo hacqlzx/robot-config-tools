@@ -133,30 +133,13 @@ function registerCabinetDeviceHandler(): void {
         bayMainDeviceCount: beforeBayCount,
       });
 
-      for (const row of rows) {
-        const sameName = existingByBay.find((item: any) =>
-          item.mainDeviceType === MAIN_DEVICE_TYPE_CABINET
-          && item.mainDeviceName === row.name,
-        );
-        if (sameName) throw new Error(`当前间隔下已存在同名屏柜：${row.name}`);
-
-        const sameCode = existingByCode.find((item: any) =>
-          item.mainDeviceCode === row.code
-        );
-        if (sameCode) throw new Error(`屏柜编码已存在：${row.code}`);
-      }
-
       let inserted = 0;
       let updated = 0;
       const savedIds: number[] = [];
       db.transaction(() => {
         for (let i = 0; i < rows.length; i++) {
           const row = rows[i];
-          const existing = existingByCode.find((item: any) => item.mainDeviceCode === row.code)
-            ?? existingByBay.find((item: any) =>
-              item.mainDeviceType === MAIN_DEVICE_TYPE_CABINET
-              && item.mainDeviceName === row.name,
-            );
+          const existing = existingByCode.find((item: any) => item.mainDeviceCode === row.code);
 
           const dto = {
             mainDeviceType: MAIN_DEVICE_TYPE_CABINET,
