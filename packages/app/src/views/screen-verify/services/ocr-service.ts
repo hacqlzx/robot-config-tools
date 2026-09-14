@@ -267,14 +267,14 @@ async function recognizeCabinetLabelsWithQwenOcr(
   const sourceGroups = groupOcrSourcesByImage(resolvedSources);
   const results = await Promise.all(sourceGroups.map(async (sourceGroup) => {
     const requestSource = sourceGroup[0];
-  const { response, text: payloadText } = await requestRecognitionText(
-    `${DASH_SCOPE_BASE_URL}/chat/completions`,
-    {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${requireDashScopeApiKey()}`,
-        "Content-Type": "application/json",
-      },
+    const { response, text: payloadText } = await requestRecognitionText(
+      DASH_SCOPE_OCR_URL,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${requireDashScopeApiKey()}`,
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
           model: DASH_SCOPE_OCR_MODEL,
           input: {
