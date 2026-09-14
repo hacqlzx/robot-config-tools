@@ -24,6 +24,7 @@ export class PotreeFlyKeyboardController {
   private readonly pressedKeys = new Set<string>();
   private started = false;
   private active = true;
+  private planar = false;
   private animationFrame: number | null = null;
   private previousFrameTime = 0;
   private firstMovementFrame = false;
@@ -51,6 +52,10 @@ export class PotreeFlyKeyboardController {
       this.animationFrame = null;
     }
     if (!active) this.clearKeys();
+  }
+
+  setPlanar(planar: boolean): void {
+    this.planar = planar;
   }
 
   dispose(): void {
@@ -145,13 +150,14 @@ export class PotreeFlyKeyboardController {
     const view = this.viewer.scene.view;
     const direction = view.direction;
     const horizontalLength = Math.hypot(direction.x, direction.y);
-    const forwardX = horizontalLength > 0 ? direction.x / horizontalLength : 0;
-    const forwardY = horizontalLength > 0 ? direction.y / horizontalLength : 0;
+    const yawBased = this.planar || horizontalLength <= 0;
+    const forwardX = yawBased ? -Math.sin(view.yaw) : direction.x / horizontalLength;
+    const forwardY = yawBased ? Math.cos(view.yaw) : direction.y / horizontalLength;
     const rightX = forwardY;
     const rightY = -forwardX;
     const forwardAmount = Number(this.pressedKeys.has("KeyW")) - Number(this.pressedKeys.has("KeyS"));
     const rightAmount = Number(this.pressedKeys.has("KeyD")) - Number(this.pressedKeys.has("KeyA"));
-    const verticalAmount = Number(this.pressedKeys.has("KeyE")) - Number(this.pressedKeys.has("KeyQ"));
+    const verticalAmount = this.planar ? 0 : Number(this.pressedKeys.has("KeyE")) - Number(this.pressedKeys.has("KeyQ"));
 
     let speed = BASE_FLY_SPEED;
     if (this.pressedKeys.has("ShiftLeft") || this.pressedKeys.has("ShiftRight")) speed *= 10;

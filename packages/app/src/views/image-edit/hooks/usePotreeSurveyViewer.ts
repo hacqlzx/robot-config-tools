@@ -6,6 +6,7 @@ import type {
   SpaceDrawingLayer,
   SpaceDrawingSelection,
   SpaceSceneAdapterFactory,
+  SpaceViewLock,
 } from "@/views/space-edit/workspace/engine/types";
 import {
   DEFAULT_SPACE_RENDER_SETTINGS,
@@ -193,6 +194,10 @@ export function usePotreeSurveyViewer({ selectedProject, onSelect, active = true
     adapter.focusAlongDirection(cx, cy, cz, dx, dy, dz, extent);
   }, [adapter]);
 
+  const setViewLock = useCallback((lock: SpaceViewLock) => {
+    adapter.setViewLock(lock);
+  }, [adapter]);
+
   const loading = modelLoading || state === "mounting";
   const displayLoadingFile = state === "mounting"
     ? "正在初始化 Potree 场景"
@@ -214,6 +219,7 @@ export function usePotreeSurveyViewer({ selectedProject, onSelect, active = true
     renderSettings,
     setLayerData,
     setRenderSettings,
+    setViewLock,
     showRay,
     showRays,
   };

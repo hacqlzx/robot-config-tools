@@ -53,6 +53,7 @@ export class PotreeRotationPivotIndicator {
   private activeDrag = false;
   private started = false;
   private active = true;
+  private rotationEnabled = true;
   private interactionMode: SpaceInteractionMode = "idle";
   private unsubscribeInteractions: (() => void) | null = null;
 
@@ -92,6 +93,11 @@ export class PotreeRotationPivotIndicator {
   setActive(active: boolean): void {
     this.active = active;
     if (!active) this.cancel();
+  }
+
+  setRotationEnabled(enabled: boolean): void {
+    this.rotationEnabled = enabled;
+    if (!enabled) this.cancel();
   }
 
   dispose(): void {
@@ -190,7 +196,7 @@ export class PotreeRotationPivotIndicator {
   };
 
   private canStart(event: MouseEvent): boolean {
-    if (!this.active || event.button !== 0 || event.target instanceof Element && event.target.closest("[data-space-edit-overlay]")) {
+    if (!this.active || !this.rotationEnabled || event.button !== 0 || event.target instanceof Element && event.target.closest("[data-space-edit-overlay]")) {
       return false;
     }
     return this.canNavigate()

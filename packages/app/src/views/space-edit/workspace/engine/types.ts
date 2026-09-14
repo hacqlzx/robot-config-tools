@@ -3,6 +3,7 @@ import type { SpaceInteractionMode } from "./SpaceInteractionCoordinator";
 import type { DrawingItem, NormalAnnotationItem, PathData } from "../../hooks/drawing/drawing-schema";
 
 export type SpaceSceneLifecycleState = "detached" | "mounting" | "ready" | "failed";
+export type SpaceViewLock = "none" | "top";
 
 export interface SpaceSceneModel {
   name: string;
@@ -200,6 +201,7 @@ export interface SpaceSceneAdapter {
   pickPointAt(clientX: number, clientY: number): [number, number, number] | null;
   setCoordinateCorrectionMarker(point: [number, number, number] | null): void;
   setViewDirection(direction: ViewDirection): void;
+  setViewLock(lock: SpaceViewLock): void;
   getRenderSettings(): SpaceRenderSettings;
   setRenderSettings(settings: SpaceRenderSettings): void;
   setDrawingLayer(layerId: string, data: SpaceDrawingLayer): void;

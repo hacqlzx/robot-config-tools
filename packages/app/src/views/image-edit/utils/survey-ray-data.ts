@@ -9,6 +9,36 @@ import type { TaskImageConfig, TaskManifest, TaskSPConfig, TaskSPPose } from "..
 
 const DEFAULT_SURVEY_RAY_LENGTH = 4;
 
+export interface SurveyModelBounds {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  minZ: number;
+  maxZ: number;
+}
+
+export interface SurveyRayDiagnostics {
+  /** 勘察任务声明的地图编码，缺失时为空。 */
+  taskMapCode: string;
+  /** 当前加载模型 LAS 头中的绝对坐标范围。 */
+  modelBounds: SurveyModelBounds;
+  /** 成功解析到实际/兜底位姿的停靠点数量。 */
+  poseCount: number;
+  /** 明显落在当前模型范围外的停靠点 ID。 */
+  outsidePoseIds: number[];
+  /** 同时存在任务实际位姿和当前地图停靠点位姿的数量。 */
+  comparedPoseCount: number;
+  /** 任务位姿减去当前地图停靠点位姿的中位偏移。 */
+  medianPoseOffset?: [number, number, number];
+  /** 各停靠点水平偏移相对中位偏移的最大残差。 */
+  maxHorizontalOffsetResidual?: number;
+}
+
+export interface SurveyRayDrawingData extends RayRenderData {
+  diagnostics: SurveyRayDiagnostics;
+}
+
 interface LoadSurveyRayDrawingDataOptions {
   /** 文件读取源；当前页面传 Electron 文件源。 */
   fileSource: FileSource;
@@ -108,6 +138,41 @@ function normalizePose(pose: TaskSPPose | StopPointPose | undefined): StopPointP
   return { x, y, z, yaw };
 }
 
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle];
+}
+
+function modelBoundsFromHeader(header: Awaited<ReturnType<typeof loadLasCoordinateTransform>>["header"]): SurveyModelBounds {
+  return {
+    minX: header.minX,
+    maxX: header.maxX,
+    minY: header.minY,
+    maxY: header.maxY,
+    minZ: header.minZ,
+    maxZ: header.maxZ,
+  };
+}
+
+function poseOutsideModel(pose: StopPointPose, bounds: SurveyModelBounds): boolean {
+  const spanX = Math.max(0, bounds.maxX - bounds.minX);
+  const spanY = Math.max(0, bounds.maxY - bounds.minY);
+  const spanZ = Math.max(0, bounds.maxZ - bounds.minZ);
+  // 实际停车位姿允许略微落在点云边缘外；明显超界才提示坐标系不一致。
+  const horizontalMargin = Math.max(1, Math.min(10, Math.hypot(spanX, spanY) * 0.02));
+  const verticalMargin = Math.max(2, Math.min(10, spanZ * 0.1));
+  return pose.x < bounds.minX - horizontalMargin
+    || pose.x > bounds.maxX + horizontalMargin
+    || pose.y < bounds.minY - horizontalMargin
+    || pose.y > bounds.maxY + horizontalMargin
+    || pose.z < bounds.minZ - verticalMargin
+    || pose.z > bounds.maxZ + verticalMargin;
+}
+
 function parseStopPointPose(record: Record<string, unknown>): { id: string; pose: StopPointPose } | null {
   const id = valueText(record.id);
   const x = asFiniteNumber(record.pose_x);
@@ -129,6 +194,17 @@ async function loadStopPointPoseMap(fileSource: FileSource, stopPointFilePath?: 
     if (parsed) result.set(parsed.id, parsed.pose);
   }
   return result;
+}
+
+function findStopPointPose(stopPointPoses: Map<string, StopPointPose>, ids: number[]): StopPointPose | undefined {
+  for (const id of ids) {
+    if (!Number.isFinite(id) || id === 0) continue;
+    for (const key of [String(id), String(-id), String(Math.abs(id))]) {
+      const pose = stopPointPoses.get(key);
+      if (pose) return pose;
+    }
+  }
+  return undefined;
 }
 
 function buildRay(
@@ -177,7 +253,7 @@ export async function loadSurveyRayDrawingData({
   stopPointFilePath,
   rayLength = DEFAULT_SURVEY_RAY_LENGTH,
   outputCoordinates = "scene",
-}: LoadSurveyRayDrawingDataOptions): Promise<RayRenderData | null> {
+}: LoadSurveyRayDrawingDataOptions): Promise<SurveyRayDrawingData | null> {
   // 优先使用 stop_points.json 的精确停靠点位姿；缺失时回退到每个 SP 配置中的 sp_pose。
   const [manifest, stopPointPoses] = await Promise.all([
     readJson<TaskManifest>(fileSource, pathJoin(deviceDir, "json_list.json")),
@@ -192,6 +268,8 @@ export async function loadSurveyRayDrawingData({
   if (fileNames.length === 0) return null;
 
   const rays: RayRenderItem[] = [];
+  const posesBySpId = new Map<number, StopPointPose>();
+  const poseOffsetsBySpId = new Map<number, [number, number, number]>();
 
   for (let i = 0; i < fileNames.length; i++) {
     const fileName = fileNames[i];
@@ -202,11 +280,18 @@ export async function loadSurveyRayDrawingData({
       const spConfig = await readJson<TaskSPConfig>(fileSource, pathJoin(pathJoin(deviceDir, String(stopPointId)), fileName));
       const spId = finiteNumber(spConfig.sp_id) ? spConfig.sp_id : stopPointId;
       const cpId = Math.abs(Number(spConfig.cp_id));
-      const stopPointPose = stopPointPoses.get(String(spId))
-        ?? stopPointPoses.get(String(stopPointId))
-        ?? (Number.isFinite(cpId) && cpId > 0 ? stopPointPoses.get(String(cpId)) : undefined);
+      const stopPointPose = findStopPointPose(stopPointPoses, [spId, stopPointId, cpId]);
       // sp_pose 是本次勘察采集时的实际位姿；stop_points.json 是规划停靠点，只在任务位姿缺失时兜底。
-      const basePose = normalizePose(spConfig.sp_pose) ?? stopPointPose;
+      const taskPose = normalizePose(spConfig.sp_pose);
+      const basePose = taskPose ?? stopPointPose;
+      if (basePose && !posesBySpId.has(spId)) posesBySpId.set(spId, basePose);
+      if (taskPose && stopPointPose && !poseOffsetsBySpId.has(spId)) {
+        poseOffsetsBySpId.set(spId, [
+          taskPose.x - stopPointPose.x,
+          taskPose.y - stopPointPose.y,
+          taskPose.z - stopPointPose.z,
+        ]);
+      }
       const images = Object.entries(spConfig.images || {}).sort(([keyA, a], [keyB, b]) => {
         const locA = Array.isArray(a.pic_loc) ? a.pic_loc : [0, 0];
         const locB = Array.isArray(b.pic_loc) ? b.pic_loc : [0, 0];
@@ -224,7 +309,35 @@ export async function loadSurveyRayDrawingData({
   }
 
   if (rays.length === 0) return null;
-  if (outputCoordinates === "las") return { rays };
   const coordinate = await loadLasCoordinateTransform(fileSource, modelPath);
-  return drawingDataLasToScene({ rays }, coordinate) as RayRenderData;
+  const modelBounds = modelBoundsFromHeader(coordinate.header);
+  const offsets = [...poseOffsetsBySpId.values()];
+  const medianPoseOffset: [number, number, number] | undefined = offsets.length > 0
+    ? [
+      median(offsets.map((offset) => offset[0])),
+      median(offsets.map((offset) => offset[1])),
+      median(offsets.map((offset) => offset[2])),
+    ]
+    : undefined;
+  const maxHorizontalOffsetResidual = medianPoseOffset
+    ? offsets.reduce((maximum, offset) => Math.max(
+      maximum,
+      Math.hypot(offset[0] - medianPoseOffset[0], offset[1] - medianPoseOffset[1]),
+    ), 0)
+    : undefined;
+  const diagnostics: SurveyRayDiagnostics = {
+    taskMapCode: valueText(manifest.map_code ?? manifest.map_id),
+    modelBounds,
+    poseCount: posesBySpId.size,
+    outsidePoseIds: [...posesBySpId.entries()]
+      .filter(([, pose]) => poseOutsideModel(pose, modelBounds))
+      .map(([spId]) => spId)
+      .sort((a, b) => a - b),
+    comparedPoseCount: offsets.length,
+    medianPoseOffset,
+    maxHorizontalOffsetResidual,
+  };
+  if (outputCoordinates === "las") return { rays, diagnostics };
+  const converted = drawingDataLasToScene({ rays }, coordinate) as RayRenderData;
+  return { ...converted, diagnostics };
 }

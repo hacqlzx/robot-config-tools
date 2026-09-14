@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect } from "react";
-import { Button, Space, Divider, App, Spin, Radio, Select, Input, Checkbox, Dropdown, Progress, Tooltip } from "antd";
+import { Button, Space, Divider, App, Spin, Radio, Select, Input, Checkbox, Dropdown, Progress, Tooltip, Segmented } from "antd";
 import {
   UploadOutlined,
   DownloadOutlined,
@@ -8,6 +8,8 @@ import {
   HddOutlined,
   CheckCircleOutlined,
   DownOutlined,
+  BorderOutlined,
+  BoxPlotOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
 import SurveyImageLoad from "./components/SurveyImageLoad";
@@ -26,7 +28,10 @@ import type {
   RayRenderData,
   RayRenderItem,
 } from "@/space-model/drawing-data";
-import { loadSurveyRayDrawingData } from "./utils/survey-ray-data";
+import {
+  loadSurveyRayDrawingData,
+  type SurveyRayDiagnostics,
+} from "./utils/survey-ray-data";
 import { usePotreeSurveyViewer, type PotreeSurveySelectInfo } from "./hooks/usePotreeSurveyViewer";
 import { useResizable } from "@/components/useResizable";
 import ImageCanvas from "@/components/image-canvas/ImageCanvas";
@@ -71,6 +76,49 @@ function isFiniteVec3(value: unknown): value is [number, number, number] {
     && Number.isFinite(value[0])
     && Number.isFinite(value[1])
     && Number.isFinite(value[2]);
+}
+
+function textValue(value: unknown): string {
+  return value == null ? "" : String(value).trim();
+}
+
+function formatCoordinateOffset(value: number): string {
+  const normalized = Math.abs(value) < 0.0005 ? 0 : value;
+  return normalized.toFixed(3);
+}
+
+function buildSurveyCoordinateWarning(
+  diagnostics: SurveyRayDiagnostics,
+  currentMapCode: string,
+): string {
+  const warnings: string[] = [];
+  const taskMapCode = textValue(diagnostics.taskMapCode);
+  const modelMapCode = textValue(currentMapCode);
+  if (taskMapCode && modelMapCode && taskMapCode !== modelMapCode) {
+    warnings.push(`任务地图编码 ${taskMapCode} 与当前模型编码 ${modelMapCode} 不一致`);
+  }
+
+  if (diagnostics.outsidePoseIds.length > 0) {
+    const ids = diagnostics.outsidePoseIds.slice(0, 6).map((id) => `SP${id}`).join("、");
+    const suffix = diagnostics.outsidePoseIds.length > 6 ? ` 等${diagnostics.outsidePoseIds.length}个点` : "";
+    warnings.push(`${ids}${suffix} 的任务位姿落在当前模型坐标范围外`);
+  }
+
+  const offset = diagnostics.medianPoseOffset;
+  if (offset && diagnostics.comparedPoseCount > 0) {
+    const horizontalOffset = Math.hypot(offset[0], offset[1]);
+    const residual = diagnostics.maxHorizontalOffsetResidual ?? Number.POSITIVE_INFINITY;
+    const consistentOffset = horizontalOffset >= 1
+      && (diagnostics.comparedPoseCount === 1 || residual <= Math.max(0.5, horizontalOffset * 0.1));
+    if (consistentOffset) {
+      warnings.push(
+        `${diagnostics.comparedPoseCount}个停靠点存在一致坐标偏移（ΔX=${formatCoordinateOffset(offset[0])}，ΔY=${formatCoordinateOffset(offset[1])}）`,
+      );
+    }
+  }
+
+  if (warnings.length === 0) return "";
+  return `${warnings.join("；")}。很可能是模型替换或坐标纠正后，仍在使用旧勘察任务坐标。`;
 }
 
 function getSharedCalibrationFilePath(surveyDir: string): string {
@@ -196,6 +244,7 @@ export default function ImageEdit() {
   const [pointFilter, setPointFilter] = useState<"all" | "marked" | "unmarked">("all");
   const [pointTableVisible, setPointTableVisible] = useState(true);
   const [mapVisible, setMapVisible] = useState(true);
+  const [mapViewMode, setMapViewMode] = useState<"2d" | "3d">("3d");
   const [checkedPoints, setCheckedPoints] = useState<number[]>([]);
   const [points, setPoints] = useState<{ id: number; pointCode: string; pointName: string; demarcateState: number }[]>([]);
 
@@ -205,10 +254,13 @@ export default function ImageEdit() {
   const [calibratedImageCount, setCalibratedImageCount] = useState(0);
   const surveyDirRef = useRef<string>("");
   const loadedMapRef = useRef<string | null>(null);
+  const loadedMapCodeRef = useRef("");
   const loadedModelPathRef = useRef<string>("");
   const loadedStopPointFilePathRef = useRef<string>("");
   const surveyRayDataRef = useRef<RayRenderData | null>(null);
   const visibleRayIdRef = useRef("");
+  const mapLoadVersionRef = useRef(0);
+  const taskLoadVersionRef = useRef(0);
 
   // 加载已标定的图片 ID 集合 + 已标定点位编码集合
   const refreshCalibratedRects = useCallback(async (mapName?: string | null) => {
@@ -310,12 +362,19 @@ export default function ImageEdit() {
     renderSettings,
     error: viewerError,
     setRenderSettings,
+    setViewLock,
     showRay,
   } = usePotreeSurveyViewer({
     selectedProject,
     onSelect: handle3DSelect,
     active: pageActive && mapVisible,
   });
+
+  const handleMapViewModeChange = useCallback((value: string | number) => {
+    const mode = value === "2d" ? "2d" : "3d";
+    setMapViewMode(mode);
+    setViewLock(mode === "2d" ? "top" : "none");
+  }, [setViewLock]);
 
   // 弹窗状态
   const [surveyLoadOpen, setSurveyLoadOpen] = useState(false);
@@ -338,9 +397,13 @@ export default function ImageEdit() {
   /** 加载勘察图像（地图模式：LAS + 区域绘制 + 机器人路径/停靠点） */
   const handleSurveyLoad = useCallback(async (mapName: string) => {
     if (!selectedProject || !window.electronAPI?.project) return;
+    const loadVersion = ++mapLoadVersionRef.current;
+    // 地图切换会使正在读取的旧任务失效，避免旧射线回写到新模型。
+    taskLoadVersionRef.current += 1;
     // 卸载旧模型和旧任务状态；勘察页同一时间只展示一张地图，避免区域/射线跨地图残留。
     clearViewer();
     loadedMapRef.current = null;
+    loadedMapCodeRef.current = "";
     loadedModelPathRef.current = "";
     loadedStopPointFilePathRef.current = "";
     surveyRayDataRef.current = null;
@@ -359,11 +422,13 @@ export default function ImageEdit() {
     setPoints([]);
     try {
       const tree = await window.electronAPI.project.listTree(selectedProject, `地图/${mapName}`);
+      if (loadVersion !== mapLoadVersionRef.current) return;
 
       const lasFiles: string[] = [];
       const drawingJsonFiles: string[] = [];
       let pathFile = "";
       let stopPointFile = "";
+      let mapInfoFile = "";
       const walk = (nodes: TreeNode[]) => {
         for (const n of nodes) {
           if (!n.isDir) {
@@ -378,6 +443,8 @@ export default function ImageEdit() {
               }
             } else if (fileName === "description_file.json") {
               drawingJsonFiles.push(n.path);
+            } else if (fileName === "map_info.json" && !mapInfoFile) {
+              mapInfoFile = n.path;
             }
           }
           if (n.children) walk(n.children);
@@ -399,11 +466,22 @@ export default function ImageEdit() {
       const primaryModelPath = lasFiles.find((filePath) => /[\\/]map\.(las|laz)$/i.test(filePath)) || lasFiles[0];
       loadedStopPointFilePathRef.current = stopPointFile;
       const loadedSourceModelPath = await loadPotreeModel({ mapName, modelPath: primaryModelPath });
-      if (!loadedSourceModelPath) return;
+      if (loadVersion !== mapLoadVersionRef.current || !loadedSourceModelPath) return;
       loadedModelPathRef.current = loadedSourceModelPath;
+      if (mapInfoFile && window.electronAPI?.readLargeFile) {
+        try {
+          const mapInfoBuffer = await window.electronAPI.readLargeFile(mapInfoFile);
+          const mapInfo = JSON.parse(new TextDecoder().decode(mapInfoBuffer));
+          loadedMapCodeRef.current = textValue(mapInfo?.map_code ?? mapInfo?.mapCode ?? mapInfo?.map_id ?? mapInfo?.mapId);
+        } catch (mapInfoError) {
+          loadedMapCodeRef.current = "";
+          console.warn("[handleSurveyLoad] 地图编码读取失败:", mapInfoError);
+        }
+      }
 
       // 区域等绘制 JSON 仍按原格式加载；路径文件单独走 path.json + stop_points.json，不读 reference_path.txt。
       for (const jsonPath of drawingJsonFiles) {
+        if (loadVersion !== mapLoadVersionRef.current) return;
         try {
           await loadDrawing(jsonPath);
         } catch (e) {
@@ -412,6 +490,7 @@ export default function ImageEdit() {
       }
 
       if (pathFile) {
+        if (loadVersion !== mapLoadVersionRef.current) return;
         try {
           // 机器人路径用 path.json + stop_points.json 组合回显，和空间编辑写的 reference_path.txt 分开处理。
           await loadPath(pathFile);
@@ -420,10 +499,12 @@ export default function ImageEdit() {
         }
       }
 
+      if (loadVersion !== mapLoadVersionRef.current) return;
       message.success(`地图"${mapName}"加载成功`);
       loadedMapRef.current = mapName;
       setLoadedMap(mapName);
     } catch (e: any) {
+      if (loadVersion !== mapLoadVersionRef.current) return;
       message.error("加载地图数据失败: " + (e?.message || ""));
     }
   }, [clearTask, clearViewer, loadDrawing, loadPath, loadPotreeModel, message, selectedProject]);
@@ -431,6 +512,7 @@ export default function ImageEdit() {
   /** 加载任务图像（任务模式：JSON + JPG 拼接） */
   const handleTaskLoad = useCallback(async (taskDir: string) => {
     console.log("[handleTaskLoad] 开始加载:", taskDir);
+    const loadVersion = ++taskLoadVersionRef.current;
     surveyDirRef.current = taskDir;
     try {
       clearTask();
@@ -439,6 +521,7 @@ export default function ImageEdit() {
       visibleRayIdRef.current = "";
       setTaskImages([]);
       const result = await loadTask(taskDir);
+      if (loadVersion !== taskLoadVersionRef.current) return;
       surveyDirRef.current = result.surveyDir;
       if (loadedModelPathRef.current) {
         try {
@@ -450,12 +533,21 @@ export default function ImageEdit() {
             stopPointFilePath: loadedStopPointFilePathRef.current || undefined,
             outputCoordinates: "las",
           });
+          if (loadVersion !== taskLoadVersionRef.current) return;
           surveyRayDataRef.current = rayData;
+          if (rayData) {
+            const coordinateWarning = buildSurveyCoordinateWarning(rayData.diagnostics, loadedMapCodeRef.current);
+            if (coordinateWarning) {
+              console.warn("[handleTaskLoad] 勘察定位坐标疑似不匹配:", rayData.diagnostics);
+              message.warning({ content: coordinateWarning, duration: 10 });
+            }
+          }
         } catch (rayError) {
           surveyRayDataRef.current = null;
           console.error("[handleTaskLoad] 射线加载失败:", rayError);
         }
       }
+      if (loadVersion !== taskLoadVersionRef.current) return;
       // 按当前选中的云台侧计算布局
       const items = setSide(ptzSide);
       setTaskImages(items);
@@ -463,6 +555,7 @@ export default function ImageEdit() {
       console.log("[handleTaskLoad] 完成, 图片数:", items.length);
       refreshCalibratedRects(loadedMapRef.current);
     } catch (e: any) {
+      if (loadVersion !== taskLoadVersionRef.current) return;
       console.error("[handleTaskLoad] 失败:", e);
       message.error("加载任务数据失败: " + (e?.message || ""));
     }
@@ -859,6 +952,23 @@ export default function ImageEdit() {
             {!viewerError && !loadedMap && !loading && (
               <div className="map-empty">请先加载勘察图像</div>
             )}
+            <div className="image-edit-map-view-mode" data-space-edit-overlay="true">
+              <Segmented
+                className="image-edit-map-view-segmented"
+                value={mapViewMode}
+                onChange={handleMapViewModeChange}
+                options={[
+                  {
+                    label: <span className="image-edit-map-view-label"><BorderOutlined />二维</span>,
+                    value: "2d",
+                  },
+                  {
+                    label: <span className="image-edit-map-view-label"><BoxPlotOutlined />三维</span>,
+                    value: "3d",
+                  },
+                ]}
+              />
+            </div>
             <PotreeRenderSettings settings={renderSettings} onChange={setRenderSettings} />
             {loading && (
               <div className="map-loading-overlay">

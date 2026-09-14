@@ -41,6 +41,7 @@ import {
   type SpaceNormalAnnotationCallbacks,
   type SpaceSceneAdapter,
   type SpaceSceneModel,
+  type SpaceViewLock,
 } from "./types";
 
 const MODEL_LOAD_TIMEOUT_MS = 60_000;
@@ -51,6 +52,7 @@ const DIRECTION_LOCATE_CAMERA_FACTOR = 1.15;
 const DIRECTION_LOCATE_SIDE_FACTOR = 0.65;
 const INTERACTION_LOD_MULTIPLIER = 2;
 const FOCUS_INTERACTION_LOD_SETTLE_MS = 650;
+const NAVIGATION_INTERACTION_LOD_SETTLE_MS = 180;
 const INTERACTION_POINT_BUDGET = 250_000;
 const MIN_NODE_SIZE_BY_DETAIL: Record<SpaceRenderDetailLevel, number> = {
   1: 80,
@@ -137,6 +139,11 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   private hoverEventTarget: HTMLElement | null = null;
   private correctionMarkerElement: HTMLDivElement | null = null;
   private correctionMarkerPoint: [number, number, number] | null = null;
+  private viewLock: SpaceViewLock = "none";
+  private controlsUpdateWrapped = false;
+  private navigationControls: NonNullable<PotreeViewerInstance["controls"]> | null = null;
+  private navigationElement: HTMLElement | null = null;
+  private navigationMouseButton: number | null = null;
 
   mount(host: HTMLElement): Promise<void> {
     this.host = host;
@@ -196,12 +203,22 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.rotationPivotIndicator = new PotreeRotationPivotIndicator(viewer, potree, three, renderArea, this.interactions);
     this.rotationPivotIndicator.start();
     this.rotationPivotIndicator.setActive(this.active);
+    this.wrapControlsForViewLock();
+    this.bindNavigationPerformanceControls();
+    this.applyViewLockControllers();
+    if (this.viewLock === "top") this.snapViewToTop();
     this.resize();
     this.syncActiveState();
   }
 
   setActive(active: boolean): void {
     this.active = active;
+    // Potree keeps the point budget as module-level state.  Another cached
+    // viewer (for example the survey page) can therefore overwrite it while
+    // this scene is hidden.  Re-apply the scene's settings whenever it becomes
+    // active so returning to the page does not require toggling the settings UI
+    // to restore the configured detail/budget.
+    if (active) this.applyRenderSettings();
     this.syncActiveState();
   }
 
@@ -495,15 +512,30 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   setViewDirection(direction: ViewDirection): void {
     const viewer = this.viewer;
     if (!viewer) return;
-    const angles = POTREE_VIEW_ANGLES[direction];
+    const angles = POTREE_VIEW_ANGLES[this.viewLock === "top" ? "上" : direction];
     viewer.scene.view.yaw = angles.yaw;
     viewer.scene.view.pitch = angles.pitch;
     this.fitModelToScreen();
   }
 
+  setViewLock(lock: SpaceViewLock): void {
+    this.viewLock = lock;
+    this.wrapControlsForViewLock();
+    this.applyViewLockControllers();
+    if (lock === "top") {
+      this.viewer?.controls?.stop?.();
+      this.snapViewToTop();
+      this.fitModelToScreen();
+    }
+  }
+
   focusAlongDirection(cx: number, cy: number, cz: number, dx: number, dy: number, dz: number, extent: number): void {
     const viewer = this.viewer;
     if (!viewer) return;
+    if (this.viewLock === "top") {
+      this.focusTopOn(cx, cy, cz, extent);
+      return;
+    }
     const len = Math.hypot(dx, dy, dz);
     if (!Number.isFinite(len) || len < 1e-6) {
       this.focusTopOn(cx, cy, cz, extent);
@@ -541,7 +573,6 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     // temporary coarse LOD until the new nodes have settled, otherwise the
     // full point budget is requested in one frame.
     this.beginInteractionLod();
-    this.viewer.setPointBudget(Math.min(this.configuredPointBudget(), INTERACTION_POINT_BUDGET));
     this.focusCamera(cameraX, cameraY, cameraZ, lookX, lookY, lookZ);
     this.scheduleInteractionLodRestoreAfter(FOCUS_INTERACTION_LOD_SETTLE_MS);
   }
@@ -625,6 +656,13 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
 
   private readonly handleHoverMove = (event: MouseEvent): void => {
     if (!this.active || !this.viewer || !this.pointcloud) {
+      this.clearHoverCoordinate();
+      return;
+    }
+
+    // Picking forces a WebGL readback. Suppress it while the camera is being
+    // dragged so pointer movement stays responsive, then resume on hover.
+    if (event.buttons !== 0) {
       this.clearHoverCoordinate();
       return;
     }
@@ -990,7 +1028,11 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   }
 
   private applyRenderSettings(): void {
-    if (!this.viewer) return;
+    // Potree stores point budget at module scope, so applying settings from a
+    // hidden cached viewer would affect whichever scene is currently visible.
+    // Inactive scenes keep their settings in `renderSettings` and re-apply
+    // them from setActive(true) when they become visible again.
+    if (!this.viewer || !this.active) return;
     if (!this.interactionLodActive) {
       this.viewer.setMinNodeSize(this.baseMinNodeSize());
     }
@@ -1020,6 +1062,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
       this.interactionLodActive = true;
       viewer.setMinNodeSize(this.baseMinNodeSize() * INTERACTION_LOD_MULTIPLIER);
     }
+    viewer.setPointBudget(Math.min(this.configuredPointBudget(), INTERACTION_POINT_BUDGET));
   };
 
   private scheduleInteractionLodRestoreAfter(delayMs: number): void {
@@ -1032,13 +1075,16 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     }, delayMs);
   };
 
-  private resetInteractionLod(): void {
+  private resetInteractionLod(applySettings = this.active): void {
     if (this.interactionLodTimer !== null) {
       window.clearTimeout(this.interactionLodTimer);
       this.interactionLodTimer = null;
     }
     this.interactionLodActive = false;
-    this.applyRenderSettings();
+    // Potree's point budget is global to the loaded runtime.  A cached,
+    // inactive viewer must not overwrite the settings of the visible scene
+    // while it is being deactivated or unloaded.
+    if (applySettings) this.applyRenderSettings();
   }
 
   async loadModel(model: SpaceSceneModel): Promise<void> {
@@ -1079,7 +1125,10 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
       this.syncActiveState();
 
       this.fitTimer = window.setTimeout(() => {
-        if (this.viewer && this.pointcloud === pointcloud) this.fitModelToScreen();
+        if (this.viewer && this.pointcloud === pointcloud) {
+          if (this.viewLock === "top") this.snapViewToTop();
+          this.fitModelToScreen();
+        }
       }, 250);
     } finally {
       window.clearTimeout(timeoutId);
@@ -1159,6 +1208,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.pathEditor = null;
     this.normalAnnotationEditor?.dispose();
     this.normalAnnotationEditor = null;
+    this.unbindNavigationPerformanceControls();
     this.disposeCoordinateCorrectionMarker();
     this.disposeHoverCoordinateOverlay();
     this.clearModel();
@@ -1171,6 +1221,93 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.potree = null;
     this.three = null;
     this.mountPromise = null;
+    this.controlsUpdateWrapped = false;
     host?.replaceChildren();
+  }
+
+  private wrapControlsForViewLock(): void {
+    const controls = this.viewer?.controls;
+    if (!controls?.update || this.controlsUpdateWrapped) return;
+    const originalUpdate = controls.update.bind(controls);
+    controls.update = (delta: number) => {
+      this.prepareLockedView(controls);
+      originalUpdate(delta);
+      if (this.viewLock === "top") this.snapViewToTop();
+    };
+    this.controlsUpdateWrapped = true;
+  }
+
+  private readonly handleNavigationStart = (): void => {
+    if (!this.active || !this.pointcloud) return;
+    // Right-drag is the space editor's pan gesture. Keep the configured point
+    // budget and node size while panning so the scene does not become blurry.
+    if (this.navigationMouseButton === 2) {
+      this.resetInteractionLod();
+      return;
+    }
+    this.beginInteractionLod();
+  };
+
+  private readonly handleNavigationEnd = (): void => {
+    this.scheduleInteractionLodRestoreAfter(NAVIGATION_INTERACTION_LOD_SETTLE_MS);
+    this.navigationMouseButton = null;
+  };
+
+  private readonly handleNavigationMouseDown = (event: MouseEvent): void => {
+    this.navigationMouseButton = event.button;
+  };
+
+  private readonly handleNavigationMouseUp = (event: MouseEvent): void => {
+    if (event.button === this.navigationMouseButton) this.navigationMouseButton = null;
+  };
+
+  private bindNavigationPerformanceControls(): void {
+    const controls = this.viewer?.controls;
+    if (!controls || controls === this.navigationControls) return;
+    this.unbindNavigationPerformanceControls();
+    controls.addEventListener("start", this.handleNavigationStart);
+    controls.addEventListener("end", this.handleNavigationEnd);
+    const element = this.viewer?.renderer.domElement;
+    element?.addEventListener("mousedown", this.handleNavigationMouseDown, true);
+    element?.addEventListener("mouseup", this.handleNavigationMouseUp, true);
+    this.navigationElement = element ?? null;
+    this.navigationControls = controls;
+  }
+
+  private unbindNavigationPerformanceControls(): void {
+    this.navigationControls?.removeEventListener("start", this.handleNavigationStart);
+    this.navigationControls?.removeEventListener("end", this.handleNavigationEnd);
+    this.navigationElement?.removeEventListener("mousedown", this.handleNavigationMouseDown, true);
+    this.navigationElement?.removeEventListener("mouseup", this.handleNavigationMouseUp, true);
+    this.navigationElement = null;
+    this.navigationMouseButton = null;
+    this.navigationControls = null;
+  }
+
+  private prepareLockedView(controls: NonNullable<PotreeViewerInstance["controls"]>): void {
+    if (this.viewLock !== "top") return;
+    const rotationSpeed = controls.rotationSpeed || 5;
+    const panDelta = controls.panDelta;
+    if (panDelta) {
+      panDelta.x += (controls.yawDelta || 0) / rotationSpeed;
+      panDelta.y += (controls.pitchDelta || 0) / rotationSpeed;
+    }
+    controls.yawDelta = 0;
+    controls.pitchDelta = 0;
+    this.snapViewToTop();
+  }
+
+  private applyViewLockControllers(): void {
+    const locked = this.viewLock === "top";
+    this.rotationPivotIndicator?.setRotationEnabled(!locked);
+    this.keyboardController?.setPlanar(locked);
+  }
+
+  private snapViewToTop(): void {
+    const view = this.viewer?.scene.view;
+    if (!view) return;
+    const angles = POTREE_VIEW_ANGLES.上;
+    view.yaw = angles.yaw;
+    view.pitch = angles.pitch;
   }
 }

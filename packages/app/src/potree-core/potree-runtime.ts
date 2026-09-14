@@ -148,6 +148,11 @@ export interface PotreeControls {
   addEventListener: (type: string, listener: (event: unknown) => void) => void;
   removeEventListener: (type: string, listener: (event: unknown) => void) => void;
   stop?: () => void;
+  update?: (delta: number) => void;
+  yawDelta?: number;
+  pitchDelta?: number;
+  panDelta?: { x: number; y: number };
+  rotationSpeed?: number;
 }
 
 export interface PotreeThreeDisposable {

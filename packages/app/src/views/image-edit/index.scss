@@ -104,6 +104,64 @@
   height: 100%;
 }
 
+.image-edit-map-view-mode {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 6;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  background: rgba(24, 26, 31, 0.78);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(6px);
+
+  .image-edit-map-view-segmented {
+    padding: 0;
+    border-radius: 4px;
+    background: transparent;
+
+    .ant-segmented-item {
+      min-width: 68px;
+      height: 30px;
+      color: rgba(255, 255, 255, 0.76);
+      border-radius: 3px;
+      transition: color 0.15s ease, background 0.15s ease;
+
+      &:hover:not(.ant-segmented-item-selected) {
+        color: #fff;
+        background: rgba(255, 255, 255, 0.1);
+      }
+    }
+
+    .ant-segmented-item-selected {
+      color: #0958d9;
+      background: #fff;
+      box-shadow: none;
+    }
+
+    .ant-segmented-item-label {
+      min-height: 30px;
+      padding: 0 10px;
+      line-height: 30px;
+    }
+
+    .ant-segmented-thumb {
+      border-radius: 3px;
+      background: #fff;
+      box-shadow: none;
+    }
+  }
+}
+
+.image-edit-map-view-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
 .map-empty {
   position: absolute;
   top: 0;
