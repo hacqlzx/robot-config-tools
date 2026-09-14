@@ -5,7 +5,7 @@ import {
   setConnectionStatus,
 } from "../stores/appContextStore";
 
-const instance = axios.create({ timeout: 300000 });
+const instance = axios.create({ timeout: 6000000 });
 
 /**
  * 后台请求统一异常。

@@ -11,11 +11,17 @@ import {
   importProspectCalibration,
   importCorrection,
   importScreenVerifyAnnotationParams,
+  databaseRestore,
+  backstageProgramUpgrade,
+  robotProgramUpgrade,
   exportSpaceModel,
   exportProspectImage,
   exportDeviceImage,
   exportDeviceCheckImage,
   exportBack,
+  databaseBackup,
+  exportBackendLog,
+  getRecentMonthRobotLog,
   downloadCommunicateExcel,
 } from "@/api/config.js";
 import { startDownloadTaskFlyAnimation } from "@/components/download-task";
@@ -24,7 +30,7 @@ import "./index.scss";
 
 interface IEAction {
   /** 行为类型，决定按钮图标和默认兜底文案。 */
-  key: "import" | "export" | "export-log" | "export-error";
+  key: "import" | "export" | "upgrade";
   /** 按钮文案，也是分发具体导入导出逻辑时的区分条件之一。 */
   label: string;
   /** 按钮下方的短说明。 */
@@ -55,6 +61,8 @@ interface ImportDialogConfig {
   accept: string;
   /** 上传区域展示的格式说明。 */
   acceptHint: string;
+  /** 弹窗确认按钮文案。 */
+  confirmText?: string;
   /** 工程备份导入需要展示下发类型，其余导入隐藏。 */
   showBackupType?: boolean;
   /** 真正执行导入的函数；backupType 只有工程备份导入会读取。 */
@@ -121,11 +129,39 @@ const cardList: IECard[] = [
     ],
   },
   {
-    key: "log",
-    title: "日志",
+    key: "backend-backup",
+    title: "后台备份",
     actions: [
-      { key: "export-log", label: "运行日志导出", desc: "导出机器人日志" },
-      { key: "export-error", label: "异常数据导出", desc: "导出机器人异常数据" },
+      { key: "export", label: "数据库备份", desc: "备份后台数据库" },
+      { key: "import", label: "数据库恢复", desc: "恢复后台数据库" },
+    ],
+  },
+  {
+    key: "robot-log",
+    title: "机器人日志",
+    actions: [
+      { key: "export", label: "运行日志导出", desc: "导出机器人运行日志" },
+    ],
+  },
+  {
+    key: "backend-log",
+    title: "后台日志",
+    actions: [
+      { key: "export", label: "运行日志导出", desc: "导出后台运行日志" },
+    ],
+  },
+  {
+    key: "backstage-program-update",
+    title: "后台程序更新",
+    actions: [
+      { key: "upgrade", label: "程序升级", desc: "后台程序升级" },
+    ],
+  },
+  {
+    key: "robot-program-update",
+    title: "机器人程序更新",
+    actions: [
+      { key: "upgrade", label: "程序升级", desc: "机器人程序升级" },
     ],
   },
 ];
@@ -139,7 +175,11 @@ function calcColumns(width: number): number {
 
 /** 判断 action key 是否为导入类型 */
 function isImportKey(key: string): boolean {
-  return key === "import";
+  return key === "import" || key === "upgrade";
+}
+
+function getActionIcon(key: IEAction["key"]) {
+  return isImportKey(key) ? <UploadOutlined /> : <DownloadOutlined />;
 }
 
 function matchImportAccept(fileName: string, accept: string): boolean {
@@ -427,6 +467,54 @@ export default function ImportExport() {
     }
   }, [createRemoteExportTask, resolveSelectedRobot, message]);
 
+  /** 后台数据库备份 */
+  const handleDatabaseBackup = useCallback(async (triggerElement?: HTMLElement) => {
+    try {
+      await createRemoteExportTask({
+        label: "数据库备份",
+        exportPath: "/robot/tool/file/databaseBackup",
+        destTitle: "选择数据库备份保存目录",
+        triggerElement,
+        fallbackExport: databaseBackup,
+      });
+    } catch (e: any) {
+      message.error("数据库备份失败: " + (e?.message || e));
+    }
+  }, [createRemoteExportTask, message]);
+
+  /** 机器人最近一个月运行日志导出 */
+  const handleRobotLogExport = useCallback(async (triggerElement?: HTMLElement) => {
+    try {
+      const robot = await resolveSelectedRobot();
+      if (!robot) return;
+      await createRemoteExportTask({
+        label: "机器人运行日志导出",
+        exportPath: "/robot/tool/file/getRecentMonthRobotLog",
+        query: { robotId: robot.id },
+        destTitle: "选择机器人运行日志保存目录",
+        triggerElement,
+        fallbackExport: () => getRecentMonthRobotLog(robot.id),
+      });
+    } catch (e: any) {
+      message.error("机器人运行日志导出失败: " + (e?.message || e));
+    }
+  }, [createRemoteExportTask, message, resolveSelectedRobot]);
+
+  /** 后台运行日志导出 */
+  const handleBackendLogExport = useCallback(async (triggerElement?: HTMLElement) => {
+    try {
+      await createRemoteExportTask({
+        label: "后台运行日志导出",
+        exportPath: "/robot/tool/file/exportBackendLog",
+        destTitle: "选择后台运行日志保存目录",
+        triggerElement,
+        fallbackExport: exportBackendLog,
+      });
+    } catch (e: any) {
+      message.error("后台运行日志导出失败: " + (e?.message || e));
+    }
+  }, [createRemoteExportTask, message]);
+
   /** 图像标识导入 */
   const handleImageLabelImport = useCallback(async (file: File) => {
     setUploadingLabel("图像标识导入");
@@ -486,6 +574,63 @@ export default function ImportExport() {
       setUploadingLabel(null);
     }
   }, [message]);
+
+  /** 后台数据库恢复 */
+  const handleDatabaseRestore = useCallback(async (file: File) => {
+    setUploadingLabel("数据库恢复");
+    try {
+      const res = await databaseRestore(file);
+      const body = res.data;
+      if (body.success) {
+        message.success(typeof body.data === "string" && body.data ? body.data : "数据库恢复成功");
+      } else {
+        message.error(body.message || "数据库恢复失败");
+      }
+    } catch (e: any) {
+      message.error("数据库恢复失败: " + (e?.message || e));
+    } finally {
+      setUploadingLabel(null);
+    }
+  }, [message]);
+
+  /** 后台程序升级 */
+  const handleBackstageProgramUpgrade = useCallback(async (file: File) => {
+    setUploadingLabel("后台程序升级");
+    try {
+      const res = await backstageProgramUpgrade(file);
+      const body = res.data;
+      if (body.success) {
+        message.success(typeof body.data === "string" && body.data ? body.data : "后台程序升级成功");
+      } else {
+        message.error(body.message || "后台程序升级失败");
+      }
+    } catch (e: any) {
+      message.error("后台程序升级失败: " + (e?.message || e));
+    } finally {
+      setUploadingLabel(null);
+    }
+  }, [message]);
+
+  /** 机器人程序升级 */
+  const handleRobotProgramUpgrade = useCallback(async (file: File) => {
+    setUploadingLabel("机器人程序升级");
+    try {
+      const robot = await resolveSelectedRobot();
+      if (!robot) return;
+
+      const res = await robotProgramUpgrade(file, robot.id);
+      const body = res.data;
+      if (body.success) {
+        message.success(typeof body.data === "string" && body.data ? body.data : "机器人程序升级成功");
+      } else {
+        message.error(body.message || "机器人程序升级失败");
+      }
+    } catch (e: any) {
+      message.error("机器人程序升级失败: " + (e?.message || e));
+    } finally {
+      setUploadingLabel(null);
+    }
+  }, [message, resolveSelectedRobot]);
 
   /** 空间模型导出 */
   const handleSpaceModelExport = useCallback(async (triggerElement?: HTMLElement) => {
@@ -691,6 +836,57 @@ export default function ImportExport() {
       return;
     }
 
+    // 后台数据库备份、恢复和运行日志。
+    if (card.key === "backend-backup" && actionKey === "export") {
+      handleDatabaseBackup(triggerElement);
+      return;
+    }
+
+    if (card.key === "backend-backup" && actionKey === "import") {
+      openImportDialog({
+        title: "数据库恢复",
+        accept: ".zip",
+        acceptHint: ".zip 格式的数据库备份",
+        confirmText: "开始恢复",
+        onImport: handleDatabaseRestore,
+      });
+      return;
+    }
+
+    if (card.key === "robot-log" && actionKey === "export") {
+      handleRobotLogExport(triggerElement);
+      return;
+    }
+
+    if (card.key === "backend-log" && actionKey === "export") {
+      handleBackendLogExport(triggerElement);
+      return;
+    }
+
+    // 后台程序升级：接口未限制升级包扩展名，文件内容由后台校验。
+    if (card.key === "backstage-program-update" && actionKey === "upgrade") {
+      openImportDialog({
+        title: "后台程序升级",
+        accept: "",
+        acceptHint: "后台程序升级包",
+        confirmText: "开始升级",
+        onImport: handleBackstageProgramUpgrade,
+      });
+      return;
+    }
+
+    // 机器人程序升级：robotId 在确认上传时取自顶部当前机器人。
+    if (card.key === "robot-program-update" && actionKey === "upgrade") {
+      openImportDialog({
+        title: "机器人程序升级",
+        accept: "",
+        acceptHint: "机器人程序升级包",
+        confirmText: "开始升级",
+        onImport: handleRobotProgramUpgrade,
+      });
+      return;
+    }
+
     const verb = isImportKey(actionKey) ? "导入" : "导出";
     message.info(`${verb}「${label || card.title}」（功能待接入）`);
   };
@@ -731,7 +927,7 @@ export default function ImportExport() {
         <Button
           type="primary"
           disabled={act.disabled}
-          icon={isImportKey(act.key) ? <UploadOutlined /> : <DownloadOutlined />}
+          icon={getActionIcon(act.key)}
           loading={uploadingLabel === act.label}
           onClick={(event) => handleAction(card, act.key, act.label, event.currentTarget)}
         >
@@ -775,7 +971,7 @@ export default function ImportExport() {
         title={importDialog?.title}
         open={Boolean(importDialog)}
         centered
-        okText="确定"
+        okText={importDialog?.confirmText || "确定"}
         cancelText="取消"
         confirmLoading={Boolean(importDialog && uploadingLabel === importDialog.title)}
         okButtonProps={{ disabled: importFileList.length === 0 }}

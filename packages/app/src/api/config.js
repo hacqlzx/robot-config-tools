@@ -56,11 +56,6 @@ export function deleteRobot(id) {
   return http.get("/robot/tool/robot/delete", { id });
 }
 
-/** 下发相机内参/外参标定指令，type: 0 内参，1 外参 */
-export function cameraCalibrationDelivery(cameraId, type) {
-  return http.get("/robot/tool/camera/calibrationDelivery", { cameraId, type });
-}
-
 // ========== 地图 ==========
 
 /** 地图查询 */
@@ -199,6 +194,28 @@ export function importScreenVerifyAnnotationParams(file) {
   const formData = new FormData();
   formData.append("file", file);
   return http.post("/robot/tool/file/syncModelJSON", formData);
+}
+
+/** 恢复后台数据库 */
+export function databaseRestore(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  return http.post("/robot/tool/file/databaseRestore", formData);
+}
+
+/** 后台程序升级 */
+export function backstageProgramUpgrade(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  return http.post("/robot/tool/file/backstageProgramUpgrade", formData);
+}
+
+/** 机器人程序升级 */
+export function robotProgramUpgrade(file, robotId) {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("robotId", String(robotId));
+  return http.post("/robot/tool/file/robotProgramUpgrade", formData);
 }
 
 // ========== 任务下发 ==========
@@ -390,6 +407,21 @@ export function exportDeviceCheckImage(robotId) {
 /** 工程备份导出 */
 export function exportBack(robotId) {
   return http.get("/robot/tool/file/exportBack", { robotId });
+}
+
+/** 备份后台数据库 */
+export function databaseBackup() {
+  return http.get("/robot/tool/file/databaseBackup");
+}
+
+/** 导出后台运行日志 */
+export function exportBackendLog() {
+  return http.get("/robot/tool/file/exportBackendLog");
+}
+
+/** 导出机器人最近一个月运行日志 */
+export function getRecentMonthRobotLog(robotId) {
+  return http.get("/robot/tool/file/getRecentMonthRobotLog", { robotId });
 }
 
 /** 点表模板下载 */
