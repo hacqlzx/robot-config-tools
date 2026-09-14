@@ -21,6 +21,17 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
   close: () => ipcRenderer.send("win:close"),
   ping: (ip) => ipcRenderer.invoke("ping", ip),
+  calibrationGrpc: {
+    status: () => ipcRenderer.invoke("calibration-grpc:status"),
+    connect: (robotCode, endpoint) => ipcRenderer.invoke("calibration-grpc:connect", robotCode, endpoint),
+    disconnect: (robotCode) => ipcRenderer.invoke("calibration-grpc:disconnect", robotCode),
+    deliver: (request) => ipcRenderer.invoke("calibration-grpc:deliver", request),
+    onChanged: (callback) => {
+      const handler = (_event, status) => callback(status);
+      ipcRenderer.on("calibration-grpc:changed", handler);
+      return () => ipcRenderer.removeListener("calibration-grpc:changed", handler);
+    },
+  },
   getFilePath: (file) => webUtils.getPathForFile(file),
   readFileChunk: (path, offset, length) =>
     ipcRenderer.invoke("read-file-chunk", path, offset, length),

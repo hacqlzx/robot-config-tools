@@ -4,6 +4,7 @@ import { configureAppCommandLine, configureCertificateHandling, disableApplicati
 import { createWindow } from "./app/create-window";
 import { loadInitialProjectRoot } from "./project-core/project-root";
 import { registerArchiveIpc } from "./ipc/archive-ipc";
+import { registerCalibrationGrpcIpc } from "./ipc/calibration-grpc-ipc";
 import { registerDeviceVerifyIpc } from "./ipc/device-verify-ipc";
 import { registerExportTaskIpc } from "./ipc/export-task-ipc";
 import { registerFileIpc } from "./ipc/file-ipc";
@@ -27,6 +28,7 @@ app.whenReady().then(async () => {
   registerProjectIpc();
   registerPotreeIpc();
   registerArchiveIpc();
+  registerCalibrationGrpcIpc();
   registerDeviceVerifyIpc();
   registerExportTaskIpc();
 

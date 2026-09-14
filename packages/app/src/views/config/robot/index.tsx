@@ -202,7 +202,7 @@ export default function RobotConfig() {
     setCalibrationOpen(true);
   };
 
-  const calibrationCameras = data.find((item) => item.id === calibrationRobotId)?.cameraVOS || [];
+  const calibrationRobot = data.find((item) => item.id === calibrationRobotId);
 
   const columns: ColumnsType<RobotRecord> = [
     { title: "序号", width: 60, align: "center", render: (_: any, __: any, index: number) => index + 1 },
@@ -282,9 +282,11 @@ export default function RobotConfig() {
       />
       <CameraCalibrationModal
         open={calibrationOpen}
-        data={calibrationCameras}
+        data={calibrationRobot?.cameraVOS || []}
+        robotCode={calibrationRobot?.robotCode || ""}
+        robotIp={calibrationRobot?.ip || ""}
+        robotPort={calibrationRobot?.port || 0}
         onClose={() => setCalibrationOpen(false)}
-        onSuccess={fetchRobots}
       />
     </div>
   );

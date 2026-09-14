@@ -390,6 +390,13 @@ declare global {
       onWindowStateChange: (callback: (state: AppWindowState) => void) => () => void;
       close: () => void;
       ping: (ip: string) => Promise<boolean>;
+      calibrationGrpc: {
+        status: () => Promise<import("./services/calibration-grpc-types").CalibrationGrpcStatus>;
+        connect: (robotCode: string, endpoint: import("./services/calibration-grpc-types").CalibrationGrpcEndpoint) => Promise<import("./services/calibration-grpc-types").CalibrationGrpcStatus>;
+        disconnect: (robotCode?: string) => Promise<import("./services/calibration-grpc-types").CalibrationGrpcStatus>;
+        deliver: (request: import("./services/calibration-grpc-types").CameraCalibrationDeliveryRequest) => Promise<import("./services/calibration-grpc-types").CameraCalibrationDeliveryReply>;
+        onChanged: (callback: (status: import("./services/calibration-grpc-types").CalibrationGrpcStatus) => void) => () => void;
+      };
       readFileChunk: (path: string, offset: number, length: number) => Promise<ArrayBuffer>;
       readLargeFile: (path: string) => Promise<ArrayBuffer>;
       getFilePath: (file: File) => string;

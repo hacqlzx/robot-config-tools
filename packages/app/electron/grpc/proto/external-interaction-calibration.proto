@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package qb_cbr_grpc;
+
+service ExternalInteraction {
+  rpc ei_camera_calibration_delivery(CameraCalibrationDeliveryRequest)
+      returns (CameraCalibrationDeliveryReply) {}
+}
+
+message CameraCalibrationDeliveryRequest {
+  string SendCode = 1;
+  string ReceiveCode = 2;
+  string Time = 3;
+  string camera_id = 4;
+  int32 type = 5;
+}
+
+message CameraCalibrationDeliveryReply {
+  string SendCode = 1;
+  string ReceiveCode = 2;
+  string Time = 3;
+  string Code = 4;
+  string Message = 5;
+}
