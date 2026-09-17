@@ -1,5 +1,5 @@
 import { app } from "electron";
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +18,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const POTREE_OUTPUT_DIR_NAME = ".potree";
 const CONVERTER_ALIAS_DIR_NAME = ".potree-converter-runtime";
 const REQUIRED_OUTPUT_FILES = ["metadata.json", "octree.bin", "hierarchy.bin"] as const;
-const RESERVED_CONVERTER_DRIVES = new Set<string>();
 
 export type PotreeConversionPhase = "checking" | "converting" | "validating" | "complete";
 
@@ -49,6 +48,7 @@ const activeConversions = new Map<string, ActiveConversion>();
 interface ConverterPathAlias {
   inputPath: string;
   outputPath: string;
+  finalize: () => Promise<void>;
   cleanup: () => Promise<void>;
 }
 
@@ -61,119 +61,116 @@ function isAsciiPath(filePath: string): boolean {
   return /^[\x00-\x7F]*$/.test(filePath);
 }
 
-function execFileAsync(file: string, args: string[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    execFile(file, args, { windowsHide: true }, (error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
-function reserveConverterDrive(): string {
-  for (let code = "Z".charCodeAt(0); code >= "D".charCodeAt(0); code -= 1) {
-    const letter = String.fromCharCode(code);
-    if (RESERVED_CONVERTER_DRIVES.has(letter) || fs.existsSync(`${letter}:\\`)) continue;
-    RESERVED_CONVERTER_DRIVES.add(letter);
-    return letter;
+function resolveVolumeRuntimeBase(targetPath: string): string {
+  const volumeRoot = path.parse(path.resolve(targetPath)).root;
+  if (!volumeRoot || !isAsciiPath(volumeRoot)) {
+    throw new Error("无法在模型所在磁盘创建 PotreeConverter 纯英文临时目录");
   }
-
-  throw new Error("没有可用于 PotreeConverter 的临时盘符，请释放一个盘符后重试");
+  return path.join(volumeRoot, CONVERTER_ALIAS_DIR_NAME);
 }
 
-async function createWindowsDrivePathAlias(modelPath: string, outputDir: string): Promise<ConverterPathAlias> {
-  const modelDir = path.dirname(modelPath);
-  const outputRelativePath = path.relative(modelDir, outputDir);
-  if (!outputRelativePath || outputRelativePath.startsWith("..") || path.isAbsolute(outputRelativePath)) {
-    throw new Error("PotreeConverter 输出目录无效");
-  }
-  if (!isAsciiPath(outputRelativePath)) {
-    throw new Error("PotreeConverter 输出目录必须使用英文路径");
-  }
-
-  const driveLetter = reserveConverterDrive();
-  let mounted = false;
-  let stagedInputDir: string | null = null;
-  let stagedInputPath: string | null = null;
+async function createWindowsStagedPathAlias(modelPath: string, outputDir: string): Promise<ConverterPathAlias> {
+  const aliasBase = resolveVolumeRuntimeBase(modelPath);
+  let taskDir: string | null = null;
 
   try {
-    // PotreeConverter 通过旧版窄字符路径处理文件；用盘符隐藏中文父目录。
-    await execFileAsync("subst.exe", [`${driveLetter}:`, modelDir]);
-    mounted = true;
+    await fs.promises.mkdir(aliasBase, { recursive: true });
+    const createdTaskDir = await fs.promises.mkdtemp(path.join(aliasBase, "task-"));
+    taskDir = createdTaskDir;
+    const inputPath = path.join(createdTaskDir, `input${path.extname(modelPath).toLowerCase() || ".las"}`);
+    const stagedOutputPath = path.join(createdTaskDir, "output");
 
-    let inputRelativePath = path.basename(modelPath);
-
-    if (!isAsciiPath(inputRelativePath)) {
-      stagedInputDir = path.join(modelDir, `.potree.converter-source-${Date.now()}`);
-      await fs.promises.mkdir(stagedInputDir, { recursive: true });
-      stagedInputPath = path.join(stagedInputDir, `input${path.extname(modelPath).toLowerCase() || ".las"}`);
-      await fs.promises.link(modelPath, stagedInputPath);
-      inputRelativePath = path.relative(modelDir, stagedInputPath);
+    try {
+      // The source and runtime directory share a volume, so NTFS can expose the
+      // large model under an ASCII path without copying its contents.
+      await fs.promises.link(modelPath, inputPath);
+    } catch (linkError) {
+      try {
+        await fs.promises.copyFile(modelPath, inputPath);
+      } catch (copyError) {
+        throw new Error(
+          `无法在模型所在磁盘准备转换文件：${errorMessage(copyError)}（硬链接失败：${errorMessage(linkError)}）`,
+        );
+      }
     }
 
-    const driveRoot = `${driveLetter}:\\`;
-    const inputPath = path.win32.join(driveRoot, inputRelativePath);
-    const outputPath = path.win32.join(driveRoot, outputRelativePath);
-    if (!isAsciiPath(inputPath) || !isAsciiPath(outputPath)) {
+    if (!isAsciiPath(inputPath) || !isAsciiPath(stagedOutputPath)) {
       throw new Error("无法为 PotreeConverter 创建纯英文临时路径");
     }
 
     return {
       inputPath,
-      outputPath,
+      outputPath: stagedOutputPath,
+      finalize: async () => {
+        await fs.promises.rm(outputDir, { recursive: true, force: true });
+        await fs.promises.rename(stagedOutputPath, outputDir);
+      },
       cleanup: async () => {
-        if (stagedInputPath) {
-          await fs.promises.unlink(stagedInputPath).catch((_error: unknown): undefined => undefined);
-        }
-        if (stagedInputDir) {
-          await fs.promises.rmdir(stagedInputDir).catch((_error: unknown): undefined => undefined);
-        }
-        if (mounted) {
-          await execFileAsync("subst.exe", [`${driveLetter}:`, "/d"]).catch((_error: unknown): undefined => undefined);
-        }
-        RESERVED_CONVERTER_DRIVES.delete(driveLetter);
+        await fs.promises.rm(createdTaskDir, { recursive: true, force: true }).catch((_error: unknown): undefined => undefined);
+        await fs.promises.rmdir(aliasBase).catch((_error: unknown): undefined => undefined);
       },
     };
   } catch (error) {
-    if (stagedInputPath) {
-      await fs.promises.unlink(stagedInputPath).catch((_cleanupError: unknown): undefined => undefined);
+    if (taskDir) {
+      await fs.promises.rm(taskDir, { recursive: true, force: true }).catch((_cleanupError: unknown): undefined => undefined);
     }
-    if (stagedInputDir) {
-      await fs.promises.rmdir(stagedInputDir).catch((_cleanupError: unknown): undefined => undefined);
-    }
-    if (mounted) {
-      await execFileAsync("subst.exe", [`${driveLetter}:`, "/d"]).catch((_cleanupError: unknown): undefined => undefined);
-    }
-    RESERVED_CONVERTER_DRIVES.delete(driveLetter);
-    throw error;
+    await fs.promises.rmdir(aliasBase).catch((_cleanupError: unknown): undefined => undefined);
+    throw new Error(`创建 PotreeConverter 临时目录失败：${errorMessage(error)}`);
   }
 }
 
-async function createWindowsDirectoryAlias(directoryPath: string): Promise<ConverterDirectoryAlias> {
-  const driveLetter = reserveConverterDrive();
-  let mounted = false;
+async function createWindowsDirectoryAlias(
+  directoryPath: string,
+  runtimeVolumePath: string,
+): Promise<ConverterDirectoryAlias> {
+  const aliasBase = resolveVolumeRuntimeBase(runtimeVolumePath);
+  let taskDir: string | null = null;
+  let directoryAlias: string | null = null;
+  let directoryAliasIsJunction = false;
 
   try {
-    await execFileAsync("subst.exe", [`${driveLetter}:`, directoryPath]);
-    mounted = true;
+    await fs.promises.mkdir(aliasBase, { recursive: true });
+    const createdTaskDir = await fs.promises.mkdtemp(path.join(aliasBase, "converter-"));
+    taskDir = createdTaskDir;
+    const createdDirectoryAlias = path.join(createdTaskDir, "runtime");
+    directoryAlias = createdDirectoryAlias;
+    try {
+      await fs.promises.symlink(directoryPath, createdDirectoryAlias, "junction");
+      directoryAliasIsJunction = true;
+    } catch {
+      await fs.promises.cp(directoryPath, createdDirectoryAlias, { recursive: true });
+    }
+    if (!isAsciiPath(createdDirectoryAlias)) throw new Error("无法为 PotreeConverter 运行目录创建纯英文临时路径");
+
     return {
-      rootPath: `${driveLetter}:\\`,
+      rootPath: createdDirectoryAlias,
       cleanup: async () => {
-        if (mounted) {
-          await execFileAsync("subst.exe", [`${driveLetter}:`, "/d"]).catch((_error: unknown): undefined => undefined);
+        if (directoryAliasIsJunction) {
+          await fs.promises.unlink(createdDirectoryAlias).catch((_error: unknown): undefined => undefined);
+        } else {
+          await fs.promises.rm(createdDirectoryAlias, { recursive: true, force: true }).catch((_error: unknown): undefined => undefined);
         }
-        RESERVED_CONVERTER_DRIVES.delete(driveLetter);
+        await fs.promises.rm(createdTaskDir, { recursive: true, force: true }).catch((_error: unknown): undefined => undefined);
+        await fs.promises.rmdir(aliasBase).catch((_error: unknown): undefined => undefined);
       },
     };
   } catch (error) {
-    if (mounted) {
-      await execFileAsync("subst.exe", [`${driveLetter}:`, "/d"]).catch((_cleanupError: unknown): undefined => undefined);
+    if (directoryAlias) {
+      if (directoryAliasIsJunction) {
+        await fs.promises.unlink(directoryAlias).catch((_cleanupError: unknown): undefined => undefined);
+      } else {
+        await fs.promises.rm(directoryAlias, { recursive: true, force: true }).catch((_cleanupError: unknown): undefined => undefined);
+      }
     }
-    RESERVED_CONVERTER_DRIVES.delete(driveLetter);
-    throw error;
+    if (taskDir) {
+      await fs.promises.rm(taskDir, { recursive: true, force: true }).catch((_cleanupError: unknown): undefined => undefined);
+    }
+    await fs.promises.rmdir(aliasBase).catch((_cleanupError: unknown): undefined => undefined);
+    throw new Error(`创建 PotreeConverter 运行目录别名失败：${errorMessage(error)}`);
   }
 }
 
@@ -217,6 +214,7 @@ async function createJunctionPathAlias(modelPath: string, outputDir: string): Pr
     return {
       inputPath,
       outputPath,
+      finalize: async () => undefined,
       cleanup: async () => {
         await fs.promises.unlink(modelDirAlias).catch((_error: unknown): undefined => undefined);
         await fs.promises.rm(taskDir, { recursive: true, force: true }).catch((_error: unknown): undefined => undefined);
@@ -238,11 +236,16 @@ async function createJunctionPathAlias(modelPath: string, outputDir: string): Pr
 
 async function createConverterPathAlias(modelPath: string, outputDir: string): Promise<ConverterPathAlias> {
   if (isAsciiPath(modelPath) && isAsciiPath(outputDir)) {
-    return { inputPath: modelPath, outputPath: outputDir, cleanup: async () => undefined };
+    return {
+      inputPath: modelPath,
+      outputPath: outputDir,
+      finalize: async () => undefined,
+      cleanup: async () => undefined,
+    };
   }
 
   if (process.platform === "win32") {
-    return createWindowsDrivePathAlias(modelPath, outputDir);
+    return createWindowsStagedPathAlias(modelPath, outputDir);
   }
 
   return createJunctionPathAlias(modelPath, outputDir);
@@ -367,7 +370,7 @@ async function runConverter(
 
   try {
     if (process.platform === "win32" && !isAsciiPath(converterPath)) {
-      converterAlias = await createWindowsDirectoryAlias(path.dirname(converterPath));
+      converterAlias = await createWindowsDirectoryAlias(path.dirname(converterPath), modelPath);
     }
     const executablePath = converterAlias
       ? path.win32.join(converterAlias.rootPath, path.basename(converterPath))
@@ -401,6 +404,7 @@ async function runConverter(
         reject(new Error(`PotreeConverter 转换失败（退出码 ${code ?? "未知"}）${detail ? `\n${detail}` : ""}`));
       });
     });
+    await pathAlias.finalize();
   } finally {
     await converterAlias?.cleanup();
     await pathAlias.cleanup();

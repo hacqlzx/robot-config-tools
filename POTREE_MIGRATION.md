@@ -89,7 +89,7 @@ electron/potree
 - 每张地图的 Viewer 产物固定保存到模型同目录的 `.potree/`：`metadata.json`、`octree.bin`、`hierarchy.bin`。原始 `map.las` 仍是权威数据源。
 - `.potree`、转换临时目录和备份目录属于可再生缓存，空间模型 ZIP 的文件扫描与大小统计会跳过它们。
 - 勾选地图或导入模型后会先检查三项产物及时间戳。产物缺失、损坏或早于原模型时，主进程转换到 `.potree.tmp-*`，校验成功后再替换 `.potree`；失败时保留原有可用产物。
-- PotreeConverter 2.1.3 在 Windows 下不能可靠读取中文输入/输出路径。主进程会在纯英文项目根下创建临时 junction，让 Converter 通过 ASCII 路径访问原地图目录，任务结束后立即清理。
+- PotreeConverter 2.1.3 在 Windows 下不能可靠读取中文输入/输出路径。主进程会在模型所在盘根目录的 `.potree-converter-runtime` 中创建纯英文临时任务目录，优先用硬链接提供输入（不复制大模型），不支持硬链接时复制兜底；转换产物校验前移回原地图目录，任务结束后立即清理，不再依赖 `subst` 临时盘符。
 - `robot-project://asset/` 只映射项目根内文件并支持字节范围请求，供 Potree 读取大型 `octree.bin`。renderer 不接收任意本地文件读取能力。
 - Potree 2.1.3 的 `setPointBudget` 会先 `parseInt`，因此“全部加载”使用 `Number.MAX_SAFE_INTEGER` 表示，不能直接传 `Infinity`。
 
