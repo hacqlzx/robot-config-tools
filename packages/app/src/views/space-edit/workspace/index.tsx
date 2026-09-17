@@ -322,6 +322,7 @@ export default function SpaceEditWorkspace() {
   const [inspectionItems, setInspectionItems] = useState<InspectionPointItem[]>([]);
   const [shownInspectionPointIds, setShownInspectionPointIds] = useState<Set<string>>(new Set());
   const [inspectionState, setInspectionState] = useState<SpaceInspectionPointState>(DEFAULT_INSPECTION_POINT_STATE);
+  const [inspectionBayFilter, setInspectionBayFilter] = useState<string | undefined>(undefined);
   const [inspectionSaving, setInspectionSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [projectBoundBayIds, setProjectBoundBayIds] = useState<Set<number>>(new Set());
@@ -1252,7 +1253,7 @@ export default function SpaceEditWorkspace() {
   const handleSaveInspection = useCallback(() => {
     void runSaveOperation(() => persistInspectionPoints({
       silent: false,
-      closeAfterSave: true,
+      closeAfterSave: false,
       markFileShown: true,
     }));
   }, [persistInspectionPoints, runSaveOperation]);
@@ -2879,8 +2880,10 @@ export default function SpaceEditWorkspace() {
                     count={inspectionState.count}
                     items={inspectionItems}
                     saving={inspectionSaving || modelOperationBusy || saveStatus === "saving" || !!loading || correctionSaving}
+                    bayFilter={inspectionBayFilter}
                     onClose={handleCloseInspectionPanel}
                     onSave={handleSaveInspection}
+                    onBayFilterChange={setInspectionBayFilter}
                     onRename={handleInspectionRename}
                     onBindPoint={handleInspectionBindPoint}
                     onUnbindPoint={handleInspectionUnbindPoint}

@@ -168,6 +168,7 @@ export interface PotreeThreeDisposable {
 export interface PotreeThreeBufferGeometry extends PotreeThreeDisposable {
   setAttribute: (name: string, attribute: unknown) => PotreeThreeBufferGeometry;
   computeBoundingSphere: () => void;
+  rotateX: (angle: number) => PotreeThreeBufferGeometry;
 }
 
 export interface PotreeThreeObject3D {
@@ -193,6 +194,8 @@ export interface PotreeThreeVector3 {
 export interface PotreeThreeNamespace {
   Scene: new () => PotreeThreeObject3D;
   Group: new () => PotreeThreeObject3D;
+  AmbientLight: new (color?: number, intensity?: number) => PotreeThreeObject3D;
+  DirectionalLight: new (color?: number, intensity?: number) => PotreeThreeObject3D;
   Vector3: new (x?: number, y?: number, z?: number) => PotreeThreeVector3;
   BufferGeometry: new () => PotreeThreeBufferGeometry;
   Float32BufferAttribute: new (values: number[], itemSize: number) => unknown;
@@ -207,12 +210,28 @@ export interface PotreeThreeNamespace {
     material: PotreeThreeDisposable,
   ) => PotreeThreeObject3D;
   BoxGeometry: new (width?: number, height?: number, depth?: number) => PotreeThreeDisposable;
+  CylinderGeometry: new (
+    radiusTop?: number,
+    radiusBottom?: number,
+    height?: number,
+    radialSegments?: number,
+    heightSegments?: number,
+    openEnded?: boolean,
+  ) => PotreeThreeBufferGeometry;
+  ConeGeometry: new (
+    radius?: number,
+    height?: number,
+    radialSegments?: number,
+    heightSegments?: number,
+    openEnded?: boolean,
+  ) => PotreeThreeBufferGeometry;
   SphereGeometry: new (
     radius?: number,
     widthSegments?: number,
     heightSegments?: number,
   ) => PotreeThreeDisposable;
   MeshBasicMaterial: new (parameters: Record<string, unknown>) => PotreeThreeDisposable;
+  MeshPhongMaterial: new (parameters: Record<string, unknown>) => PotreeThreeDisposable;
   Mesh: new (
     geometry: PotreeThreeDisposable,
     material: PotreeThreeDisposable,

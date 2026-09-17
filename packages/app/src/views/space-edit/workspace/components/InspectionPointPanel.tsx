@@ -12,9 +12,11 @@ interface Props {
   items: InspectionPointItem[];
   marking: boolean;
   saving?: boolean;
+  bayFilter?: string;
   onClose: () => void;
   onRename: (id: string, name: string) => void;
   onSave: () => void;
+  onBayFilterChange: (value: string | undefined) => void;
   onBindPoint: (id: string, point: { pointCode: string; pointName: string }) => void;
   onUnbindPoint: (id: string) => void;
   onDelete: (id: string) => void;
@@ -30,15 +32,13 @@ function pointBayKey(point: DevicePoint): string {
   return bayName ? `name:${bayName}` : "";
 }
 
-export default function InspectionPointPanel({ item, count, items, marking, saving = false, onClose, onRename, onSave, onBindPoint, onUnbindPoint, onDelete }: Props) {
+export default function InspectionPointPanel({ item, count, items, marking, saving = false, bayFilter, onClose, onRename, onSave, onBayFilterChange, onBindPoint, onUnbindPoint, onDelete }: Props) {
   const projectName = useSelectedProject();
   const [points, setPoints] = useState<DevicePoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
-  const [bayFilter, setBayFilter] = useState<string | undefined>(undefined);
 
   useEffect(() => { setNameDraft(item?.name?.trim() || ""); }, [item?.id, item?.name]);
-  useEffect(() => { setBayFilter(undefined); }, [projectName]);
   useEffect(() => {
     let cancelled = false;
     const api = window.electronAPI;
@@ -104,7 +104,7 @@ export default function InspectionPointPanel({ item, count, items, marking, savi
               disabled={saving || loading}
               placeholder="全部间隔"
               style={{ width: "100%" }}
-              onChange={setBayFilter}
+              onChange={onBayFilterChange}
             />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "64px minmax(0, 1fr)", gap: 8, alignItems: "center" }}>

@@ -36,13 +36,16 @@ const CLICK_THRESHOLD = 4;
 const HIT_DISTANCE_SQ = 12 * 12;
 const DIRECTION_HIT_DISTANCE_SQ = 14 * 14;
 const DIRECTION_LINE_HIT_DISTANCE_SQ = 8 * 8;
-const POINT_COLOR = 0x40c4ff;
-const SELECTED_COLOR = 0xffd666;
-const NORMAL_COLOR = 0xffd666;
-const DIRECTION_HANDLE_COLOR = 0x40c4ff;
-const POINT_SCALE = 0.055;
-const DIRECTION_HANDLE_SCALE = 0.035;
-const NORMAL_LINE_THICKNESS = 0.008;
+const POINT_COLOR = 0x52c41a;
+const SELECTED_COLOR = 0xd4ff3f;
+const NORMAL_COLOR = 0x52c41a;
+const POINT_SCALE = 0.032;
+const SELECTED_POINT_SCALE = 0.036;
+const SELECTED_HALO_SCALE = 0.049;
+const NORMAL_LINE_THICKNESS = 0.0055;
+const ARROW_HEAD_LENGTH = 0.056;
+const ARROW_HEAD_RADIUS = 0.027;
+const SELECTED_PULSE_DURATION_MS = 1_600;
 const DEFAULT_NORMAL_LENGTH = INSPECTION_POINT_LENGTH.default;
 const MIN_NORMAL_LENGTH = INSPECTION_POINT_LENGTH.min;
 const MAX_NORMAL_LENGTH = INSPECTION_POINT_LENGTH.max;
@@ -62,14 +65,6 @@ function scale(value: Vec3, amount: number): Vec3 {
 function normalize(value: Vec3): Vec3 | null {
   const length = Math.hypot(...value);
   return length > 1e-8 ? scale(value, 1 / length) : null;
-}
-
-function cross(left: Vec3, right: Vec3): Vec3 {
-  return [
-    left[1] * right[2] - left[2] * right[1],
-    left[2] * right[0] - left[0] * right[2],
-    left[0] * right[1] - left[1] * right[0],
-  ];
 }
 
 function dot(left: Vec3, right: Vec3): number {
@@ -124,6 +119,7 @@ export class PotreeInspectionPointEditor {
   private readonly scene: PotreeThreeObject3D;
   private readonly labelContainer: HTMLDivElement;
   private visualGroup: PotreeThreeObject3D | null = null;
+  private selectedPointMesh: PotreeThreeObject3D | null = null;
   private labels: Array<{ position: Vec3; element: HTMLDivElement }> = [];
   private callbacks: SpaceInspectionPointCallbacks | null = null;
   private items: InspectionPointItem[] = [];
@@ -150,6 +146,10 @@ export class PotreeInspectionPointEditor {
     private readonly pickSurfaceNormal: (mouse: { x: number; y: number }) => SurfacePick | null,
   ) {
     this.scene = new three.Scene();
+    this.scene.add(new three.AmbientLight(0xffffff, 0.78));
+    const keyLight = new three.DirectionalLight(0xffffff, 0.92);
+    keyLight.position.set(1.5, 2.2, 3);
+    this.scene.add(keyLight);
     this.labelContainer = document.createElement("div");
     Object.assign(this.labelContainer.style, { position: "absolute", inset: "0", pointerEvents: "none", zIndex: "18" });
     host.appendChild(this.labelContainer);
@@ -410,7 +410,7 @@ export class PotreeInspectionPointEditor {
         return {
           position: [...fitted.position] as Vec3,
           direction,
-          length: Number.isFinite(fitted.length) && fitted.length > 0 ? fitted.length : DEFAULT_NORMAL_LENGTH,
+          length: DEFAULT_NORMAL_LENGTH,
         };
       }
     }
@@ -544,50 +544,67 @@ export class PotreeInspectionPointEditor {
       const itemIndex = this.items.findIndex((candidate) => candidate.id === item.id);
       const selected = item.id === this.selectedId;
       const geometry = new this.three.SphereGeometry(1, 16, 12);
-      const material = new this.three.MeshBasicMaterial({
+      const material = new this.three.MeshPhongMaterial({
         color: selected ? SELECTED_COLOR : POINT_COLOR,
+        emissive: selected ? 0x344d00 : 0x102e0a,
+        specular: 0xeaffdf,
+        shininess: 88,
         depthTest: false,
         depthWrite: false,
+        transparent: true,
+        opacity: selected ? 1 : 0.96,
       });
       const mesh = new this.three.Mesh(geometry, material);
       const local = subtract(item.position, origin);
       mesh.position.set(local[0], local[1], local[2]);
-      const pointScale = POINT_SCALE * (selected ? 1.15 : 1);
+      const pointScale = selected ? SELECTED_POINT_SCALE : POINT_SCALE;
       mesh.scale.set(pointScale, pointScale, pointScale);
       group.add(mesh);
 
-      const end = this.endpoint(item);
-      const lineColor = selected ? SELECTED_COLOR : NORMAL_COLOR;
-      const lineWidth = NORMAL_LINE_THICKNESS * (selected ? 1.25 : 1);
-      this.addLine(group, item.position, end, origin, lineColor, lineWidth);
-      this.addArrowHead(group, item.position, end, origin, lineColor, lineWidth);
       if (selected) {
-        const handleGeometry = new this.three.SphereGeometry(1, 14, 10);
-        const handleMaterial = new this.three.MeshBasicMaterial({
-          color: DIRECTION_HANDLE_COLOR,
+        const haloMaterial = new this.three.MeshBasicMaterial({
+          color: SELECTED_COLOR,
           depthTest: false,
           depthWrite: false,
+          transparent: true,
+          opacity: 0.2,
         });
-        const handleMesh = new this.three.Mesh(handleGeometry, handleMaterial);
-        const localEnd = subtract(end, origin);
-        handleMesh.position.set(localEnd[0], localEnd[1], localEnd[2]);
-        handleMesh.scale.set(DIRECTION_HANDLE_SCALE, DIRECTION_HANDLE_SCALE, DIRECTION_HANDLE_SCALE);
-        group.add(handleMesh);
+        const halo = new this.three.Mesh(geometry, haloMaterial);
+        halo.position.set(local[0], local[1], local[2]);
+        halo.scale.set(SELECTED_HALO_SCALE, SELECTED_HALO_SCALE, SELECTED_HALO_SCALE);
+        this.selectedPointMesh = halo;
+        group.add(halo);
       }
+
+      const end = this.endpoint(item);
+      const guideColor = selected ? SELECTED_COLOR : NORMAL_COLOR;
+      const lineWidth = NORMAL_LINE_THICKNESS * (selected ? 1.12 : 1);
+      const lineOpacity = selected ? 0.98 : 0.88;
+      const direction = normalize(subtract(end, item.position));
+      const lineStart = direction
+        ? add(item.position, scale(direction, pointScale * 0.72))
+        : item.position;
+      const lineEnd = direction
+        ? subtract(end, scale(direction, ARROW_HEAD_LENGTH))
+        : end;
+      this.addLine(group, lineStart, lineEnd, origin, guideColor, lineWidth, lineOpacity);
+      this.addArrowHead(group, item.position, end, origin, guideColor, lineOpacity);
 
       const label = document.createElement("div");
       label.textContent = item.name?.trim() || `巡检点 ${itemIndex + 1}`;
       Object.assign(label.style, {
         position: "absolute",
         color: "#ffffff",
-        background: "rgba(0, 0, 0, 0.78)",
-        border: `1px solid ${selected ? "#ffd666" : "rgba(64, 196, 255, 0.82)"}`,
-        borderRadius: "3px",
-        padding: "2px 5px",
-        fontSize: "13px",
+        background: "rgba(15, 23, 42, 0.86)",
+        border: `1px solid ${selected ? "#d4ff3f" : "rgba(82, 196, 26, 0.72)"}`,
+        borderRadius: "4px",
+        padding: "2px 6px",
+        fontSize: "12px",
         fontWeight: "600",
-        lineHeight: "18px",
-        boxShadow: "0 1px 3px rgba(0, 0, 0, 0.65)",
+        lineHeight: "17px",
+        boxShadow: selected
+          ? "0 0 0 2px rgba(212, 255, 63, 0.26), 0 2px 5px rgba(0, 0, 0, 0.42)"
+          : "0 1px 3px rgba(0, 0, 0, 0.45)",
         transform: "translate(-50%, -125%)",
         whiteSpace: "nowrap",
       });
@@ -597,13 +614,23 @@ export class PotreeInspectionPointEditor {
     this.visualGroup = group;
     this.scene.add(group);
   }
-  private addLine(group: PotreeThreeObject3D, from: Vec3, to: Vec3, origin: Vec3, color: number, thickness: number): void {
+  private addLine(group: PotreeThreeObject3D, from: Vec3, to: Vec3, origin: Vec3, color: number, thickness: number, opacity: number): void {
     const localFrom = subtract(from, origin);
     const localTo = subtract(to, origin);
     const length = Math.hypot(...subtract(localTo, localFrom));
     if (!Number.isFinite(length) || length <= 1e-8) return;
-    const geometry = new this.three.BoxGeometry(1, 1, 1);
-    const material = new this.three.MeshBasicMaterial({ color, depthTest: false, depthWrite: false });
+    const geometry = new this.three.CylinderGeometry(1, 1, 1, 12, 1, false);
+    geometry.rotateX(Math.PI / 2);
+    const material = new this.three.MeshPhongMaterial({
+      color,
+      emissive: 0x102e0a,
+      specular: 0x8fd66b,
+      shininess: 34,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+      opacity,
+    });
     const mesh = new this.three.Mesh(geometry, material);
     mesh.position.set(
       (localFrom[0] + localTo[0]) / 2,
@@ -615,23 +642,43 @@ export class PotreeInspectionPointEditor {
     mesh.lookAt(localTo[0], localTo[1], localTo[2]);
     group.add(mesh);
   }
-  private addArrowHead(group: PotreeThreeObject3D, from: Vec3, to: Vec3, origin: Vec3, color: number, thickness: number): void {
+  private addArrowHead(group: PotreeThreeObject3D, from: Vec3, to: Vec3, origin: Vec3, color: number, opacity: number): void {
     const direction = normalize(subtract(to, from));
     if (!direction) return;
-    const arrowLength = Math.max(0.08, Math.min(0.24, Math.hypot(...subtract(to, from)) * 0.3));
-    const reference: Vec3 = Math.abs(direction[2]) < 0.9 ? [0, 0, 1] : [0, 1, 0];
-    const side = normalize(cross(direction, reference));
-    if (!side) return;
-    const back = subtract(to, scale(direction, arrowLength));
-    const wingOffset = scale(side, arrowLength * 0.55);
-    this.addLine(group, add(back, wingOffset), to, origin, color, thickness * 1.15);
-    this.addLine(group, add(back, scale(wingOffset, -1)), to, origin, color, thickness * 1.15);
+    const base = subtract(to, scale(direction, ARROW_HEAD_LENGTH));
+    const geometry = new this.three.ConeGeometry(ARROW_HEAD_RADIUS, ARROW_HEAD_LENGTH, 12, 1, false);
+    geometry.rotateX(Math.PI / 2);
+    const material = new this.three.MeshPhongMaterial({
+      color,
+      emissive: 0x102e0a,
+      specular: 0xb7eb8f,
+      shininess: 42,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+      opacity,
+    });
+    const mesh = new this.three.Mesh(geometry, material);
+    const localBase = subtract(base, origin);
+    const localTip = subtract(to, origin);
+    mesh.position.set(
+      (localBase[0] + localTip[0]) / 2,
+      (localBase[1] + localTip[1]) / 2,
+      (localBase[2] + localTip[2]) / 2,
+    );
+    mesh.lookAt(localTip[0], localTip[1], localTip[2]);
+    group.add(mesh);
   }
-  private clearVisuals(): void { this.labels.forEach(({ element }) => element.remove()); this.labels = []; if (this.visualGroup) { this.scene.remove(this.visualGroup); disposeObject(this.visualGroup); this.visualGroup = null; } }
+  private clearVisuals(): void { this.labels.forEach(({ element }) => element.remove()); this.labels = []; this.selectedPointMesh = null; if (this.visualGroup) { this.scene.remove(this.visualGroup); disposeObject(this.visualGroup); this.visualGroup = null; } }
   private readonly renderOverlay = (): void => {
     if (!this.pageActive || !this.visualGroup) return;
     const camera = this.viewer.scene.getActiveCamera?.();
     if (!camera) return;
+    if (this.selectedPointMesh) {
+      const phase = (performance.now() % SELECTED_PULSE_DURATION_MS) / SELECTED_PULSE_DURATION_MS * Math.PI * 2;
+      const pulseScale = SELECTED_HALO_SCALE * (1.04 + Math.sin(phase) * 0.12);
+      this.selectedPointMesh.scale.set(pulseScale, pulseScale, pulseScale);
+    }
     this.viewer.renderer.render(this.scene, camera);
     this.labels.forEach(({ position, element }) => {
       const projected = this.project(position);

@@ -1,13 +1,21 @@
 import { useState, useEffect, useRef } from "react";
 import { Dropdown } from "antd";
 import {
+  AppstoreOutlined,
+  BorderOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloseCircleOutlined,
+  CompassOutlined,
+  EnvironmentOutlined,
   FileOutlined,
+  FolderOpenOutlined,
   FolderOutlined,
   LoadingOutlined,
+  NodeIndexOutlined,
   QuestionCircleOutlined,
+  GlobalOutlined,
+  ThunderboltOutlined,
 } from "@ant-design/icons";
 import {
   DRAWING_FILE_NAME,
@@ -106,6 +114,55 @@ function siblingPath(filePath: string, fileName: string): string {
 
 function isRobotStopPointFileName(name: string): boolean {
   return (ROBOT_STOP_POINTS_FILE_NAMES as readonly string[]).includes(name);
+}
+
+function getNodeIcon(node: SpaceTreeNode, expanded: boolean, selected: boolean, unavailable: boolean): JSX.Element {
+  const size = 14;
+  const color = unavailable ? "#bfbfbf" : selected ? "#1677ff" : "#595959";
+  if (node.virtualType === "inspection-root") {
+    return expanded
+      ? <FolderOpenOutlined style={{ color, fontSize: size }} />
+      : <FolderOutlined style={{ color, fontSize: size }} />;
+  }
+  if (node.virtualType === "inspection-bay") {
+    return expanded
+      ? <FolderOpenOutlined style={{ color, fontSize: size }} />
+      : <FolderOutlined style={{ color, fontSize: size }} />;
+  }
+  if (node.virtualType === "inspection-point") {
+    return <EnvironmentOutlined style={{ color, fontSize: size }} />;
+  }
+
+  const drawingNode = parseVirtualDrawingPath(node.path);
+  if (drawingNode?.subType === "cabinet") {
+    return <BorderOutlined style={{ color, fontSize: size }} />;
+  }
+  if (drawingNode?.subType === "charging") {
+    return <ThunderboltOutlined style={{ color, fontSize: size }} />;
+  }
+  if (drawingNode?.subType === "device") {
+    return <AppstoreOutlined style={{ color, fontSize: size }} />;
+  }
+  if (isLasOrLazFileName(node.name)) {
+    return <GlobalOutlined style={{ color, fontSize: size }} />;
+  }
+  if (node.name === DRAWING_FILE_NAME) {
+    return expanded
+      ? <FolderOpenOutlined style={{ color, fontSize: size }} />
+      : <FolderOutlined style={{ color, fontSize: size }} />;
+  }
+  if (node.name === ROBOT_PATH_FILE_NAME) {
+    return <CompassOutlined style={{ color, fontSize: size }} />;
+  }
+  if (node.name === PATH_FILE_NAME) {
+    return <NodeIndexOutlined style={{ color, fontSize: size }} />;
+  }
+  if (node.isDir) {
+    return expanded
+      ? <FolderOpenOutlined style={{ color, fontSize: size }} />
+      : <FolderOutlined style={{ color, fontSize: size }} />;
+  }
+  return <FileOutlined style={{ color, fontSize: size }} />;
 }
 
 function getPotreeStatusMeta(status?: ProjectMapPotreeState["status"], error?: string): { title: string; color: string; icon: JSX.Element } | null {
@@ -572,10 +629,11 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
               />
             )}
 
-            {node.isDir ? (
-              <FolderOutlined style={{ color: "#faad14", fontSize: 14 }} />
-            ) : (
-              <FileOutlined style={{ color: "#999", fontSize: 14 }} />
+            {getNodeIcon(
+              node,
+              !!expanded[node.path],
+              inspectionPoint?.id === selectedInspectionPointId,
+              checkUnavailable,
             )}
             <span
               title={node.name}

@@ -53,7 +53,7 @@ interface Props {
 
 const TABS = [
   { key: "map", label: "地图" },
-  { key: "device", label: "设备台账" },
+  { key: "device", label: "巡检点" },
   { key: "cabinet", label: "屏柜" },
   { key: "deviceArea", label: "设备区" },
 ];

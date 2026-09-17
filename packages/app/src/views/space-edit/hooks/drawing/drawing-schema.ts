@@ -70,7 +70,7 @@ export interface NormalAnnotationFile {
 }
 
 /** 三维巡检点标注，坐标直接使用 Potree 当前的 LAS 绝对坐标。 */
-export const INSPECTION_POINT_LENGTH = { min: 0.12, max: 1.6, default: 0.8 } as const;
+export const INSPECTION_POINT_LENGTH = { min: 0.12, max: 1.6, default: 0.45 } as const;
 export const INSPECTION_POINT_COMPONENT_TYPE_STORAGE_KEY = "space-edit:inspection-point-component-type";
 
 /** 巡检点部件类型，供标注详情面板选择。 */
