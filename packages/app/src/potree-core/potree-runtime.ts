@@ -13,6 +13,12 @@ export interface PotreePointCloud {
     size: number;
     pointSizeType: unknown;
     activeAttributeName?: string;
+    rgbGamma: number;
+    rgbBrightness: number;
+    rgbContrast: number;
+    intensityGamma: number;
+    intensityBrightness: number;
+    intensityContrast: number;
     dispose?: () => void;
   };
   pcoGeometry?: {

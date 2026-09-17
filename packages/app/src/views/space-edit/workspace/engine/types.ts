@@ -1,6 +1,6 @@
 import type { ViewDirection } from "../../types";
 import type { SpaceInteractionMode } from "./SpaceInteractionCoordinator";
-import type { DrawingItem, NormalAnnotationItem, PathData } from "../../hooks/drawing/drawing-schema";
+import type { DrawingItem, InspectionPointItem, NormalAnnotationItem, PathData } from "../../hooks/drawing/drawing-schema";
 
 export type SpaceSceneLifecycleState = "detached" | "mounting" | "ready" | "failed";
 export type SpaceViewLock = "none" | "top";
@@ -26,6 +26,7 @@ export interface SpaceRayItem {
 }
 
 export type SpaceNormalAnnotation = NormalAnnotationItem;
+export type SpaceInspectionPoint = InspectionPointItem;
 
 export interface SpaceNormalAnnotationState {
   count: number;
@@ -36,6 +37,18 @@ export interface SpaceNormalAnnotationState {
 export interface SpaceNormalAnnotationCallbacks {
   onChange: (state: SpaceNormalAnnotationState) => void;
   onHistory?: SpaceDrawingHistoryCallback;
+}
+
+export interface SpaceInspectionPointState {
+  count: number;
+  selectedId: string | null;
+  active: boolean;
+}
+
+export interface SpaceInspectionPointCallbacks {
+  onChange: (state: SpaceInspectionPointState) => void;
+  onHistory?: SpaceDrawingHistoryCallback;
+  onAddBlocked?: () => void;
 }
 
 export interface SpaceDrawingSelection {
@@ -138,23 +151,38 @@ export const SPACE_POINT_BUDGET_MAX = 100_000_000;
 export const SPACE_POINT_BUDGET_STEP = 100_000;
 export const SPACE_POINT_BUDGET_ALL = "all" as const;
 export type SpacePointBudget = number | typeof SPACE_POINT_BUDGET_ALL;
+export const SPACE_COLOR_ADJUSTMENT_MIN = -1;
+export const SPACE_COLOR_ADJUSTMENT_MAX = 1;
+export const SPACE_COLOR_ADJUSTMENT_STEP = 0.01;
+export const SPACE_GAMMA_MIN = 0.1;
+export const SPACE_GAMMA_MAX = 4;
+export const SPACE_GAMMA_STEP = 0.01;
 
 export interface SpaceRenderSettings {
   detailLevel: SpaceRenderDetailLevel;
   pointBudget: SpacePointBudget;
+  gamma: number;
+  brightness: number;
+  contrast: number;
 }
 
 export const DEFAULT_SPACE_RENDER_SETTINGS: SpaceRenderSettings = {
   detailLevel: 4,
   pointBudget: SPACE_POINT_BUDGET_ALL,
+  gamma: 1,
+  brightness: 0,
+  contrast: 0,
 };
 
 const LEGACY_DEFAULT_SPACE_RENDER_SETTINGS: SpaceRenderSettings = {
   detailLevel: 2,
   pointBudget: 500_000,
+  gamma: 1,
+  brightness: 0,
+  contrast: 0,
 };
 
-export type SpaceDrawingHistoryScope = "cabinet" | "charging" | "device-area" | "path" | "normal";
+export type SpaceDrawingHistoryScope = "cabinet" | "charging" | "device-area" | "path" | "normal" | "inspection-point";
 export type SpaceDrawingHistorySnapshot = unknown;
 export type SpaceDrawingHistoryCallback = (
   before: SpaceDrawingHistorySnapshot,
@@ -166,24 +194,39 @@ export function normalizeSpaceRenderSettings(settings: Partial<SpaceRenderSettin
   const detailLevel = SPACE_RENDER_DETAIL_LEVELS.includes(settings.detailLevel as SpaceRenderDetailLevel)
     ? settings.detailLevel as SpaceRenderDetailLevel
     : DEFAULT_SPACE_RENDER_SETTINGS.detailLevel;
-  if (settings.pointBudget === SPACE_POINT_BUDGET_ALL) {
-    return { detailLevel, pointBudget: SPACE_POINT_BUDGET_ALL };
-  }
-  if (typeof settings.pointBudget !== "number" || !Number.isFinite(settings.pointBudget)) {
-    return { detailLevel, pointBudget: DEFAULT_SPACE_RENDER_SETTINGS.pointBudget };
-  }
-  const pointBudget = Math.round(Math.min(
-    SPACE_POINT_BUDGET_MAX,
-    Math.max(SPACE_POINT_BUDGET_MIN, settings.pointBudget),
-  ) / SPACE_POINT_BUDGET_STEP) * SPACE_POINT_BUDGET_STEP;
+  const pointBudget = settings.pointBudget === SPACE_POINT_BUDGET_ALL
+    ? SPACE_POINT_BUDGET_ALL
+    : typeof settings.pointBudget !== "number" || !Number.isFinite(settings.pointBudget)
+      ? DEFAULT_SPACE_RENDER_SETTINGS.pointBudget
+      : Math.round(Math.min(
+        SPACE_POINT_BUDGET_MAX,
+        Math.max(SPACE_POINT_BUDGET_MIN, settings.pointBudget),
+      ) / SPACE_POINT_BUDGET_STEP) * SPACE_POINT_BUDGET_STEP;
+  const normalizeColorAdjustment = (value: unknown, fallback: number) => (
+    typeof value === "number" && Number.isFinite(value)
+      ? Math.min(SPACE_COLOR_ADJUSTMENT_MAX, Math.max(SPACE_COLOR_ADJUSTMENT_MIN, value))
+      : fallback
+  );
+  const gamma = typeof settings.gamma === "number" && Number.isFinite(settings.gamma)
+    ? Math.min(SPACE_GAMMA_MAX, Math.max(SPACE_GAMMA_MIN, settings.gamma))
+    : DEFAULT_SPACE_RENDER_SETTINGS.gamma;
 
-  return { detailLevel, pointBudget };
+  return {
+    detailLevel,
+    pointBudget,
+    gamma,
+    brightness: normalizeColorAdjustment(settings.brightness, DEFAULT_SPACE_RENDER_SETTINGS.brightness),
+    contrast: normalizeColorAdjustment(settings.contrast, DEFAULT_SPACE_RENDER_SETTINGS.contrast),
+  };
 }
 
 /** Migrate the previous implicit default without overwriting explicit user choices. */
 export function migrateSpaceRenderSettings(settings: SpaceRenderSettings): SpaceRenderSettings {
   return settings.detailLevel === LEGACY_DEFAULT_SPACE_RENDER_SETTINGS.detailLevel
     && settings.pointBudget === LEGACY_DEFAULT_SPACE_RENDER_SETTINGS.pointBudget
+    && settings.gamma === LEGACY_DEFAULT_SPACE_RENDER_SETTINGS.gamma
+    && settings.brightness === LEGACY_DEFAULT_SPACE_RENDER_SETTINGS.brightness
+    && settings.contrast === LEGACY_DEFAULT_SPACE_RENDER_SETTINGS.contrast
     ? { ...DEFAULT_SPACE_RENDER_SETTINGS }
     : settings;
 }
@@ -255,6 +298,25 @@ export interface SpaceSceneAdapter {
   clearNormalAnnotations(): void;
   undoNormalAnnotation(): void;
   redoNormalAnnotation(): void;
+  setInspectionPointCallbacks(callbacks: SpaceInspectionPointCallbacks | null): void;
+  startInspectionPointEditing(): boolean;
+  setInspectionPointEnabled(enabled: boolean): void;
+  setInspectionPointDefaultComponentType(componentType: string | undefined): void;
+  setInspectionPoints(items: SpaceInspectionPoint[]): void;
+  setVisibleInspectionPointIds(ids: string[]): void;
+  getInspectionPoints(): SpaceInspectionPoint[];
+  selectInspectionPoint(id: string | null): void;
+  renameInspectionPoint(id: string, name: string): void;
+  setInspectionPointComponentType(id: string, componentType: string | undefined): void;
+  setInspectionPointLength(id: string, length: number): void;
+  bindInspectionPointPoint(id: string, point: { pointCode: string; pointName?: string }): void;
+  unbindInspectionPointPoint(id: string): void;
+  deleteInspectionPoint(id: string): void;
+  markInspectionPointsSaved(): void;
+  hasInspectionPointDraft(): boolean;
+  clearInspectionPoints(): void;
+  undoInspectionPoint(): void;
+  redoInspectionPoint(): void;
   startClipping(onBoundsChange: (bounds: SpaceClipBounds) => void, initialBounds?: SpaceClipBounds | null): SpaceClipBounds | null;
   setClipBounds(bounds: SpaceClipBounds): void;
   commitClipping(): SpaceClipBounds | null;

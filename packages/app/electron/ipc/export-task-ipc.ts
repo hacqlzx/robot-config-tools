@@ -20,7 +20,12 @@ import {
   prepareDeviceVerificationCorrectionData,
   prepareMarkedDeviceVerificationPoints,
 } from "./device-verify-ipc";
-import { exportNormalAnnotationExcel, prepareNormalAnnotationExport } from "../normal-annotation-export";
+import {
+  exportInspectionPointExcel,
+  exportNormalAnnotationExcel,
+  prepareInspectionPointExport,
+  prepareNormalAnnotationExport,
+} from "../normal-annotation-export";
 
 type ExportTaskStatus = "pending" | "running" | "success" | "failed" | "cancelled";
 type LocalExportOperation =
@@ -31,7 +36,8 @@ type LocalExportOperation =
   | "cabinet-annotation-params"
   | "device-correction-data"
   | "device-marked-points"
-  | "normal-annotations";
+  | "normal-annotations"
+  | "inspection-points";
 
 interface RemoteExportTaskRequest {
   type: "remote-export";
@@ -315,7 +321,7 @@ class ExportTaskManager {
       });
     } catch (error: any) {
       if (tempPath) {
-        await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
+        await fs.promises.rm(tempPath, { force: true }).catch((): undefined => undefined);
       }
       if (!this.isCurrentRun(task.id, runToken)) return;
       const aborted = abortController.signal.aborted || error?.name === "AbortError" || task.status === "cancelled";
@@ -374,7 +380,7 @@ class ExportTaskManager {
       });
     } catch (error: any) {
       if (tempPath) {
-        await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
+        await fs.promises.rm(tempPath, { force: true }).catch((): undefined => undefined);
       }
       if (!this.isCurrentRun(task.id, runToken)) return;
       const aborted = abortController.signal.aborted || error?.name === "AbortError" || task.status === "cancelled";
@@ -654,6 +660,11 @@ async function prepareLocalExport(request: LocalExportPrepareRequest): Promise<v
       prepareNormalAnnotationExport(projectName, request.payload?.items);
       return;
     }
+    case "inspection-points": {
+      const projectName = asString(request.payload?.projectName);
+      prepareInspectionPointExport(projectName, request.payload?.items);
+      return;
+    }
     default:
       throw new Error("不支持的本地导出类型");
   }
@@ -708,6 +719,11 @@ async function executeLocalExport(
       const projectName = asString(request.payload?.projectName);
       onProgress?.("准备导出法线标注", 20);
       return { success: true, ...exportNormalAnnotationExcel(projectName, request.destDir, request.payload?.items) };
+    }
+    case "inspection-points": {
+      const projectName = asString(request.payload?.projectName);
+      onProgress?.("准备导出巡检点标注", 20);
+      return { success: true, ...exportInspectionPointExcel(projectName, request.destDir, request.payload?.items) };
     }
     default:
       throw new Error("不支持的本地导出类型");
@@ -782,4 +798,5 @@ const LOCAL_EXPORT_OPERATIONS = new Set<LocalExportOperation>([
   "device-correction-data",
   "device-marked-points",
   "normal-annotations",
+  "inspection-points",
 ]);

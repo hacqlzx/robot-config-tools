@@ -8,6 +8,7 @@ interface NormalAnnotationExportRecord {
   pointCode?: unknown;
   pointName?: unknown;
   origin?: unknown;
+  position?: unknown;
   direction?: unknown;
   diameter?: unknown;
 }
@@ -17,12 +18,19 @@ interface NormalAnnotationExportRow {
   pointCode: string;
   origin: [number, number, number];
   direction: [number, number, number];
-  diameter: number;
+  diameter: number | null;
   recognitionType: string;
 }
 
 interface PreparedNormalAnnotationExport {
   rows: NormalAnnotationExportRow[];
+}
+
+interface AnnotationExportOptions {
+  itemName: "法线" | "巡检点";
+  collectionName: "法线标注" | "巡检点标注";
+  positionField: "origin" | "position";
+  requireDiameter: boolean;
 }
 
 const EXPORT_HEADERS = [
@@ -51,11 +59,36 @@ export function prepareNormalAnnotationExport(
   projectName: string,
   data: unknown,
 ): PreparedNormalAnnotationExport {
+  return prepareAnnotationExport(projectName, data, {
+    itemName: "法线",
+    collectionName: "法线标注",
+    positionField: "origin",
+    requireDiameter: true,
+  });
+}
+
+export function prepareInspectionPointExport(
+  projectName: string,
+  data: unknown,
+): PreparedNormalAnnotationExport {
+  return prepareAnnotationExport(projectName, data, {
+    itemName: "巡检点",
+    collectionName: "巡检点标注",
+    positionField: "position",
+    requireDiameter: false,
+  });
+}
+
+function prepareAnnotationExport(
+  projectName: string,
+  data: unknown,
+  options: AnnotationExportOptions,
+): PreparedNormalAnnotationExport {
   const safeProjectName = textValue(projectName);
   if (!safeProjectName) throw new Error("请先选择项目");
 
   const records = Array.isArray(data) ? data : [];
-  if (records.length === 0) throw new Error("暂无可导出的法线标注");
+  if (records.length === 0) throw new Error(`暂无可导出的${options.collectionName}`);
 
   const pointRepo = new DevicePointRepo(getDatabase());
   const points = pointRepo.list(safeProjectName);
@@ -70,30 +103,30 @@ export function prepareNormalAnnotationExport(
 
   records.forEach((value, index) => {
     const record = asRecord(value);
-    const normalLabel = textValue(record?.name) || `第 ${index + 1} 个法线`;
+    const itemLabel = textValue(record?.name) || `第 ${index + 1} 个${options.itemName}`;
     const pointCode = textValue(record?.pointCode);
     if (!pointCode) {
-      unboundNormals.push(normalLabel);
+      unboundNormals.push(itemLabel);
       return;
     }
 
     const pointCodeKey = normalizePointCode(pointCode);
     const firstIndex = seenPointCodes.get(pointCodeKey);
     if (firstIndex !== undefined) {
-      throw new Error(`点位“${pointCode}”已绑定多个法线（第 ${firstIndex + 1} 个和第 ${index + 1} 个）`);
+      throw new Error(`点位“${pointCode}”已绑定多个${options.itemName}（第 ${firstIndex + 1} 个和第 ${index + 1} 个）`);
     }
     seenPointCodes.set(pointCodeKey, index);
 
     const point = pointByCode.get(pointCodeKey);
-    if (!point) throw new Error(`法线“${normalLabel}”绑定的点位不存在：${pointCode}`);
+    if (!point) throw new Error(`${options.itemName}“${itemLabel}”绑定的点位不存在：${pointCode}`);
 
-    const origin = numberTuple(record?.origin);
-    if (!origin) throw new Error(`法线“${normalLabel}”的圆心坐标无效`);
+    const origin = numberTuple(options.positionField === "origin" ? record?.origin : record?.position);
+    if (!origin) throw new Error(`${options.itemName}“${itemLabel}”的坐标无效`);
     const direction = numberTuple(record?.direction);
-    if (!direction) throw new Error(`法线“${normalLabel}”的法向量无效`);
-    const diameter = Number(record?.diameter);
-    if (!Number.isFinite(diameter) || diameter <= 0) {
-      throw new Error(`法线“${normalLabel}”的目标直径无效`);
+    if (!direction) throw new Error(`${options.itemName}“${itemLabel}”的法向量无效`);
+    const diameterValue = Number(record?.diameter);
+    if (options.requireDiameter && (!Number.isFinite(diameterValue) || diameterValue <= 0)) {
+      throw new Error(`${options.itemName}“${itemLabel}”的目标直径无效`);
     }
 
     rows.push({
@@ -101,15 +134,15 @@ export function prepareNormalAnnotationExport(
       pointCode: textValue(point.pointCode) || pointCode,
       origin,
       direction,
-      diameter,
+      diameter: options.requireDiameter ? diameterValue : null,
       recognitionType: displayRecognitionType(point.recognitionTypeList),
     });
   });
 
   if (unboundNormals.length > 0) {
-    throw new Error(`请先为以下法线绑定点位：${unboundNormals.join("、")}`);
+    throw new Error(`请先为以下${options.itemName}绑定点位：${unboundNormals.join("、")}`);
   }
-  if (rows.length === 0) throw new Error("暂无可导出的法线标注");
+  if (rows.length === 0) throw new Error(`暂无可导出的${options.collectionName}`);
   return { rows };
 }
 
@@ -119,18 +152,35 @@ export function exportNormalAnnotationExcel(
   data: unknown,
 ) {
   const prepared = prepareNormalAnnotationExport(projectName, data);
+  return exportAnnotationExcel(destDir, prepared, "法线标注");
+}
+
+export function exportInspectionPointExcel(
+  projectName: string,
+  destDir: string,
+  data: unknown,
+) {
+  const prepared = prepareInspectionPointExport(projectName, data);
+  return exportAnnotationExcel(destDir, prepared, "巡检点标注");
+}
+
+function exportAnnotationExcel(
+  destDir: string,
+  prepared: PreparedNormalAnnotationExport,
+  filePrefix: string,
+) {
   const outputDir = path.resolve(String(destDir || "").trim());
   if (!path.isAbsolute(outputDir) || !fs.existsSync(outputDir) || !fs.statSync(outputDir).isDirectory()) {
     throw new Error("导出目录无效");
   }
 
-  const fileName = uniqueFileName(outputDir, `法线标注_${formatExportTime(new Date())}.xlsx`);
+  const fileName = uniqueFileName(outputDir, `${filePrefix}_${formatExportTime(new Date())}.xlsx`);
   const filePath = path.join(outputDir, fileName);
-  fs.writeFileSync(filePath, generateNormalAnnotationExcel(prepared.rows));
+  fs.writeFileSync(filePath, generateAnnotationExcel(prepared.rows));
   return { success: true, filePath, fileName, exportedCount: prepared.rows.length };
 }
 
-function generateNormalAnnotationExcel(rows: NormalAnnotationExportRow[]): Buffer {
+function generateAnnotationExcel(rows: NormalAnnotationExportRow[]): Buffer {
   const dataRows = rows.map((row, index) => [
     index + 1,
     COLLECT_TYPE,

@@ -3,8 +3,16 @@ import { Tree, Modal, message } from "antd";
 import type { TreeProps, TreeDataNode } from "antd";
 import TreeView from "./TreeView";
 import DeviceTree from "@/components/DeviceTree";
-import { deleteCabinetDevicesFromJson, isDrawingDataFileName, isReferencePathFileName } from "../hooks/drawing/drawing-storage";
+import type { DevicePoint } from "@robot/database";
+import {
+  deleteCabinetDevicesFromJson,
+  INSPECTION_POINTS_FILE_NAME,
+  isDrawingDataFileName,
+  isReferencePathFileName,
+  loadInspectionPoints,
+} from "../hooks/drawing/drawing-storage";
 import type { SpaceTreeNode } from "../types";
+import type { InspectionPointItem } from "../hooks/drawing/drawing-schema";
 import { MAP_DIR_NAME, isLasOrLazFileName, loadedFileKey } from "../utils/space-paths";
 import { useSelectedProject } from "@/stores/appContextStore";
 
@@ -15,7 +23,7 @@ const MAIN_DEVICE_TYPE_CABINET = 29;
 
 interface Props {
   panelWidth: number;
-  onLoadLas?: (filePath: string) => Promise<void>;
+  onLoadLas?: (filePath: string, loadAllContents?: boolean) => Promise<void>;
   onToggleVisible?: (filePath: string) => void;
   onUnloadMapFile?: (filePath: string) => Promise<boolean>;
   loadedFiles: Set<string>;
@@ -35,6 +43,12 @@ interface Props {
   modelBusy?: boolean;
   /** 地图树加载完成后的回调，用于扫描区域文件 */
   onMapTreeLoaded?: (nodes: SpaceTreeNode[]) => void;
+  activeModelPath?: string | null;
+  inspectionPoints?: InspectionPointItem[];
+  shownInspectionPointIds?: Set<string>;
+  selectedInspectionPointId?: string | null;
+  onSelectInspectionPoint?: (item: InspectionPointItem) => void;
+  onSetInspectionPointVisibility?: (ids: string[], visible: boolean) => void;
 }
 
 const TABS = [
@@ -48,6 +62,118 @@ function isDirectMapDirNode(node: SpaceTreeNode): boolean {
   if (!node.isDir) return false;
   const parts = node.path.split(/[\\/]+/).filter(Boolean);
   return parts.length >= 2 && parts[parts.length - 2] === MAP_DIR_NAME;
+}
+
+function parentPath(filePath: string): string {
+  return filePath.replace(/[\\/][^\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
+}
+
+function normalizedPath(filePath: string): string {
+  return filePath.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+function normalizePointCode(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function pointBayKey(point: Pick<DevicePoint, "bayId" | "bayCode" | "bayName">): string {
+  const code = String(point.bayCode || "").trim();
+  if (code) return `code:${code}`;
+  const id = Number(point.bayId);
+  if (Number.isFinite(id) && id > 0) return `id:${id}`;
+  const name = String(point.bayName || "").trim();
+  return name ? `name:${name}` : "unassigned";
+}
+
+function pointBayName(point: Pick<DevicePoint, "bayId" | "bayCode" | "bayName">): string {
+  return String(point.bayName || point.bayCode || (Number(point.bayId) > 0 ? `间隔 ${point.bayId}` : "未分配间隔")).trim();
+}
+
+function collectInspectionPointFiles(nodes: SpaceTreeNode[]): Array<{ mapDir: string; filePath: string | null }> {
+  const result: Array<{ mapDir: string; filePath: string | null }> = [];
+  const walk = (items: SpaceTreeNode[]) => {
+    items.forEach((node) => {
+      if (isDirectMapDirNode(node)) {
+        const file = node.children?.find((child) => !child.isDir && child.name === INSPECTION_POINTS_FILE_NAME);
+        result.push({ mapDir: normalizedPath(node.path), filePath: file?.path ?? null });
+        return;
+      }
+      if (node.children) walk(node.children);
+    });
+  };
+  walk(nodes);
+  return result;
+}
+
+function setMapContentActive(nodes: SpaceTreeNode[], active: boolean): SpaceTreeNode[] {
+  return nodes.map((node) => ({
+    ...node,
+    mapContentActive: active,
+    children: node.children ? setMapContentActive(node.children, active) : node.children,
+  }));
+}
+
+function injectInspectionPointTree(
+  nodes: SpaceTreeNode[],
+  activeModelPath: string | null | undefined,
+  activeItems: InspectionPointItem[],
+  storedItemsByMap: Map<string, InspectionPointItem[]>,
+  pointBayByCode: Map<string, { key: string; name: string }>,
+): SpaceTreeNode[] {
+  const activeDir = activeModelPath ? parentPath(activeModelPath) : null;
+  return nodes.map((node) => {
+    const children = node.children
+      ? injectInspectionPointTree(node.children, activeModelPath, activeItems, storedItemsByMap, pointBayByCode)
+      : node.children;
+    if (!isDirectMapDirNode(node)) return children === node.children ? node : { ...node, children };
+    const mapDir = normalizedPath(node.path);
+    const isActiveMap = !!activeDir && mapDir === activeDir;
+    const inspectionItems = isActiveMap ? activeItems : storedItemsByMap.get(mapDir) ?? [];
+    const mapChildren = setMapContentActive(children ?? [], isActiveMap);
+    if (inspectionItems.length === 0) {
+      return { ...node, mapContentActive: isActiveMap, children: mapChildren };
+    }
+    const groups = new Map<string, { name: string; items: InspectionPointItem[] }>();
+    inspectionItems.forEach((item) => {
+      const bay = item.pointCode ? pointBayByCode.get(normalizePointCode(item.pointCode)) : undefined;
+      const key = bay?.key || "unassigned";
+      const name = bay?.name || "未分配间隔";
+      const group = groups.get(key) || { name, items: [] };
+      group.items.push(item);
+      groups.set(key, group);
+    });
+    const inspectionBays = [...groups.entries()]
+      .sort((left, right) => left[1].name.localeCompare(right[1].name, "zh-Hans-CN", { numeric: true }))
+      .map(([bayKey, group]) => ({
+        name: group.name,
+        path: `${node.path}#inspection-bay:${encodeURIComponent(bayKey)}`,
+        isDir: true,
+        virtualType: "inspection-bay" as const,
+        inspectionBayKey: bayKey,
+        inspectionMapActive: isActiveMap,
+        mapContentActive: isActiveMap,
+        children: group.items.map((item, index) => ({
+          name: item.name?.trim() || `巡检点 ${index + 1}`,
+          path: `${node.path}#inspection-point:${item.id}`,
+          isDir: false,
+          virtualType: "inspection-point" as const,
+          inspectionPointId: item.id,
+          inspectionBayKey: bayKey,
+          inspectionMapActive: isActiveMap,
+          mapContentActive: isActiveMap,
+        })),
+      }));
+    const inspectionRoot: SpaceTreeNode = {
+      name: `巡检点 (${inspectionItems.length})`,
+      path: `${node.path}#inspection-points`,
+      isDir: true,
+      virtualType: "inspection-root",
+      inspectionMapActive: isActiveMap,
+      mapContentActive: isActiveMap,
+      children: inspectionBays,
+    };
+    return { ...node, mapContentActive: isActiveMap, children: [...mapChildren, inspectionRoot] };
+  });
 }
 
 type DeleteStage = "unload" | "database" | "filesystem";
@@ -172,10 +298,12 @@ const TREE_CSS = `
   .side-tree .ant-tree-switcher { width: 16px; flex-shrink: 0; }
 `;
 
-export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUnloadMapFile, loadedFiles, treeKey, loadingFile, mapDrawingShown, mapDrawingAvailableTypes, onToggleDrawing, mapPathShown, onTogglePath, modelBusy = false, onMapTreeLoaded }: Props) {
+export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUnloadMapFile, loadedFiles, treeKey, loadingFile, mapDrawingShown, mapDrawingAvailableTypes, onToggleDrawing, mapPathShown, onTogglePath, modelBusy = false, onMapTreeLoaded, activeModelPath, inspectionPoints = [], shownInspectionPointIds = new Set(), selectedInspectionPointId = null, onSelectInspectionPoint, onSetInspectionPointVisibility }: Props) {
   const selectedProject = useSelectedProject();
   const [sideTab, setSideTab] = useState("map");
   const [mapTreeData, setMapTreeData] = useState<SpaceTreeNode[]>([]);
+  const [storedInspectionPointsByMap, setStoredInspectionPointsByMap] = useState<Map<string, InspectionPointItem[]>>(new Map());
+  const [pointBayByCode, setPointBayByCode] = useState<Map<string, { key: string; name: string }>>(new Map());
   const [mapPotreeStatuses, setMapPotreeStatuses] = useState<Record<string, ProjectMapPotreeState>>({});
   const [cabinetTreeData, setCabinetTreeData] = useState<TreeDataNode[]>([]);
   const [cabinetSelectedKeys, setCabinetSelectedKeys] = useState<React.Key[]>([]);
@@ -183,11 +311,16 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
   const [treeLoading, setTreeLoading] = useState(false);
   const deleteLockedRef = useRef(false);
   const [deletingPath, setDeletingPath] = useState<string | null>(null);
+  const renderedMapTreeData = React.useMemo(
+    () => injectInspectionPointTree(mapTreeData, activeModelPath, inspectionPoints, storedInspectionPointsByMap, pointBayByCode),
+    [activeModelPath, inspectionPoints, mapTreeData, pointBayByCode, storedInspectionPointsByMap],
+  );
 
   const loadMapTree = useCallback(async () => {
     if (!selectedProject || !window.electronAPI) {
       setMapTreeData([]);
       setMapPotreeStatuses({});
+      setStoredInspectionPointsByMap(new Map());
       return;
     }
     try {
@@ -197,15 +330,44 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
         api.project.getManifest(selectedProject),
         api.getProjectRoot(),
       ]);
+      const inspectionEntries = await Promise.all(
+        collectInspectionPointFiles(nodes).map(async ({ mapDir, filePath }) => [
+          mapDir,
+          filePath ? await loadInspectionPoints(api, filePath) : [],
+        ] as const),
+      );
       setMapTreeData(nodes);
       setMapPotreeStatuses(buildMapPotreeStatuses(projectRoot || "", manifest));
+      setStoredInspectionPointsByMap(new Map(inspectionEntries));
       // 通知 workspace 扫描区域文件
       onMapTreeLoaded?.(nodes);
     } catch {
       setMapTreeData([]);
       setMapPotreeStatuses({});
+      setStoredInspectionPointsByMap(new Map());
     }
   }, [selectedProject, onMapTreeLoaded]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const api = window.electronAPI;
+    if (!selectedProject || !api?.db?.point) {
+      setPointBayByCode(new Map());
+      return () => { cancelled = true; };
+    }
+    api.db.point.list(selectedProject)
+      .then((points) => {
+        if (cancelled) return;
+        const bayMap = new Map<string, { key: string; name: string }>();
+        (points as DevicePoint[]).forEach((point) => {
+          const code = normalizePointCode(point.pointCode);
+          if (code) bayMap.set(code, { key: pointBayKey(point), name: pointBayName(point) });
+        });
+        setPointBayByCode(bayMap);
+      })
+      .catch(() => { if (!cancelled) setPointBayByCode(new Map()); });
+    return () => { cancelled = true; };
+  }, [selectedProject, treeKey]);
 
   const loadBayTypeTree = useCallback(async (bayType: string, setter: React.Dispatch<React.SetStateAction<TreeDataNode[]>>) => {
     if (!selectedProject || !window.electronAPI) {
@@ -389,11 +551,11 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
         </div>
         <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 8 }}>
           {sideTab === "map" ? (
-            mapTreeData.length === 0 ? (
+            renderedMapTreeData.length === 0 ? (
               <div style={{ color: "#999", textAlign: "center", padding: 16, fontSize: 12 }}>暂无数据</div>
             ) : (
               <TreeView
-                nodes={mapTreeData}
+                nodes={renderedMapTreeData}
                 loadedFiles={loadedFiles}
                 loadingFile={loadingFile}
                 onLoadLas={onLoadLas}
@@ -407,6 +569,11 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
                 onTogglePath={onTogglePath}
                 mapPotreeStatuses={mapPotreeStatuses}
                 modelBusy={modelBusy || deletingPath !== null}
+                inspectionPoints={inspectionPoints}
+                shownInspectionPointIds={shownInspectionPointIds}
+                selectedInspectionPointId={selectedInspectionPointId}
+                onSelectInspectionPoint={onSelectInspectionPoint}
+                onSetInspectionPointVisibility={onSetInspectionPointVisibility}
               />
             )
           ) : sideTab === "device" ? (

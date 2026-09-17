@@ -4,9 +4,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertInside, resolveProjectDir, resolveProjectRootPath } from "../project-core/project-paths";
-import { updateManifestForPotreeModel, type ProjectMapPotreeStatus } from "../project-core/project-manifest";
+import {
+  updateManifestForPotreeModel,
+  updateManifestForWrittenFile,
+  type ProjectMapPotreeStatus,
+} from "../project-core/project-manifest";
 import { ensureProjectRoot, getProjectRoot } from "../project-core/project-root";
 import { readLasModelBounds, type LasClipBounds } from "./las-clip";
+import { prepareLasBoundsForPotree } from "./las-bounds-repair";
 import { createProjectAssetUrl } from "./project-asset-protocol";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -442,15 +447,14 @@ async function ensureModelInternal(
   notify("checking", 2, "正在检查 Potree 数据");
   recordModelState(projectName, safeModelPath, outputDir, metadataPath, "checking");
 
-  let bounds: LasClipBounds;
-  try {
-    bounds = await readLasModelBounds(safeModelPath);
-  } catch (error) {
-    recordModelState(projectName, safeModelPath, outputDir, metadataPath, "error", { error: error instanceof Error ? error.message : String(error) });
-    throw error;
-  }
-
   if (await hasUsableOutput(safeModelPath, outputDir)) {
+    let bounds: LasClipBounds;
+    try {
+      bounds = await readLasModelBounds(safeModelPath);
+    } catch (error) {
+      recordModelState(projectName, safeModelPath, outputDir, metadataPath, "error", { error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
     recordModelState(projectName, safeModelPath, outputDir, metadataPath, "ready", { generated: false });
     notify("complete", 100, "Potree 数据已就绪");
     return { modelPath: safeModelPath, metadataUrl: createProjectAssetUrl(metadataPath), generated: false, bounds };
@@ -458,9 +462,24 @@ async function ensureModelInternal(
 
   const tempDir = `${outputDir}.tmp-${process.pid}-${Date.now()}`;
   try {
-    notify("converting", 4, "正在启动 PotreeConverter");
+    const prepared = await prepareLasBoundsForPotree(
+      safeModelPath,
+      (percent, message) => notify("checking", percent, message),
+    );
+    const bounds = prepared.bounds;
+    if (prepared.repaired) {
+      updateManifestForWrittenFile(projectName, safeModelPath, (await fs.promises.stat(safeModelPath)).size);
+    }
+    if (prepared.mapInfoUpdated) {
+      updateManifestForWrittenFile(projectName, prepared.mapInfoPath, (await fs.promises.stat(prepared.mapInfoPath)).size);
+    }
+
+    notify("converting", 15, "正在启动 PotreeConverter");
     recordModelState(projectName, safeModelPath, outputDir, metadataPath, "converting");
-    await runConverter(safeModelPath, tempDir, (percent, message) => notify("converting", percent, message));
+    await runConverter(safeModelPath, tempDir, (percent, message) => {
+      const mappedPercent = Math.min(94, Math.max(15, 15 + Math.round(((percent - 4) / 90) * 79)));
+      notify("converting", mappedPercent, message);
+    });
     notify("validating", 96, "正在校验转换产物");
     recordModelState(projectName, safeModelPath, outputDir, metadataPath, "validating");
     await validateOutput(tempDir);

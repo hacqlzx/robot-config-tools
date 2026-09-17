@@ -25,6 +25,7 @@ const MAP_MODEL_FILE_NAME = "map.las";
 const MAP_INFO_FILE_NAME = "map_info.json";
 const DESCRIPTION_FILE_NAME = "description_file.json";
 const NORMAL_ANNOTATIONS_FILE_NAME = "normal_annotations.json";
+const INSPECTION_POINTS_FILE_NAME = "inspection_points.json";
 const REFERENCE_PATH_FILE_NAME = "reference_path.txt";
 const ROBOT_PATH_FILE_NAME = "path.json";
 const ROBOT_STOP_POINT_FILE_NAMES = new Set(["stop_points.json", "stop_point.json"]);
@@ -176,6 +177,19 @@ function shiftNormalAnnotations(data: unknown, origin: Vec3): unknown {
     if (item && typeof item === "object" && !Array.isArray(item)) {
       const record = item as Record<string, unknown>;
       if ("origin" in record) record.origin = shiftTuple(record.origin, origin);
+    }
+  });
+  return data;
+}
+
+function shiftInspectionPoints(data: unknown, origin: Vec3): unknown {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return data;
+  const items = (data as Record<string, unknown>).items;
+  if (!Array.isArray(items)) return data;
+  items.forEach((item) => {
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      const record = item as Record<string, unknown>;
+      if ("position" in record) record.position = shiftTuple(record.position, origin);
     }
   });
   return data;
@@ -375,6 +389,7 @@ async function copyCompanionFiles(sourceDir: string, targetDir: string, sourceMo
 async function transformCompanionFiles(targetDir: string, mapName: string, origin: Vec3, bounds: ReturnType<typeof shiftedBounds>): Promise<void> {
   await transformJsonFile(path.join(targetDir, DESCRIPTION_FILE_NAME), (data) => shiftDescriptionFile(data, origin));
   await transformJsonFile(path.join(targetDir, NORMAL_ANNOTATIONS_FILE_NAME), (data) => shiftNormalAnnotations(data, origin));
+  await transformJsonFile(path.join(targetDir, INSPECTION_POINTS_FILE_NAME), (data) => shiftInspectionPoints(data, origin));
   await transformJsonFile(path.join(targetDir, ROBOT_PATH_FILE_NAME), (data) => shiftRobotPathFile(data, origin));
   for (const fileName of ROBOT_STOP_POINT_FILE_NAMES) {
     await transformJsonFile(path.join(targetDir, fileName), (data) => shiftRobotPathFile(data, origin));

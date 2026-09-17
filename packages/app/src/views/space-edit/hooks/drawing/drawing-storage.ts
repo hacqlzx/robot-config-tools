@@ -21,6 +21,7 @@ import {
   AREA_TYPE_CHARGING,
   AREA_TYPE_DEVICE,
   DRAWING_FILE_NAME,
+  INSPECTION_POINTS_FILE_NAME,
   NORMAL_ANNOTATIONS_FILE_NAME,
   PATH_FILE_NAME,
   ROBOT_PATH_FILE_NAME,
@@ -33,6 +34,8 @@ import {
   type PathPoint,
   type NormalAnnotationItem,
   type NormalAnnotationFile,
+  type InspectionPointItem,
+  type InspectionPointFile,
   type RobotAreaRecord,
 } from "./drawing-schema";
 import {
@@ -62,6 +65,7 @@ import {
   valueText,
 } from "./drawing-codec-utils";
 import {
+  PATH_CHARGING_AREA_REQUIRED_MESSAGE,
   isPathStartInChargingArea,
   orderedPathPoints,
   PATH_START_CHARGING_AREA_MESSAGE,
@@ -74,6 +78,7 @@ import {
 
 export {
   DRAWING_FILE_NAME,
+  INSPECTION_POINTS_FILE_NAME,
   NORMAL_ANNOTATIONS_FILE_NAME,
   PATH_FILE_NAME,
   ROBOT_PATH_FILE_NAME,
@@ -93,6 +98,8 @@ export type {
   PathSegment,
   NormalAnnotationFile,
   NormalAnnotationItem,
+  InspectionPointFile,
+  InspectionPointItem,
   RobotAreaRecord,
 } from "./drawing-schema";
 
@@ -178,6 +185,37 @@ function normalAnnotationRecords(data: unknown): NormalAnnotationItem[] {
   });
 }
 
+function inspectionPointRecords(data: unknown): InspectionPointItem[] {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return [];
+  const payload = data as { version?: unknown; items?: unknown };
+  if ((payload.version !== 1 && payload.version !== 2) || !Array.isArray(payload.items)) return [];
+  return payload.items.flatMap((value, index) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const record = value as Record<string, unknown>;
+    const position = normalAnnotationTuple(record.position ?? record.origin);
+    if (!position) return [];
+    const direction = normalAnnotationTuple(record.direction) ?? [0, 0, 1];
+    const directionLength = Math.hypot(...direction);
+    const normalizedDirection: [number, number, number] = directionLength > 1e-8
+      ? [direction[0] / directionLength, direction[1] / directionLength, direction[2] / directionLength]
+      : [0, 0, 1];
+    const storedLength = Number(record.length);
+    return [{
+      id: typeof record.id === "string" && record.id ? record.id : `inspection:${index + 1}`,
+      name: typeof record.name === "string" ? record.name : undefined,
+      componentType: typeof record.componentType === "string" && record.componentType.trim()
+        ? record.componentType.trim()
+        : undefined,
+      position,
+      direction: normalizedDirection,
+      length: Number.isFinite(storedLength) && storedLength > 0 ? storedLength : 0.8,
+      pointCode: typeof record.pointCode === "string" && record.pointCode.trim() ? record.pointCode : undefined,
+      pointName: typeof record.pointName === "string" && record.pointName.trim() ? record.pointName : undefined,
+      updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : "",
+    }];
+  });
+}
+
 /** 读取当前地图的法线标注；文件不存在时返回空数组。 */
 export async function loadNormalAnnotations(api: ElectronAPI, modelPath: string): Promise<NormalAnnotationItem[]> {
   try {
@@ -211,6 +249,41 @@ export async function saveNormalAnnotationsInLasCoordinates(params: {
   await api.project.writeFile(
     projectName,
     mapSiblingSubPath(modelPath, NORMAL_ANNOTATIONS_FILE_NAME),
+    buffer,
+  );
+}
+
+/** 读取当前地图的巡检点标注；文件不存在时返回空数组。 */
+export async function loadInspectionPoints(api: ElectronAPI, modelPath: string): Promise<InspectionPointItem[]> {
+  try {
+    return inspectionPointRecords(await readJsonFile(api, mapSiblingFilePath(modelPath, INSPECTION_POINTS_FILE_NAME)));
+  } catch {
+    return [];
+  }
+}
+
+/** 保存当前地图的巡检点标注，坐标保持 Potree 使用的 LAS 绝对坐标。 */
+export async function saveInspectionPointsInLasCoordinates(params: {
+  api: ElectronAPI;
+  projectName: string;
+  modelPath: string;
+  items: InspectionPointItem[];
+}): Promise<void> {
+  const { api, projectName, modelPath, items } = params;
+  const payload: InspectionPointFile = {
+    version: 2,
+    items: items.map((item) => ({
+      ...item,
+      position: [...item.position] as [number, number, number],
+      direction: [...item.direction] as [number, number, number],
+      updatedAt: item.updatedAt || new Date().toISOString(),
+    })),
+  };
+  const bytes = new TextEncoder().encode(JSON.stringify(payload, null, 2));
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  await api.project.writeFile(
+    projectName,
+    mapSiblingSubPath(modelPath, INSPECTION_POINTS_FILE_NAME),
     buffer,
   );
 }
@@ -659,6 +732,9 @@ async function loadRobotRouteDrawing(api: ElectronAPI, pathJsonPath: string): Pr
 
 function pathPointsStartingInChargingArea(points: PathPoint[], chargingArea: ChargingAreaItem | null): PathPoint[] {
   if (points.length === 0) return points;
+  if (!chargingArea) {
+    throw new Error(PATH_CHARGING_AREA_REQUIRED_MESSAGE);
+  }
   if (isPathStartInChargingArea(points[0], chargingArea)) return points;
   const endPoint = points.length > 1 ? points[points.length - 1] : null;
   if (endPoint && isPathStartInChargingArea(endPoint, chargingArea)) return [...points].reverse();

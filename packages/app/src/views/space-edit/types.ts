@@ -7,6 +7,11 @@ export interface SpaceTreeNode {
   path: string;
   isDir: boolean;
   children?: SpaceTreeNode[];
+  virtualType?: "inspection-root" | "inspection-bay" | "inspection-point";
+  inspectionPointId?: string;
+  inspectionBayKey?: string;
+  inspectionMapActive?: boolean;
+  mapContentActive?: boolean;
 }
 
 export interface ModelPointStats {

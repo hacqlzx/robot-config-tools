@@ -1,7 +1,13 @@
-import { Button, Popover, Segmented, Slider } from "antd";
-import { SettingOutlined } from "@ant-design/icons";
+import { Button, InputNumber, Popover, Segmented, Slider } from "antd";
+import { ReloadOutlined, SettingOutlined } from "@ant-design/icons";
 import {
   DEFAULT_SPACE_RENDER_SETTINGS,
+  SPACE_COLOR_ADJUSTMENT_MAX,
+  SPACE_COLOR_ADJUSTMENT_MIN,
+  SPACE_COLOR_ADJUSTMENT_STEP,
+  SPACE_GAMMA_MAX,
+  SPACE_GAMMA_MIN,
+  SPACE_GAMMA_STEP,
   SPACE_POINT_BUDGET_MAX,
   SPACE_POINT_BUDGET_ALL,
   SPACE_POINT_BUDGET_MIN,
@@ -28,6 +34,11 @@ function formatPointBudget(pointBudget: SpaceRenderSettings["pointBudget"]): str
   return pointBudget === SPACE_POINT_BUDGET_ALL
     ? "全部"
     : pointCountFormatter.format(pointBudget);
+}
+
+function formatColorAdjustment(value: number): string {
+  const percentage = Math.round(value * 100);
+  return `${percentage > 0 ? "+" : ""}${percentage}%`;
 }
 
 export default function PotreeRenderSettings({ settings, onChange }: PotreeRenderSettingsProps) {
@@ -82,6 +93,83 @@ export default function PotreeRenderSettings({ settings, onChange }: PotreeRende
             onChange={(pointBudget: number) => onChange({ ...settings, pointBudget })}
           />
         )}
+      </div>
+      <div style={{ display: "grid", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+          <span style={{ color: "#4b5563", fontSize: 13 }}>画面调整</span>
+          <Button
+            type="text"
+            size="small"
+            icon={<ReloadOutlined />}
+            disabled={settings.gamma === DEFAULT_SPACE_RENDER_SETTINGS.gamma
+              && settings.brightness === DEFAULT_SPACE_RENDER_SETTINGS.brightness
+              && settings.contrast === DEFAULT_SPACE_RENDER_SETTINGS.contrast}
+            onClick={() => onChange({
+              ...settings,
+              gamma: DEFAULT_SPACE_RENDER_SETTINGS.gamma,
+              brightness: DEFAULT_SPACE_RENDER_SETTINGS.brightness,
+              contrast: DEFAULT_SPACE_RENDER_SETTINGS.contrast,
+            })}
+          >
+            重置
+          </Button>
+        </div>
+        <div style={{ display: "grid", gap: 2 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+            <span style={{ color: "#4b5563", fontSize: 13 }}>伽马</span>
+            <InputNumber
+              min={SPACE_GAMMA_MIN}
+              max={SPACE_GAMMA_MAX}
+              step={SPACE_GAMMA_STEP}
+              precision={2}
+              value={settings.gamma}
+              onChange={(gamma) => {
+                if (gamma !== null) onChange({ ...settings, gamma });
+              }}
+              style={{ width: 76 }}
+            />
+          </div>
+          <Slider
+            min={SPACE_GAMMA_MIN}
+            max={SPACE_GAMMA_MAX}
+            step={SPACE_GAMMA_STEP}
+            value={settings.gamma}
+            tooltip={{ formatter: (value) => Number(value ?? 1).toFixed(2) }}
+            onChange={(gamma: number) => onChange({ ...settings, gamma })}
+          />
+        </div>
+        <div style={{ display: "grid", gap: 2 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+            <span style={{ color: "#4b5563", fontSize: 13 }}>亮度</span>
+            <span style={{ color: "#111827", fontSize: 13, fontVariantNumeric: "tabular-nums" }}>
+              {formatColorAdjustment(settings.brightness)}
+            </span>
+          </div>
+          <Slider
+            min={SPACE_COLOR_ADJUSTMENT_MIN}
+            max={SPACE_COLOR_ADJUSTMENT_MAX}
+            step={SPACE_COLOR_ADJUSTMENT_STEP}
+            value={settings.brightness}
+            tooltip={{ formatter: (value) => formatColorAdjustment(value || 0) }}
+            onChange={(brightness: number) => onChange({ ...settings, brightness })}
+          />
+        </div>
+        <div style={{ display: "grid", gap: 2 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+            <span style={{ color: "#4b5563", fontSize: 13 }}>对比度</span>
+            <span style={{ color: "#111827", fontSize: 13, fontVariantNumeric: "tabular-nums" }}>
+              {formatColorAdjustment(settings.contrast)}
+            </span>
+          </div>
+          <Slider
+            min={SPACE_COLOR_ADJUSTMENT_MIN}
+            max={SPACE_COLOR_ADJUSTMENT_MAX}
+            step={SPACE_COLOR_ADJUSTMENT_STEP}
+            value={settings.contrast}
+            tooltip={{ formatter: (value) => formatColorAdjustment(value || 0) }}
+            onChange={(contrast: number) => onChange({ ...settings, contrast })}
+          />
+        </div>
       </div>
     </div>
   );

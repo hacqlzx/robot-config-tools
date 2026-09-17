@@ -5,11 +5,16 @@ import type {
   SpaceSceneAdapter,
 } from "../engine/types";
 
-interface SpaceDrawingHistoryEntry {
+export interface SpaceDrawingHistoryEntry {
   scope: SpaceDrawingHistoryScope;
   before: SpaceDrawingHistorySnapshot;
   after: SpaceDrawingHistorySnapshot;
   label: string;
+}
+
+export interface SpaceDrawingHistoryCheckpoint {
+  entries: SpaceDrawingHistoryEntry[];
+  index: number;
 }
 
 interface UseSpaceDrawingHistoryParams {
@@ -89,12 +94,25 @@ export function useSpaceDrawingHistory({ adapter, onRestore }: UseSpaceDrawingHi
     refresh();
   }, [refresh]);
 
+  const createCheckpoint = useCallback((): SpaceDrawingHistoryCheckpoint => ({
+    entries: entriesRef.current.slice(),
+    index: indexRef.current,
+  }), []);
+
+  const restoreCheckpoint = useCallback((checkpoint: SpaceDrawingHistoryCheckpoint) => {
+    entriesRef.current = checkpoint.entries.slice();
+    indexRef.current = Math.max(0, Math.min(checkpoint.index, entriesRef.current.length));
+    refresh();
+  }, [refresh]);
+
   return {
     record,
     undo,
     redo,
     clear,
     clearScope,
+    createCheckpoint,
+    restoreCheckpoint,
     canUndo: indexRef.current > 0,
     canRedo: indexRef.current < entriesRef.current.length,
     version,

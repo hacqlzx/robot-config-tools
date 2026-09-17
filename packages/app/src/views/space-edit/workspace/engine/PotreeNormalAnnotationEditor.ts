@@ -72,6 +72,8 @@ const MIN_NORMAL_NEIGHBORS = 6;
 const MIN_CIRCLE_RADIUS = 8;
 const MAX_CIRCLE_SAMPLES = 192;
 const MAX_CIRCLE_PICK_WINDOW = 257;
+const SURFACE_PICK_WINDOW_SIZES = [5, 9, 15] as const;
+const SURFACE_NORMAL_PICK_WINDOW = 11;
 const NORMAL_VERTICAL_COMPONENT = 0.72;
 const MIN_RAISED_ABOVE_SUPPORT = 0.02;
 
@@ -401,6 +403,14 @@ export class PotreeNormalAnnotationEditor {
 
   getData(): NormalAnnotationItem[] {
     return cloneItems(this.items);
+  }
+
+  /** 复用法线标注的局部平面拟合，但不创建法线标注或展示采样范围。 */
+  pickSurfaceNormal(mouse: { x: number; y: number }): { position: Vec3; direction: Vec3; length: number } | null {
+    const picked = this.pickPoint(mouse);
+    return picked
+      ? { position: picked.position, direction: picked.normal, length: this.defaultLength() }
+      : null;
   }
 
   select(id: string | null): void {
@@ -746,13 +756,59 @@ export class PotreeNormalAnnotationEditor {
 
   private pickIntersection(mouse: { x: number; y: number }): PotreePointCloudIntersection | null {
     const camera = this.viewer.scene.getActiveCamera?.();
-    const pick = this.potree.Utils?.getMousePointCloudIntersection;
-    if (!camera || !pick || this.viewer.scene.pointclouds.length === 0) return null;
-    try {
-      return pick(mouse, camera, this.viewer, this.viewer.scene.pointclouds, { pickClipped: true });
-    } catch {
-      return null;
+    const ray = camera ? this.mouseRay(camera, mouse) : null;
+    if (!camera || !ray || this.viewer.scene.pointclouds.length === 0) return null;
+
+    const rayDirection = normalize([ray.direction.x, ray.direction.y, ray.direction.z]);
+    if (!rayDirection) return null;
+    const element = this.viewer.renderer.domElement;
+
+    // Potree normally chooses the hit closest to the cursor inside a fairly
+    // large pixel window. On a sparse foreground surface that can select a
+    // background point visible through a sampling gap. Start with a small
+    // window, prefer its front-most depth, and only expand when it is empty.
+    for (const pickWindowSize of SURFACE_PICK_WINDOW_SIZES) {
+      let closest: PotreePointCloudIntersection | null = null;
+      let closestDepth = Number.POSITIVE_INFINITY;
+
+      for (const pointcloud of this.viewer.scene.pointclouds) {
+        if (!pointcloud.visible || !pointcloud.pick) continue;
+        let picked: unknown;
+        try {
+          picked = pointcloud.pick(this.viewer, camera, ray, {
+            pickClipped: true,
+            x: mouse.x,
+            y: element.clientHeight - mouse.y,
+            pickWindowSize,
+            all: true,
+          });
+        } catch {
+          continue;
+        }
+
+        const candidates = Array.isArray(picked) ? picked : picked ? [picked] : [];
+        for (const candidate of candidates) {
+          if (!candidate || typeof candidate !== "object") continue;
+          const point = candidate as Record<string, unknown>;
+          const position = valueAsVec3(point.position);
+          if (!position) continue;
+          const fromCamera = subtract(position, [ray.origin.x, ray.origin.y, ray.origin.z]);
+          const depth = dot(fromCamera, rayDirection);
+          if (!Number.isFinite(depth) || depth <= 0 || depth >= closestDepth) continue;
+          const distance = Math.hypot(fromCamera[0], fromCamera[1], fromCamera[2]);
+          closestDepth = depth;
+          closest = {
+            location: { x: position[0], y: position[1], z: position[2] },
+            distance,
+            pointcloud,
+            point,
+          };
+        }
+      }
+
+      if (closest) return closest;
     }
+    return null;
   }
 
   private pickLocation(mouse: { x: number; y: number }): PointLocation | null {
@@ -1027,7 +1083,7 @@ export class PotreeNormalAnnotationEditor {
         pickClipped: true,
         x: mouse.x,
         y: element.clientHeight - mouse.y,
-        pickWindowSize: 11,
+        pickWindowSize: SURFACE_NORMAL_PICK_WINDOW,
         all: true,
       });
     } catch {
@@ -1035,10 +1091,16 @@ export class PotreeNormalAnnotationEditor {
     }
     if (!Array.isArray(picked)) return null;
 
+    const depthTolerance = this.surfaceDepthTolerance(
+      origin,
+      camera,
+      (SURFACE_NORMAL_PICK_WINDOW - 1) / 2,
+    );
     const samples = picked.flatMap((value) => {
       if (!value || typeof value !== "object") return [];
       const point = valueAsVec3((value as Record<string, unknown>).position);
       if (!point || Math.hypot(point[0] - origin[0], point[1] - origin[1], point[2] - origin[2]) < 1e-5) return [];
+      if (cameraNormal && Math.abs(dot(subtract(point, origin), cameraNormal)) > depthTolerance) return [];
       return [{
         point,
         distance: Math.hypot(point[0] - origin[0], point[1] - origin[1], point[2] - origin[2]),
@@ -1198,6 +1260,20 @@ export class PotreeNormalAnnotationEditor {
     }
     if (nearest.length < 3) return null;
 
+    const camera = this.viewer.scene.getActiveCamera?.();
+    if (cameraNormal && camera) {
+      const depthTolerance = Math.max(
+        this.surfaceDepthTolerance(origin, camera, (SURFACE_NORMAL_PICK_WINDOW - 1) / 2),
+        primary.spacing * 3,
+        radius * 0.5,
+      );
+      const sameSurface = nearest.filter(({ point }) => (
+        Math.abs(dot(subtract(point, origin), cameraNormal)) <= depthTolerance
+      ));
+      if (sameSurface.length < 3) return null;
+      nearest = sameSurface;
+    }
+
     const distances = nearest.map(({ distance }) => distance);
     const localScale = Math.max(median(distances.slice(0, 12)), 1e-4);
     const tolerance = Math.max(primary.spacing * 1.5, localScale * 0.22, 1e-4);
@@ -1310,6 +1386,19 @@ export class PotreeNormalAnnotationEditor {
   private cameraFacingNormal(mouse: { x: number; y: number }, camera: PotreeCamera): Vec3 | null {
     const ray = this.mouseRay(camera, mouse);
     return ray ? normalize([-ray.direction.x, -ray.direction.y, -ray.direction.z]) : null;
+  }
+
+  private surfaceDepthTolerance(origin: Vec3, camera: PotreeCamera, pixelRadius: number): number {
+    const viewPosition = this.viewer.scene.view.position;
+    const cameraDistance = Math.hypot(
+      origin[0] - viewPosition.x,
+      origin[1] - viewPosition.y,
+      origin[2] - viewPosition.z,
+    );
+    const viewportHeight = Math.max(1, this.viewer.renderer.domElement.clientHeight);
+    const fieldOfView = Math.min(170, Math.max(1, Number(camera.fov) || 60));
+    const worldPerPixel = 2 * cameraDistance * Math.tan((fieldOfView * Math.PI) / 360) / viewportHeight;
+    return Math.max(worldPerPixel * Math.max(3, pixelRadius), cameraDistance * 1e-4, 1e-4);
   }
 
   private orientTowardCamera(normal: Vec3 | null, origin: Vec3): Vec3 | null {

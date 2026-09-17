@@ -11,6 +11,7 @@ import {
 } from "@ant-design/icons";
 import {
   DRAWING_FILE_NAME,
+  INSPECTION_POINTS_FILE_NAME,
   NORMAL_ANNOTATIONS_FILE_NAME,
   PATH_FILE_NAME,
   ROBOT_PATH_FILE_NAME,
@@ -19,6 +20,7 @@ import {
   isReferencePathFileName,
 } from "../hooks/drawing/drawing-storage";
 import type { SpaceTreeNode } from "../types";
+import type { InspectionPointItem } from "../hooks/drawing/drawing-schema";
 import { MAP_INFO_FILE_NAME, isLasOrLazFileName, loadedFileKey } from "../utils/space-paths";
 
 interface Props {
@@ -26,7 +28,7 @@ interface Props {
   depth?: number;
   loadedFiles: Set<string>;
   loadingFile: string;
-  onLoadLas?: (filePath: string) => Promise<void>;
+  onLoadLas?: (filePath: string, loadAllContents?: boolean) => Promise<void>;
   onToggleVisible?: (filePath: string) => void;
   /** 懒加载子节点，返回的 children 会被合并到对应节点下 */
   loadChildren?: (node: SpaceTreeNode) => Promise<SpaceTreeNode[]>;
@@ -48,6 +50,11 @@ interface Props {
   mapPotreeStatuses?: Record<string, ProjectMapPotreeState>;
   /** 模型操作进行中，禁止地图树触发新的加载或切换 */
   modelBusy?: boolean;
+  inspectionPoints?: InspectionPointItem[];
+  shownInspectionPointIds?: Set<string>;
+  selectedInspectionPointId?: string | null;
+  onSelectInspectionPoint?: (item: InspectionPointItem) => void;
+  onSetInspectionPointVisibility?: (ids: string[], visible: boolean) => void;
 }
 
 // 虚拟节点类型后缀，用于区分同一 JSON 文件的不同类型
@@ -68,6 +75,13 @@ function parseVirtualDrawingPath(virtualPath: string): { jsonPath: string; subTy
 // 判断是否是虚拟绘制节点
 function isVirtualDrawingPath(path: string): boolean {
   return /#(cabinet|charging|device)$/.test(path);
+}
+
+function requiresLoadedMap(node: SpaceTreeNode): boolean {
+  return isVirtualDrawingPath(node.path)
+    || isDrawingDataFileName(node.name)
+    || isReferencePathFileName(node.name)
+    || isRobotStopPointFileName(node.name);
 }
 
 function displayNodeName(node: SpaceTreeNode): string {
@@ -113,12 +127,12 @@ function getPotreeStatusMeta(status?: ProjectMapPotreeState["status"], error?: s
   }
 }
 
-export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, onLoadLas, onToggleVisible, loadChildren, onRequestDelete, onRequestOpenDir, drawingShown, drawingAvailableTypes, onToggleDrawing, pathShown, onTogglePath, mapPotreeStatuses, modelBusy = false }: Props) {
+export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, onLoadLas, onToggleVisible, loadChildren, onRequestDelete, onRequestOpenDir, drawingShown, drawingAvailableTypes, onToggleDrawing, pathShown, onTogglePath, mapPotreeStatuses, modelBusy = false, inspectionPoints = [], shownInspectionPointIds = new Set(), selectedInspectionPointId = null, onSelectInspectionPoint, onSetInspectionPointVisibility }: Props) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
     const expandAll = (list: SpaceTreeNode[]) => {
       list.forEach((node) => {
-        if (node.isDir) {
+        if (node.isDir && node.virtualType !== "inspection-root") {
           init[node.path] = true;
           if (node.children) expandAll(node.children);
         }
@@ -136,14 +150,14 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
   const [loadingNodes, setLoadingNodes] = useState<Set<string>>(new Set());
   const loadedRef = useRef<Set<string>>(new Set());
 
-  // 当节点变化时自动展开新目录和 description_file.json
+  // 当节点变化时自动展开新目录和 description_file.json；巡检点目录常驻但默认收起。
   useEffect(() => {
     setExpanded((prev) => {
       const next = { ...prev };
       let changed = false;
       const expandNew = (list: SpaceTreeNode[]) => {
         list.forEach((node) => {
-          if (node.isDir) {
+          if (node.isDir && node.virtualType !== "inspection-root") {
             if (!(node.path in next)) { next[node.path] = true; changed = true; }
             if (node.children) expandNew(node.children);
           }
@@ -163,6 +177,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
   const isPath = isReferencePathFileName;
   const isHiddenFile = (name: string) => name === MAP_INFO_FILE_NAME
     || name === NORMAL_ANNOTATIONS_FILE_NAME
+    || name === INSPECTION_POINTS_FILE_NAME
     || isRobotStopPointFileName(name);
   
   const isVisibleTreeNode = (node: SpaceTreeNode) => {
@@ -208,22 +223,22 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
       // 如果还没有加载过数据，显示所有三个类型（待检测）
       if (!availableTypes) {
         return [
-          { path: makeVirtualDrawingPath(node.path, "cabinet"), name: "屏柜", isDir: false },
-          { path: makeVirtualDrawingPath(node.path, "charging"), name: "充电区域", isDir: false },
-          { path: makeVirtualDrawingPath(node.path, "device"), name: "设备区域", isDir: false },
+          { path: makeVirtualDrawingPath(node.path, "cabinet"), name: "屏柜", isDir: false, mapContentActive: node.mapContentActive },
+          { path: makeVirtualDrawingPath(node.path, "charging"), name: "充电区域", isDir: false, mapContentActive: node.mapContentActive },
+          { path: makeVirtualDrawingPath(node.path, "device"), name: "设备区域", isDir: false, mapContentActive: node.mapContentActive },
         ];
       }
       
       // 已加载过数据，只显示有数据的类型
       const virtualChildren: SpaceTreeNode[] = [];
       if (availableTypes.has("cabinet")) {
-        virtualChildren.push({ path: makeVirtualDrawingPath(node.path, "cabinet"), name: "屏柜", isDir: false });
+        virtualChildren.push({ path: makeVirtualDrawingPath(node.path, "cabinet"), name: "屏柜", isDir: false, mapContentActive: node.mapContentActive });
       }
       if (availableTypes.has("charging")) {
-        virtualChildren.push({ path: makeVirtualDrawingPath(node.path, "charging"), name: "充电区域", isDir: false });
+        virtualChildren.push({ path: makeVirtualDrawingPath(node.path, "charging"), name: "充电区域", isDir: false, mapContentActive: node.mapContentActive });
       }
       if (availableTypes.has("device")) {
-        virtualChildren.push({ path: makeVirtualDrawingPath(node.path, "device"), name: "设备区域", isDir: false });
+        virtualChildren.push({ path: makeVirtualDrawingPath(node.path, "device"), name: "设备区域", isDir: false, mapContentActive: node.mapContentActive });
       }
       // 已加载但没有任何类型数据时，返回空数组
       return virtualChildren;
@@ -245,6 +260,11 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
 
     // description_file.json 文件本身可展开为虚拟子节点
     if (!node.isDir && node.name === DRAWING_FILE_NAME) {
+      setExpanded((prev) => ({ ...prev, [node.path]: true }));
+      return;
+    }
+
+    if (node.virtualType === "inspection-root" || node.virtualType === "inspection-bay") {
       setExpanded((prev) => ({ ...prev, [node.path]: true }));
       return;
     }
@@ -275,13 +295,33 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
   };
 
   const getCheckState = (node: SpaceTreeNode): { checked: boolean; indeterminate?: boolean } => {
+    if (node.virtualType === "inspection-point") {
+      return { checked: !!node.inspectionPointId && shownInspectionPointIds.has(node.inspectionPointId) };
+    }
+    if (node.virtualType === "inspection-root" || node.virtualType === "inspection-bay") {
+      const ids: string[] = [];
+      const collect = (children: SpaceTreeNode[]) => children.forEach((child) => {
+        if (child.inspectionPointId) ids.push(child.inspectionPointId);
+        if (child.children) collect(child.children);
+      });
+      collect(node.children ?? []);
+      if (ids.length === 0) return { checked: false };
+      const selectedCount = ids.filter((id) => shownInspectionPointIds.has(id)).length;
+      if (selectedCount === ids.length) return { checked: true };
+      if (selectedCount > 0) return { checked: false, indeterminate: true };
+      return { checked: false };
+    }
+    if (node.virtualType) return { checked: false };
     // 虚拟绘制节点：检查对应类型是否已显示
     if (isVirtualDrawingPath(node.path)) {
       return { checked: drawingShown?.has(node.path) || false };
     }
     // description_file.json 父节点：检查所有虚拟子节点状态
     if (!node.isDir && node.name === DRAWING_FILE_NAME) {
-      const childStates = ["cabinet", "charging", "device"].map((type) =>
+      const availableTypes = drawingAvailableTypes?.get(node.path);
+      const types = availableTypes ? [...availableTypes] : ["cabinet", "charging", "device"] as DrawingSubType[];
+      if (types.length === 0) return { checked: false };
+      const childStates = types.map((type) =>
         drawingShown?.has(makeVirtualDrawingPath(node.path, type as DrawingSubType)) || false
       );
       const allChecked = childStates.every((s) => s);
@@ -293,7 +333,15 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
     if (node.isDir) {
       const children = getEffectiveChildren(node);
       if (!children || children.length === 0) return { checked: false };
-      const states = children.filter((c) => isVisibleTreeNode(c) && !isDrawing(c.name) && !isPath(c.name)).map(getCheckState);
+      const isMapDirectory = children.some((child) => !child.isDir && isLas(child.name));
+      const relevantChildren = isMapDirectory
+        ? children.filter((child) => isVisibleTreeNode(child)
+          && (isLas(child.name)
+            || (isDrawing(child.name) && (drawingAvailableTypes?.get(child.path)?.size ?? 1) > 0)
+            || isPath(child.name)
+            || (child.virtualType === "inspection-root" && (child.children?.length ?? 0) > 0)))
+        : children.filter((child) => !child.virtualType && isVisibleTreeNode(child) && !isDrawing(child.name) && !isPath(child.name));
+      const states = relevantChildren.map(getCheckState);
       if (states.length === 0) return { checked: false };
       const allChecked = states.every((s) => s.checked);
       const someChecked = states.some((s) => s.checked || s.indeterminate);
@@ -318,6 +366,24 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
 
   const handleCheck = (node: SpaceTreeNode, checked: boolean) => {
     if (modelBusy) return;
+    if (requiresLoadedMap(node) && node.mapContentActive === false) return;
+    if ((node.virtualType === "inspection-root" || node.virtualType === "inspection-bay" || node.virtualType === "inspection-point")
+      && !node.inspectionMapActive) return;
+    if (node.virtualType === "inspection-point") {
+      if (node.inspectionPointId) onSetInspectionPointVisibility?.([node.inspectionPointId], checked);
+      return;
+    }
+    if (node.virtualType === "inspection-root" || node.virtualType === "inspection-bay") {
+      const ids: string[] = [];
+      const collect = (children: SpaceTreeNode[]) => children.forEach((child) => {
+        if (child.inspectionPointId) ids.push(child.inspectionPointId);
+        if (child.children) collect(child.children);
+      });
+      collect(node.children ?? []);
+      onSetInspectionPointVisibility?.(ids, checked);
+      return;
+    }
+    if (node.virtualType) return;
     // 虚拟绘制节点：直接调用回调
     if (isVirtualDrawingPath(node.path)) {
       onToggleDrawing?.(node.path, checked);
@@ -352,8 +418,10 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
         const lasNodes: SpaceTreeNode[] = [];
         const drawNodes: SpaceTreeNode[] = [];
         const pathNodes: SpaceTreeNode[] = [];
+        const inspectionPointIds: string[] = [];
         const collect = (items: SpaceTreeNode[]) => {
           items.forEach((child) => {
+            if (child.inspectionPointId) inspectionPointIds.push(child.inspectionPointId);
             if (!child.isDir && isHiddenFile(child.name)) {
               return;
             }
@@ -372,16 +440,22 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
 
         const uniqueLasNodes = sortPreferredModels(uniqueByPath(lasNodes));
         const lasNodesToApply = checked ? uniqueLasNodes.slice(0, 1) : uniqueLasNodes;
+        let loadedAllContents = false;
 
         for (const child of lasNodesToApply) {
           const fileKey = loadedFileKey(child.path);
           const isLoaded = loadedFiles.has(loadedFileKey(child.path));
           if (checked) {
-            if (!isLoaded && loadingFile !== fileKey) await onLoadLas?.(child.path);
+            if (!isLoaded && loadingFile !== fileKey) {
+              await onLoadLas?.(child.path, true);
+              loadedAllContents = true;
+            }
           } else {
             if (isLoaded) onToggleVisible?.(child.path);
           }
         }
+
+        if (checked && loadedAllContents) return;
 
         for (const child of uniqueByPath(drawNodes)) {
           // 对每个 description_file.json 勾选所有虚拟子节点
@@ -392,6 +466,9 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
 
         for (const child of uniqueByPath(pathNodes)) {
           onTogglePath?.(child.path, checked);
+        }
+        if (inspectionPointIds.length > 0) {
+          onSetInspectionPointVisibility?.([...new Set(inspectionPointIds)], checked);
         }
       };
       recurse(children);
@@ -433,7 +510,15 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
           else if (info.key === "delete") onRequestDelete?.(node);
         };
         // 虚拟节点不显示右键菜单
-        const enableContextMenu = !isVirtualDrawingPath(node.path);
+        const enableContextMenu = !isVirtualDrawingPath(node.path) && !node.virtualType;
+        const inspectionPoint = node.virtualType === "inspection-point" && node.inspectionMapActive && !modelBusy
+          ? inspectionPoints.find((item) => item.id === node.inspectionPointId) ?? null
+          : null;
+        const inspectionCheckable = node.virtualType === "inspection-root" || node.virtualType === "inspection-bay" || node.virtualType === "inspection-point";
+        const inspectionRootEmpty = node.virtualType === "inspection-root" && (node.children?.length ?? 0) === 0;
+        const inspectionUnavailable = inspectionCheckable && !node.inspectionMapActive;
+        const mapContentUnavailable = requiresLoadedMap(node) && node.mapContentActive === false;
+        const checkUnavailable = inspectionUnavailable || mapContentUnavailable;
 
         // 节点内容渲染
         const nodeContent = (
@@ -470,19 +555,22 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
             )}
 
             {/* 复选框 */}
-            <input
-              type="checkbox"
-              checked={state.checked}
-              disabled={modelBusy}
-              ref={(el) => {
-                if (el) el.indeterminate = state.indeterminate || false;
-              }}
-              style={{ width: 14, height: 14, cursor: modelBusy ? "not-allowed" : "pointer", flexShrink: 0 }}
-              onChange={(e) => {
-                e.stopPropagation();
-                handleCheck(node, e.target.checked);
-              }}
-            />
+            {node.virtualType && !inspectionCheckable ? <span style={{ width: 14, flexShrink: 0 }} /> : (
+              <input
+                type="checkbox"
+                checked={state.checked}
+                disabled={modelBusy || inspectionRootEmpty || checkUnavailable}
+                ref={(el) => {
+                  if (el) el.indeterminate = state.indeterminate || false;
+                }}
+                title={checkUnavailable ? "请先加载当前地图" : undefined}
+                style={{ width: 14, height: 14, cursor: modelBusy || inspectionRootEmpty || checkUnavailable ? "not-allowed" : "pointer", flexShrink: 0 }}
+                onChange={(e) => {
+                  e.stopPropagation();
+                  handleCheck(node, e.target.checked);
+                }}
+              />
+            )}
 
             {node.isDir ? (
               <FolderOutlined style={{ color: "#faad14", fontSize: 14 }} />
@@ -491,7 +579,8 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
             )}
             <span
               title={node.name}
-              style={{ marginLeft: 2, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "default" }}
+              style={{ marginLeft: 2, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: inspectionPoint ? "pointer" : "default", color: inspectionPoint?.id === selectedInspectionPointId ? "#1677ff" : undefined, fontWeight: inspectionPoint?.id === selectedInspectionPointId ? 600 : undefined }}
+              onClick={() => { if (inspectionPoint) onSelectInspectionPoint?.(inspectionPoint); }}
             >
               {displayNodeName(node)}
             </span>
@@ -543,6 +632,11 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
                 onTogglePath={onTogglePath}
                 mapPotreeStatuses={mapPotreeStatuses}
                 modelBusy={modelBusy}
+                inspectionPoints={inspectionPoints}
+                shownInspectionPointIds={shownInspectionPointIds}
+                selectedInspectionPointId={selectedInspectionPointId}
+                onSelectInspectionPoint={onSelectInspectionPoint}
+                onSetInspectionPointVisibility={onSetInspectionPointVisibility}
               />
             )}
           </div>

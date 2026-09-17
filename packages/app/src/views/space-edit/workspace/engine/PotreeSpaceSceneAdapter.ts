@@ -18,6 +18,7 @@ import { PotreeDrawingRenderer } from "./PotreeDrawingRenderer";
 import { PotreeFlyKeyboardController } from "./PotreeFlyKeyboardController";
 import { PotreePathEditor } from "./PotreePathEditor";
 import { PotreeNormalAnnotationEditor } from "./PotreeNormalAnnotationEditor";
+import { PotreeInspectionPointEditor } from "./PotreeInspectionPointEditor";
 import { PotreeRotationPivotIndicator } from "./PotreeRotationPivotIndicator";
 import { SpaceInteractionCoordinator, type SpaceInteractionMode } from "./SpaceInteractionCoordinator";
 import {
@@ -39,6 +40,8 @@ import {
   type SpacePathCallbacks,
   type SpaceNormalAnnotation,
   type SpaceNormalAnnotationCallbacks,
+  type SpaceInspectionPoint,
+  type SpaceInspectionPointCallbacks,
   type SpaceSceneAdapter,
   type SpaceSceneModel,
   type SpaceViewLock,
@@ -116,6 +119,9 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   private deviceAreaEditor: PotreeDeviceAreaEditor | null = null;
   private pathEditor: PotreePathEditor | null = null;
   private normalAnnotationEditor: PotreeNormalAnnotationEditor | null = null;
+  private inspectionPointEditor: PotreeInspectionPointEditor | null = null;
+  private inspectionPointCallbacks: SpaceInspectionPointCallbacks | null = null;
+  private inspectionPointDefaultComponentType: string | undefined;
   private mountPromise: Promise<void> | null = null;
   private fitTimer: number | null = null;
   private mountVersion = 0;
@@ -200,6 +206,17 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.pathEditor.setEnabled(true);
     this.normalAnnotationEditor = new PotreeNormalAnnotationEditor(viewer, potree, three, renderArea, this.interactions);
     this.normalAnnotationEditor.setActive(this.active);
+    this.inspectionPointEditor = new PotreeInspectionPointEditor(
+      viewer,
+      potree,
+      three,
+      renderArea,
+      this.interactions,
+      (mouse) => this.normalAnnotationEditor?.pickSurfaceNormal(mouse) ?? null,
+    );
+    this.inspectionPointEditor.setDefaultComponentType(this.inspectionPointDefaultComponentType);
+    this.inspectionPointEditor.setCallbacks(this.inspectionPointCallbacks);
+    this.inspectionPointEditor.setActive(this.active);
     this.rotationPivotIndicator = new PotreeRotationPivotIndicator(viewer, potree, three, renderArea, this.interactions);
     this.rotationPivotIndicator.start();
     this.rotationPivotIndicator.setActive(this.active);
@@ -224,6 +241,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
 
   setInteractionMode(mode: SpaceInteractionMode): void {
     this.interactions.setMode(mode);
+    if (mode === "inspection-point") this.resetInteractionLod();
   }
 
   pickPointAt(clientX: number, clientY: number): [number, number, number] | null {
@@ -489,6 +507,40 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.normalAnnotationEditor?.redo();
   }
 
+  setInspectionPointCallbacks(callbacks: SpaceInspectionPointCallbacks | null): void {
+    this.inspectionPointCallbacks = callbacks;
+    this.inspectionPointEditor?.setCallbacks(callbacks);
+  }
+
+  startInspectionPointEditing(): boolean {
+    if (!this.inspectionPointEditor || !this.pointcloud) return false;
+    this.inspectionPointEditor.setEnabled(true);
+    return true;
+  }
+
+  setInspectionPointEnabled(enabled: boolean): void { this.inspectionPointEditor?.setEnabled(enabled); }
+  setInspectionPointDefaultComponentType(componentType: string | undefined): void {
+    this.inspectionPointDefaultComponentType = componentType?.trim() || undefined;
+    this.inspectionPointEditor?.setDefaultComponentType(componentType);
+  }
+  setInspectionPoints(items: SpaceInspectionPoint[]): void { this.inspectionPointEditor?.setData(items); }
+  setVisibleInspectionPointIds(ids: string[]): void { this.inspectionPointEditor?.setVisibleIds(ids); }
+  getInspectionPoints(): SpaceInspectionPoint[] { return this.inspectionPointEditor?.getData() ?? []; }
+  selectInspectionPoint(id: string | null): void { this.inspectionPointEditor?.select(id); }
+  renameInspectionPoint(id: string, name: string): void { this.inspectionPointEditor?.rename(id, name); }
+  setInspectionPointComponentType(id: string, componentType: string | undefined): void {
+    this.inspectionPointEditor?.setComponentType(id, componentType);
+  }
+  setInspectionPointLength(id: string, length: number): void { this.inspectionPointEditor?.setLength(id, length); }
+  bindInspectionPointPoint(id: string, point: { pointCode: string; pointName?: string }): void { this.inspectionPointEditor?.bindPoint(id, point); }
+  unbindInspectionPointPoint(id: string): void { this.inspectionPointEditor?.unbindPoint(id); }
+  deleteInspectionPoint(id: string): void { this.inspectionPointEditor?.delete(id); }
+  markInspectionPointsSaved(): void { this.inspectionPointEditor?.markSaved(); }
+  hasInspectionPointDraft(): boolean { return this.inspectionPointEditor?.hasDraft() ?? false; }
+  clearInspectionPoints(): void { this.inspectionPointEditor?.clear(); }
+  undoInspectionPoint(): void { this.inspectionPointEditor?.undo(); }
+  redoInspectionPoint(): void { this.inspectionPointEditor?.redo(); }
+
   restoreDrawingHistorySnapshot(scope: SpaceDrawingHistoryScope, snapshot: SpaceDrawingHistorySnapshot): void {
     switch (scope) {
       case "cabinet":
@@ -505,6 +557,9 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
         break;
       case "normal":
         this.normalAnnotationEditor?.restoreSnapshot(snapshot);
+        break;
+      case "inspection-point":
+        this.inspectionPointEditor?.restoreSnapshot(snapshot);
         break;
     }
   }
@@ -614,6 +669,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.deviceAreaEditor?.setActive(active);
     this.pathEditor?.setPageActive(active);
     this.normalAnnotationEditor?.setActive(active);
+    this.inspectionPointEditor?.setActive(active);
     if (!active) {
       this.viewer?.controls?.stop?.();
       this.resetInteractionLod();
@@ -1037,6 +1093,15 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
       this.viewer.setMinNodeSize(this.baseMinNodeSize());
     }
     this.viewer.setPointBudget(this.configuredPointBudget());
+    if (this.pointcloud) {
+      const { material } = this.pointcloud;
+      material.rgbGamma = this.renderSettings.gamma;
+      material.rgbBrightness = this.renderSettings.brightness;
+      material.rgbContrast = this.renderSettings.contrast;
+      material.intensityGamma = this.renderSettings.gamma;
+      material.intensityBrightness = this.renderSettings.brightness;
+      material.intensityContrast = this.renderSettings.contrast;
+    }
   }
 
   private configuredPointBudget(): number {
@@ -1150,6 +1215,8 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.pathEditor?.clear();
     this.normalAnnotationEditor?.setEnabled(false);
     this.normalAnnotationEditor?.clear();
+    this.inspectionPointEditor?.setEnabled(false);
+    this.inspectionPointEditor?.clear();
     this.clearDrawingLayers();
     if (this.fitTimer !== null) {
       window.clearTimeout(this.fitTimer);
@@ -1208,6 +1275,8 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.pathEditor = null;
     this.normalAnnotationEditor?.dispose();
     this.normalAnnotationEditor = null;
+    this.inspectionPointEditor?.dispose();
+    this.inspectionPointEditor = null;
     this.unbindNavigationPerformanceControls();
     this.disposeCoordinateCorrectionMarker();
     this.disposeHoverCoordinateOverlay();
@@ -1239,6 +1308,19 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
 
   private readonly handleNavigationStart = (): void => {
     if (!this.active || !this.pointcloud) return;
+    // Inspection placement and local normal fitting need the configured point
+    // density immediately after rotation, so do not switch to coarse LOD.
+    if (this.interactions.isMode("inspection-point")) {
+      this.resetInteractionLod();
+      return;
+    }
+    // A path click is a point-picking gesture, not a camera interaction. Keep
+    // the configured point density so repeated clicks do not make the cloud
+    // look sparse while drawing a route.
+    if (this.interactions.isMode("path")) {
+      this.resetInteractionLod();
+      return;
+    }
     // Right-drag is the space editor's pan gesture. Keep the configured point
     // budget and node size while panning so the scene does not become blurry.
     if (this.navigationMouseButton === 2) {

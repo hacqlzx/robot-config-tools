@@ -7,7 +7,8 @@ export type SpaceInteractionMode =
   | "charging"
   | "device-area"
   | "path"
-  | "normal";
+  | "normal"
+  | "inspection-point";
 
 export type SpaceInteractionClaim =
   | "drawing-drag"

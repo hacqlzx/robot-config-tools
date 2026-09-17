@@ -69,6 +69,69 @@ export interface NormalAnnotationFile {
   items: NormalAnnotationItem[];
 }
 
+/** 三维巡检点标注，坐标直接使用 Potree 当前的 LAS 绝对坐标。 */
+export const INSPECTION_POINT_LENGTH = { min: 0.12, max: 1.6, default: 0.8 } as const;
+export const INSPECTION_POINT_COMPONENT_TYPE_STORAGE_KEY = "space-edit:inspection-point-component-type";
+
+/** 巡检点部件类型，供标注详情面板选择。 */
+export const INSPECTION_POINT_COMPONENT_TYPES = [
+  { value: "指针表计", label: "指针表计（油温表 / 电流表 / 电压表 / SF6压力表 / 压力表）" },
+  { value: "数显表计", label: "数显表计（数显表 / 泄漏电流表）" },
+  { value: "分类型表盘", label: "分类型表盘（表计破损 / 模糊用）" },
+  { value: "气体继电器", label: "气体继电器" },
+  { value: "压力释放阀", label: "压力释放阀" },
+  { value: "潜油泵", label: "潜油泵" },
+  { value: "呼吸器硅胶桶", label: "呼吸器硅胶桶" },
+  { value: "油封（呼吸器油杯）", label: "油封（呼吸器油杯）" },
+  { value: "电容器", label: "电容器" },
+  { value: "二次接线盒", label: "二次接线盒" },
+  { value: "压板", label: "压板" },
+  { value: "空开", label: "空开" },
+  { value: "瓦斯观察窗", label: "瓦斯观察窗" },
+  { value: "油流继电器指示盘 / 窗", label: "油流继电器指示盘 / 窗" },
+  { value: "灭火器", label: "灭火器" },
+  { value: "储油柜", label: "储油柜" },
+  { value: "升高座", label: "升高座" },
+  { value: "套管", label: "套管" },
+  { value: "冷却器", label: "冷却器" },
+  { value: "膨胀器", label: "膨胀器" },
+  { value: "均压环", label: "均压环" },
+  { value: "外绝缘 / 绝缘子", label: "外绝缘 / 绝缘子" },
+  { value: "引线 / 接地引下线", label: "引线 / 接地引下线" },
+  { value: "导电接头", label: "导电接头" },
+  { value: "分合闸指示", label: "分合闸指示" },
+  { value: "观察窗", label: "观察窗" },
+  { value: "油位计", label: "油位计" },
+  { value: "油位窗", label: "油位窗" },
+  { value: "指示灯", label: "指示灯" },
+  { value: "旋钮", label: "旋钮" },
+  { value: "箱体 / 箱门", label: "箱体 / 箱门" },
+  { value: "显示屏", label: "显示屏" },
+  { value: "刀闸", label: "刀闸" },
+] as const;
+
+export type InspectionPointComponentType = typeof INSPECTION_POINT_COMPONENT_TYPES[number]["value"];
+
+export interface InspectionPointItem {
+  id: string;
+  name?: string;
+  /** 按部件形态差异选择的巡检部件类型。旧数据可能没有该字段。 */
+  componentType?: string;
+  position: [number, number, number];
+  /** 点击位置附近局部点集拟合得到的单位法线。 */
+  direction: [number, number, number];
+  /** 法线在编辑器中的显示长度，使用点云世界坐标单位。 */
+  length: number;
+  pointCode?: string;
+  pointName?: string;
+  updatedAt: string;
+}
+
+export interface InspectionPointFile {
+  version: 2;
+  items: InspectionPointItem[];
+}
+
 export interface PathPoint {
   /** 路径拓扑通过稳定 id 关联，不依赖点在数组中的位置。 */
   id: string;
@@ -148,6 +211,7 @@ export interface RobotAreaRecord {
 
 export const DRAWING_FILE_NAME = "description_file.json";
 export const NORMAL_ANNOTATIONS_FILE_NAME = "normal_annotations.json";
+export const INSPECTION_POINTS_FILE_NAME = "inspection_points.json";
 export const PATH_FILE_NAME = "reference_path.txt";
 export const ROBOT_PATH_FILE_NAME = "path.json";
 export const ROBOT_STOP_POINTS_FILE_NAMES = ["stop_points.json", "stop_point.json"] as const;

@@ -15,18 +15,20 @@ import SidePanel from "../components/SidePanel";
 import SpaceEditLayout from "../components/SpaceEditLayout";
 import Toolbar from "../components/Toolbar";
 import ViewCube from "../components/ViewCube";
-import type { SaveStatus, ViewDirection } from "../types";
+import type { SaveStatus, SpaceTreeNode, ViewDirection } from "../types";
 import { useElementActive } from "@/components/useElementActive";
 import {
   deleteCabinetItem,
   DRAWING_FILE_NAME,
   NORMAL_ANNOTATIONS_FILE_NAME,
+  INSPECTION_POINTS_FILE_NAME,
   PATH_FILE_NAME,
   ROBOT_PATH_FILE_NAME,
   loadAllItemsFromJsonInLasCoordinates,
   loadDrawingItemsByTypeInLasCoordinates,
   loadPathDrawingInLasCoordinates,
   loadNormalAnnotations,
+  loadInspectionPoints,
   getBoundBayIdsInProject,
   loadCabinetNameSequence,
   saveCabinetDrawingInLasCoordinates,
@@ -34,13 +36,16 @@ import {
   saveDeviceAreasInLasCoordinates,
   savePathDrawingInLasCoordinates,
   saveNormalAnnotationsInLasCoordinates,
+  saveInspectionPointsInLasCoordinates,
   type CabinetItem,
   type ChargingAreaItem,
   type DeviceAreaItem,
   type NormalAnnotationItem,
+  type InspectionPointItem,
   type PathData,
 } from "../hooks/drawing/drawing-storage";
 import {
+  PATH_CHARGING_AREA_REQUIRED_MESSAGE,
   isPathStartInChargingArea,
   orderedPathPoints,
   PATH_START_CHARGING_AREA_MESSAGE,
@@ -59,15 +64,17 @@ import ModelLoadingOverlay from "./components/ModelLoadingOverlay";
 import PotreeClipController from "./components/PotreeClipController";
 import PotreeRenderSettings from "./components/PotreeRenderSettings";
 import NormalAnnotationPanel from "./components/NormalAnnotationPanel";
+import InspectionPointPanel from "./components/InspectionPointPanel";
 import MapCoordinateCorrectionPanel from "./components/MapCoordinateCorrectionPanel";
 import SpaceSceneHost from "./components/SpaceSceneHost";
 import SpaceShortcutHelp from "./components/SpaceShortcutHelp";
 import { PotreeSpaceSceneAdapter } from "./engine/PotreeSpaceSceneAdapter";
-import { useSpaceDrawingHistory } from "./hooks/useSpaceDrawingHistory";
+import {
+  useSpaceDrawingHistory,
+  type SpaceDrawingHistoryCheckpoint,
+} from "./hooks/useSpaceDrawingHistory";
 import {
   DEFAULT_SPACE_RENDER_SETTINGS,
-  migrateSpaceRenderSettings,
-  normalizeSpaceRenderSettings,
   type SpaceCabinetState,
   type SpaceChargingAreaState,
   type SpaceClipBounds,
@@ -78,10 +85,10 @@ import {
   type SpaceDrawingSelection,
   type SpacePathState,
   type SpaceNormalAnnotationState,
+  type SpaceInspectionPointState,
   type SpaceRenderSettings,
 } from "./engine/types";
 
-const RENDER_SETTINGS_STORAGE_KEY = "space-edit:potree-render-settings";
 const DEFAULT_CHARGING_STATE: SpaceChargingAreaState = {
   pointCount: 0,
   height: 1,
@@ -120,6 +127,12 @@ const DEFAULT_PATH_STATE: SpacePathState = {
 };
 
 const DEFAULT_NORMAL_ANNOTATION_STATE: SpaceNormalAnnotationState = {
+  count: 0,
+  selectedId: null,
+  active: false,
+};
+
+const DEFAULT_INSPECTION_POINT_STATE: SpaceInspectionPointState = {
   count: 0,
   selectedId: null,
   active: false,
@@ -167,6 +180,13 @@ interface PathSession {
   filePath: string;
 }
 
+interface InspectionPointEditSession {
+  items: InspectionPointItem[];
+  historyCheckpoint: SpaceDrawingHistoryCheckpoint;
+  wasDirty: boolean;
+  dirtyVersion: number;
+}
+
 interface PersistOptions {
   silent?: boolean;
   closeAfterSave?: boolean;
@@ -185,18 +205,6 @@ function errorMessage(error: unknown): string {
 
 function normalizePointCode(value: unknown): string {
   return String(value ?? "").trim().toLowerCase();
-}
-
-function loadRenderSettings(): SpaceRenderSettings {
-  try {
-    const saved = window.localStorage.getItem(RENDER_SETTINGS_STORAGE_KEY);
-    if (!saved) return { ...DEFAULT_SPACE_RENDER_SETTINGS };
-    return migrateSpaceRenderSettings(
-      normalizeSpaceRenderSettings(JSON.parse(saved) as Partial<SpaceRenderSettings>),
-    );
-  } catch {
-    return { ...DEFAULT_SPACE_RENDER_SETTINGS };
-  }
 }
 
 function mapNameFromModelPath(modelPath: string): string {
@@ -284,7 +292,9 @@ export default function SpaceEditWorkspace() {
   const [pointImporting, setPointImporting] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
-  const [renderSettings, setRenderSettings] = useState(loadRenderSettings);
+  const [renderSettings, setRenderSettings] = useState<SpaceRenderSettings>(
+    () => ({ ...DEFAULT_SPACE_RENDER_SETTINGS }),
+  );
   const [drawingShown, setDrawingShown] = useState<Set<string>>(new Set());
   const [drawingAvailableTypes, setDrawingAvailableTypes] = useState<Map<string, Set<"cabinet" | "charging" | "device">>>(new Map());
   const [pathShown, setPathShown] = useState<Set<string>>(new Set());
@@ -307,6 +317,12 @@ export default function SpaceEditWorkspace() {
   const [normalState, setNormalState] = useState<SpaceNormalAnnotationState>(DEFAULT_NORMAL_ANNOTATION_STATE);
   const [normalSaving, setNormalSaving] = useState(false);
   const [normalExporting, setNormalExporting] = useState(false);
+  const [inspectionExporting, setInspectionExporting] = useState(false);
+  const [inspectionMode, setInspectionMode] = useState(false);
+  const [inspectionItems, setInspectionItems] = useState<InspectionPointItem[]>([]);
+  const [shownInspectionPointIds, setShownInspectionPointIds] = useState<Set<string>>(new Set());
+  const [inspectionState, setInspectionState] = useState<SpaceInspectionPointState>(DEFAULT_INSPECTION_POINT_STATE);
+  const [inspectionSaving, setInspectionSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [projectBoundBayIds, setProjectBoundBayIds] = useState<Set<number>>(new Set());
   const drawingLifecycleVersion = useRef(0);
@@ -324,6 +340,8 @@ export default function SpaceEditWorkspace() {
   const pathSession = useRef<PathSession | null>(null);
   const pathSavingRef = useRef(false);
   const normalSavingRef = useRef(false);
+  const inspectionSavingRef = useRef(false);
+  const inspectionEditSessionRef = useRef<InspectionPointEditSession | null>(null);
   const dirtyScopesRef = useRef<Set<SpaceDrawingHistoryScope>>(new Set());
   const dirtyScopeVersionsRef = useRef<Map<SpaceDrawingHistoryScope, number>>(new Map());
   const saveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -365,6 +383,27 @@ export default function SpaceEditWorkspace() {
       markDirty(scope);
     }
   }, [drawingHistory.record, markDirty]);
+
+  useEffect(() => {
+    adapter.setInspectionPointCallbacks({
+      onChange: (state) => {
+        setInspectionState(state);
+        setInspectionItems(adapter.getInspectionPoints());
+        if (state.selectedId) {
+          setShownInspectionPointIds((current) => {
+            if (current.has(state.selectedId!)) return current;
+            return new Set([...current, state.selectedId!]);
+          });
+        }
+      },
+      onHistory: (before, after, label) => recordDrawingHistory("inspection-point", before, after, label),
+      onAddBlocked: () => message.info({
+        key: "inspection-point-pending-new",
+        content: "请先保存当前新增的巡检点，再继续新增",
+      }),
+    });
+    return () => adapter.setInspectionPointCallbacks(null);
+  }, [adapter, message, recordDrawingHistory]);
 
   const showSavedStatus = useCallback(() => {
     if (dirtyScopesRef.current.size > 0) {
@@ -426,6 +465,7 @@ export default function SpaceEditWorkspace() {
       "device-area": "设备区域",
       path: "可行路径",
       normal: "法线标注",
+      "inspection-point": "巡检点",
     };
     return [...dirtyScopesRef.current].map((scope) => labels[scope]).join("、") || "空间编辑";
   }, []);
@@ -533,6 +573,8 @@ export default function SpaceEditWorkspace() {
     pathSession.current = null;
     pathSavingRef.current = false;
     normalSavingRef.current = false;
+    inspectionSavingRef.current = false;
+    inspectionEditSessionRef.current = null;
     dirtyScopesRef.current.clear();
     dirtyScopeVersionsRef.current.clear();
     setSaveStatus("idle");
@@ -542,6 +584,7 @@ export default function SpaceEditWorkspace() {
     adapter.clearDeviceAreaDrawing();
     adapter.clearPathDrawing();
     adapter.clearNormalAnnotations();
+    adapter.clearInspectionPoints();
     adapter.clearDrawingLayers();
     adapter.setCoordinateCorrectionMarker(null);
     setCabinetMode(false);
@@ -565,6 +608,11 @@ export default function SpaceEditWorkspace() {
     setNormalItems([]);
     setNormalState(DEFAULT_NORMAL_ANNOTATION_STATE);
     setNormalSaving(false);
+    setInspectionMode(false);
+    setInspectionItems([]);
+    setShownInspectionPointIds(new Set());
+    setInspectionState(DEFAULT_INSPECTION_POINT_STATE);
+    setInspectionSaving(false);
     setProjectBoundBayIds(new Set());
     setDrawingShown(new Set());
     setPathShown(new Set());
@@ -762,26 +810,33 @@ export default function SpaceEditWorkspace() {
     updateLayerVisibility("path", filePath, true);
   }, [adapter, nextLayerVersion, updateLayerVisibility]);
 
-  const loadModelCompanionFiles = useCallback(async (modelPath: string) => {
+  const loadModelCompanionFiles = useCallback(async (modelPath: string, loadAllContents: boolean) => {
     if (!selectedProject || !window.electronAPI?.project) return;
     const subDir = mapDirSubPathFromModelPath(modelPath);
     if (!subDir) return;
     try {
       const tree = await window.electronAPI.project.listTree(selectedProject, subDir) as SpaceFileNode[];
       const drawingFile = findFilesByName(tree, [DRAWING_FILE_NAME])[0];
-      // 先检测类型，再按实际类型加载
-      if (drawingFile) {
-        // 先加载完整数据以检测类型（handleToggleDrawing 会自动触发子类型加载）
-        await handleToggleDrawing(drawingFile, true);
-      }
+      if (loadAllContents && drawingFile) await handleToggleDrawing(drawingFile, true);
       const normalFile = findFilesByName(tree, [NORMAL_ANNOTATIONS_FILE_NAME])[0];
       const normalItems = normalFile ? await loadNormalAnnotations(window.electronAPI, normalFile) : [];
       adapter.setNormalAnnotations(normalItems);
       setNormalItems(normalItems);
       setNormalState({ ...DEFAULT_NORMAL_ANNOTATION_STATE, count: normalItems.length });
+      const inspectionFile = findFilesByName(tree, [INSPECTION_POINTS_FILE_NAME])[0];
+      const inspectionItems = inspectionFile ? await loadInspectionPoints(window.electronAPI, modelPath) : [];
+      adapter.setVisibleInspectionPointIds([]);
+      adapter.setInspectionPoints(inspectionItems);
+      setInspectionItems(inspectionItems);
+      setShownInspectionPointIds(loadAllContents
+        ? new Set(inspectionItems.map((item) => item.id))
+        : new Set());
+      setInspectionState({ ...DEFAULT_INSPECTION_POINT_STATE, count: inspectionItems.length });
       const pathFiles = findFilesByName(tree, [PATH_FILE_NAME, ROBOT_PATH_FILE_NAME])
         .sort((left, right) => left.localeCompare(right));
-      for (const pathFile of pathFiles) await handleTogglePath(pathFile, true);
+      if (loadAllContents) {
+        for (const pathFile of pathFiles) await handleTogglePath(pathFile, true);
+      }
     } catch (error) {
       console.warn("[space-edit] 自动加载区域/路径失败", { modelPath, error });
     }
@@ -808,10 +863,32 @@ export default function SpaceEditWorkspace() {
   }, [adapter]);
 
   const closeNormalMode = useCallback(() => {
+    const inspectionSession = inspectionEditSessionRef.current;
+    if (inspectionSession) {
+      inspectionEditSessionRef.current = null;
+      adapter.setInspectionPoints(inspectionSession.items);
+      drawingHistory.restoreCheckpoint(inspectionSession.historyCheckpoint);
+      if (inspectionSession.wasDirty) {
+        dirtyScopesRef.current.add("inspection-point");
+        dirtyScopeVersionsRef.current.set("inspection-point", inspectionSession.dirtyVersion);
+      } else {
+        dirtyScopesRef.current.delete("inspection-point");
+        dirtyScopeVersionsRef.current.delete("inspection-point");
+      }
+      if (saveStatusTimerRef.current) {
+        clearTimeout(saveStatusTimerRef.current);
+        saveStatusTimerRef.current = null;
+      }
+      setSaveStatus(dirtyScopesRef.current.size > 0 ? "dirty" : "idle");
+    }
     adapter.setNormalAnnotationEnabled(false);
+    adapter.setInspectionPointEnabled(false);
+    adapter.selectInspectionPoint(null);
     setNormalMode(false);
+    setInspectionMode(false);
     setNormalState((current) => ({ ...current, active: false }));
-  }, [adapter]);
+    setInspectionState((current) => ({ ...current, selectedId: null, active: false }));
+  }, [adapter, drawingHistory.restoreCheckpoint]);
 
   const closeCorrectionMode = useCallback(() => {
     if (correctionSaving) return;
@@ -896,6 +973,7 @@ export default function SpaceEditWorkspace() {
     cancelHideDraft();
     closeCabinetMode();
     closeChargingMode();
+    closeCorrectionMode();
     closeDeviceAreaMode();
     closePathMode();
     closeNormalMode();
@@ -911,7 +989,7 @@ export default function SpaceEditWorkspace() {
       return;
     }
     setNormalMode(true);
-  }, [activeSourcePath, adapter, cancelHideDraft, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, message, normalMode, recordDrawingHistory]);
+  }, [activeSourcePath, adapter, cancelHideDraft, closeCabinetMode, closeChargingMode, closeCorrectionMode, closeDeviceAreaMode, closeNormalMode, closePathMode, message, normalMode, recordDrawingHistory]);
 
   const handleNormalSelect = useCallback((item: NormalAnnotationItem) => {
     const current = adapter.getNormalAnnotations().find((candidate) => candidate.id === item.id) ?? item;
@@ -993,6 +1071,254 @@ export default function SpaceEditWorkspace() {
       setNormalExporting(false);
     }
   }, [message, normalItems, selectedProject]);
+
+  const persistInspectionPoints = useCallback(async (options: PersistOptions = {}): Promise<boolean> => {
+    const silent = !!options.silent;
+    const closeAfterSave = options.closeAfterSave !== false;
+    const clearHistory = options.clearHistory !== false && closeAfterSave;
+    const api = window.electronAPI;
+    const modelPath = activeSourcePath;
+    if (!api) {
+      if (!silent) message.warning("巡检点保存仅支持 Electron 模式");
+      return false;
+    }
+    if (!selectedProject) {
+      if (!silent) message.warning("请先选择项目");
+      return false;
+    }
+    if (!modelPath) {
+      if (!silent) message.warning("请先加载模型");
+      return false;
+    }
+    if (inspectionSavingRef.current) return false;
+
+    const version = operationVersion.current;
+    const items = adapter.getInspectionPoints().map((item: InspectionPointItem) => ({
+      ...item,
+      updatedAt: new Date().toISOString(),
+    }));
+    const unboundItem = items.find((item) => !item.pointCode?.trim());
+    if (unboundItem) {
+      adapter.selectInspectionPoint(unboundItem.id);
+      if (!silent) message.warning("请为每个巡检点绑定点位后再保存");
+      return false;
+    }
+    const dirtyVersion = options.dirtyVersion ?? dirtyScopeVersionsRef.current.get("inspection-point") ?? 0;
+    inspectionSavingRef.current = true;
+    setInspectionSaving(true);
+    try {
+      await saveInspectionPointsInLasCoordinates({
+        api,
+        projectName: selectedProject,
+        modelPath,
+        items,
+      });
+      if (version !== operationVersion.current) return false;
+      setInspectionItems(items);
+      setInspectionState((current) => ({
+        ...current,
+        count: items.length,
+        active: closeAfterSave ? false : current.active,
+      }));
+      adapter.markInspectionPointsSaved();
+      const scopeSaved = clearDirtyScope("inspection-point", dirtyVersion);
+      if (clearHistory && scopeSaved) drawingHistory.clearScope("inspection-point");
+      if (closeAfterSave) {
+        inspectionEditSessionRef.current = null;
+        closeNormalMode();
+      } else if (scopeSaved) {
+        inspectionEditSessionRef.current = {
+          items,
+          historyCheckpoint: drawingHistory.createCheckpoint(),
+          wasDirty: false,
+          dirtyVersion: dirtyScopeVersionsRef.current.get("inspection-point") ?? 0,
+        };
+      }
+      if (!silent) message.success(items.length > 0 ? "巡检点保存成功" : "巡检点已清空");
+      return true;
+    } catch (error) {
+      if (!silent) message.error(`保存巡检点失败: ${errorMessage(error)}`);
+      return false;
+    } finally {
+      inspectionSavingRef.current = false;
+      if (version === operationVersion.current) setInspectionSaving(false);
+    }
+  }, [activeSourcePath, adapter, clearDirtyScope, closeNormalMode, drawingHistory.clearScope, drawingHistory.createCheckpoint, message, selectedProject]);
+
+  const handleToggleInspection = useCallback(() => {
+    if (inspectionMode) {
+      closeNormalMode();
+      return;
+    }
+    if (!activeSourcePath) {
+      message.warning("请先加载模型");
+      return;
+    }
+    if (modelBusyRef.current || inspectionSavingRef.current) {
+      message.warning("模型或巡检点正在处理中，请稍后再试");
+      return;
+    }
+    if (!window.electronAPI) {
+      message.warning("巡检点标注仅支持 Electron 模式");
+      return;
+    }
+    cancelHideDraft();
+    closeCabinetMode();
+    closeChargingMode();
+    closeCorrectionMode();
+    closeDeviceAreaMode();
+    closePathMode();
+    closeNormalMode();
+    inspectionEditSessionRef.current = {
+      items: adapter.getInspectionPoints(),
+      historyCheckpoint: drawingHistory.createCheckpoint(),
+      wasDirty: dirtyScopesRef.current.has("inspection-point"),
+      dirtyVersion: dirtyScopeVersionsRef.current.get("inspection-point") ?? 0,
+    };
+    const started = adapter.startInspectionPointEditing();
+    if (!started) {
+      message.error("巡检点编辑器初始化失败");
+      return;
+    }
+    setInspectionMode(true);
+  }, [activeSourcePath, adapter, cancelHideDraft, closeCabinetMode, closeChargingMode, closeCorrectionMode, closeDeviceAreaMode, closeNormalMode, closePathMode, drawingHistory.createCheckpoint, inspectionMode, message]);
+
+  const handleInspectionSelect = useCallback((item: InspectionPointItem) => {
+    if (modelBusyRef.current || inspectionSavingRef.current || saveStatus === "saving" || correctionSaving) return;
+    const current = adapter.getInspectionPoints().find((candidate) => candidate.id === item.id);
+    if (!current) return;
+    if (!inspectionMode) {
+      cancelHideDraft();
+      closeCabinetMode();
+      closeChargingMode();
+      closeCorrectionMode();
+      closeDeviceAreaMode();
+      closePathMode();
+      closeNormalMode();
+    }
+    setShownInspectionPointIds((current) => {
+      if (current.has(item.id)) return current;
+      const next = new Set(current);
+      next.add(item.id);
+      return next;
+    });
+    adapter.selectInspectionPoint(current.id);
+    adapter.focusAlongDirection(
+      current.position[0],
+      current.position[1],
+      current.position[2],
+      current.direction[0],
+      current.direction[1],
+      current.direction[2],
+      Math.max(0.5, current.length * 1.5),
+    );
+  }, [adapter, cancelHideDraft, closeCabinetMode, closeChargingMode, closeCorrectionMode, closeDeviceAreaMode, closeNormalMode, closePathMode, correctionSaving, inspectionMode, saveStatus]);
+
+  const handleCloseInspectionPanel = useCallback(() => {
+    if (inspectionMode) closeNormalMode();
+    else adapter.selectInspectionPoint(null);
+  }, [adapter, closeNormalMode, inspectionMode]);
+
+  const handleInspectionVisibility = useCallback((ids: string[], visible: boolean) => {
+    const idSet = new Set(ids);
+    setShownInspectionPointIds((current) => {
+      const next = new Set(current);
+      ids.forEach((id) => visible ? next.add(id) : next.delete(id));
+      if (next.size === current.size && [...next].every((id) => current.has(id))) return current;
+      return next;
+    });
+    if (!visible && inspectionState.selectedId && idSet.has(inspectionState.selectedId)) {
+      adapter.selectInspectionPoint(null);
+    }
+  }, [adapter, inspectionState.selectedId]);
+
+  useEffect(() => {
+    const validIds = new Set(inspectionItems.map((item) => item.id));
+    setShownInspectionPointIds((current) => {
+      const next = new Set([...current].filter((id) => validIds.has(id)));
+      if (next.size === current.size && [...next].every((id) => current.has(id))) return current;
+      return next;
+    });
+  }, [inspectionItems]);
+
+  useEffect(() => {
+    adapter.setVisibleInspectionPointIds([...shownInspectionPointIds]);
+  }, [adapter, shownInspectionPointIds]);
+
+  const handleInspectionRename = useCallback((inspectionId: string, name: string) => {
+    adapter.renameInspectionPoint(inspectionId, name);
+  }, [adapter]);
+
+  const handleSaveInspection = useCallback(() => {
+    void runSaveOperation(() => persistInspectionPoints({
+      silent: false,
+      closeAfterSave: true,
+      markFileShown: true,
+    }));
+  }, [persistInspectionPoints, runSaveOperation]);
+
+  const handleInspectionBindPoint = useCallback((inspectionId: string, point: { pointCode: string; pointName: string }) => {
+    const pointCodeKey = normalizePointCode(point.pointCode);
+    const alreadyBound = inspectionItems.some((item) => item.id !== inspectionId && normalizePointCode(item.pointCode) === pointCodeKey);
+    if (alreadyBound) {
+      message.warning("该点位已绑定其他巡检点");
+      return;
+    }
+    adapter.bindInspectionPointPoint(inspectionId, point);
+  }, [adapter, inspectionItems, message]);
+
+  const handleInspectionUnbindPoint = useCallback((inspectionId: string) => {
+    adapter.unbindInspectionPointPoint(inspectionId);
+  }, [adapter]);
+
+  const handleInspectionDelete = useCallback((inspectionId: string) => {
+    adapter.deleteInspectionPoint(inspectionId);
+  }, [adapter]);
+
+  const handleInspectionExport = useCallback(async (triggerElement?: HTMLElement) => {
+    if (!selectedProject) {
+      message.warning("请先选择项目");
+      return;
+    }
+    const unbound = inspectionItems
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => !normalizePointCode(item.pointCode));
+    if (unbound.length > 0) {
+      const names = unbound.map(({ item, index }) => item.name?.trim() || `第 ${index + 1} 个巡检点`);
+      message.warning(`请先为以下巡检点绑定点位：${names.join("、")}`);
+      return;
+    }
+
+    const boundByCode = new Map<string, number>();
+    for (let index = 0; index < inspectionItems.length; index += 1) {
+      const pointCode = normalizePointCode(inspectionItems[index].pointCode);
+      const firstIndex = boundByCode.get(pointCode);
+      if (firstIndex !== undefined) {
+        message.warning(`点位“${inspectionItems[index].pointCode}”已绑定多个巡检点（第 ${firstIndex + 1} 个和第 ${index + 1} 个）`);
+        return;
+      }
+      boundByCode.set(pointCode, index);
+    }
+
+    setInspectionExporting(true);
+    try {
+      const result = await createLocalExportTask({
+        name: "巡检点标注导出",
+        operation: "inspection-points",
+        destTitle: "选择巡检点标注保存目录",
+        payload: {
+          projectName: selectedProject,
+          items: inspectionItems,
+        },
+        triggerElement,
+      });
+      if (!result.success) message.error(result.error || "创建巡检点标注导出任务失败");
+    } catch (error) {
+      message.error(`创建巡检点标注导出任务失败：${errorMessage(error)}`);
+    } finally {
+      setInspectionExporting(false);
+    }
+  }, [inspectionItems, message, selectedProject]);
 
   const persistPath = useCallback(async (options: PersistOptions = {}): Promise<boolean> => {
     const silent = !!options.silent;
@@ -1324,7 +1650,8 @@ export default function SpaceEditWorkspace() {
 
   const handleDrawingSelection = useCallback((selection: SpaceDrawingSelection | null) => {
     void selection;
-  }, []);
+    adapter.selectInspectionPoint(null);
+  }, [adapter]);
 
   const handleDrawingDelete = useCallback(async (selection: SpaceDrawingSelection) => {
     const api = window.electronAPI;
@@ -1790,6 +2117,11 @@ export default function SpaceEditWorkspace() {
         chargingArea = items.find((item): item is ChargingAreaItem => item.type === "charging-area") ?? null;
       }
 
+      if (!chargingArea) {
+        if (!silent) message.warning(PATH_CHARGING_AREA_REQUIRED_MESSAGE);
+        return false;
+      }
+
       const start = points[0];
       const end = points.length > 1 ? points[points.length - 1] : null;
       if (isPathStartInChargingArea(start, chargingArea)
@@ -1828,6 +2160,7 @@ export default function SpaceEditWorkspace() {
     const pathData = adapter.getPathData();
     const shouldSavePath = dirty.has("path") || (!silent && (pathMode || adapter.hasPathDraft()));
     const shouldSaveNormal = dirty.has("normal") || (!silent && normalMode);
+    const shouldSaveInspection = dirty.has("inspection-point") || (!silent && inspectionMode);
 
     if (!silent && chargingState.pointCount > 0 && !chargingVerts) {
       message.warning("充电区域请先完成 3 个点的绘制");
@@ -1896,6 +2229,15 @@ export default function SpaceEditWorkspace() {
       savedAny = true;
     }
 
+    if (shouldSaveInspection) {
+      const saved = await persistInspectionPoints({
+        ...persistOptions,
+        dirtyVersion: saveStartedVersions.get("inspection-point") ?? 0,
+      });
+      if (!saved) return false;
+      savedAny = true;
+    }
+
     if (!savedAny) {
       if (!silent) message.info("没有需要保存的编辑内容");
       return false;
@@ -1913,6 +2255,7 @@ export default function SpaceEditWorkspace() {
     deviceAreaState.pointCount,
     drawingHistory.clear,
     message,
+    inspectionMode,
     normalMode,
     pathMode,
     persistCabinet,
@@ -1920,6 +2263,7 @@ export default function SpaceEditWorkspace() {
     persistDeviceAreas,
     persistPath,
     persistNormalAnnotations,
+    persistInspectionPoints,
     validatePathBeforeSave,
   ]);
   saveAllRef.current = saveAll;
@@ -1931,11 +2275,6 @@ export default function SpaceEditWorkspace() {
 
   useEffect(() => {
     adapter.setRenderSettings(renderSettings);
-    try {
-      window.localStorage.setItem(RENDER_SETTINGS_STORAGE_KEY, JSON.stringify(renderSettings));
-    } catch {
-      // Rendering still works when storage is unavailable.
-    }
   }, [adapter, renderSettings]);
 
   useEffect(() => {
@@ -1965,10 +2304,10 @@ export default function SpaceEditWorkspace() {
 
   useEffect(() => {
     const busy = saveStatus === "saving" || !!loading || correctionSaving;
-    const mode = busy ? "busy" : hideDraftBounds ? "clip" : correctionMode ? "correction" : cabinetMode ? "cabinet" : chargingMode ? "charging" : deviceAreaMode ? "device-area" : pathMode ? "path" : normalMode ? "normal" : "idle";
+    const mode = busy ? "busy" : hideDraftBounds ? "clip" : correctionMode ? "correction" : cabinetMode ? "cabinet" : chargingMode ? "charging" : deviceAreaMode ? "device-area" : pathMode ? "path" : inspectionMode ? "inspection-point" : normalMode ? "normal" : "idle";
     adapter.setInteractionMode(mode);
     return () => adapter.setInteractionMode("idle");
-  }, [adapter, cabinetMode, chargingMode, hideDraftBounds, correctionMode, correctionSaving, deviceAreaMode, loading, normalMode, pathMode, saveStatus]);
+  }, [adapter, cabinetMode, chargingMode, hideDraftBounds, correctionMode, correctionSaving, deviceAreaMode, inspectionMode, loading, normalMode, pathMode, saveStatus]);
 
   useEffect(() => {
     adapter.setDrawingInteractionCallbacks({
@@ -1988,11 +2327,14 @@ export default function SpaceEditWorkspace() {
         if (!event.repeat) closeCorrectionMode();
         return;
       }
-      if (event.key === "Escape" && normalMode) {
+      if (event.key === "Escape" && (normalMode || inspectionMode || inspectionState.selectedId)) {
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
-        if (!event.repeat) closeNormalMode();
+        if (!event.repeat) {
+          if (normalMode) closeNormalMode();
+          else handleCloseInspectionPanel();
+        }
         return;
       }
       const target = event.target as HTMLElement | null;
@@ -2019,6 +2361,7 @@ export default function SpaceEditWorkspace() {
         || adapter.hasChargingAreaDraft()
         || pathMode
         || normalMode
+        || inspectionMode
         || dirtyScopesRef.current.size > 0;
       if (!saveShortcut || !hasDraft) return;
       event.preventDefault();
@@ -2036,10 +2379,13 @@ export default function SpaceEditWorkspace() {
     deviceAreaMode,
     handleHistoryRedo,
     handleHistoryUndo,
+    handleCloseInspectionPanel,
     handleSaveAll,
     closeNormalMode,
     closeCorrectionMode,
     correctionMode,
+    inspectionMode,
+    inspectionState.selectedId,
     normalMode,
     pathMode,
     pageActive,
@@ -2082,7 +2428,11 @@ export default function SpaceEditWorkspace() {
     adapter.setViewDirection(direction);
   }, [adapter]);
 
-  const loadModel = useCallback(async (item: MapModelItem, skipUnsavedConfirmation = false) => {
+  const loadModel = useCallback(async (
+    item: MapModelItem,
+    skipUnsavedConfirmation = false,
+    loadAllContents = true,
+  ) => {
     if (!selectedProject) {
       message.warning("请先选择项目");
       return;
@@ -2112,9 +2462,12 @@ export default function SpaceEditWorkspace() {
       setLoading({ kind: "model", modelPath: item.modelPath, title: item.mapName, message: "正在加载点云层级", percent: 98 });
       await adapter.loadModel({ name: item.mapName, metadataUrl: result.metadataUrl, clipBounds: result.bounds });
       if (version !== operationVersion.current) return;
+      const defaultRenderSettings = { ...DEFAULT_SPACE_RENDER_SETTINGS };
+      adapter.setRenderSettings(defaultRenderSettings);
+      setRenderSettings(defaultRenderSettings);
       setActiveModelPath(item.modelPath);
       setActiveSourcePath(result.modelPath);
-      await loadModelCompanionFiles(result.modelPath);
+      await loadModelCompanionFiles(result.modelPath, loadAllContents);
       if (result.generated) message.success("模型转换并加载完成");
     } catch (error) {
       if (version === operationVersion.current) message.error(errorMessage(error));
@@ -2132,8 +2485,8 @@ export default function SpaceEditWorkspace() {
     return true;
   }, [activeModelPath, clearLoadedModelState, confirmUnsavedChanges]);
 
-  const handleLoadFromTree = useCallback(async (modelPath: string) => {
-    await loadModel({ mapName: mapNameFromModelPath(modelPath), modelPath });
+  const handleLoadFromTree = useCallback(async (modelPath: string, loadAllContents = false) => {
+    await loadModel({ mapName: mapNameFromModelPath(modelPath), modelPath }, false, loadAllContents);
   }, [loadModel]);
 
   const handleToggleFromTree = useCallback((modelPath: string) => {
@@ -2419,10 +2772,12 @@ export default function SpaceEditWorkspace() {
             onToggleDeviceArea={() => void handleToggleDeviceArea()}
             pathMode={pathMode}
             onTogglePath={() => void handleTogglePathMode()}
-            normalMode={normalMode}
-            normalCount={normalState.count}
-            normalSaving={normalSaving || normalExporting}
-            onToggleNormal={handleToggleNormal}
+            inspectionMode={inspectionMode}
+            inspectionCount={inspectionState.count}
+            inspectionSaving={inspectionSaving}
+            inspectionExporting={inspectionExporting}
+            onToggleInspection={handleToggleInspection}
+            onExportInspection={handleInspectionExport}
             onUndo={handleHistoryUndo}
             onRedo={handleHistoryRedo}
             canUndo={drawingHistory.canUndo}
@@ -2451,6 +2806,12 @@ export default function SpaceEditWorkspace() {
             onTogglePath={(filePath, checked) => void handleTogglePath(filePath, checked)}
             modelBusy={modelOperationBusy}
             onMapTreeLoaded={handleMapTreeLoaded}
+            activeModelPath={activeSourcePath}
+            inspectionPoints={inspectionItems}
+            shownInspectionPointIds={shownInspectionPointIds}
+            selectedInspectionPointId={inspectionState.selectedId}
+            onSelectInspectionPoint={handleInspectionSelect}
+            onSetInspectionPointVisibility={handleInspectionVisibility}
           />
         )}
         scene={(
@@ -2481,7 +2842,7 @@ export default function SpaceEditWorkspace() {
                     </div>
                   </div>
                 ) : null}
-                {!normalMode && <SpaceShortcutHelp />}
+                {!normalMode && !inspectionMode && <SpaceShortcutHelp />}
                 {correctionMode && !correctionSaving && activeSourcePath && (
                   <MapCoordinateCorrectionPanel
                     mapName={mapNameFromModelPath(activeSourcePath)}
@@ -2509,6 +2870,21 @@ export default function SpaceEditWorkspace() {
                     onUnbindPoint={handleNormalUnbindPoint}
                     onDelete={handleNormalDelete}
                     onExport={handleNormalExport}
+                  />
+                )}
+                {(inspectionMode || inspectionState.selectedId) && (
+                  <InspectionPointPanel
+                    marking={inspectionMode}
+                    item={inspectionItems.find((item) => item.id === inspectionState.selectedId) ?? null}
+                    count={inspectionState.count}
+                    items={inspectionItems}
+                    saving={inspectionSaving || modelOperationBusy || saveStatus === "saving" || !!loading || correctionSaving}
+                    onClose={handleCloseInspectionPanel}
+                    onSave={handleSaveInspection}
+                    onRename={handleInspectionRename}
+                    onBindPoint={handleInspectionBindPoint}
+                    onUnbindPoint={handleInspectionUnbindPoint}
+                    onDelete={handleInspectionDelete}
                   />
                 )}
                 <SaveStatusBadge status={saveStatus} />

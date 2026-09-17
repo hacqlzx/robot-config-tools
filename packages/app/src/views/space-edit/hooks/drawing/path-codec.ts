@@ -21,6 +21,7 @@ import type {
 } from "./drawing-schema";
 
 export const PATH_START_CHARGING_AREA_MESSAGE = "可行驶路径起点需要在充电区域中";
+export const PATH_CHARGING_AREA_REQUIRED_MESSAGE = "请先绘制充电区域，再保存可行驶路径";
 
 /** path.json 中当前参与回显的字段；索引签名用于兼容机器人协议的其他扩展字段。 */
 interface RobotPathRecord {
