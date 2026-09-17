@@ -9,12 +9,38 @@ const MAP_MODEL_FILE_NAME = "map.las";
 const MAP_INFO_FILE_NAME = "map_info.json";
 const DESCRIPTION_FILE_NAME = "description_file.json";
 const CABINET_FILE_NAME = "cabinet.json";
+const INSPECTION_POINTS_FILE_NAME = "inspection_points.json";
 const REFERENCE_PATH_FILE_NAME = "reference_path.txt";
 const LEGACY_REFERENCE_PATH_FILE_NAME = "可行驶路径.json";
 const MAP_MODEL_EXT_RE = /\.(las|laz)$/i;
 const AREA_TYPE_CABINET_ROW = "1";
 const AREA_TYPE_CABINET = "2";
+const AREA_TYPE_CHARGING = "4";
 const MAIN_DEVICE_TYPE_CABINET = 29;
+
+const REGION_EXPORT_HEADERS = [
+  "编号", "变电站名称", "电压等级", "区域名称", "间隔名称", "设备名称",
+  "X1", "Y1", "Z1", "X2", "Y2", "Z2", "X3", "Y3", "Z3", "X4", "Y4", "Z4",
+];
+const COMPONENT_POINT_EXPORT_HEADERS = [
+  "编号", "采集类型", "识别类型", "设备点位名称", "设备点位ID",
+  "X", "Y", "Z", "法向量X", "法向量Y", "法向量Z",
+];
+const COMPONENT_POINT_COLLECT_TYPE = "可见光";
+const COMPONENT_POINT_RECOGNITION_LABELS: Record<string, string> = {
+  meter_read: "表计",
+  position_state: "位置状态",
+  appearance: "外观",
+  sound: "声音",
+  ir_temp: "红外",
+  visible: "可见光",
+  表计读取: "表计",
+  位置状态识别: "位置状态",
+  设备外观查看: "外观",
+  声音检测: "声音",
+  红外测温: "红外",
+  可见光查看: "可见光",
+};
 
 // 逆向映射
 const RECOGNITION_REV: Record<string, string> = {
@@ -360,6 +386,179 @@ function findMainForArea(record: Record<string, unknown>, lookup: ReturnType<typ
   return byName.length === 1 ? byName[0] : null;
 }
 
+type CoordinateTuple = [number, number, number];
+
+function coordinateTuple(value: unknown): CoordinateTuple | null {
+  if (!Array.isArray(value) || value.length < 3) return null;
+  const tuple: CoordinateTuple = [Number(value[0]), Number(value[1]), Number(value[2])];
+  return tuple.every(Number.isFinite) ? tuple : null;
+}
+
+function parsePose(value: unknown): CoordinateTuple[] | null {
+  if (typeof value !== "string") return null;
+  const points = value.split(";").map((part) => coordinateTuple(part.split(",").map((item) => item.trim())));
+  return points.length === 4 && points.every(Boolean) ? points as CoordinateTuple[] : null;
+}
+
+function areaPose(record: Record<string, unknown>): CoordinateTuple[] | null {
+  return parsePose(record.pose_3d) ?? parsePose(record.pose);
+}
+
+function chargingFootprint(points: CoordinateTuple[]): CoordinateTuple[] {
+  const [frontLeft, frontRight, , backLeft] = points;
+  const backRight: CoordinateTuple = [
+    frontRight[0] + backLeft[0] - frontLeft[0],
+    frontRight[1] + backLeft[1] - frontLeft[1],
+    frontRight[2] + backLeft[2] - frontLeft[2],
+  ];
+  return [frontLeft, frontRight, backRight, backLeft];
+}
+
+function mapJsonData(mapDir: string, fileName: string): unknown {
+  const directPath = path.join(mapDir, fileName);
+  const filePath = fs.existsSync(directPath)
+    ? directPath
+    : listFilesRecursive(mapDir)
+      .find((candidate) => path.basename(candidate).toLowerCase() === fileName.toLowerCase());
+  if (!filePath) return null;
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+function knownStationName(data: PointTableExportData): string {
+  const stationName = getStationName(data);
+  return stationName === "未知厂站" ? "" : stationName;
+}
+
+function generateSimpleExcel(
+  headers: string[],
+  rows: unknown[][],
+  sheetName: string,
+  columnWidths: number[],
+  numericColumns: number[],
+): Buffer {
+  const worksheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  const headerStyle = {
+    alignment: { horizontal: "center", vertical: "center", wrapText: true },
+    fill: { patternType: "solid", fgColor: { rgb: "E7E6E6" } },
+    font: { name: "等线", sz: 11, bold: true },
+  };
+  for (let column = 0; column < headers.length; column += 1) {
+    const cellRef = XLSX.utils.encode_cell({ r: 0, c: column });
+    worksheet[cellRef].s = headerStyle;
+  }
+  for (let row = 1; row <= rows.length; row += 1) {
+    for (const column of numericColumns) {
+      const cell = worksheet[XLSX.utils.encode_cell({ r: row, c: column })];
+      if (cell?.t === "n") cell.z = "0.###############";
+    }
+  }
+  worksheet["!rows"] = [{ hpt: 24 }];
+  worksheet["!cols"] = columnWidths.map((wch) => ({ wch }));
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+  return Buffer.from(XLSX.write(workbook, { type: "array", bookType: "xlsx" }) as ArrayBuffer);
+}
+
+function generateMapRegionExcel(mapDir: string, data: PointTableExportData): { buffer: Buffer; rowCount: number } {
+  const parsed = mapJsonData(mapDir, DESCRIPTION_FILE_NAME);
+  const records = Array.isArray(parsed) ? parsed.filter(isRecord) : [];
+  const mainLookup = buildMainLookup(data.mains || []);
+  const stationName = knownStationName(data);
+  const rows: unknown[][] = [];
+
+  for (const record of records.filter((item) => areaType(item) === AREA_TYPE_CHARGING)) {
+    const pose = areaPose(record);
+    if (!pose) continue;
+    rows.push([
+      rows.length + 1,
+      stationName,
+      "",
+      "",
+      "",
+      "机站",
+      ...chargingFootprint(pose).flatMap((point) => point),
+    ]);
+  }
+
+  for (const record of records.filter((item) => areaType(item) === AREA_TYPE_CABINET)) {
+    const pose = areaPose(record);
+    if (!pose) continue;
+    const main = findMainForArea(record, mainLookup);
+    rows.push([
+      rows.length + 1,
+      textValue(main?.stationName) || stationName,
+      textValue(main?.voltName),
+      "",
+      textValue(main?.bayName),
+      textValue(record.name) || textValue(main?.mainDeviceName) || textValue(record.code),
+      ...pose.flatMap((point) => point),
+    ]);
+  }
+
+  return {
+    buffer: generateSimpleExcel(
+      REGION_EXPORT_HEADERS,
+      rows,
+      "区域",
+      [8, 20, 14, 18, 20, 20, ...Array(12).fill(14)],
+      Array.from({ length: 12 }, (_, index) => index + 6),
+    ),
+    rowCount: rows.length,
+  };
+}
+
+function displayComponentPointRecognition(value: unknown): string {
+  const labels = textValue(value)
+    .split(",")
+    .map((item) => COMPONENT_POINT_RECOGNITION_LABELS[item.trim()] || item.trim())
+    .filter(Boolean);
+  return uniqueTexts(labels).join("、");
+}
+
+function generateMapComponentPointExcel(mapDir: string, data: PointTableExportData): { buffer: Buffer; rowCount: number } {
+  const parsed = mapJsonData(mapDir, INSPECTION_POINTS_FILE_NAME);
+  const items = isRecord(parsed) && Array.isArray(parsed.items) ? parsed.items.filter(isRecord) : [];
+  const pointByCode = new Map(
+    data.points
+      .map((point) => [textValue(point.pointCode).toLowerCase(), point] as const)
+      .filter(([code]) => !!code),
+  );
+  const rows: unknown[][] = [];
+
+  for (const item of items) {
+    const position = coordinateTuple(item.position ?? item.origin);
+    const direction = coordinateTuple(item.direction);
+    if (!position || !direction) continue;
+    const pointCode = textValue(item.pointCode);
+    const point = pointByCode.get(pointCode.toLowerCase());
+    rows.push([
+      rows.length + 1,
+      COMPONENT_POINT_COLLECT_TYPE,
+      displayComponentPointRecognition(point?.recognitionTypeList),
+      textValue(point?.pointName) || textValue(item.pointName) || textValue(item.name),
+      textValue(point?.pointCode) || pointCode,
+      ...position,
+      ...direction,
+    ]);
+  }
+
+  return {
+    buffer: generateSimpleExcel(
+      COMPONENT_POINT_EXPORT_HEADERS,
+      rows,
+      "部件点",
+      [8, 12, 14, 24, 40, 16, 16, 16, 16, 16, 16],
+      [5, 6, 7, 8, 9, 10],
+    ),
+    rowCount: rows.length,
+  };
+}
+
 function descriptionTextWithBayCode(existingText: string, data: PointTableExportData): string {
   let parsed: unknown;
   try {
@@ -575,6 +774,10 @@ export async function exportSpaceZip(
   }
 
   const xlsxBuf = generatePointExcel(pointTableData);
+  const regionExcel = generateMapRegionExcel(src, pointTableData);
+  const componentPointExcel = generateMapComponentPointExcel(src, pointTableData);
+  const regionExcelName = `${mapName}区域.xlsx`;
+  const componentPointExcelName = `${mapName}部件点.xlsx`;
   const cabinetRegions = collectCabinetRegions(mapRoot, pointTableData.mains);
   const cabinetRecords = buildCabinetRecords(pointTableData.mains, cabinetRegions);
   const cabinetText = `${JSON.stringify(cabinetRecords, null, 2)}\n`;
@@ -585,10 +788,19 @@ export async function exportSpaceZip(
     mappedCabinetRegions: cabinetRegions.length,
     records: cabinetRecords.length,
   });
+  console.log("[导出模型] 地图业务 Excel 统计", {
+    mapName,
+    regionRows: regionExcel.rowCount,
+    componentPointRows: componentPointExcel.rowCount,
+  });
 
   // Step 1: 计算最终导出包需要读取的文件大小。
   onProgress?.("计算文件大小...", 2);
-  const totalSize = getDirSize(src) + xlsxBuf.length + Buffer.byteLength(cabinetText);
+  const totalSize = getDirSize(src)
+    + xlsxBuf.length
+    + regionExcel.buffer.length
+    + componentPointExcel.buffer.length
+    + Buffer.byteLength(cabinetText);
   const totalMB = totalSize / 1024 / 1024;
 
   // 自动编号防重名
@@ -628,6 +840,8 @@ export async function exportSpaceZip(
   appendMapContents(archive, src, mapName, pointTableData);
   archive.append(xlsxBuf, { name: "point.xlsx" });
   archive.append(cabinetText, { name: CABINET_FILE_NAME });
+  archive.append(regionExcel.buffer, { name: regionExcelName });
+  archive.append(componentPointExcel.buffer, { name: componentPointExcelName });
 
   await Promise.all([
     archive.finalize(),
