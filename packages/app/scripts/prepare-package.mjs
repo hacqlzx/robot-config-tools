@@ -7,6 +7,7 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const appRoot = path.resolve(scriptDir, "..");
 const workspaceRoot = path.resolve(appRoot, "..", "..");
 const releaseRoot = path.join(appRoot, "release");
+const distElectronRoot = path.join(appRoot, "dist-electron");
 const processStateDir = path.join(appRoot, "node_modules", ".cache", "robot-config-tools", "dev-processes");
 const dryRun = process.argv.includes("--dry-run");
 
@@ -214,12 +215,15 @@ async function main() {
 
   if (dryRun) {
     console.log(`[package:prepare] 将清空 ${releaseRoot}`);
+    console.log(`[package:prepare] 将清空 ${distElectronRoot}`);
     return;
   }
 
   for (const state of trackedStates) fs.rmSync(state.statePath, { force: true });
   await fs.promises.rm(releaseRoot, { recursive: true, force: true, maxRetries: 6, retryDelay: 300 });
   console.log(`[package:prepare] 已清空 ${releaseRoot}`);
+  await fs.promises.rm(distElectronRoot, { recursive: true, force: true, maxRetries: 6, retryDelay: 300 });
+  console.log(`[package:prepare] 已清空 ${distElectronRoot}`);
 }
 
 main().catch((error) => {
