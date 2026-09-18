@@ -35,6 +35,8 @@ interface Props {
   mapDrawingAvailableTypes?: Map<string, Set<"cabinet" | "charging" | "device">>;
   /** 勾选/取消地图树里的绘制 json（回显屏柜） */
   onToggleDrawing?: (path: string, checked: boolean) => void;
+  /** 删除区域文件中的指定区域类型 */
+  onDeleteDrawingType?: (path: string, type: DrawingSubType) => Promise<void>;
   /** 已回显的路径 json 集合 */
   mapPathShown?: Set<string>;
   /** 勾选/取消可行驶路径 json */
@@ -49,6 +51,19 @@ interface Props {
   selectedInspectionPointId?: string | null;
   onSelectInspectionPoint?: (item: InspectionPointItem) => void;
   onSetInspectionPointVisibility?: (ids: string[], visible: boolean) => void;
+}
+
+type DrawingSubType = "cabinet" | "charging" | "device";
+
+function parseVirtualDrawingPath(path: string): { filePath: string; type: DrawingSubType } | null {
+  const match = path.match(/^(.+)#(cabinet|charging|device)$/);
+  return match ? { filePath: match[1], type: match[2] as DrawingSubType } : null;
+}
+
+function drawingTypeLabel(type: DrawingSubType): string {
+  if (type === "cabinet") return "屏柜";
+  if (type === "charging") return "充电区域";
+  return "设备区域";
 }
 
 const TABS = [
@@ -264,6 +279,16 @@ function buildCabinetMainDeviceTree(voltList: any[], bayList: any[], mainList: a
     .filter(Boolean) as TreeDataNode[];
 }
 
+function collectTreeKeys(nodes: TreeDataNode[]): Set<React.Key> {
+  const keys = new Set<React.Key>();
+  const visit = (items: TreeDataNode[]) => items.forEach((item) => {
+    keys.add(item.key);
+    if (item.children) visit(item.children);
+  });
+  visit(nodes);
+  return keys;
+}
+
 function normalizeRootPath(rootPath: string): string {
   return rootPath.replace(/\\/g, "/").replace(/\/+$/, "");
 }
@@ -298,7 +323,7 @@ const TREE_CSS = `
   .side-tree .ant-tree-switcher { width: 16px; flex-shrink: 0; }
 `;
 
-export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUnloadMapFile, loadedFiles, treeKey, loadingFile, mapDrawingShown, mapDrawingAvailableTypes, onToggleDrawing, mapPathShown, onTogglePath, modelBusy = false, onMapTreeLoaded, activeModelPath, inspectionPoints = [], shownInspectionPointIds = new Set(), selectedInspectionPointId = null, onSelectInspectionPoint, onSetInspectionPointVisibility }: Props) {
+export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUnloadMapFile, loadedFiles, treeKey, loadingFile, mapDrawingShown, mapDrawingAvailableTypes, onToggleDrawing, onDeleteDrawingType, mapPathShown, onTogglePath, modelBusy = false, onMapTreeLoaded, activeModelPath, inspectionPoints = [], shownInspectionPointIds = new Set(), selectedInspectionPointId = null, onSelectInspectionPoint, onSetInspectionPointVisibility }: Props) {
   const selectedProject = useSelectedProject();
   const [sideTab, setSideTab] = useState("map");
   const [mapTreeData, setMapTreeData] = useState<SpaceTreeNode[]>([]);
@@ -309,6 +334,8 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
   const [cabinetSelectedKeys, setCabinetSelectedKeys] = useState<React.Key[]>([]);
   const [deviceAreaTreeData, setDeviceAreaTreeData] = useState<TreeDataNode[]>([]);
   const [treeLoading, setTreeLoading] = useState(false);
+  const mapTreeRequestVersion = useRef(0);
+  const cabinetTreeRequestVersion = useRef(0);
   const deleteLockedRef = useRef(false);
   const [deletingPath, setDeletingPath] = useState<string | null>(null);
   const renderedMapTreeData = React.useMemo(
@@ -317,6 +344,7 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
   );
 
   const loadMapTree = useCallback(async () => {
+    const requestVersion = ++mapTreeRequestVersion.current;
     if (!selectedProject || !window.electronAPI) {
       setMapTreeData([]);
       setMapPotreeStatuses({});
@@ -336,12 +364,14 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
           filePath ? await loadInspectionPoints(api, filePath) : [],
         ] as const),
       );
+      if (requestVersion !== mapTreeRequestVersion.current) return;
       setMapTreeData(nodes);
       setMapPotreeStatuses(buildMapPotreeStatuses(projectRoot || "", manifest));
       setStoredInspectionPointsByMap(new Map(inspectionEntries));
       // 通知 workspace 扫描区域文件
       onMapTreeLoaded?.(nodes);
     } catch {
+      if (requestVersion !== mapTreeRequestVersion.current) return;
       setMapTreeData([]);
       setMapPotreeStatuses({});
       setStoredInspectionPointsByMap(new Map());
@@ -390,8 +420,10 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
   }, [selectedProject]);
 
   const loadCabinetTree = useCallback(async () => {
+    const requestVersion = ++cabinetTreeRequestVersion.current;
     if (!selectedProject || !window.electronAPI) {
       setCabinetTreeData([]);
+      setCabinetSelectedKeys([]);
       return;
     }
     setTreeLoading(true);
@@ -402,11 +434,17 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
         api.db.bay.list(selectedProject),
         api.db.mainDevice.list(selectedProject),
       ]);
-      setCabinetTreeData(buildCabinetMainDeviceTree(voltList || [], bayList || [], mainList || []));
+      if (requestVersion !== cabinetTreeRequestVersion.current) return;
+      const nextTree = buildCabinetMainDeviceTree(voltList || [], bayList || [], mainList || []);
+      const nextKeys = collectTreeKeys(nextTree);
+      setCabinetTreeData(nextTree);
+      setCabinetSelectedKeys((current) => current.filter((key) => nextKeys.has(key)));
     } catch {
+      if (requestVersion !== cabinetTreeRequestVersion.current) return;
       setCabinetTreeData([]);
+      setCabinetSelectedKeys([]);
     } finally {
-      setTreeLoading(false);
+      if (requestVersion === cabinetTreeRequestVersion.current) setTreeLoading(false);
     }
   }, [selectedProject]);
 
@@ -453,10 +491,13 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
     }
     deleteLockedRef.current = true;
     setDeletingPath(node.path);
+    const drawingType = parseVirtualDrawingPath(node.path);
     const isMapDir = isDirectMapDirNode(node);
     Modal.confirm({
       title: "删除确认",
-      content: isMapDir
+      content: drawingType
+        ? `确定删除该地图中的全部${drawingTypeLabel(drawingType.type)}？此操作不可恢复。`
+        : isMapDir
         ? `确定删除地图「${node.name}」？将同步清理该地图的屏柜及关联点位、勘察图片和图像标识，且不可恢复。`
         : `确定删除「${node.name}」？`,
       okText: "删除",
@@ -467,6 +508,20 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
         setDeletingPath(null);
       },
       onOk: async () => {
+        if (drawingType) {
+          const label = drawingTypeLabel(drawingType.type);
+          try {
+            if (!onDeleteDrawingType) throw new Error("区域删除服务不可用");
+            await onDeleteDrawingType(drawingType.filePath, drawingType.type);
+            message.success(`${label}已删除`);
+            await loadMapTree();
+          } catch (error) {
+            console.error("[地图树区域删除] 删除失败", { ...drawingType, error });
+            message.error(`删除${label}失败：${error instanceof Error ? error.message : String(error)}`);
+            await loadMapTree();
+          }
+          return;
+        }
         let stage: DeleteStage = "unload";
         try {
           // 删除前先完成模型卸载，再清除绘制和路径回显（含子目录）。
@@ -513,7 +568,7 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
         }
       },
     });
-  }, [loadMapTree, loadedFiles, modelBusy, onToggleDrawing, onTogglePath, onUnloadMapFile, selectedProject]);
+  }, [loadMapTree, loadedFiles, modelBusy, onDeleteDrawingType, onToggleDrawing, onTogglePath, onUnloadMapFile, selectedProject]);
 
   /** 渲染 antd Tree（设备台账或屏柜共用） */
 

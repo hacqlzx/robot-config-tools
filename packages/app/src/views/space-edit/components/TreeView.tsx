@@ -277,13 +277,10 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
       // 获取该文件可用的类型
       const availableTypes = drawingAvailableTypes?.get(node.path);
       
-      // 如果还没有加载过数据，显示所有三个类型（待检测）
+      // 类型扫描完成前不注入虚拟子节点，避免切换模型时把不存在的
+      // 屏柜、充电区域和设备区域短暂显示到每张地图下面。
       if (!availableTypes) {
-        return [
-          { path: makeVirtualDrawingPath(node.path, "cabinet"), name: "屏柜", isDir: false, mapContentActive: node.mapContentActive },
-          { path: makeVirtualDrawingPath(node.path, "charging"), name: "充电区域", isDir: false, mapContentActive: node.mapContentActive },
-          { path: makeVirtualDrawingPath(node.path, "device"), name: "设备区域", isDir: false, mapContentActive: node.mapContentActive },
-        ];
+        return [];
       }
       
       // 已加载过数据，只显示有数据的类型
@@ -376,7 +373,7 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
     // description_file.json 父节点：检查所有虚拟子节点状态
     if (!node.isDir && node.name === DRAWING_FILE_NAME) {
       const availableTypes = drawingAvailableTypes?.get(node.path);
-      const types = availableTypes ? [...availableTypes] : ["cabinet", "charging", "device"] as DrawingSubType[];
+      const types = availableTypes ? [...availableTypes] : [];
       if (types.length === 0) return { checked: false };
       const childStates = types.map((type) =>
         drawingShown?.has(makeVirtualDrawingPath(node.path, type as DrawingSubType)) || false
@@ -558,16 +555,18 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
         const statusMeta = !node.isDir && isLas(node.name) && loadingFile !== nodeFileKey
           ? getPotreeStatusMeta(modelStatus?.status, modelStatus?.error)
           : null;
-        const menuItems = [
-          { key: "openDir", label: "打开文件目录" },
-          { key: "delete", label: modelBusy ? "模型处理中，暂不可删除" : "删除", danger: true, disabled: modelBusy },
-        ];
+        const virtualDrawingNode = isVirtualDrawingPath(node.path);
+        const menuItems = virtualDrawingNode
+          ? [{ key: "delete", label: modelBusy ? "模型处理中，暂不可删除" : "删除", danger: true, disabled: modelBusy }]
+          : [
+              { key: "openDir", label: "打开文件目录" },
+              { key: "delete", label: modelBusy ? "模型处理中，暂不可删除" : "删除", danger: true, disabled: modelBusy },
+            ];
         const onMenuClick = (info: { key: string }) => {
           if (info.key === "openDir") onRequestOpenDir?.(node);
           else if (info.key === "delete") onRequestDelete?.(node);
         };
-        // 虚拟节点不显示右键菜单
-        const enableContextMenu = !isVirtualDrawingPath(node.path) && !node.virtualType;
+        const enableContextMenu = !node.virtualType;
         const inspectionPoint = node.virtualType === "inspection-point" && node.inspectionMapActive && !modelBusy
           ? inspectionPoints.find((item) => item.id === node.inspectionPointId) ?? null
           : null;

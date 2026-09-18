@@ -597,7 +597,7 @@ export async function loadChargingAreaFromJson(api: ElectronAPI, jsonPath: strin
 
 /** 由绘制 JSON 绝对路径推导项目相对子路径（写回用） */
 function subPathFromJson(jsonPath: string): string {
-  return projectSubPathFromDir(jsonPath, MAP_DIR_NAME, DRAWING_FILE_NAME);
+  return projectSubPathFromDir(jsonPath.replace(/#(?:cabinet|charging|device)$/, ""), MAP_DIR_NAME, DRAWING_FILE_NAME);
 }
 
 async function deleteCabinetMainDevices(
@@ -628,20 +628,45 @@ async function deleteCabinetMainDevices(
 
 /** 删除某个 description_file.json 中全部屏柜对应的主设备数据 */
 export async function deleteCabinetDevicesFromJson(api: ElectronAPI, projectName: string, jsonPath: string): Promise<void> {
+  const actualJsonPath = jsonPath.replace(/#(?:cabinet|charging|device)$/, "");
   let records: RobotAreaRecord[] = [];
   try {
-    records = await readAreaRecordsFromPath(api, jsonPath);
+    records = await readAreaRecordsFromPath(api, actualJsonPath);
   } catch {
     return;
   }
   await deleteCabinetMainDevices(api, projectName, records.filter(isCabinetRecord));
 }
 
+/** 删除区域文件中的某一类记录，保留其他区域类型和未知扩展记录。 */
+export async function deleteDrawingTypeFromJson(
+  api: ElectronAPI,
+  projectName: string,
+  jsonPath: string,
+  type: "cabinet" | "charging" | "device",
+): Promise<void> {
+  const actualJsonPath = jsonPath.replace(/#(?:cabinet|charging|device)$/, "");
+  const records = await readAreaRecordsFromPath(api, actualJsonPath);
+  if (type === "cabinet") {
+    await deleteCabinetMainDevices(api, projectName, records.filter(isCabinetRecord));
+  }
+  const next = records.filter((record) => {
+    const recordType = areaType(record);
+    if (type === "cabinet") return recordType !== AREA_TYPE_CABINET_ROW && recordType !== AREA_TYPE_CABINET;
+    if (type === "charging") return recordType !== AREA_TYPE_CHARGING;
+    return recordType !== AREA_TYPE_DEVICE;
+  });
+  const bytes = new TextEncoder().encode(JSON.stringify(next, null, 2));
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  await api.project.writeFile(projectName, subPathFromJson(actualJsonPath), buffer);
+}
+
 /** 删除某屏柜/柜排记录及其柜子并写回 JSON */
 export async function deleteCabinetItem(api: ElectronAPI, projectName: string, jsonPath: string, cabinetId: number): Promise<void> {
+  const actualJsonPath = jsonPath.replace(/#(?:cabinet|charging|device)$/, "");
   let records: RobotAreaRecord[] = [];
   try {
-    records = await readAreaRecordsFromPath(api, jsonPath);
+    records = await readAreaRecordsFromPath(api, actualJsonPath);
   } catch {
     return;
   }
@@ -652,7 +677,7 @@ export async function deleteCabinetItem(api: ElectronAPI, projectName: string, j
     && (areaType(record) === AREA_TYPE_CABINET_ROW || !valueText(record.parent_id))
   );
   if (!removedRoot) {
-    console.warn("[屏柜删除] 未找到三维屏柜对应的 JSON 记录", { jsonPath, cabinetId, rootId });
+    console.warn("[屏柜删除] 未找到三维屏柜对应的 JSON 记录", { jsonPath: actualJsonPath, cabinetId, rootId });
     throw new Error(`未找到屏柜记录：${rootId}`);
   }
   const removedRootId = valueText(removedRoot.id);
@@ -663,7 +688,7 @@ export async function deleteCabinetItem(api: ElectronAPI, projectName: string, j
   const removedRecords = [removedRoot, ...removedChildren];
   console.log("[屏柜删除] 三维删除请求", {
     projectName,
-    jsonPath,
+    jsonPath: actualJsonPath,
     selectedId: cabinetId,
     rootId: removedRootId,
     rootCode: valueText(removedRoot.code),
@@ -680,7 +705,7 @@ export async function deleteCabinetItem(api: ElectronAPI, projectName: string, j
   });
   const bytes = new TextEncoder().encode(JSON.stringify(next, null, 2));
   const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-  await api.project.writeFile(projectName, subPathFromJson(jsonPath), buffer);
+  await api.project.writeFile(projectName, subPathFromJson(actualJsonPath), buffer);
 }
 
 function isRobotPathFileName(name: string): boolean {

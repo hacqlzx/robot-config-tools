@@ -22,6 +22,7 @@ import {
   databaseBackup,
   exportBackendLog,
   getRecentMonthRobotLog,
+  downLoadExcelTemplate,
   downloadCommunicateExcel,
 } from "@/api/config.js";
 import { startDownloadTaskFlyAnimation } from "@/components/download-task";
@@ -48,6 +49,8 @@ interface IECard {
   desc?: string;
   /** 是否展示模板下载按钮。 */
   templateDownload?: boolean;
+  /** 模板下载按钮文案，未配置时显示“模板下载”。 */
+  templateDownloadLabel?: string;
   /** 卡片内的操作按钮列表。 */
   actions?: IEAction[];
 }
@@ -82,6 +85,8 @@ const cardList: IECard[] = [
   {
     key: "space-model",
     title: "空间模型",
+    templateDownload: true,
+    templateDownloadLabel: "点表模板下载",
     actions: [
       { key: "export", label: "空间模型导出", desc: "导出 .las、路径等" },
       { key: "import", label: "空间模型导入", desc: "导入 .las、路径等" },
@@ -709,20 +714,85 @@ export default function ImportExport() {
     }
   }, [createRemoteExportTask, resolveSelectedRobot, message]);
 
-  /** 通信模板下载 */
-  const handleCommunicationTemplateDownload = useCallback(async (triggerElement?: HTMLElement) => {
+  /** 先调用模板接口获取文件地址，再交给下载任务中心下载。 */
+  const downloadTemplate = useCallback(async ({
+    label,
+    destTitle,
+    triggerElement,
+    request,
+  }: {
+    label: string;
+    destTitle: string;
+    triggerElement?: HTMLElement;
+    request: () => Promise<any>;
+  }) => {
+    if (!backendIp) {
+      message.warning("请先连接后台");
+      return;
+    }
+
+    setUploadingLabel(label);
     try {
-      await createRemoteExportTask({
-        label: "通信模板下载",
-        exportPath: "/robot/tool/file/downloadCommunicateExcel",
-        destTitle: "选择通信模板保存目录",
-        triggerElement,
-        fallbackExport: () => downloadCommunicateExcel(),
-      });
+      const res = await request();
+      const body = res?.data;
+      if (!body?.success || !body?.data) {
+        message.error(body?.message || "获取模板下载地址失败");
+        return;
+      }
+
+      const downloadPath = String(body.data);
+      const downloadTasks = window.electronAPI?.downloadTasks;
+      if (downloadTasks && window.electronAPI?.selectDir) {
+        const tasks = await downloadTasks.list().catch(() => []);
+        if (tasks.some((task) => task.status === "pending" || task.status === "running")) {
+          message.warning("已有导出任务进行中");
+          return;
+        }
+
+        const destDir = await window.electronAPI.selectDir(destTitle);
+        if (!destDir) return;
+        const result = await downloadTasks.create({
+          type: "remote-download",
+          name: label,
+          backendIp,
+          downloadPath,
+          destDir,
+        });
+        if (!result.success) {
+          message.warning(result.error || "创建下载任务失败");
+          return;
+        }
+        if (triggerElement) startDownloadTaskFlyAnimation(triggerElement);
+        return;
+      }
+
+      await downloadFileToSelectedDir(downloadPath, label);
     } catch (e: any) {
       message.error("下载失败: " + (e?.message || e));
+    } finally {
+      setUploadingLabel(null);
     }
-  }, [createRemoteExportTask, message]);
+  }, [backendIp, downloadFileToSelectedDir, message]);
+
+  /** 通信模板下载 */
+  const handleCommunicationTemplateDownload = useCallback(async (triggerElement?: HTMLElement) => {
+    await downloadTemplate({
+      label: "通信模板下载",
+      destTitle: "选择通信模板保存目录",
+      triggerElement,
+      request: downloadCommunicateExcel,
+    });
+  }, [downloadTemplate]);
+
+  /** 点表模板下载 */
+  const handlePointTableTemplateDownload = useCallback(async (triggerElement?: HTMLElement) => {
+    await downloadTemplate({
+      label: "点表模板下载",
+      destTitle: "选择点表模板保存目录",
+      triggerElement,
+      request: downLoadExcelTemplate,
+    });
+  }, [downloadTemplate]);
 
   const handleAction = (card: IECard, actionKey: IEAction["key"], label: string, triggerElement?: HTMLElement) => {
     const action = card.actions?.find((item) => item.key === actionKey && item.label === label);
@@ -893,7 +963,13 @@ export default function ImportExport() {
 
   /** 模板下载映射 */
   const templateHandlers: Record<string, (triggerElement?: HTMLElement) => Promise<void> | void> = {
+    "space-model": handlePointTableTemplateDownload,
     "communication": handleCommunicationTemplateDownload,
+  };
+
+  const templateLoadingLabels: Record<string, string> = {
+    "space-model": "点表模板下载",
+    "communication": "通信模板下载",
   };
 
   const closeImportDialog = () => {
@@ -953,10 +1029,11 @@ export default function ImportExport() {
                 <Button
                   type="text"
                   size="small"
+                  loading={uploadingLabel === templateLoadingLabels[card.key]}
                   onClick={(event) => templateHandlers[card.key]?.(event.currentTarget)}
                   style={{ marginLeft: "auto", color: "#546bf7" }}
                 >
-                  模板下载
+                  {card.templateDownloadLabel || "模板下载"}
                 </Button>
               )}
             </div>

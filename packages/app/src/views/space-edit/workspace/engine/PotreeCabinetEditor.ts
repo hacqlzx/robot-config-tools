@@ -20,7 +20,8 @@ const LINE_THICKNESS = 0.01;
 const POINT_SCALE = 0.06;
 const CLICK_THRESHOLD = 3;
 const VERTEX_HIT_DISTANCE_SQ = 100;
-const EDGE_HIT_DISTANCE_SQ = 100;
+const SPLIT_EDGE_HIT_RADIUS = 22;
+const SPLIT_EDGE_EPSILON = 0.001;
 const RED_VERTICES = new Set([0, 1, 2, 6]);
 const RED_EDGES: [number, number][] = [[0, 1], [1, 2], [2, 6]];
 const GREEN_EDGES: [number, number][] = [
@@ -348,6 +349,9 @@ export class PotreeCabinetEditor {
     if (event.button !== 0 || !this.canHandlePointer()) return;
     if (this.interactions.hasClaim("drawing-drag")) return;
     this.mouseDown = { x: event.clientX, y: event.clientY };
+    // Cabinet clicks are drawing gestures, including the first four points and
+    // split placement. Claim them before Potree's camera controls see mousedown.
+    this.consumePointer(event);
     if (!this.verts) return;
 
     const vertex = this.hitTestVertex(this.mousePosition(event));
@@ -355,7 +359,6 @@ export class PotreeCabinetEditor {
     this.selectedVertex = vertex;
     this.dragBefore = this.snapshot();
     this.interactions.setClaim("drawing-drag", true);
-    this.consumePointer(event);
   };
 
   private readonly handleMouseMove = (event: MouseEvent): void => {
@@ -412,16 +415,21 @@ export class PotreeCabinetEditor {
   };
 
   private consumePointer(event: MouseEvent): void {
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && !this.host.contains(focused)) focused.blur();
     event.preventDefault();
     event.stopPropagation();
     this.viewer.controls?.stop?.();
   }
 
   private mousePosition(event: MouseEvent): { x: number; y: number } {
+    const element = this.viewer.renderer.domElement;
     const bounds = this.viewer.renderer.domElement.getBoundingClientRect();
+    const width = Math.max(1, element.clientWidth);
+    const height = Math.max(1, element.clientHeight);
     return {
-      x: Math.min(bounds.width, Math.max(0, event.clientX - bounds.left)),
-      y: Math.min(bounds.height, Math.max(0, event.clientY - bounds.top)),
+      x: Math.min(width, Math.max(0, (event.clientX - bounds.left) * width / Math.max(1, bounds.width))),
+      y: Math.min(height, Math.max(0, (event.clientY - bounds.top) * height / Math.max(1, bounds.height))),
     };
   }
 
@@ -490,40 +498,43 @@ export class PotreeCabinetEditor {
     const first = this.projectPoint(this.verts[0], camera);
     const second = this.projectPoint(this.verts[1], camera);
     if (!first || !second) return null;
-    if (distanceSquaredToSegment(mouse.x, mouse.y, first.x, first.y, second.x, second.y) > EDGE_HIT_DISTANCE_SQ) return null;
+    if (distanceSquaredToSegment(mouse.x, mouse.y, first.x, first.y, second.x, second.y)
+      > SPLIT_EDGE_HIT_RADIUS ** 2) return null;
 
     const screenDx = second.x - first.x;
     const screenDy = second.y - first.y;
     const screenLength = screenDx * screenDx + screenDy * screenDy;
-    const screenAmount = screenLength > 0
-      ? Math.max(0, Math.min(1, ((mouse.x - first.x) * screenDx + (mouse.y - first.y) * screenDy) / screenLength))
-      : 0.5;
-    const ray = this.mouseRay(camera, mouse);
-    const rayAmount = ray ? this.rayEdgeParam(ray, this.verts[0], this.verts[1]) : null;
-    return Math.max(0.05, Math.min(0.95, rayAmount ?? screenAmount));
-  }
-
-  private rayEdgeParam(ray: PotreeRay, first: Vec3, second: Vec3): number | null {
-    const rayDirection: Vec3 = [ray.direction.x, ray.direction.y, ray.direction.z];
-    const edge = subtract(second, first);
-    const offset: Vec3 = [ray.origin.x - first[0], ray.origin.y - first[1], ray.origin.z - first[2]];
-    const a = dot(rayDirection, rayDirection);
-    const b = dot(rayDirection, edge);
-    const c = dot(edge, edge);
-    const d = dot(rayDirection, offset);
-    const e = dot(edge, offset);
-    const denominator = a * c - b * b;
-    return Math.abs(denominator) > 1e-9 ? (a * e - b * d) / denominator : null;
+    if (screenLength <= 1e-8) return null;
+    const screenAmount = Math.max(
+      0,
+      Math.min(1, ((mouse.x - first.x) * screenDx + (mouse.y - first.y) * screenDy) / screenLength),
+    );
+    // Screen-space interpolation is not linear in world space under
+    // perspective. Invert the projected edge so an off-edge click near either
+    // endpoint cannot be amplified into a large along-edge displacement.
+    let low = 0;
+    let high = 1;
+    for (let iteration = 0; iteration < 20; iteration += 1) {
+      const amount = (low + high) / 2;
+      const projected = this.projectPoint(lerp(this.verts[0], this.verts[1], amount), camera);
+      if (!projected) break;
+      const projectedAmount = (
+        (projected.x - first.x) * screenDx + (projected.y - first.y) * screenDy
+      ) / screenLength;
+      if (projectedAmount < screenAmount) low = amount;
+      else high = amount;
+    }
+    return Math.max(SPLIT_EDGE_EPSILON, Math.min(1 - SPLIT_EDGE_EPSILON, (low + high) / 2));
   }
 
   private projectPoint(point: Vec3, camera: PotreeCamera): { x: number; y: number } | null {
     const projected = new this.three.Vector3(...point).project(camera) as PotreeThreeVector3;
     if (![projected.x, projected.y, projected.z].every(Number.isFinite)
       || projected.z < -1 || projected.z > 1) return null;
-    const bounds = this.viewer.renderer.domElement.getBoundingClientRect();
+    const element = this.viewer.renderer.domElement;
     return {
-      x: (projected.x + 1) * 0.5 * bounds.width,
-      y: (1 - projected.y) * 0.5 * bounds.height,
+      x: (projected.x + 1) * 0.5 * element.clientWidth,
+      y: (1 - projected.y) * 0.5 * element.clientHeight,
     };
   }
 

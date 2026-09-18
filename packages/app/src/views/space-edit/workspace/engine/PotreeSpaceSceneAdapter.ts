@@ -241,7 +241,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
 
   setInteractionMode(mode: SpaceInteractionMode): void {
     this.interactions.setMode(mode);
-    if (mode === "inspection-point") this.resetInteractionLod();
+    if (mode !== "idle") this.resetInteractionLod();
   }
 
   pickPointAt(clientX: number, clientY: number): [number, number, number] | null {
@@ -1308,22 +1308,18 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
 
   private readonly handleNavigationStart = (): void => {
     if (!this.active || !this.pointcloud) return;
-    // Inspection placement and local normal fitting need the configured point
-    // density immediately after rotation, so do not switch to coarse LOD.
-    if (this.interactions.isMode("inspection-point")) {
+    // Coarse LOD is only useful for actual camera navigation. Drawing,
+    // selection, save/delete busy states and editor drags must retain the
+    // configured density, otherwise a click can leave the cloud sparse.
+    if (!this.interactions.isMode("idle")
+      || this.interactions.hasAnyClaim("drawing-drag", "drawing-selection", "path-selection")) {
       this.resetInteractionLod();
       return;
     }
-    // A path click is a point-picking gesture, not a camera interaction. Keep
-    // the configured point density so repeated clicks do not make the cloud
-    // look sparse while drawing a route.
-    if (this.interactions.isMode("path")) {
-      this.resetInteractionLod();
-      return;
-    }
-    // Right-drag is the space editor's pan gesture. Keep the configured point
-    // budget and node size while panning so the scene does not become blurry.
-    if (this.navigationMouseButton === 2) {
+    // Keep mouse rotation and pan at the configured density. Left-drag can
+    // reach Potree's fallback controls when the pointer is over empty space,
+    // so it must follow the same LOD policy as point-backed pivot rotation.
+    if (this.navigationMouseButton === 0 || this.navigationMouseButton === 2) {
       this.resetInteractionLod();
       return;
     }

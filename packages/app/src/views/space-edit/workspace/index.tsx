@@ -19,6 +19,7 @@ import type { SaveStatus, SpaceTreeNode, ViewDirection } from "../types";
 import { useElementActive } from "@/components/useElementActive";
 import {
   deleteCabinetItem,
+  deleteDrawingTypeFromJson,
   DRAWING_FILE_NAME,
   NORMAL_ANNOTATIONS_FILE_NAME,
   INSPECTION_POINTS_FILE_NAME,
@@ -265,6 +266,34 @@ function sameFilePath(left: string, right: string): boolean {
   return loadedFileKey(left) === loadedFileKey(right);
 }
 
+type DrawingSubType = "cabinet" | "charging" | "device";
+
+const DRAWING_SUB_TYPES: DrawingSubType[] = ["cabinet", "charging", "device"];
+
+function parseDrawingLayerPath(layerId: string): { filePath: string; type: DrawingSubType } | null {
+  const match = layerId.match(/^(.+)#(cabinet|charging|device)$/);
+  return match ? { filePath: match[1], type: match[2] as DrawingSubType } : null;
+}
+
+function drawingFilePathFromLayerId(layerId: string): string {
+  return parseDrawingLayerPath(layerId)?.filePath ?? layerId;
+}
+
+function drawingLayerId(filePath: string, type: DrawingSubType): string {
+  return `${drawingFilePathFromLayerId(filePath)}#${type}`;
+}
+
+function sameDrawingFilePath(left: string, right: string): boolean {
+  return sameFilePath(drawingFilePathFromLayerId(left), drawingFilePathFromLayerId(right));
+}
+
+function drawingItemType(item: NonNullable<SpaceDrawingLayer["areas"]>[number]): DrawingSubType | null {
+  if (item.type === "cabinet") return "cabinet";
+  if (item.type === "charging-area") return "charging";
+  if (item.type === "device-area") return "device";
+  return null;
+}
+
 export default function SpaceEditWorkspace() {
   const { message } = App.useApp();
   const selectedProject = useSelectedProject();
@@ -297,6 +326,8 @@ export default function SpaceEditWorkspace() {
   );
   const [drawingShown, setDrawingShown] = useState<Set<string>>(new Set());
   const [drawingAvailableTypes, setDrawingAvailableTypes] = useState<Map<string, Set<"cabinet" | "charging" | "device">>>(new Map());
+  const drawingShownRef = useRef(drawingShown);
+  drawingShownRef.current = drawingShown;
   const [pathShown, setPathShown] = useState<Set<string>>(new Set());
   const [cabinetMode, setCabinetMode] = useState(false);
   const [cabinetState, setCabinetState] = useState<SpaceCabinetState>(DEFAULT_CABINET_STATE);
@@ -328,6 +359,7 @@ export default function SpaceEditWorkspace() {
   const [projectBoundBayIds, setProjectBoundBayIds] = useState<Set<number>>(new Set());
   const drawingLifecycleVersion = useRef(0);
   const drawingLayerVersions = useRef(new Map<string, number>());
+  const drawingTypeScanVersions = useRef(new Map<string, number>());
   const drawingLayerData = useRef(new Map<string, SpaceDrawingLayer>());
   const cabinetSession = useRef<CabinetSession | null>(null);
   const cabinetSavingRef = useRef(false);
@@ -563,6 +595,7 @@ export default function SpaceEditWorkspace() {
   const clearDrawingVisibility = useCallback(() => {
     drawingLifecycleVersion.current += 1;
     drawingLayerVersions.current.clear();
+    drawingTypeScanVersions.current.clear();
     drawingLayerData.current.clear();
     cabinetSession.current = null;
     cabinetSavingRef.current = false;
@@ -615,6 +648,7 @@ export default function SpaceEditWorkspace() {
     setInspectionState(DEFAULT_INSPECTION_POINT_STATE);
     setInspectionSaving(false);
     setProjectBoundBayIds(new Set());
+    drawingShownRef.current = new Set();
     setDrawingShown(new Set());
     setPathShown(new Set());
   }, [adapter, drawingHistory.clear]);
@@ -643,6 +677,7 @@ export default function SpaceEditWorkspace() {
       const next = new Set(current);
       if (visible) next.add(filePath);
       else next.delete(filePath);
+      if (kind === "drawing") drawingShownRef.current = next;
       return next;
     });
   }, []);
@@ -656,48 +691,108 @@ export default function SpaceEditWorkspace() {
 
   const renderDrawingLayer = useCallback((filePath: string, data: SpaceDrawingLayer) => {
     const editingTypes = new Set<string>();
-    const cabinet = cabinetSession.current;
     const charging = chargingSession.current;
     const deviceArea = deviceAreaSession.current;
-    if (cabinet && sameFilePath(cabinet.filePath, filePath)) {
-      cabinet.filePath = filePath;
-      cabinet.sourceData = data;
-      editingTypes.add("cabinet");
-    }
-    if (charging && sameFilePath(charging.filePath, filePath)) {
-      charging.filePath = filePath;
-      charging.sourceData = data;
+    if (charging && sameDrawingFilePath(charging.filePath, filePath)) {
       editingTypes.add("charging-area");
     }
-    if (deviceArea && sameFilePath(deviceArea.filePath, filePath)) {
-      deviceArea.filePath = filePath;
-      deviceArea.sourceData = data;
+    if (deviceArea && sameDrawingFilePath(deviceArea.filePath, filePath)) {
       editingTypes.add("device-area");
     }
     const areas = (data.areas ?? []).filter((item) => !editingTypes.has(item.type));
     adapter.setDrawingLayer(filePath, { ...data, areas });
   }, [adapter]);
 
+  const syncDrawingFileLayers = useCallback((
+    filePath: string,
+    items: NonNullable<SpaceDrawingLayer["areas"]>,
+    forceVisibleTypes: DrawingSubType[] = [],
+  ) => {
+    const actualFilePath = drawingFilePathFromLayerId(filePath);
+    const actualKey = loadedFileKey(actualFilePath);
+    drawingTypeScanVersions.current.set(actualKey, (drawingTypeScanVersions.current.get(actualKey) ?? 0) + 1);
+
+    const itemsByType = new Map<DrawingSubType, NonNullable<SpaceDrawingLayer["areas"]>>(
+      DRAWING_SUB_TYPES.map((type) => [type, []]),
+    );
+    items.forEach((item) => {
+      const type = drawingItemType(item);
+      if (type) itemsByType.get(type)?.push(item);
+    });
+    const availableTypes = new Set(
+      DRAWING_SUB_TYPES.filter((type) => (itemsByType.get(type)?.length ?? 0) > 0),
+    );
+    setDrawingAvailableTypes((current) => {
+      const next = new Map(current);
+      for (const existingPath of next.keys()) {
+        if (sameFilePath(existingPath, actualFilePath)) next.delete(existingPath);
+      }
+      next.set(actualFilePath, availableTypes);
+      return next;
+    });
+
+    const previousShown = drawingShownRef.current;
+    const visibleTypes = new Set(forceVisibleTypes);
+    let legacyLayerWasVisible = false;
+    previousShown.forEach((layerId) => {
+      if (!sameDrawingFilePath(layerId, actualFilePath)) return;
+      const parsed = parseDrawingLayerPath(layerId);
+      if (parsed) visibleTypes.add(parsed.type);
+      else legacyLayerWasVisible = true;
+    });
+    if (legacyLayerWasVisible) availableTypes.forEach((type) => visibleTypes.add(type));
+
+    const nextShown = new Set(previousShown);
+    [...nextShown].forEach((layerId) => {
+      if (sameDrawingFilePath(layerId, actualFilePath)) nextShown.delete(layerId);
+    });
+    adapter.removeDrawingLayer(actualFilePath);
+    DRAWING_SUB_TYPES.forEach((type) => adapter.removeDrawingLayer(drawingLayerId(actualFilePath, type)));
+    for (const cachedLayerId of [...drawingLayerData.current.keys()]) {
+      if (sameDrawingFilePath(cachedLayerId, actualFilePath)) drawingLayerData.current.delete(cachedLayerId);
+    }
+
+    availableTypes.forEach((type) => {
+      const layerId = drawingLayerId(actualFilePath, type);
+      const data: SpaceDrawingLayer = { areas: itemsByType.get(type) ?? [] };
+      drawingLayerData.current.set(layerId, data);
+      if (!visibleTypes.has(type)) return;
+      renderDrawingLayer(layerId, data);
+      nextShown.add(layerId);
+    });
+    drawingShownRef.current = nextShown;
+    setDrawingShown(nextShown);
+  }, [adapter, renderDrawingLayer]);
+
   // 预扫描区域文件，检测其包含的类型（不加载渲染）
   const scanDrawingFileTypes = useCallback(async (filePath: string) => {
     const api = window.electronAPI;
     if (!api) return;
+    const actualFilePath = drawingFilePathFromLayerId(filePath);
+    const scanKey = loadedFileKey(actualFilePath);
+    const lifecycleVersion = drawingLifecycleVersion.current;
+    const scanVersion = (drawingTypeScanVersions.current.get(scanKey) ?? 0) + 1;
+    drawingTypeScanVersions.current.set(scanKey, scanVersion);
     
     try {
       // 加载完整数据仅用于类型检测
-      const items = await loadAllItemsFromJsonInLasCoordinates(api, filePath);
+      const items = await loadAllItemsFromJsonInLasCoordinates(api, actualFilePath);
+      if (lifecycleVersion !== drawingLifecycleVersion.current
+        || drawingTypeScanVersions.current.get(scanKey) !== scanVersion) return;
       
       const availableTypes = new Set<"cabinet" | "charging" | "device">();
       if (items.some(item => item.type === "cabinet")) availableTypes.add("cabinet");
       if (items.some(item => item.type === "charging-area")) availableTypes.add("charging");
       if (items.some(item => item.type === "device-area")) availableTypes.add("device");
       
-      setDrawingAvailableTypes(prev => new Map(prev).set(filePath, availableTypes));
-      console.log(`[区域扫描] ${filePath} 包含类型:`, Array.from(availableTypes));
+      setDrawingAvailableTypes(prev => new Map(prev).set(actualFilePath, availableTypes));
+      console.log(`[区域扫描] ${actualFilePath} 包含类型:`, Array.from(availableTypes));
     } catch (error) {
-      console.warn(`[区域扫描] 无法读取文件 ${filePath}`, error);
+      if (lifecycleVersion !== drawingLifecycleVersion.current
+        || drawingTypeScanVersions.current.get(scanKey) !== scanVersion) return;
+      console.warn(`[区域扫描] 无法读取文件 ${actualFilePath}`, error);
       // 扫描失败时设置为空集合
-      setDrawingAvailableTypes(prev => new Map(prev).set(filePath, new Set()));
+      setDrawingAvailableTypes(prev => new Map(prev).set(actualFilePath, new Set()));
     }
   }, []);
 
@@ -727,19 +822,37 @@ export default function SpaceEditWorkspace() {
 
 
   const handleToggleDrawing = useCallback(async (virtualPath: string, checked: boolean) => {
-    // 解析虚拟路径: filePath#type 或直接 filePath
-    const match = virtualPath.match(/^(.+)#(cabinet|charging|device)$/);
-    const filePath = match ? match[1] : virtualPath;
-    const filterType = match ? match[2] as "cabinet" | "charging" | "device" : null;
+    const parsedLayer = parseDrawingLayerPath(virtualPath);
+    const filePath = parsedLayer?.filePath ?? virtualPath;
+    const filterType = parsedLayer?.type ?? null;
     
     const layerVersion = nextLayerVersion("drawing", virtualPath);
     const lifecycleVersion = drawingLifecycleVersion.current;
     if (!checked) {
-      adapter.removeDrawingLayer(virtualPath);
-      for (const cachedPath of drawingLayerData.current.keys()) {
-        if (sameFilePath(cachedPath, virtualPath)) drawingLayerData.current.delete(cachedPath);
+      if (parsedLayer) {
+        adapter.removeDrawingLayer(virtualPath);
+        for (const cachedPath of [...drawingLayerData.current.keys()]) {
+          if (sameFilePath(cachedPath, virtualPath)) drawingLayerData.current.delete(cachedPath);
+        }
+        updateLayerVisibility("drawing", virtualPath, false);
+      } else {
+        adapter.removeDrawingLayer(filePath);
+        DRAWING_SUB_TYPES.forEach((type) => {
+          const layerId = drawingLayerId(filePath, type);
+          nextLayerVersion("drawing", layerId);
+          adapter.removeDrawingLayer(layerId);
+        });
+        for (const cachedPath of [...drawingLayerData.current.keys()]) {
+          if (sameDrawingFilePath(cachedPath, filePath)) drawingLayerData.current.delete(cachedPath);
+        }
+        setDrawingShown((current) => {
+          const next = new Set(
+            [...current].filter((layerId) => !sameDrawingFilePath(layerId, filePath)),
+          );
+          drawingShownRef.current = next;
+          return next;
+        });
       }
-      updateLayerVisibility("drawing", virtualPath, false);
       return;
     }
     const api = window.electronAPI;
@@ -749,10 +862,14 @@ export default function SpaceEditWorkspace() {
     const items = filterType 
       ? await loadDrawingItemsByTypeInLasCoordinates(api, filePath, filterType)
       : await loadAllItemsFromJsonInLasCoordinates(api, filePath);
-    
-    // 如果是虚拟节点且没有数据，则不显示
+
+    if (lifecycleVersion !== drawingLifecycleVersion.current
+      || layerVersion !== drawingLayerVersions.current.get(`drawing:${loadedFileKey(virtualPath)}`)) return;
+
     if (filterType && items.length === 0) {
-      console.log(`[绘制加载] ${filterType} 类型无数据，跳过显示`);
+      adapter.removeDrawingLayer(virtualPath);
+      drawingLayerData.current.delete(virtualPath);
+      updateLayerVisibility("drawing", virtualPath, false);
       return;
     }
     
@@ -782,8 +899,6 @@ export default function SpaceEditWorkspace() {
       }
     }
     
-    if (lifecycleVersion !== drawingLifecycleVersion.current
-      || layerVersion !== drawingLayerVersions.current.get(`drawing:${loadedFileKey(virtualPath)}`)) return;
     const data: SpaceDrawingLayer = { areas: items };
     drawingLayerData.current.set(virtualPath, data);
     renderDrawingLayer(virtualPath, data);
@@ -1532,10 +1647,7 @@ export default function SpaceEditWorkspace() {
       adapter.setCabinetNames([]);
       cabinetSession.current = null;
       cabinetDraftRef.current = null;
-      const layer: SpaceDrawingLayer = { areas: items };
-      drawingLayerData.current.set(drawingFilePath, layer);
-      renderDrawingLayer(drawingFilePath, layer);
-      updateLayerVisibility("drawing", drawingFilePath, true);
+      syncDrawingFileLayers(drawingFilePath, items, ["cabinet"]);
       setCabinetMode(false);
       setCabinetState(DEFAULT_CABINET_STATE);
       try {
@@ -1559,7 +1671,7 @@ export default function SpaceEditWorkspace() {
       cabinetSavingRef.current = false;
       if (version === operationVersion.current) setCabinetSaving(false);
     }
-  }, [activeSourcePath, adapter, clearDirtyScope, drawingHistory.clearScope, existingCabinetNames, message, renderDrawingLayer, selectedProject, updateLayerVisibility]);
+  }, [activeSourcePath, adapter, clearDirtyScope, drawingHistory.clearScope, existingCabinetNames, message, selectedProject, syncDrawingFileLayers]);
 
   const handleCabinetDraftChange = useCallback((data: CabinetSaveData | null) => {
     cabinetDraftRef.current = data;
@@ -1602,8 +1714,8 @@ export default function SpaceEditWorkspace() {
     const version = operationVersion.current;
     const expectedPath = mapSiblingFilePath(activeSourcePath, DRAWING_FILE_NAME);
     const cachedPath = [...drawingLayerData.current.keys()]
-      .find((filePath) => sameFilePath(filePath, expectedPath));
-    const drawingFilePath = cachedPath || expectedPath;
+      .find((filePath) => sameDrawingFilePath(filePath, expectedPath));
+    const drawingFilePath = drawingFilePathFromLayerId(cachedPath || expectedPath);
     const items = await loadAllItemsFromJsonInLasCoordinates(api, drawingFilePath);
     if (version !== operationVersion.current) return;
     cancelHideDraft();
@@ -1611,12 +1723,11 @@ export default function SpaceEditWorkspace() {
     closeDeviceAreaMode();
     closePathMode();
     closeNormalMode();
-    const wasVisible = [...drawingShown].some((filePath) => sameFilePath(filePath, drawingFilePath));
+    const wasVisible = [...drawingShown].some((filePath) => sameDrawingFilePath(filePath, drawingFilePath));
     const sourceData: SpaceDrawingLayer = { areas: items };
     cabinetSession.current = { filePath: drawingFilePath, sourceData, wasVisible };
-    drawingLayerData.current.set(drawingFilePath, sourceData);
     if (wasVisible) {
-      renderDrawingLayer(drawingFilePath, sourceData);
+      syncDrawingFileLayers(drawingFilePath, items);
     }
 
     const started = adapter.startCabinetDrawing({
@@ -1625,7 +1736,7 @@ export default function SpaceEditWorkspace() {
     });
     if (!started) {
       cabinetSession.current = null;
-      if (wasVisible) renderDrawingLayer(drawingFilePath, sourceData);
+      if (wasVisible) syncDrawingFileLayers(drawingFilePath, items);
       message.error("屏柜编辑器初始化失败");
       return;
     }
@@ -1639,7 +1750,7 @@ export default function SpaceEditWorkspace() {
     const existingNames = cabinetItems.flatMap((item) => item.cabinets?.map((c: any) => c.name) || []).filter(Boolean);
     setExistingCabinetNames(existingNames);
     setCabinetMode(true);
-  }, [activeSourcePath, adapter, cabinetMode, cancelHideDraft, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, drawingShown, message, recordDrawingHistory, renderDrawingLayer, selectedProject]);
+  }, [activeSourcePath, adapter, cabinetMode, cancelHideDraft, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, drawingShown, message, recordDrawingHistory, selectedProject, syncDrawingFileLayers]);
 
   const handleCabinetUndo = useCallback(() => {
     adapter.undoCabinet();
@@ -1654,10 +1765,81 @@ export default function SpaceEditWorkspace() {
     adapter.selectInspectionPoint(null);
   }, [adapter]);
 
+  const handleDeleteDrawingType = useCallback(async (filePath: string, type: DrawingSubType): Promise<void> => {
+    const api = window.electronAPI;
+    if (!api || !selectedProject) throw new Error("项目文件服务不可用");
+    if (saveOperationInFlightRef.current) throw new Error("正在保存区域，请稍后再试");
+    saveOperationInFlightRef.current = true;
+    showSavingStatus();
+    const drawingFilePath = drawingFilePathFromLayerId(filePath);
+    try {
+      await deleteDrawingTypeFromJson(api, selectedProject, drawingFilePath, type);
+
+      let clearedActiveDraft = false;
+      if (type === "cabinet" && cabinetSession.current
+        && sameDrawingFilePath(cabinetSession.current.filePath, drawingFilePath)) {
+        adapter.setCabinetDrawingEnabled(false);
+        adapter.clearCabinetDrawing();
+        adapter.setCabinetNames([]);
+        cabinetSession.current = null;
+        cabinetDraftRef.current = null;
+        setCabinetMode(false);
+        setCabinetState(DEFAULT_CABINET_STATE);
+        setExistingCabinetNames([]);
+        clearedActiveDraft = true;
+      } else if (type === "charging" && chargingSession.current
+        && sameDrawingFilePath(chargingSession.current.filePath, drawingFilePath)) {
+        adapter.setChargingAreaDrawingEnabled(false);
+        adapter.clearChargingAreaDrawing();
+        chargingSession.current = null;
+        setChargingMode(false);
+        setChargingState(DEFAULT_CHARGING_STATE);
+        clearedActiveDraft = true;
+      } else if (type === "device" && deviceAreaSession.current
+        && sameDrawingFilePath(deviceAreaSession.current.filePath, drawingFilePath)) {
+        adapter.setDeviceAreaDrawingEnabled(false);
+        adapter.clearDeviceAreaDrawing();
+        deviceAreaSession.current = null;
+        setDeviceAreaMode(false);
+        setDeviceAreaState(DEFAULT_DEVICE_AREA_STATE);
+        setProjectBoundBayIds(new Set());
+        clearedActiveDraft = true;
+      }
+
+      if (clearedActiveDraft) {
+        const scope: SpaceDrawingHistoryScope = type === "cabinet"
+          ? "cabinet"
+          : type === "charging" ? "charging" : "device-area";
+        dirtyScopesRef.current.delete(scope);
+        dirtyScopeVersionsRef.current.delete(scope);
+        drawingHistory.clearScope(scope);
+      }
+
+      const items = await loadAllItemsFromJsonInLasCoordinates(api, drawingFilePath);
+      syncDrawingFileLayers(drawingFilePath, items);
+      const activeDrawingFile = activeSourcePath
+        ? mapSiblingFilePath(activeSourcePath, DRAWING_FILE_NAME)
+        : null;
+      if (type === "cabinet" && activeDrawingFile
+        && sameDrawingFilePath(activeDrawingFile, drawingFilePath)) {
+        const cabinetItems = items.filter((item): item is CabinetItem => item.type === "cabinet");
+        setExistingCabinetNames(cabinetItems.flatMap((item) => item.cabinets?.map((cabinet) => cabinet.name) || []).filter(Boolean));
+      }
+      setTreeKey((value) => value + 1);
+      showSavedStatus();
+    } catch (error) {
+      showSaveFailedStatus();
+      throw error;
+    } finally {
+      saveOperationInFlightRef.current = false;
+    }
+  }, [activeSourcePath, adapter, drawingHistory.clearScope, selectedProject, showSaveFailedStatus, showSavedStatus, showSavingStatus, syncDrawingFileLayers]);
+
   const handleDrawingDelete = useCallback(async (selection: SpaceDrawingSelection) => {
     const api = window.electronAPI;
     const modelPath = activeSourcePath;
     if (!api || !selectedProject || !modelPath) return;
+    const drawingFilePath = drawingFilePathFromLayerId(selection.layerId);
     const sourceData = drawingLayerData.current.get(selection.layerId);
     if (selection.item.type === "cabinet") {
       const cabinetId = Number(selection.item.id);
@@ -1666,11 +1848,9 @@ export default function SpaceEditWorkspace() {
         return;
       }
       try {
-        await deleteCabinetItem(api, selectedProject, selection.layerId, cabinetId);
-        const items = await loadAllItemsFromJsonInLasCoordinates(api, selection.layerId);
-        const data: SpaceDrawingLayer = { areas: items };
-        drawingLayerData.current.set(selection.layerId, data);
-        renderDrawingLayer(selection.layerId, data);
+        await deleteCabinetItem(api, selectedProject, drawingFilePath, cabinetId);
+        const items = await loadAllItemsFromJsonInLasCoordinates(api, drawingFilePath);
+        syncDrawingFileLayers(drawingFilePath, items);
         // 更新已有屏柜名称列表
         const cabinetItems = items.filter((item): item is CabinetItem => item.type === "cabinet");
         const updatedNames = cabinetItems.flatMap((item) => item.cabinets?.map((c: any) => c.name) || []).filter(Boolean);
@@ -1710,16 +1890,14 @@ export default function SpaceEditWorkspace() {
       } else {
         return;
       }
-      const items = await loadAllItemsFromJsonInLasCoordinates(api, selection.layerId);
-      const data: SpaceDrawingLayer = { areas: items };
-      drawingLayerData.current.set(selection.layerId, data);
-      renderDrawingLayer(selection.layerId, data);
+      const items = await loadAllItemsFromJsonInLasCoordinates(api, drawingFilePath);
+      syncDrawingFileLayers(drawingFilePath, items);
       setTreeKey((value) => value + 1);
       message.success(selection.item.type === "charging-area" ? "充电区域已删除" : "设备区域已删除");
     } catch (error) {
       message.error(`删除区域失败：${errorMessage(error)}`);
     }
-  }, [activeSourcePath, message, renderDrawingLayer, selectedProject]);
+  }, [activeSourcePath, message, selectedProject, syncDrawingFileLayers]);
 
   const persistChargingArea = useCallback(async (item: ChargingAreaItem | null, options: PersistOptions = {}): Promise<boolean> => {
     const silent = !!options.silent;
@@ -1760,14 +1938,12 @@ export default function SpaceEditWorkspace() {
       const items = await loadAllItemsFromJsonInLasCoordinates(api, drawingFilePath);
       if (version !== operationVersion.current) return false;
       const data: SpaceDrawingLayer = { areas: items };
-      drawingLayerData.current.set(drawingFilePath, data);
       if (closeAfterSave) {
         chargingSession.current = null;
       } else if (chargingSession.current) {
         chargingSession.current = { ...chargingSession.current, filePath: drawingFilePath, sourceData: data };
       }
-      renderDrawingLayer(drawingFilePath, data);
-      if (markFileShown) updateLayerVisibility("drawing", drawingFilePath, true);
+      syncDrawingFileLayers(drawingFilePath, items, markFileShown ? ["charging"] : []);
       if (closeAfterSave) {
         adapter.setChargingAreaDrawingEnabled(false);
         adapter.clearChargingAreaDrawing();
@@ -1786,7 +1962,7 @@ export default function SpaceEditWorkspace() {
       chargingSavingRef.current = false;
       if (version === operationVersion.current) setChargingSaving(false);
     }
-  }, [activeSourcePath, adapter, clearDirtyScope, drawingHistory.clearScope, message, renderDrawingLayer, selectedProject, updateLayerVisibility]);
+  }, [activeSourcePath, adapter, clearDirtyScope, drawingHistory.clearScope, message, selectedProject, syncDrawingFileLayers]);
 
   const handleSaveChargingArea = useCallback(async (): Promise<boolean> => {
     const verts = adapter.getChargingAreaVerts();
@@ -1829,8 +2005,8 @@ export default function SpaceEditWorkspace() {
     const version = operationVersion.current;
     const expectedPath = mapSiblingFilePath(activeSourcePath, DRAWING_FILE_NAME);
     const cachedPath = [...drawingLayerData.current.keys()]
-      .find((filePath) => sameFilePath(filePath, expectedPath));
-    const drawingFilePath = cachedPath || expectedPath;
+      .find((filePath) => sameDrawingFilePath(filePath, expectedPath));
+    const drawingFilePath = drawingFilePathFromLayerId(cachedPath || expectedPath);
     const items = await loadAllItemsFromJsonInLasCoordinates(api, drawingFilePath);
     if (version !== operationVersion.current) return;
     const hasExisting = items.some((item) => item.type === "charging-area")
@@ -1843,12 +2019,11 @@ export default function SpaceEditWorkspace() {
     closeDeviceAreaMode();
     closePathMode();
     closeNormalMode();
-    const wasVisible = [...drawingShown].some((filePath) => sameFilePath(filePath, drawingFilePath));
+    const wasVisible = [...drawingShown].some((filePath) => sameDrawingFilePath(filePath, drawingFilePath));
     const sourceData: SpaceDrawingLayer = { areas: items };
     chargingSession.current = { filePath: drawingFilePath, sourceData, wasVisible };
-    drawingLayerData.current.set(drawingFilePath, sourceData);
     if (wasVisible) {
-      renderDrawingLayer(drawingFilePath, sourceData);
+      syncDrawingFileLayers(drawingFilePath, items);
     }
 
     const started = adapter.startChargingAreaDrawing({
@@ -1858,12 +2033,12 @@ export default function SpaceEditWorkspace() {
     });
     if (!started) {
       chargingSession.current = null;
-      if (wasVisible) renderDrawingLayer(drawingFilePath, sourceData);
+      if (wasVisible) syncDrawingFileLayers(drawingFilePath, items);
       message.error("充电区域编辑器初始化失败");
       return;
     }
     setChargingMode(true);
-  }, [activeSourcePath, adapter, chargingMode, cancelHideDraft, closeCabinetMode, closeDeviceAreaMode, closeChargingMode, closeNormalMode, closePathMode, drawingShown, message, recordDrawingHistory, renderDrawingLayer]);
+  }, [activeSourcePath, adapter, chargingMode, cancelHideDraft, closeCabinetMode, closeDeviceAreaMode, closeChargingMode, closeNormalMode, closePathMode, drawingShown, message, recordDrawingHistory, syncDrawingFileLayers]);
 
   const handleChargingHeightChange = useCallback((height: number) => {
     adapter.setChargingAreaHeight(height);
@@ -1930,14 +2105,12 @@ export default function SpaceEditWorkspace() {
       const savedItems = await loadAllItemsFromJsonInLasCoordinates(api, drawingFilePath);
       if (version !== operationVersion.current) return false;
       const data: SpaceDrawingLayer = { areas: savedItems };
-      drawingLayerData.current.set(drawingFilePath, data);
       if (closeAfterSave) {
         deviceAreaSession.current = null;
       } else if (deviceAreaSession.current) {
         deviceAreaSession.current = { ...deviceAreaSession.current, filePath: drawingFilePath, sourceData: data };
       }
-      renderDrawingLayer(drawingFilePath, data);
-      if (markFileShown) updateLayerVisibility("drawing", drawingFilePath, true);
+      syncDrawingFileLayers(drawingFilePath, savedItems, markFileShown ? ["device"] : []);
       if (closeAfterSave) {
         adapter.setDeviceAreaDrawingEnabled(false);
         adapter.clearDeviceAreaDrawing();
@@ -1957,7 +2130,7 @@ export default function SpaceEditWorkspace() {
       deviceAreaSavingRef.current = false;
       if (version === operationVersion.current) setDeviceAreaSaving(false);
     }
-  }, [activeSourcePath, adapter, clearDirtyScope, drawingHistory.clearScope, message, renderDrawingLayer, selectedProject, updateLayerVisibility]);
+  }, [activeSourcePath, adapter, clearDirtyScope, drawingHistory.clearScope, message, selectedProject, syncDrawingFileLayers]);
 
   const handleSaveDeviceAreas = useCallback(async (): Promise<boolean> => {
     const boxes = adapter.getDeviceAreaBoxes();
@@ -2010,8 +2183,8 @@ export default function SpaceEditWorkspace() {
     const version = operationVersion.current;
     const expectedPath = mapSiblingFilePath(activeSourcePath, DRAWING_FILE_NAME);
     const cachedPath = [...drawingLayerData.current.keys()]
-      .find((filePath) => sameFilePath(filePath, expectedPath));
-    const drawingFilePath = cachedPath || expectedPath;
+      .find((filePath) => sameDrawingFilePath(filePath, expectedPath));
+    const drawingFilePath = drawingFilePathFromLayerId(cachedPath || expectedPath);
     const items = await loadAllItemsFromJsonInLasCoordinates(api, drawingFilePath);
     if (version !== operationVersion.current) return;
     cancelHideDraft();
@@ -2019,12 +2192,11 @@ export default function SpaceEditWorkspace() {
     closeChargingMode();
     closePathMode();
     closeNormalMode();
-    const wasVisible = [...drawingShown].some((filePath) => sameFilePath(filePath, drawingFilePath));
+    const wasVisible = [...drawingShown].some((filePath) => sameDrawingFilePath(filePath, drawingFilePath));
     const sourceData: SpaceDrawingLayer = { areas: items };
     deviceAreaSession.current = { filePath: drawingFilePath, sourceData, wasVisible };
-    drawingLayerData.current.set(drawingFilePath, sourceData);
     if (wasVisible) {
-      renderDrawingLayer(drawingFilePath, sourceData);
+      syncDrawingFileLayers(drawingFilePath, items);
     }
 
     const started = adapter.startDeviceAreaDrawing({
@@ -2034,7 +2206,7 @@ export default function SpaceEditWorkspace() {
     });
     if (!started) {
       deviceAreaSession.current = null;
-      if (wasVisible) renderDrawingLayer(drawingFilePath, sourceData);
+      if (wasVisible) syncDrawingFileLayers(drawingFilePath, items);
       message.error("设备区域编辑器初始化失败");
       return;
     }
@@ -2065,7 +2237,7 @@ export default function SpaceEditWorkspace() {
         if (version === operationVersion.current) setProjectBoundBayIds(new Set());
       }
     }
-  }, [activeSourcePath, adapter, cancelHideDraft, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, deviceAreaMode, drawingShown, message, recordDrawingHistory, renderDrawingLayer, selectedProject]);
+  }, [activeSourcePath, adapter, cancelHideDraft, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, deviceAreaMode, drawingShown, message, recordDrawingHistory, selectedProject, syncDrawingFileLayers]);
 
   const handleDeviceAreaHeightChange = useCallback((height: number) => {
     adapter.setDeviceAreaHeight(height);
@@ -2394,6 +2566,9 @@ export default function SpaceEditWorkspace() {
 
   useEffect(() => {
     clearLoadedModelState();
+    // 区域类型映射按项目隔离；同一项目切换模型时保留已扫描结果，
+    // 让地图树在新一轮扫描期间保持稳定。
+    setDrawingAvailableTypes(new Map());
   }, [clearLoadedModelState, selectedProject]);
 
   useEffect(() => {
@@ -2787,7 +2962,7 @@ export default function SpaceEditWorkspace() {
             onImportPointTable={handleImportPointTable}
             onExportModel={() => setExportOpen(true)}
             importing={pointImporting}
-            modelBusy={modelOperationBusy}
+            modelBusy={modelOperationBusy || saveStatus === "saving" || !!loading || correctionSaving}
           />
         )}
         viewControls={<ViewCube onViewChange={handleViewChange} />}
@@ -2803,6 +2978,7 @@ export default function SpaceEditWorkspace() {
             mapDrawingShown={drawingShown}
             mapDrawingAvailableTypes={drawingAvailableTypes}
             onToggleDrawing={(filePath, checked) => void handleToggleDrawing(filePath, checked)}
+            onDeleteDrawingType={handleDeleteDrawingType}
             mapPathShown={pathShown}
             onTogglePath={(filePath, checked) => void handleTogglePath(filePath, checked)}
             modelBusy={modelOperationBusy}

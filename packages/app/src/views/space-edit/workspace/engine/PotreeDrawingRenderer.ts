@@ -561,7 +561,13 @@ export class PotreeDrawingRenderer {
     if (event.button !== 0 || !this.canHandlePointer()) return;
     this.mouseDown = { x: event.clientX, y: event.clientY };
     this.pendingSelection = this.hitTest(this.mousePosition(event));
-    this.interactions.setClaim("drawing-selection", !!this.pendingSelection);
+    if (this.pendingSelection) {
+      // Block Potree's default navigation, but let the pivot-rotation listener
+      // on this host distinguish a drag from a selection click.
+      event.preventDefault();
+      event.stopPropagation();
+      this.viewer.controls?.stop?.();
+    }
   };
 
   private readonly handleMouseUp = (event: MouseEvent): void => {
@@ -583,8 +589,9 @@ export class PotreeDrawingRenderer {
         this.rebuildLayer(layerId);
       });
       event.preventDefault();
+      // Keep the mouseup away from Potree while allowing the pivot-rotation
+      // listener on window to clear its pending gesture.
       event.stopPropagation();
-      event.stopImmediatePropagation();
       this.viewer.controls?.stop?.();
       return;
     }
@@ -634,10 +641,13 @@ export class PotreeDrawingRenderer {
   }
 
   private mousePosition(event: MouseEvent): { x: number; y: number } {
-    const bounds = this.viewer.renderer.domElement.getBoundingClientRect();
+    const element = this.viewer.renderer.domElement;
+    const bounds = element.getBoundingClientRect();
+    const width = Math.max(1, element.clientWidth);
+    const height = Math.max(1, element.clientHeight);
     return {
-      x: Math.min(bounds.width, Math.max(0, event.clientX - bounds.left)),
-      y: Math.min(bounds.height, Math.max(0, event.clientY - bounds.top)),
+      x: Math.min(width, Math.max(0, (event.clientX - bounds.left) * width / Math.max(1, bounds.width))),
+      y: Math.min(height, Math.max(0, (event.clientY - bounds.top) * height / Math.max(1, bounds.height))),
     };
   }
 
