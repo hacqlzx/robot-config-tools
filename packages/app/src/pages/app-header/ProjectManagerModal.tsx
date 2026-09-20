@@ -18,7 +18,8 @@ interface ProjectManagerModalProps {
   onClose: () => void;
   onReloadProjects: () => Promise<void>;
   onChooseProjectRoot: () => Promise<void>;
-  onSwitchProject: (name: string) => void;
+  onSwitchProject: (name: string, skipConfirmation?: boolean) => Promise<boolean>;
+  onConfirmProjectChange: (actionText: string) => Promise<boolean>;
   onOpenProjectDir: (name: string) => Promise<void>;
   onDeleteProject: (name: string) => void;
 }
@@ -49,6 +50,7 @@ export default function ProjectManagerModal({
   onReloadProjects,
   onChooseProjectRoot,
   onSwitchProject,
+  onConfirmProjectChange,
   onOpenProjectDir,
   onDeleteProject,
 }: ProjectManagerModalProps) {
@@ -132,7 +134,7 @@ export default function ProjectManagerModal({
       setActiveProject(createdName);
       setMode("detail");
       setFormName("");
-      if (switchAfterCreate) onSwitchProject(createdName);
+      if (switchAfterCreate) await onSwitchProject(createdName);
       messageApi.success(`项目 "${createdName}" 创建成功`);
     } catch (error: any) {
       messageApi.error(error?.message || "创建项目失败");
@@ -146,12 +148,13 @@ export default function ProjectManagerModal({
     const oldName = activeProject;
     setAction("rename");
     try {
+      if (selectedProject === oldName && !(await onConfirmProjectChange("重命名项目"))) return;
       await window.electronAPI.project.rename(oldName, trimmedFormName);
       await onReloadProjects();
       setActiveProject(trimmedFormName);
       setMode("detail");
       setFormName("");
-      if (selectedProject === oldName) onSwitchProject(trimmedFormName);
+      if (selectedProject === oldName) await onSwitchProject(trimmedFormName, true);
       messageApi.success(`已重命名为 "${trimmedFormName}"`);
     } catch (error: any) {
       messageApi.error(error?.message || "重命名失败");
@@ -160,10 +163,10 @@ export default function ProjectManagerModal({
     }
   };
 
-  const handleSwitchProject = (name: string) => {
+  const handleSwitchProject = async (name: string) => {
     setAction("switch");
     try {
-      onSwitchProject(name);
+      await onSwitchProject(name);
     } finally {
       setAction(null);
     }

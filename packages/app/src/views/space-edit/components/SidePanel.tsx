@@ -14,6 +14,7 @@ import {
 import type { SpaceTreeNode } from "../types";
 import type { InspectionPointItem } from "../hooks/drawing/drawing-schema";
 import { MAP_DIR_NAME, isLasOrLazFileName, loadedFileKey } from "../utils/space-paths";
+import { validateInspectionPointBindings } from "../utils/inspection-point-import";
 import { useSelectedProject } from "@/stores/appContextStore";
 
 const MIN_WIDTH = 200;
@@ -133,17 +134,23 @@ function injectInspectionPointTree(
   activeModelPath: string | null | undefined,
   activeItems: InspectionPointItem[],
   storedItemsByMap: Map<string, InspectionPointItem[]>,
-  pointBayByCode: Map<string, { key: string; name: string }>,
+  pointBayByCode: Map<string, { key: string; name: string; pointCode: string; pointName: string }>,
+  pointCatalogReady: boolean,
 ): SpaceTreeNode[] {
   const activeDir = activeModelPath ? parentPath(activeModelPath) : null;
   return nodes.map((node) => {
     const children = node.children
-      ? injectInspectionPointTree(node.children, activeModelPath, activeItems, storedItemsByMap, pointBayByCode)
+      ? injectInspectionPointTree(node.children, activeModelPath, activeItems, storedItemsByMap, pointBayByCode, pointCatalogReady)
       : node.children;
     if (!isDirectMapDirNode(node)) return children === node.children ? node : { ...node, children };
     const mapDir = normalizedPath(node.path);
     const isActiveMap = !!activeDir && mapDir === activeDir;
     const inspectionItems = isActiveMap ? activeItems : storedItemsByMap.get(mapDir) ?? [];
+    const bindingValidation = validateInspectionPointBindings(
+      inspectionItems,
+      pointBayByCode.values(),
+      pointCatalogReady,
+    );
     const mapChildren = setMapContentActive(children ?? [], isActiveMap);
     if (inspectionItems.length === 0) {
       return { ...node, mapContentActive: isActiveMap, children: mapChildren };
@@ -175,6 +182,10 @@ function injectInspectionPointTree(
           inspectionPointId: item.id,
           inspectionBayKey: bayKey,
           inspectionMapActive: isActiveMap,
+          inspectionIssueMessage: bindingValidation.issuesByItemId
+            .get(item.id)
+            ?.map((issue) => issue.message)
+            .join("；"),
           mapContentActive: isActiveMap,
         })),
       }));
@@ -328,7 +339,8 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
   const [sideTab, setSideTab] = useState("map");
   const [mapTreeData, setMapTreeData] = useState<SpaceTreeNode[]>([]);
   const [storedInspectionPointsByMap, setStoredInspectionPointsByMap] = useState<Map<string, InspectionPointItem[]>>(new Map());
-  const [pointBayByCode, setPointBayByCode] = useState<Map<string, { key: string; name: string }>>(new Map());
+  const [pointBayByCode, setPointBayByCode] = useState<Map<string, { key: string; name: string; pointCode: string; pointName: string }>>(new Map());
+  const [pointCatalogReady, setPointCatalogReady] = useState(false);
   const [mapPotreeStatuses, setMapPotreeStatuses] = useState<Record<string, ProjectMapPotreeState>>({});
   const [cabinetTreeData, setCabinetTreeData] = useState<TreeDataNode[]>([]);
   const [cabinetSelectedKeys, setCabinetSelectedKeys] = useState<React.Key[]>([]);
@@ -339,8 +351,15 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
   const deleteLockedRef = useRef(false);
   const [deletingPath, setDeletingPath] = useState<string | null>(null);
   const renderedMapTreeData = React.useMemo(
-    () => injectInspectionPointTree(mapTreeData, activeModelPath, inspectionPoints, storedInspectionPointsByMap, pointBayByCode),
-    [activeModelPath, inspectionPoints, mapTreeData, pointBayByCode, storedInspectionPointsByMap],
+    () => injectInspectionPointTree(
+      mapTreeData,
+      activeModelPath,
+      inspectionPoints,
+      storedInspectionPointsByMap,
+      pointBayByCode,
+      pointCatalogReady,
+    ),
+    [activeModelPath, inspectionPoints, mapTreeData, pointBayByCode, pointCatalogReady, storedInspectionPointsByMap],
   );
 
   const loadMapTree = useCallback(async () => {
@@ -381,6 +400,7 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
   useEffect(() => {
     let cancelled = false;
     const api = window.electronAPI;
+    setPointCatalogReady(false);
     if (!selectedProject || !api?.db?.point) {
       setPointBayByCode(new Map());
       return () => { cancelled = true; };
@@ -388,14 +408,25 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
     api.db.point.list(selectedProject)
       .then((points) => {
         if (cancelled) return;
-        const bayMap = new Map<string, { key: string; name: string }>();
+        const bayMap = new Map<string, { key: string; name: string; pointCode: string; pointName: string }>();
         (points as DevicePoint[]).forEach((point) => {
           const code = normalizePointCode(point.pointCode);
-          if (code) bayMap.set(code, { key: pointBayKey(point), name: pointBayName(point) });
+          if (code) bayMap.set(code, {
+            key: pointBayKey(point),
+            name: pointBayName(point),
+            pointCode: String(point.pointCode || "").trim(),
+            pointName: String(point.pointName || "").trim(),
+          });
         });
         setPointBayByCode(bayMap);
+        setPointCatalogReady(true);
       })
-      .catch(() => { if (!cancelled) setPointBayByCode(new Map()); });
+      .catch(() => {
+        if (!cancelled) {
+          setPointBayByCode(new Map());
+          setPointCatalogReady(false);
+        }
+      });
     return () => { cancelled = true; };
   }, [selectedProject, treeKey]);
 

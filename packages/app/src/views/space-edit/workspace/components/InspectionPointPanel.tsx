@@ -24,6 +24,18 @@ interface Props {
 
 function normalizeCode(value: unknown): string { return String(value ?? "").trim().toLowerCase(); }
 
+function pointDisplayName(point: Pick<DevicePoint, "pointName">): string {
+  return String(point.pointName || "").trim() || "未命名点位";
+}
+
+function pointOptionLabel(point: DevicePoint): string {
+  const name = pointDisplayName(point);
+  const context = [point.mainDeviceName, point.componentName]
+    .map((value) => String(value || "").trim())
+    .filter((value, index, values) => value && value !== name && values.indexOf(value) === index);
+  return context.length > 0 ? `${name}（${context.join(" / ")}）` : name;
+}
+
 function pointBayKey(point: DevicePoint): string {
   const bayCode = String(point.bayCode || "").trim();
   if (bayCode) return `code:${bayCode}`;
@@ -52,15 +64,26 @@ export default function InspectionPointPanel({ item, count, items, marking, savi
   }, [projectName]);
 
   const boundCodes = useMemo(() => new Set(items.map((candidate) => normalizeCode(candidate.pointCode)).filter(Boolean)), [items]);
-  const options = useMemo(() => points
-    .filter((point) => !bayFilter
+  const options = useMemo(() => {
+    const next = points
+      .filter((point) => !bayFilter
       || pointBayKey(point) === bayFilter
       || normalizeCode(point.pointCode) === normalizeCode(item?.pointCode))
-    .map((point) => ({
-    value: point.pointCode,
-    label: `${point.pointName?.trim() || point.pointCode}${point.componentName ? `（${point.componentName}）` : ""}`,
-    disabled: boundCodes.has(normalizeCode(point.pointCode)) && normalizeCode(point.pointCode) !== normalizeCode(item?.pointCode),
-  })), [bayFilter, boundCodes, item?.pointCode, points]);
+      .map((point) => ({
+        value: point.pointCode,
+        label: pointOptionLabel(point),
+        disabled: boundCodes.has(normalizeCode(point.pointCode)) && normalizeCode(point.pointCode) !== normalizeCode(item?.pointCode),
+      }));
+    const currentCode = normalizeCode(item?.pointCode);
+    if (currentCode && !next.some((option) => normalizeCode(option.value) === currentCode)) {
+      next.unshift({
+        value: item?.pointCode || "",
+        label: item?.pointName?.trim() || item?.name?.trim() || "未命名点位",
+        disabled: false,
+      });
+    }
+    return next;
+  }, [bayFilter, boundCodes, item?.name, item?.pointCode, item?.pointName, points]);
   const bayOptions = useMemo(() => {
     const bays = new Map<string, { value: string; label: string }>();
     points.forEach((point) => {

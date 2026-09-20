@@ -11,6 +11,8 @@ export interface SpaceTreeNode {
   inspectionPointId?: string;
   inspectionBayKey?: string;
   inspectionMapActive?: boolean;
+  /** 巡检点绑定异常；存在时树节点保持红色，直至数据修正。 */
+  inspectionIssueMessage?: string;
   mapContentActive?: boolean;
 }
 

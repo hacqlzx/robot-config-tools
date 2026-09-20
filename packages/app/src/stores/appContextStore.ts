@@ -364,9 +364,7 @@ export function setSelectedOcrApiKeyIndex(index: number): void {
 export function getOcrApiKey(): string {
   const keys = getOcrApiKeys();
   const index = getSelectedOcrApiKeyIndex();
-  const selectedKey = keys[index] || "";
-  console.log("[OCR API Key] 获取配置:", { keys, index, selectedKey });
-  return selectedKey;
+  return keys[index] || "";
 }
 
 /** 添加新的 OCR API Key */

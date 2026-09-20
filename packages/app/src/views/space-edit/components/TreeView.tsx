@@ -118,7 +118,7 @@ function isRobotStopPointFileName(name: string): boolean {
 
 function getNodeIcon(node: SpaceTreeNode, expanded: boolean, selected: boolean, unavailable: boolean): JSX.Element {
   const size = 14;
-  const color = unavailable ? "#bfbfbf" : selected ? "#1677ff" : "#595959";
+  const color = node.inspectionIssueMessage ? "#ff4d4f" : unavailable ? "#bfbfbf" : selected ? "#1677ff" : "#595959";
   if (node.virtualType === "inspection-root") {
     return expanded
       ? <FolderOpenOutlined style={{ color, fontSize: size }} />
@@ -635,8 +635,8 @@ export default function TreeView({ nodes, depth = 0, loadedFiles, loadingFile, o
               checkUnavailable,
             )}
             <span
-              title={node.name}
-              style={{ marginLeft: 2, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: inspectionPoint ? "pointer" : "default", color: inspectionPoint?.id === selectedInspectionPointId ? "#1677ff" : undefined, fontWeight: inspectionPoint?.id === selectedInspectionPointId ? 600 : undefined }}
+              title={node.inspectionIssueMessage || node.name}
+              style={{ marginLeft: 2, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: inspectionPoint ? "pointer" : "default", color: node.inspectionIssueMessage ? "#ff4d4f" : inspectionPoint?.id === selectedInspectionPointId ? "#1677ff" : undefined, fontWeight: node.inspectionIssueMessage || inspectionPoint?.id === selectedInspectionPointId ? 600 : undefined }}
               onClick={() => { if (inspectionPoint) onSelectInspectionPoint?.(inspectionPoint); }}
             >
               {displayNodeName(node)}

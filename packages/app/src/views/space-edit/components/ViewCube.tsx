@@ -4,6 +4,7 @@ import leftRaw from "@/assets/svg/left.svg?raw";
 import rightRaw from "@/assets/svg/right.svg?raw";
 import topRaw from "@/assets/svg/top.svg?raw";
 import bottomRaw from "@/assets/svg/bottom.svg?raw";
+import { EyeInvisibleOutlined, EyeOutlined } from "@ant-design/icons";
 import type { ViewDirection } from "../types";
 
 function svgDataUri(raw: string) {
@@ -22,11 +23,17 @@ const ICONS: Record<ViewDirection, string> = {
 
 interface Props {
   onViewChange?: (direction: ViewDirection) => void;
+  hideMode?: boolean;
+  modelHidden?: boolean;
+  modelBusy?: boolean;
+  canHideModel?: boolean;
+  onToggleHide?: () => void;
+  onRestoreModel?: () => void;
 }
 
 const DIRECTIONS: ViewDirection[] = ["前", "后", "左", "右", "上", "下"];
 
-export default function ViewCube({ onViewChange }: Props) {
+export default function ViewCube({ onViewChange, hideMode, modelHidden, modelBusy, canHideModel, onToggleHide, onRestoreModel }: Props) {
   return (
     <>
       <style>{`
@@ -42,6 +49,7 @@ export default function ViewCube({ onViewChange }: Props) {
           justify-content: center;
           transition: all 0.15s;
           padding: 3px;
+          color: #595959;
         }
         .space-edit-view-btn img {
           width: 100%;
@@ -52,10 +60,30 @@ export default function ViewCube({ onViewChange }: Props) {
         .space-edit-view-btn:hover {
           background: #1677ff;
           border-color: #1677ff;
+          color: #fff;
         }
         .space-edit-view-btn:hover img {
           opacity: 1;
           filter: brightness(10);
+        }
+        .space-edit-view-btn.active {
+          background: #1677ff;
+          border-color: #1677ff;
+          color: #fff;
+        }
+        .space-edit-view-btn:disabled,
+        .space-edit-view-btn:disabled:hover {
+          cursor: not-allowed;
+          color: #bfbfbf;
+          background: transparent;
+          border-color: #e8e8e8;
+        }
+        .space-edit-view-divider {
+          width: 24px;
+          height: 1px;
+          margin: 4px auto;
+          background: #d9d9d9;
+          flex: 0 0 auto;
         }
       `}</style>
       <div style={{
@@ -79,6 +107,28 @@ export default function ViewCube({ onViewChange }: Props) {
             <img src={ICONS[v]} alt={v} />
           </button>
         ))}
+        <div className="space-edit-view-divider" aria-hidden="true" />
+        <button
+          className={`space-edit-view-btn${hideMode ? " active" : ""}`}
+          type="button"
+          aria-label="隐藏模型"
+          aria-pressed={hideMode}
+          title="隐藏模型"
+          disabled={!canHideModel || modelBusy}
+          onClick={onToggleHide}
+        >
+          <EyeInvisibleOutlined style={{ fontSize: 17 }} />
+        </button>
+        <button
+          className="space-edit-view-btn"
+          type="button"
+          aria-label="恢复模型"
+          title="恢复模型"
+          disabled={!modelHidden || modelBusy}
+          onClick={onRestoreModel}
+        >
+          <EyeOutlined style={{ fontSize: 17 }} />
+        </button>
       </div>
     </>
   );

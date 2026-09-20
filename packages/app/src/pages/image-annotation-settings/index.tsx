@@ -1,5 +1,5 @@
-import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
-import { Button, Form, Input, Radio, Space, message } from "antd";
+import { DeleteOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
+import { Button, Empty, Form, Input, Radio, Space, message } from "antd";
 import { useEffect, useState } from "react";
 import {
   getOcrApiKeys,
@@ -10,13 +10,22 @@ import {
   getDefectDetectionIp,
   setDefectDetectionIp,
 } from "@/stores/appContextStore";
+import "./index.css";
 
-/** API Key 脱敏显示：只显示前5位和后3位，中间用 * 替代 */
+const MASKED_API_KEY_LENGTH = 24;
+const API_KEY_PREFIX_LENGTH = 5;
+const API_KEY_SUFFIX_LENGTH = 3;
+
+/** 固定长度脱敏，避免从界面推断密钥长度或撑破设置面板。 */
 function maskApiKey(key: string): string {
-  if (!key || key.length <= 8) return key;
-  const prefix = key.slice(0, 5);
-  const suffix = key.slice(-3);
-  const maskLength = Math.max(0, key.length - 8);
+  const normalizedKey = key.trim();
+  if (!normalizedKey) return "";
+  if (normalizedKey.length <= API_KEY_PREFIX_LENGTH + API_KEY_SUFFIX_LENGTH) {
+    return "*".repeat(MASKED_API_KEY_LENGTH);
+  }
+  const prefix = normalizedKey.slice(0, API_KEY_PREFIX_LENGTH);
+  const suffix = normalizedKey.slice(-API_KEY_SUFFIX_LENGTH);
+  const maskLength = MASKED_API_KEY_LENGTH - API_KEY_PREFIX_LENGTH - API_KEY_SUFFIX_LENGTH;
   return `${prefix}${"*".repeat(maskLength)}${suffix}`;
 }
 
@@ -84,15 +93,16 @@ export default function ImageAnnotationSettings() {
   };
 
   return (
-    <div>
-      <div style={{ marginBottom: 32 }}>
-        <div style={{ marginBottom: 12, fontWeight: 500 }}>文字识别 API Key</div>
-        <Space direction="vertical" style={{ width: "100%" }} size="middle">
+    <div className="image-annotation-settings">
+      <section className="image-annotation-settings__section">
+        <h3 className="image-annotation-settings__title">文字识别 API Key</h3>
+        <Space direction="vertical" className="image-annotation-settings__stack" size={12}>
           {/* 新增 API Key 输入框 */}
-          <Space.Compact style={{ width: "100%" }}>
-            <Input
+          <Space.Compact className="image-annotation-settings__key-input">
+            <Input.Password
               placeholder="请输入新的 API Key"
               value={newApiKey}
+              autoComplete="new-password"
               onChange={(e) => setNewApiKey(e.target.value)}
               onPressEnter={handleAddApiKey}
             />
@@ -106,29 +116,24 @@ export default function ImageAnnotationSettings() {
             <Radio.Group
               value={selectedIndex}
               onChange={(e) => handleSelectApiKey(e.target.value)}
-              style={{ width: "100%" }}
+              className="image-annotation-settings__key-group"
             >
-              <Space direction="vertical" style={{ width: "100%" }}>
+              <div className="image-annotation-settings__key-list">
                 {apiKeys.map((key, index) => (
                   <div
                     key={index}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      padding: "8px 12px",
-                      border: "1px solid #d9d9d9",
-                      borderRadius: 6,
-                      background: selectedIndex === index ? "#f0f5ff" : "#fff",
-                    }}
+                    className={`image-annotation-settings__key-row${selectedIndex === index ? " image-annotation-settings__key-row--selected" : ""}`}
                   >
-                    <Radio value={index} style={{ flex: 1 }}>
-                      <span style={{ fontFamily: "monospace" }}>{maskApiKey(key)}</span>
+                    <Radio value={index} className="image-annotation-settings__key-choice">
+                      <code className="image-annotation-settings__key-value">{maskApiKey(key)}</code>
                     </Radio>
                     <Button
                       type="text"
                       danger
                       size="small"
                       icon={<DeleteOutlined />}
+                      aria-label="删除 API Key"
+                      title="删除 API Key"
                       onClick={(e) => {
                         e.stopPropagation();
                         handleDeleteApiKey(index);
@@ -136,37 +141,40 @@ export default function ImageAnnotationSettings() {
                     />
                   </div>
                 ))}
-              </Space>
+              </div>
             </Radio.Group>
           ) : (
-            <div style={{ color: "#999", textAlign: "center", padding: 24 }}>
-              暂无 API Key，请先添加
+            <div className="image-annotation-settings__empty">
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无 API Key" />
             </div>
           )}
         </Space>
-      </div>
+      </section>
 
-      <Form form={form} layout="vertical" autoComplete="off">
-        <Form.Item
-          label="缺陷识别服务 IP 地址"
-          name="defectDetectionIp"
-          rules={[
-            { required: false, message: "请输入缺陷识别服务 IP 地址" },
-            {
-              pattern: /^(\d{1,3}\.){3}\d{1,3}(:\d+)?$/,
-              message: "请输入有效的 IP 地址格式 (例如: 192.168.1.100:8080)",
-            },
-          ]}
-        >
-          <Input placeholder="例如: 192.168.1.100:52002" style={{ width: "100%" }} />
-        </Form.Item>
+      <section className="image-annotation-settings__section image-annotation-settings__section--service">
+        <h3 className="image-annotation-settings__title">缺陷识别服务</h3>
+        <Form form={form} layout="vertical" autoComplete="off">
+          <Form.Item
+            label="IP 地址"
+            name="defectDetectionIp"
+            rules={[
+              { required: false, message: "请输入缺陷识别服务 IP 地址" },
+              {
+                pattern: /^(\d{1,3}\.){3}\d{1,3}(:\d+)?$/,
+                message: "请输入有效的 IP 地址格式 (例如: 192.168.1.100:8080)",
+              },
+            ]}
+          >
+            <Input placeholder="例如: 192.168.1.100:52002" />
+          </Form.Item>
 
-        <Form.Item>
-          <Button type="primary" onClick={handleSaveIp} loading={loading}>
-            保存 IP 地址
-          </Button>
-        </Form.Item>
-      </Form>
+          <Form.Item className="image-annotation-settings__actions">
+            <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveIp} loading={loading}>
+              保存 IP 地址
+            </Button>
+          </Form.Item>
+        </Form>
+      </section>
     </div>
   );
 }

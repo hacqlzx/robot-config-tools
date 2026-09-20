@@ -19,6 +19,7 @@ import {
   useRobotOptions,
 } from "@/stores/appContextStore";
 import { refreshRobotRecords } from "@/services/robot-options";
+import { confirmWorkspaceTransition } from "@/services/workspace-transition-guard";
 import { MESSAGE_TOP_OFFSET } from "@/App";
 
 const menuItems: MenuProps["items"] = menuConfig.map((item) => ({ key: item.key, label: item.label }));
@@ -179,9 +180,12 @@ export default function AppHeader() {
     setDeleteSummaryError("");
   };
 
-  const handleSwitchProject = (name: string) => {
+  const handleSwitchProject = async (name: string, skipConfirmation = false): Promise<boolean> => {
+    if (name === selectedProject) return true;
+    if (!skipConfirmation && !(await confirmWorkspaceTransition("切换项目"))) return false;
     setSelectedProject(name);
     messageApi.success(`已切换到项目 "${name}"`);
+    return true;
   };
 
   const handleOpenProjectDir = async (name: string) => {
@@ -205,6 +209,7 @@ export default function AppHeader() {
     try {
       const dir = await window.electronAPI.selectDir();
       if (!dir) return;
+      if (!(await confirmWorkspaceTransition("切换保存目录"))) return;
       await window.electronAPI.setDataPath(dir);
       messageApi.success("保存目录已更新");
       await loadProjects();
@@ -232,7 +237,15 @@ export default function AppHeader() {
             setProjectManagerOpen(true);
           }}
         />
-        <Select placeholder="选择项目" style={{ width: 160 }} size="small" value={selectedProject} onChange={(v) => { setSelectedProject(v); }} allowClear options={projects.map((p) => ({ label: p, value: p }))} />
+        <Select
+          placeholder="选择项目"
+          style={{ width: 160 }}
+          size="small"
+          value={selectedProject}
+          onChange={(value) => { if (value) void handleSwitchProject(value); }}
+          allowClear={false}
+          options={projects.map((p) => ({ label: p, value: p }))}
+        />
         <Select placeholder="选择机器人" style={{ width: 120 }} size="small" value={selectedRobot} onChange={(v) => { setSelectedRobot(v ?? null); }} allowClear options={robotOptions} />
         <DownloadTaskButton />
         <div style={{ position: "relative", display: "inline-flex" }}>
@@ -274,6 +287,7 @@ export default function AppHeader() {
         onReloadProjects={loadProjects}
         onChooseProjectRoot={handleChooseProjectRoot}
         onSwitchProject={handleSwitchProject}
+        onConfirmProjectChange={confirmWorkspaceTransition}
         onOpenProjectDir={handleOpenProjectDir}
         onDeleteProject={handleOpenDeleteModal}
       />

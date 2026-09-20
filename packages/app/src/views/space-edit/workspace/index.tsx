@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { App, Button, Modal } from "antd";
+import { App, Button, Modal, Tag, Tree } from "antd";
+import type { TreeDataNode } from "antd";
 import { CloudOutlined } from "@ant-design/icons";
 import { createLocalExportTask } from "@/components/download-task/task-actions";
 import { useResizable } from "@/components/useResizable";
+import { registerWorkspaceTransitionGuard } from "@/services/workspace-transition-guard";
 import { useSelectedProject } from "@/stores/appContextStore";
 import { parsePointExcel } from "@/utils/excel-parser";
 import ExportModal from "../components/ExportModal";
@@ -61,6 +63,11 @@ import {
   pointTableFileSubPath,
   stripModelExtension,
 } from "../utils/space-paths";
+import {
+  parseInspectionPointExcel,
+  validateInspectionPointBindings,
+  type InspectionPointBindingValidation,
+} from "../utils/inspection-point-import";
 import ModelLoadingOverlay from "./components/ModelLoadingOverlay";
 import PotreeClipController from "./components/PotreeClipController";
 import PotreeRenderSettings from "./components/PotreeRenderSettings";
@@ -208,6 +215,71 @@ function normalizePointCode(value: unknown): string {
   return String(value ?? "").trim().toLowerCase();
 }
 
+interface InspectionBindingIssueTreeItem {
+  pointCode: string;
+  pointName: string;
+  bayCode: string;
+  bayName: string;
+  issueLabel: string;
+}
+
+function inspectionBindingIssueBayNodes(
+  keyPrefix: string,
+  items: InspectionBindingIssueTreeItem[],
+): TreeDataNode[] {
+  const groups = new Map<string, { name: string; items: InspectionBindingIssueTreeItem[] }>();
+  items.forEach((item) => {
+    const bayKey = item.bayCode || `name:${item.bayName}`;
+    const group = groups.get(bayKey) ?? { name: item.bayName, items: [] };
+    group.items.push(item);
+    groups.set(bayKey, group);
+  });
+  return [...groups.entries()]
+    .sort(([, left], [, right]) => left.name.localeCompare(right.name, "zh-Hans-CN", { numeric: true }))
+    .map(([bayKey, group]) => ({
+      key: `${keyPrefix}:bay:${bayKey}`,
+      title: `${group.name}（${group.items.length} 个点位）`,
+      children: group.items.map((item) => ({
+        key: `${keyPrefix}:point:${item.pointCode}`,
+        title: (
+          <span style={{ display: "inline-flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+            <span>{item.pointName}</span>
+            <Tag color="error" style={{ marginInlineEnd: 0 }}>{item.issueLabel}</Tag>
+          </span>
+        ),
+        isLeaf: true,
+      })),
+    }));
+}
+
+function inspectionBindingIssueTreeData(validation: InspectionPointBindingValidation): TreeDataNode[] {
+  const groups: TreeDataNode[] = [];
+  if (validation.duplicates.length > 0) {
+    groups.push({
+      key: "duplicate-bindings",
+      title: `重复绑定（${validation.duplicates.length} 个点位）`,
+      children: inspectionBindingIssueBayNodes(
+        "duplicate",
+        validation.duplicates.map((item) => ({
+          ...item,
+          issueLabel: `重复绑定 ${item.count} 个巡检点`,
+        })),
+      ),
+    });
+  }
+  if (validation.missingPoints.length > 0) {
+    groups.push({
+      key: "missing-points",
+      title: `点表中不存在（${validation.missingPoints.length} 个点位）`,
+      children: inspectionBindingIssueBayNodes(
+        "missing",
+        validation.missingPoints.map((item) => ({ ...item, issueLabel: "点表中不存在" })),
+      ),
+    });
+  }
+  return groups;
+}
+
 function mapNameFromModelPath(modelPath: string): string {
   const parts = modelPath.replace(/\\/g, "/").split("/").filter(Boolean);
   return parts.length >= 2 ? parts[parts.length - 2] : stripModelExtension(parts.at(-1) || "地图模型");
@@ -348,6 +420,7 @@ export default function SpaceEditWorkspace() {
   const [normalState, setNormalState] = useState<SpaceNormalAnnotationState>(DEFAULT_NORMAL_ANNOTATION_STATE);
   const [normalSaving, setNormalSaving] = useState(false);
   const [normalExporting, setNormalExporting] = useState(false);
+  const [inspectionImporting, setInspectionImporting] = useState(false);
   const [inspectionExporting, setInspectionExporting] = useState(false);
   const [inspectionMode, setInspectionMode] = useState(false);
   const [inspectionItems, setInspectionItems] = useState<InspectionPointItem[]>([]);
@@ -549,10 +622,12 @@ export default function SpaceEditWorkspace() {
     });
   }, [dirtyScopeText, runSaveOperation]);
 
+  useEffect(() => registerWorkspaceTransitionGuard(confirmUnsavedChanges), [confirmUnsavedChanges]);
+
   const startAutoSaveTimer = useCallback(() => {
     if (autoSaveTimerRef.current) clearInterval(autoSaveTimerRef.current);
     autoSaveTimerRef.current = null;
-    if (!selectedProject || !activeSourcePath) return;
+    if (!selectedProject || !activeSourcePath || !pageActive) return;
     autoSaveTimerRef.current = setInterval(() => {
       const hasAutoSavableChanges = [...dirtyScopesRef.current].some((scope) => scope !== "cabinet");
       if (autoSaveInFlightRef.current || !hasAutoSavableChanges) return;
@@ -567,7 +642,7 @@ export default function SpaceEditWorkspace() {
         autoSaveInFlightRef.current = false;
       });
     }, 30_000);
-  }, [activeSourcePath, runSaveOperation, selectedProject]);
+  }, [activeSourcePath, pageActive, runSaveOperation, selectedProject]);
 
   const loadedFiles = useMemo(
     () => new Set(activeModelPath ? [loadedFileKey(activeModelPath)] : []),
@@ -979,24 +1054,9 @@ export default function SpaceEditWorkspace() {
   }, [adapter]);
 
   const closeNormalMode = useCallback(() => {
-    const inspectionSession = inspectionEditSessionRef.current;
-    if (inspectionSession) {
-      inspectionEditSessionRef.current = null;
-      adapter.setInspectionPoints(inspectionSession.items);
-      drawingHistory.restoreCheckpoint(inspectionSession.historyCheckpoint);
-      if (inspectionSession.wasDirty) {
-        dirtyScopesRef.current.add("inspection-point");
-        dirtyScopeVersionsRef.current.set("inspection-point", inspectionSession.dirtyVersion);
-      } else {
-        dirtyScopesRef.current.delete("inspection-point");
-        dirtyScopeVersionsRef.current.delete("inspection-point");
-      }
-      if (saveStatusTimerRef.current) {
-        clearTimeout(saveStatusTimerRef.current);
-        saveStatusTimerRef.current = null;
-      }
-      setSaveStatus(dirtyScopesRef.current.size > 0 ? "dirty" : "idle");
-    }
+    // Closing an editor only exits the mode. Dirty work stays available for
+    // Save All/autosave, matching the other drawing tools.
+    inspectionEditSessionRef.current = null;
     adapter.setNormalAnnotationEnabled(false);
     adapter.setInspectionPointEnabled(false);
     adapter.selectInspectionPoint(null);
@@ -1004,7 +1064,7 @@ export default function SpaceEditWorkspace() {
     setInspectionMode(false);
     setNormalState((current) => ({ ...current, active: false }));
     setInspectionState((current) => ({ ...current, selectedId: null, active: false }));
-  }, [adapter, drawingHistory.restoreCheckpoint]);
+  }, [adapter]);
 
   const closeCorrectionMode = useCallback(() => {
     if (correctionSaving) return;
@@ -1391,6 +1451,110 @@ export default function SpaceEditWorkspace() {
     adapter.deleteInspectionPoint(inspectionId);
   }, [adapter]);
 
+  const handleInspectionImport = useCallback(async (file: File) => {
+    if (!selectedProject) {
+      message.warning("请先选择项目");
+      return;
+    }
+    if (!activeSourcePath) {
+      message.warning("请先加载要合并巡检点的地图");
+      return;
+    }
+    if (modelBusyRef.current || inspectionSavingRef.current) {
+      message.warning("模型或巡检点正在处理中，请稍后再试");
+      return;
+    }
+    const api = window.electronAPI;
+    if (!api?.db?.point) {
+      message.warning("巡检点导入仅支持 Electron 模式");
+      return;
+    }
+    const currentItems = adapter.getInspectionPoints();
+    const unboundCurrent = currentItems.find((item) => !normalizePointCode(item.pointCode));
+    if (unboundCurrent) {
+      adapter.selectInspectionPoint(unboundCurrent.id);
+      message.warning("请先为当前未保存的巡检点绑定点位，再导入巡检点标注");
+      return;
+    }
+
+    setInspectionImporting(true);
+    try {
+      const [importedItems, projectPoints] = await Promise.all([
+        parseInspectionPointExcel(file),
+        api.db.point.list(selectedProject),
+      ]);
+      const mergedItems = [...currentItems, ...importedItems];
+      const beforeSnapshot: {
+        items: InspectionPointItem[];
+        selectedId: string | null;
+        pendingNewId: string | null;
+      } = {
+        items: currentItems,
+        selectedId: inspectionState.selectedId,
+        pendingNewId: null,
+      };
+      const afterSnapshot: {
+        items: InspectionPointItem[];
+        selectedId: string | null;
+        pendingNewId: string | null;
+      } = {
+        items: mergedItems,
+        selectedId: importedItems[0]?.id ?? null,
+        pendingNewId: null,
+      };
+      adapter.setInspectionPoints(mergedItems);
+      adapter.selectInspectionPoint(afterSnapshot.selectedId);
+      setShownInspectionPointIds((current) => new Set([
+        ...current,
+        ...importedItems.map((item) => item.id),
+      ]));
+      recordDrawingHistory("inspection-point", beforeSnapshot, afterSnapshot, "导入合并巡检点");
+
+      const saved = await persistInspectionPoints({
+        silent: true,
+        closeAfterSave: false,
+        clearHistory: false,
+      });
+      if (!saved) throw new Error("合并结果保存失败，数据已保留在编辑器中，请检查后手动保存");
+      setTreeKey((value) => value + 1);
+
+      const validation = validateInspectionPointBindings(
+        mergedItems,
+        projectPoints,
+      );
+      if (validation.duplicates.length > 0 || validation.missingPoints.length > 0) {
+        const issueTreeData = inspectionBindingIssueTreeData(validation);
+        Modal.warning({
+          title: "巡检点绑定存在异常",
+          width: 620,
+          content: (
+            <div style={{ display: "grid", gap: 12 }}>
+              <div>
+                已导入并合并 {importedItems.length} 个巡检点，结果已保存。请修正以下绑定；左侧树中的异常点会保持红色。
+              </div>
+              <div style={{ maxHeight: 360, overflow: "auto", border: "1px solid #f0f0f0", borderRadius: 6, padding: "8px 10px" }}>
+                <Tree
+                  blockNode
+                  defaultExpandAll
+                  selectable={false}
+                  showLine={{ showLeafIcon: false }}
+                  treeData={issueTreeData}
+                />
+              </div>
+            </div>
+          ),
+          okText: "知道了",
+        });
+      } else {
+        message.success(`已导入并合并 ${importedItems.length} 个巡检点`);
+      }
+    } catch (error) {
+      message.error(`巡检点导入失败：${errorMessage(error)}`);
+    } finally {
+      setInspectionImporting(false);
+    }
+  }, [activeSourcePath, adapter, inspectionState.selectedId, message, persistInspectionPoints, recordDrawingHistory, selectedProject]);
+
   const handleInspectionExport = useCallback(async (triggerElement?: HTMLElement) => {
     if (!selectedProject) {
       message.warning("请先选择项目");
@@ -1410,7 +1574,10 @@ export default function SpaceEditWorkspace() {
       const pointCode = normalizePointCode(inspectionItems[index].pointCode);
       const firstIndex = boundByCode.get(pointCode);
       if (firstIndex !== undefined) {
-        message.warning(`点位“${inspectionItems[index].pointCode}”已绑定多个巡检点（第 ${firstIndex + 1} 个和第 ${index + 1} 个）`);
+        const pointName = inspectionItems[index].pointName?.trim()
+          || inspectionItems[index].name?.trim()
+          || "未命名点位";
+        message.warning(`点位“${pointName}”已绑定多个巡检点（第 ${firstIndex + 1} 个和第 ${index + 1} 个）`);
         return;
       }
       boundByCode.set(pointCode, index);
@@ -1458,11 +1625,6 @@ export default function SpaceEditWorkspace() {
     if (pathSavingRef.current) return false;
 
     const pathData = adapter.getPathData();
-    // 如果没有路径点和路径段，直接返回成功，不显示提示
-    if ((!pathData?.points || pathData.points.length === 0) && (!pathData?.paths || pathData.paths.length === 0) && closeAfterSave) {
-      return true;
-    }
-
     const version = operationVersion.current;
     const dirtyVersion = options.dirtyVersion ?? dirtyScopeVersionsRef.current.get("path") ?? 0;
     const pathFilePath = pathSession.current?.filePath || mapSiblingFilePath(modelPath, PATH_FILE_NAME);
@@ -1545,6 +1707,27 @@ export default function SpaceEditWorkspace() {
     setPathMode(true);
   }, [activeSourcePath, adapter, cancelHideDraft, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, message, pathMode, recordDrawingHistory]);
 
+  const getCabinetDraftError = useCallback((data: CabinetSaveData | null): string | null => {
+    if (!data) return "请先选择区域和间隔";
+    const geometry = adapter.getCabinetGeometry();
+    if (!geometry) return "请先完成屏柜区域绘制";
+    const rows = data.rows.map((row) => ({ ...row, code: row.code.trim(), name: row.name.trim() }));
+    const requiresCabinetRow = geometry.splits.length > 0 || rows.length > 1;
+    const cabinetRow = requiresCabinetRow && data.cabinetRow
+      ? { ...data.cabinetRow, code: data.cabinetRow.code.trim(), name: data.cabinetRow.name.trim() }
+      : null;
+    if (rows.length === 0) return "请先完成屏柜分隔";
+    if (requiresCabinetRow && !cabinetRow?.name) return "柜排名称不能为空";
+    if (rows.some((row) => !row.name)) return "屏柜名称不能为空";
+    if (rows.some((row) => !row.code)) return "屏柜编码不能为空";
+    const duplicateName = rows.find((row, index) => rows.findIndex((item) => item.name === row.name) !== index);
+    if (duplicateName) return `屏柜名称重复：${duplicateName.name}`;
+    const existingDuplicate = rows.find((row) => existingCabinetNames.includes(row.name));
+    if (existingDuplicate) return `当前地图已存在同名屏柜：${existingDuplicate.name}`;
+    const duplicateCode = rows.find((row, index) => rows.findIndex((item) => item.code === row.code) !== index);
+    return duplicateCode ? `屏柜编码重复：${duplicateCode.code}` : null;
+  }, [adapter, existingCabinetNames]);
+
   const persistCabinet = useCallback(async (data: CabinetSaveData | null, options: PersistOptions = {}): Promise<boolean> => {
     const silent = !!options.silent;
     const clearHistory = options.clearHistory !== false;
@@ -1562,55 +1745,20 @@ export default function SpaceEditWorkspace() {
       if (!silent) message.warning("请先加载模型");
       return false;
     }
-    if (!data) {
-      if (!silent) message.warning("请先选择区域和间隔");
-      return false;
-    }
     if (cabinetSavingRef.current) return false;
 
-    const geometry = adapter.getCabinetGeometry();
-    if (!geometry) {
-      // 没有几何体，直接返回成功，不提示
-      return true;
+    const draftError = getCabinetDraftError(data);
+    if (draftError || !data) {
+      if (!silent) message.warning(draftError || "屏柜数据不完整");
+      return false;
     }
+    const geometry = adapter.getCabinetGeometry();
+    if (!geometry) return false;
     const rows = data.rows.map((row) => ({ ...row, code: row.code.trim(), name: row.name.trim() }));
     const requiresCabinetRow = geometry.splits.length > 0 || rows.length > 1;
     const cabinetRow = requiresCabinetRow && data.cabinetRow
       ? { ...data.cabinetRow, code: data.cabinetRow.code.trim(), name: data.cabinetRow.name.trim() }
       : null;
-    if (rows.length === 0) {
-      // 没有完成分隔，直接返回成功，不提示
-      return true;
-    }
-    if (requiresCabinetRow && !cabinetRow?.name) {
-      if (!silent) message.warning("柜排名称不能为空");
-      return false;
-    }
-    if (rows.some((row) => !row.name)) {
-      if (!silent) message.warning("屏柜名称不能为空");
-      return false;
-    }
-    if (rows.some((row) => !row.code)) {
-      if (!silent) message.warning("屏柜编码不能为空");
-      return false;
-    }
-    const duplicateName = rows.find((row, index) => rows.findIndex((item) => item.name === row.name) !== index);
-    if (duplicateName) {
-      if (!silent) message.warning(`屏柜名称重复：${duplicateName.name}`);
-      return false;
-    }
-    // 检查与当前地图已有屏柜名称重复
-    const existingDuplicate = rows.find((row) => existingCabinetNames.includes(row.name));
-    if (existingDuplicate) {
-      if (!silent) message.warning(`当前地图已存在同名屏柜：${existingDuplicate.name}`);
-      return false;
-    }
-    const duplicateCode = rows.find((row, index) => rows.findIndex((item) => item.code === row.code) !== index);
-    if (duplicateCode) {
-      if (!silent) message.warning(`屏柜编码重复：${duplicateCode.code}`);
-      return false;
-    }
-
     const version = operationVersion.current;
     const session = cabinetSession.current;
     const dirtyVersion = options.dirtyVersion ?? dirtyScopeVersionsRef.current.get("cabinet") ?? 0;
@@ -1671,7 +1819,7 @@ export default function SpaceEditWorkspace() {
       cabinetSavingRef.current = false;
       if (version === operationVersion.current) setCabinetSaving(false);
     }
-  }, [activeSourcePath, adapter, clearDirtyScope, drawingHistory.clearScope, existingCabinetNames, message, selectedProject, syncDrawingFileLayers]);
+  }, [activeSourcePath, adapter, clearDirtyScope, drawingHistory.clearScope, getCabinetDraftError, message, selectedProject, syncDrawingFileLayers]);
 
   const handleCabinetDraftChange = useCallback((data: CabinetSaveData | null) => {
     cabinetDraftRef.current = data;
@@ -2073,11 +2221,6 @@ export default function SpaceEditWorkspace() {
     }
     if (deviceAreaSavingRef.current) return false;
 
-    // 如果没有设备区域，直接返回成功，不显示提示
-    if (boxes.length === 0 && closeAfterSave) {
-      return true;
-    }
-
     const version = operationVersion.current;
     const session = deviceAreaSession.current;
     const dirtyVersion = options.dirtyVersion ?? dirtyScopeVersionsRef.current.get("device-area") ?? 0;
@@ -2133,6 +2276,10 @@ export default function SpaceEditWorkspace() {
   }, [activeSourcePath, adapter, clearDirtyScope, drawingHistory.clearScope, message, selectedProject, syncDrawingFileLayers]);
 
   const handleSaveDeviceAreas = useCallback(async (): Promise<boolean> => {
+    if (deviceAreaState.pointCount > 0) {
+      message.warning("设备区域存在未完成的点位，请先完成 3 个点");
+      return false;
+    }
     const boxes = adapter.getDeviceAreaBoxes();
     const unboundBoxes = boxes.filter(box => !box.bay);
     if (unboundBoxes.length > 0) {
@@ -2140,10 +2287,10 @@ export default function SpaceEditWorkspace() {
       return false;
     }
     return persistDeviceAreas(boxes);
-  }, [adapter, message, persistDeviceAreas]);
+  }, [adapter, deviceAreaState.pointCount, message, persistDeviceAreas]);
 
   deviceAreaDeleteHandler.current = () => {
-    void runSaveOperation(() => persistDeviceAreas(adapter.getDeviceAreaBoxes()));
+    void runSaveOperation(handleSaveDeviceAreas);
   };
 
   const handleToggleDeviceArea = useCallback(async () => {
@@ -2325,37 +2472,66 @@ export default function SpaceEditWorkspace() {
       clearHistory: false,
     };
     let savedAny = false;
+    const savedLabels: string[] = [];
+    const failAfterPartialSave = (): false => {
+      if (!silent && savedLabels.length > 0) {
+        message.warning(`${savedLabels.join("、")}已保存，其余内容保存失败，请修正后重试`);
+      }
+      return false;
+    };
 
     const chargingVerts = adapter.getChargingAreaVerts();
-    const shouldSaveCharging = !!chargingVerts && (!silent || dirty.has("charging"));
+    let shouldSaveCabinet = includeCabinet && adapter.hasCabinetDraft() && (!silent || dirty.has("cabinet"));
+    let shouldSaveCharging = !!chargingVerts && (!silent || dirty.has("charging"));
     const deviceBoxes = adapter.getDeviceAreaBoxes();
-    const shouldSaveDevice = !silent || dirty.has("device-area");
+    let shouldSaveDevice = !silent || dirty.has("device-area");
     const pathData = adapter.getPathData();
-    const shouldSavePath = dirty.has("path") || (!silent && (pathMode || adapter.hasPathDraft()));
+    let shouldSavePath = dirty.has("path") || (!silent && (pathMode || adapter.hasPathDraft()));
     const shouldSaveNormal = dirty.has("normal") || (!silent && normalMode);
-    const shouldSaveInspection = dirty.has("inspection-point") || (!silent && inspectionMode);
+    let shouldSaveInspection = dirty.has("inspection-point") || (!silent && inspectionMode);
 
-    if (!silent && chargingState.pointCount > 0 && !chargingVerts) {
-      message.warning("充电区域请先完成 3 个点的绘制");
-      return false;
-    }
+    const cabinetError = shouldSaveCabinet ? getCabinetDraftError(cabinetDraftRef.current) : null;
+    const chargingError = chargingState.pointCount > 0 && !chargingVerts
+      ? "充电区域请先完成 3 个点的绘制"
+      : null;
+    const deviceError = shouldSaveDevice && deviceAreaState.pointCount > 0
+      ? "设备区域存在未完成的点位，请先完成 3 个点"
+      : null;
+    const unboundDeviceCount = shouldSaveDevice ? deviceBoxes.filter((box) => !box.bay).length : 0;
+    const inspectionItemsForSave = shouldSaveInspection ? adapter.getInspectionPoints() : [];
+    const unboundInspection = inspectionItemsForSave.find((item) => !item.pointCode?.trim());
 
-    if (shouldSaveDevice && deviceAreaState.pointCount > 0) {
-      if (!silent) message.warning("设备区域存在未完成的点位，请先完成 3 个点");
-      return false;
+    if (!silent) {
+      const validationError = cabinetError
+        || chargingError
+        || deviceError
+        || (unboundDeviceCount > 0 ? `还有 ${unboundDeviceCount} 个设备区域未绑定间隔，请先绑定后再保存` : null)
+        || (unboundInspection ? "请为每个巡检点绑定点位后再保存" : null);
+      if (validationError) {
+        if (unboundInspection) adapter.selectInspectionPoint(unboundInspection.id);
+        message.warning(validationError);
+        return false;
+      }
+    } else {
+      if (cabinetError) shouldSaveCabinet = false;
+      if (chargingError) shouldSaveCharging = false;
+      if (deviceError || unboundDeviceCount > 0) shouldSaveDevice = false;
+      if (unboundInspection) shouldSaveInspection = false;
     }
 
     if (shouldSavePath && !(await validatePathBeforeSave(pathData, chargingVerts, silent))) {
-      return false;
+      if (!silent) return false;
+      shouldSavePath = false;
     }
 
-    if (includeCabinet && adapter.hasCabinetDraft() && (!silent || dirty.has("cabinet"))) {
+    if (shouldSaveCabinet) {
       const saved = await persistCabinet(cabinetDraftRef.current, {
         ...persistOptions,
         dirtyVersion: saveStartedVersions.get("cabinet") ?? 0,
       });
-      if (!saved) return false;
+      if (!saved) return failAfterPartialSave();
       savedAny = true;
+      savedLabels.push("屏柜");
     }
 
     if (chargingVerts && shouldSaveCharging) {
@@ -2369,8 +2545,9 @@ export default function SpaceEditWorkspace() {
         ...persistOptions,
         dirtyVersion: saveStartedVersions.get("charging") ?? 0,
       });
-      if (!saved) return false;
+      if (!saved) return failAfterPartialSave();
       savedAny = true;
+      savedLabels.push("充电区域");
     }
 
     if (shouldSaveDevice) {
@@ -2379,8 +2556,9 @@ export default function SpaceEditWorkspace() {
           ...persistOptions,
           dirtyVersion: saveStartedVersions.get("device-area") ?? 0,
         });
-        if (!saved) return false;
+        if (!saved) return failAfterPartialSave();
         savedAny = true;
+        savedLabels.push("设备区域");
       }
     }
 
@@ -2389,8 +2567,9 @@ export default function SpaceEditWorkspace() {
         ...persistOptions,
         dirtyVersion: saveStartedVersions.get("path") ?? 0,
       });
-      if (!saved) return false;
+      if (!saved) return failAfterPartialSave();
       savedAny = true;
+      savedLabels.push("可行路径");
     }
 
     if (shouldSaveNormal) {
@@ -2398,8 +2577,9 @@ export default function SpaceEditWorkspace() {
         ...persistOptions,
         dirtyVersion: saveStartedVersions.get("normal") ?? 0,
       });
-      if (!saved) return false;
+      if (!saved) return failAfterPartialSave();
       savedAny = true;
+      savedLabels.push("法线标注");
     }
 
     if (shouldSaveInspection) {
@@ -2407,13 +2587,14 @@ export default function SpaceEditWorkspace() {
         ...persistOptions,
         dirtyVersion: saveStartedVersions.get("inspection-point") ?? 0,
       });
-      if (!saved) return false;
+      if (!saved) return failAfterPartialSave();
       savedAny = true;
+      savedLabels.push("巡检点");
     }
 
     if (!savedAny) {
       if (!silent) message.info("没有需要保存的编辑内容");
-      return false;
+      return silent;
     }
 
     const changedDuringSave = [...saveStartedVersions.entries()].some(
@@ -2427,6 +2608,7 @@ export default function SpaceEditWorkspace() {
     chargingState.pointCount,
     deviceAreaState.pointCount,
     drawingHistory.clear,
+    getCabinetDraftError,
     message,
     inspectionMode,
     normalMode,
@@ -2934,10 +3116,6 @@ export default function SpaceEditWorkspace() {
         toolbar={(
           <Toolbar
             onOpenLoadModel={() => setImportOpen(true)}
-            hideMode={!!hideDraftBounds}
-            onToggleHide={handleHide}
-            modelHidden={!!(hideDraftBounds || hiddenModelBounds)}
-            onRestoreModel={handleRestoreModel}
             correctionMode={correctionMode}
             onToggleCorrection={() => void handleToggleCorrection()}
             cabinetMode={cabinetMode}
@@ -2951,8 +3129,10 @@ export default function SpaceEditWorkspace() {
             inspectionMode={inspectionMode}
             inspectionCount={inspectionState.count}
             inspectionSaving={inspectionSaving}
+            inspectionImporting={inspectionImporting}
             inspectionExporting={inspectionExporting}
             onToggleInspection={handleToggleInspection}
+            onImportInspection={handleInspectionImport}
             onExportInspection={handleInspectionExport}
             onUndo={handleHistoryUndo}
             onRedo={handleHistoryRedo}
@@ -2962,10 +3142,20 @@ export default function SpaceEditWorkspace() {
             onImportPointTable={handleImportPointTable}
             onExportModel={() => setExportOpen(true)}
             importing={pointImporting}
-            modelBusy={modelOperationBusy || saveStatus === "saving" || !!loading || correctionSaving}
+            modelBusy={modelOperationBusy || saveStatus === "saving" || !!loading || correctionSaving || inspectionImporting}
           />
         )}
-        viewControls={<ViewCube onViewChange={handleViewChange} />}
+        viewControls={(
+          <ViewCube
+            onViewChange={handleViewChange}
+            hideMode={!!hideDraftBounds}
+            modelHidden={!!(hideDraftBounds || hiddenModelBounds)}
+            modelBusy={modelOperationBusy || saveStatus === "saving" || !!loading || correctionSaving || inspectionImporting}
+            canHideModel={!!(activeModelPath && activeSourcePath)}
+            onToggleHide={handleHide}
+            onRestoreModel={handleRestoreModel}
+          />
+        )}
         sidePanel={(
           <SidePanel
             panelWidth={panelWidth}
@@ -2981,7 +3171,7 @@ export default function SpaceEditWorkspace() {
             onDeleteDrawingType={handleDeleteDrawingType}
             mapPathShown={pathShown}
             onTogglePath={(filePath, checked) => void handleTogglePath(filePath, checked)}
-            modelBusy={modelOperationBusy}
+            modelBusy={modelOperationBusy || inspectionImporting}
             onMapTreeLoaded={handleMapTreeLoaded}
             activeModelPath={activeSourcePath}
             inspectionPoints={inspectionItems}
@@ -2995,7 +3185,7 @@ export default function SpaceEditWorkspace() {
           <SpaceSceneHost
             adapterFactory={adapterFactory}
             picking={correctionMode && !correctionSaving}
-            busy={modelOperationBusy || saveStatus === "saving" || !!loading || correctionSaving}
+            busy={modelOperationBusy || saveStatus === "saving" || !!loading || correctionSaving || inspectionImporting}
             onSceneClick={handleCorrectionPointClick}
             overlay={(sceneState) => (
               <>
@@ -3055,7 +3245,7 @@ export default function SpaceEditWorkspace() {
                     item={inspectionItems.find((item) => item.id === inspectionState.selectedId) ?? null}
                     count={inspectionState.count}
                     items={inspectionItems}
-                    saving={inspectionSaving || modelOperationBusy || saveStatus === "saving" || !!loading || correctionSaving}
+                    saving={inspectionSaving || inspectionImporting || modelOperationBusy || saveStatus === "saving" || !!loading || correctionSaving}
                     bayFilter={inspectionBayFilter}
                     onClose={handleCloseInspectionPanel}
                     onSave={handleSaveInspection}
