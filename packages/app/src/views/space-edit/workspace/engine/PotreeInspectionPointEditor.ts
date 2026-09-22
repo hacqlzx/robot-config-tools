@@ -219,20 +219,22 @@ export class PotreeInspectionPointEditor {
     this.selectedId = id;
     this.commit(before, "修改巡检点长度");
   }
-  bindPoint(id: string, point: { pointCode: string; pointName?: string }): void {
+  bindPoint(id: string, point: { pointCode: string; pointName?: string; bayCode?: string; bayName?: string }): void {
     const item = this.items.find((candidate) => candidate.id === id); const code = point.pointCode.trim();
     if (!item || !code) return;
     const before = this.snapshot();
     const pointName = point.pointName?.trim();
     item.pointCode = code;
     item.pointName = pointName || undefined;
+    item.bayCode = point.bayCode?.trim() || undefined;
+    item.bayName = point.bayName?.trim() || undefined;
     if (pointName) item.name = pointName;
     this.selectedId = id;
     this.commit(before, "绑定巡检点位");
   }
   unbindPoint(id: string): void {
     const item = this.items.find((candidate) => candidate.id === id); if (!item?.pointCode) return;
-    const before = this.snapshot(); delete item.pointCode; delete item.pointName; this.selectedId = id; this.commit(before, "解绑巡检点位");
+    const before = this.snapshot(); delete item.pointCode; delete item.pointName; delete item.bayCode; delete item.bayName; this.selectedId = id; this.commit(before, "解绑巡检点位");
   }
   delete(id: string): void {
     const index = this.items.findIndex((item) => item.id === id); if (index < 0) return;

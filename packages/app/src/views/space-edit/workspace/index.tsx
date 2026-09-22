@@ -5,7 +5,7 @@ import { CloudOutlined } from "@ant-design/icons";
 import { createLocalExportTask } from "@/components/download-task/task-actions";
 import { useResizable } from "@/components/useResizable";
 import { registerWorkspaceTransitionGuard } from "@/services/workspace-transition-guard";
-import { useSelectedProject } from "@/stores/appContextStore";
+import { useRobotRecords, useSelectedProject, useSelectedRobot, type RobotRecordCacheItem } from "@/stores/appContextStore";
 import { parsePointExcel } from "@/utils/excel-parser";
 import ExportModal from "../components/ExportModal";
 import CabinetPanel, { type CabinetSaveData } from "../components/CabinetPanel";
@@ -211,6 +211,32 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function normalizedRobotValue(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function selectedRobotStation(
+  selectedRobot: string | null,
+  robotRecords: RobotRecordCacheItem[],
+): { name: string; code: string } | null {
+  const selectedValue = normalizedRobotValue(selectedRobot);
+  if (!selectedValue) return null;
+
+  const record = robotRecords.find((candidate) => [candidate.robotName, candidate.robotCode, candidate.id]
+    .some((value) => normalizedRobotValue(value) === selectedValue));
+  if (!record) return null;
+
+  const name = [record.operationFacName, record.stationName, record.facName]
+    .map((value) => String(value ?? "").trim())
+    .find(Boolean) || "";
+  if (!name) return null;
+
+  const code = [record.operationFacCode, record.stationCode, record.facCode, record.outStationCode]
+    .map((value) => String(value ?? "").trim())
+    .find(Boolean) || "";
+  return { name, code };
+}
+
 function normalizePointCode(value: unknown): string {
   return String(value ?? "").trim().toLowerCase();
 }
@@ -369,6 +395,8 @@ function drawingItemType(item: NonNullable<SpaceDrawingLayer["areas"]>[number]):
 export default function SpaceEditWorkspace() {
   const { message } = App.useApp();
   const selectedProject = useSelectedProject();
+  const selectedRobot = useSelectedRobot();
+  const robotRecords = useRobotRecords();
   const adapter = useMemo(() => new PotreeSpaceSceneAdapter(), []);
   const adapterFactory = useCallback(() => adapter, [adapter]);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1304,10 +1332,36 @@ export default function SpaceEditWorkspace() {
     if (inspectionSavingRef.current) return false;
 
     const version = operationVersion.current;
-    const items = adapter.getInspectionPoints().map((item: InspectionPointItem) => ({
-      ...item,
-      updatedAt: new Date().toISOString(),
-    }));
+    let pointBayByCode = new Map<string, { bayCode: string; bayName: string }>();
+    try {
+      const points = await api.db.point.list(selectedProject);
+      pointBayByCode = new Map(
+        points
+          .map((point) => {
+            const pointCode = normalizePointCode(point.pointCode);
+            if (!pointCode) return null;
+            return [pointCode, {
+              bayCode: String(point.bayCode || "").trim(),
+              bayName: String(point.bayName || "").trim(),
+            }] as const;
+          })
+          .filter((entry): entry is readonly [string, { bayCode: string; bayName: string }] => !!entry),
+      );
+    } catch {
+      // 本地库读取失败时仍允许保存，保留 JSON 中已有的间隔快照。
+    }
+    const updatedAt = new Date().toISOString();
+    const items = adapter.getInspectionPoints().map((item: InspectionPointItem) => {
+      const localBay = item.pointCode
+        ? pointBayByCode.get(normalizePointCode(item.pointCode))
+        : undefined;
+      return {
+        ...item,
+        bayCode: localBay?.bayCode || item.bayCode?.trim() || undefined,
+        bayName: localBay?.bayName || item.bayName?.trim() || undefined,
+        updatedAt,
+      };
+    });
     const unboundItem = items.find((item) => !item.pointCode?.trim());
     if (unboundItem) {
       adapter.selectInspectionPoint(unboundItem.id);
@@ -1476,7 +1530,7 @@ export default function SpaceEditWorkspace() {
     }));
   }, [persistInspectionPoints, runSaveOperation]);
 
-  const handleInspectionBindPoint = useCallback((inspectionId: string, point: { pointCode: string; pointName: string }) => {
+  const handleInspectionBindPoint = useCallback((inspectionId: string, point: { pointCode: string; pointName: string; bayCode?: string; bayName?: string }) => {
     const pointCodeKey = normalizePointCode(point.pointCode);
     const alreadyBound = inspectionItems.some((item) => item.id !== inspectionId && normalizePointCode(item.pointCode) === pointCodeKey);
     if (alreadyBound) {
@@ -1564,6 +1618,7 @@ export default function SpaceEditWorkspace() {
       const validation = validateInspectionPointBindings(
         mergedItems,
         projectPoints,
+        false,
       );
       if (validation.duplicates.length > 0 || validation.missingPoints.length > 0) {
         const issueTreeData = inspectionBindingIssueTreeData(validation);
@@ -2636,7 +2691,6 @@ export default function SpaceEditWorkspace() {
     }
 
     if (!savedAny) {
-      if (!silent) message.info("没有需要保存的编辑内容");
       return silent;
     }
 
@@ -2963,8 +3017,11 @@ export default function SpaceEditWorkspace() {
         message.warning("Excel 中无有效数据行");
         return;
       }
-      if (!stationName) {
-        message.warning("Excel 中未找到厂站名称");
+      const excelStationName = stationName.trim();
+      const robotStation = selectedRobotStation(selectedRobot, robotRecords);
+      const resolvedStationName = excelStationName || robotStation?.name || "";
+      if (!resolvedStationName) {
+        message.warning("Excel 中未找到厂站名称，且当前机器人未绑定厂站");
         return;
       }
       const api = window.electronAPI;
@@ -2978,7 +3035,7 @@ export default function SpaceEditWorkspace() {
       }
 
       const ext = file.name.match(/\.(xlsx|xls)$/i)?.[0] || ".xlsx";
-      const savedName = `${stationName}${ext}`;
+      const savedName = `${resolvedStationName}${ext}`;
       try {
         const oldFiles = await api.project.listTree(selectedProject, POINT_TABLE_DIR_NAME);
         for (const node of oldFiles) {
@@ -2990,8 +3047,10 @@ export default function SpaceEditWorkspace() {
 
       const savedSubPath = pointTableFileSubPath(savedName);
       await api.project.writeFile(selectedProject, savedSubPath, await file.arrayBuffer());
-      const stationCode = stationName.substring(0, 10) + Date.now().toString().slice(-4);
-      const result = await api.importPoints(rows, stationName, stationCode, selectedProject);
+      const stationCode = !excelStationName && robotStation?.code
+        ? robotStation.code
+        : resolvedStationName.substring(0, 10) + Date.now().toString().slice(-4);
+      const result = await api.importPoints(rows, resolvedStationName, stationCode, selectedProject);
       setTreeKey((value) => value + 1);
       message.success(`导入成功: ${result.inserted} 新增, ${result.updated} 更新`);
       if (result.errors.length > 0) message.warning(result.errors.slice(0, 3).join("; "));
@@ -3000,7 +3059,7 @@ export default function SpaceEditWorkspace() {
     } finally {
       setPointImporting(false);
     }
-  }, [message, selectedProject]);
+  }, [message, robotRecords, selectedProject, selectedRobot]);
 
   const handleHide = useCallback(() => {
     if (!activeModelPath || !activeSourcePath) {

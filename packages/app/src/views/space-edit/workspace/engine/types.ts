@@ -322,7 +322,7 @@ export interface SpaceSceneAdapter {
   renameInspectionPoint(id: string, name: string): void;
   setInspectionPointComponentType(id: string, componentType: string | undefined): void;
   setInspectionPointLength(id: string, length: number): void;
-  bindInspectionPointPoint(id: string, point: { pointCode: string; pointName?: string }): void;
+  bindInspectionPointPoint(id: string, point: { pointCode: string; pointName?: string; bayCode?: string; bayName?: string }): void;
   unbindInspectionPointPoint(id: string): void;
   deleteInspectionPoint(id: string): void;
   markInspectionPointsSaved(): void;

@@ -212,7 +212,7 @@ export function parsePointExcel(file: File): Promise<{ rows: PointExcelRow[]; st
           return;
         }
 
-        resolve({ rows, stationName: stationName || "未命名厂站" });
+        resolve({ rows, stationName });
       } catch (err: any) {
         reject(new Error("Excel 解析失败: " + err.message));
       }

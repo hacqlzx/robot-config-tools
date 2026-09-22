@@ -1,6 +1,7 @@
 ﻿import { useRef } from "react";
+import { useState } from "react";
 import { UploadOutlined, TableOutlined, SaveOutlined, BorderOutlined, ThunderboltOutlined, AppstoreOutlined, NodeIndexOutlined, EnvironmentOutlined, ExportOutlined, ImportOutlined, ArrowLeftOutlined, ArrowRightOutlined, AimOutlined, EyeOutlined, EyeInvisibleOutlined } from "@ant-design/icons";
-import { POINT_TABLE_FILE_ACCEPT } from "../utils/space-paths";
+import { POINT_TABLE_FILE_ACCEPT, POINT_TABLE_FILE_RE } from "../utils/space-paths";
 
 interface Props {
   cabinetMode?: boolean;
@@ -98,6 +99,7 @@ const BUTTON_GROUPS = [
 export default function Toolbar({ onOpenLoadModel, correctionMode, onToggleCorrection, cabinetMode, onToggleCabinet, chargingMode, onToggleCharging, deviceAreaMode, onToggleDeviceArea, pathMode, onTogglePath, inspectionMode, inspectionCount = 0, inspectionNamesVisible = true, inspectionSaving, inspectionImporting, inspectionExporting, onToggleInspection, onToggleInspectionNames, onImportInspection, onExportInspection, onUndo, onRedo, canUndo, canRedo, onSaveAll, onImportPointTable, onExportModel, importing, modelBusy }: Props) {
   const pointInputRef = useRef<HTMLInputElement>(null);
   const inspectionInputRef = useRef<HTMLInputElement>(null);
+  const [pointDropActive, setPointDropActive] = useState(false);
 
   /** 点表文件选中后立即触发导入，清空 input 值防止同名文件无法重复选择 */
   const handlePointFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -105,6 +107,34 @@ export default function Toolbar({ onOpenLoadModel, correctionMode, onToggleCorre
     if (!file) return;
     onImportPointTable?.(file);
     e.target.value = "";
+  };
+
+  const canImportPointFile = !modelBusy && !importing;
+
+  const handlePointDragOver = (event: React.DragEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!canImportPointFile) return;
+    const hasPointTable = Array.from(event.dataTransfer.files).some((file) => POINT_TABLE_FILE_RE.test(file.name));
+    setPointDropActive(hasPointTable);
+    event.dataTransfer.dropEffect = hasPointTable ? "copy" : "none";
+  };
+
+  const handlePointDragLeave = (event: React.DragEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const nextTarget = event.relatedTarget as Node | null;
+    if (nextTarget && event.currentTarget.contains(nextTarget)) return;
+    setPointDropActive(false);
+  };
+
+  const handlePointDrop = (event: React.DragEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setPointDropActive(false);
+    if (!canImportPointFile) return;
+    const file = Array.from(event.dataTransfer.files).find((candidate) => POINT_TABLE_FILE_RE.test(candidate.name));
+    if (file) onImportPointTable?.(file);
   };
 
   const handleInspectionFile = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -161,6 +191,12 @@ export default function Toolbar({ onOpenLoadModel, correctionMode, onToggleCorre
           background: #e6f4ff;
           color: #1677ff;
         }
+        .space-edit-toolbar-btn.drop-active {
+          background: #e6f4ff;
+          color: #1677ff;
+          outline: 1px dashed #1677ff;
+          outline-offset: -2px;
+        }
         .space-edit-toolbar-btn:disabled {
           cursor: not-allowed;
           color: #bfbfbf;
@@ -216,11 +252,15 @@ export default function Toolbar({ onOpenLoadModel, correctionMode, onToggleCorre
                     ? <EyeOutlined style={{ fontSize: 20 }} />
                     : <EyeInvisibleOutlined style={{ fontSize: 20 }} />)
                   : icon;
+                const isPointAction = action === "point";
                 return (
                   <button
                     key={action}
-                    className={`space-edit-toolbar-btn${isActive ? " active" : ""}`}
+                    className={`space-edit-toolbar-btn${isActive ? " active" : ""}${isPointAction && pointDropActive ? " drop-active" : ""}`}
                     onClick={(event) => handleClick(action, event.currentTarget)}
+                    onDragOver={isPointAction ? handlePointDragOver : undefined}
+                    onDragLeave={isPointAction ? handlePointDragLeave : undefined}
+                    onDrop={isPointAction ? handlePointDrop : undefined}
                     aria-label={`${buttonLabel}${action === "inspection" && inspectionCount > 0 ? `，已有 ${inspectionCount} 个` : ""}`}
                     title={isInspectionNamesAction ? `${inspectionNamesVisible ? "隐藏" : "显示"}巡检点名称` : undefined}
                     disabled={modelBusy || (action === "point" && importing) || (action === "undo" && !canUndo) || (action === "redo" && !canRedo) || (action === "inspection" && (inspectionSaving || inspectionImporting)) || (isInspectionNamesAction && inspectionCount === 0) || (action === "inspectionImport" && (inspectionSaving || inspectionImporting || inspectionExporting)) || (action === "inspectionExport" && (inspectionSaving || inspectionImporting || inspectionExporting || inspectionCount === 0))}

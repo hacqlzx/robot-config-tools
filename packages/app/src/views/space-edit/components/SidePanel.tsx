@@ -121,6 +121,62 @@ function collectInspectionPointFiles(nodes: SpaceTreeNode[]): Array<{ mapDir: st
   return result;
 }
 
+/**
+ * 地图树只展示空间编辑需要的业务节点。巡检点、标注和元数据文件仍由
+ * 各自的加载逻辑读取，但不把原始文件名暴露到左侧树中。
+ */
+function filterMapTreeNodes(nodes: SpaceTreeNode[]): SpaceTreeNode[] {
+  return nodes.flatMap((node) => {
+    if (!node.isDir) {
+      const keep = isLasOrLazFileName(node.name)
+        || isDrawingDataFileName(node.name)
+        || isReferencePathFileName(node.name);
+      return keep ? [node] : [];
+    }
+
+    const children = node.children ? filterMapTreeNodes(node.children) : [];
+    return children.length > 0 ? [{ ...node, children }] : [];
+  });
+}
+
+interface InspectionBayInfo {
+  key: string;
+  name: string;
+}
+
+function usableBayInfo(value: InspectionBayInfo | undefined): InspectionBayInfo | null {
+  if (!value || value.key === "unassigned") return null;
+  if (value.name === "未分配间隔" && value.key.startsWith("name:")) return null;
+  return value;
+}
+
+/** 本地库优先；旧 JSON 中保存的间隔快照作为本地库缺失时的回退。 */
+function inspectionBayInfo(
+  item: InspectionPointItem,
+  pointBayByCode: Map<string, InspectionBayInfo & { pointCode: string; pointName: string }>,
+): InspectionBayInfo | null {
+  const local = usableBayInfo(item.pointCode ? pointBayByCode.get(normalizePointCode(item.pointCode)) : undefined);
+  if (local) return local;
+
+  const bayCode = String(item.bayCode || "").trim();
+  const bayName = String(item.bayName || "").trim();
+  if (bayCode) return { key: `code:${bayCode}`, name: bayName && bayName !== "未分配间隔" ? bayName : bayCode };
+  if (bayName && bayName !== "未分配间隔") return { key: `name:${bayName}`, name: bayName };
+  return null;
+}
+
+function inspectionTreePointName(item: InspectionPointItem, bayName: string, index: number): string {
+  const name = item.name?.trim() || item.pointName?.trim() || `巡检点 ${index + 1}`;
+  const parentName = bayName.trim();
+  if (!parentName || parentName === "未分配间隔" || !name.startsWith(parentName)) return name;
+
+  const suffix = name
+    .slice(parentName.length)
+    .replace(/^[\s\-_/|:：.、]+/, "")
+    .trim();
+  return suffix || name;
+}
+
 function setMapContentActive(nodes: SpaceTreeNode[], active: boolean): SpaceTreeNode[] {
   return nodes.map((node) => ({
     ...node,
@@ -135,12 +191,11 @@ function injectInspectionPointTree(
   activeItems: InspectionPointItem[],
   storedItemsByMap: Map<string, InspectionPointItem[]>,
   pointBayByCode: Map<string, { key: string; name: string; pointCode: string; pointName: string }>,
-  pointCatalogReady: boolean,
 ): SpaceTreeNode[] {
   const activeDir = activeModelPath ? parentPath(activeModelPath) : null;
   return nodes.map((node) => {
     const children = node.children
-      ? injectInspectionPointTree(node.children, activeModelPath, activeItems, storedItemsByMap, pointBayByCode, pointCatalogReady)
+      ? injectInspectionPointTree(node.children, activeModelPath, activeItems, storedItemsByMap, pointBayByCode)
       : node.children;
     if (!isDirectMapDirNode(node)) return children === node.children ? node : { ...node, children };
     const mapDir = normalizedPath(node.path);
@@ -149,7 +204,7 @@ function injectInspectionPointTree(
     const bindingValidation = validateInspectionPointBindings(
       inspectionItems,
       pointBayByCode.values(),
-      pointCatalogReady,
+      false,
     );
     const mapChildren = setMapContentActive(children ?? [], isActiveMap);
     if (inspectionItems.length === 0) {
@@ -157,7 +212,7 @@ function injectInspectionPointTree(
     }
     const groups = new Map<string, { name: string; items: InspectionPointItem[] }>();
     inspectionItems.forEach((item) => {
-      const bay = item.pointCode ? pointBayByCode.get(normalizePointCode(item.pointCode)) : undefined;
+      const bay = inspectionBayInfo(item, pointBayByCode);
       const key = bay?.key || "unassigned";
       const name = bay?.name || "未分配间隔";
       const group = groups.get(key) || { name, items: [] };
@@ -175,7 +230,7 @@ function injectInspectionPointTree(
         inspectionMapActive: isActiveMap,
         mapContentActive: isActiveMap,
         children: group.items.map((item, index) => ({
-          name: item.name?.trim() || `巡检点 ${index + 1}`,
+          name: inspectionTreePointName(item, group.name, index),
           path: `${node.path}#inspection-point:${item.id}`,
           isDir: false,
           virtualType: "inspection-point" as const,
@@ -340,7 +395,6 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
   const [mapTreeData, setMapTreeData] = useState<SpaceTreeNode[]>([]);
   const [storedInspectionPointsByMap, setStoredInspectionPointsByMap] = useState<Map<string, InspectionPointItem[]>>(new Map());
   const [pointBayByCode, setPointBayByCode] = useState<Map<string, { key: string; name: string; pointCode: string; pointName: string }>>(new Map());
-  const [pointCatalogReady, setPointCatalogReady] = useState(false);
   const [mapPotreeStatuses, setMapPotreeStatuses] = useState<Record<string, ProjectMapPotreeState>>({});
   const [cabinetTreeData, setCabinetTreeData] = useState<TreeDataNode[]>([]);
   const [cabinetSelectedKeys, setCabinetSelectedKeys] = useState<React.Key[]>([]);
@@ -357,9 +411,8 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
       inspectionPoints,
       storedInspectionPointsByMap,
       pointBayByCode,
-      pointCatalogReady,
     ),
-    [activeModelPath, inspectionPoints, mapTreeData, pointBayByCode, pointCatalogReady, storedInspectionPointsByMap],
+    [activeModelPath, inspectionPoints, mapTreeData, pointBayByCode, storedInspectionPointsByMap],
   );
 
   const loadMapTree = useCallback(async () => {
@@ -384,11 +437,11 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
         ] as const),
       );
       if (requestVersion !== mapTreeRequestVersion.current) return;
-      setMapTreeData(nodes);
+      setMapTreeData(filterMapTreeNodes(nodes));
       setMapPotreeStatuses(buildMapPotreeStatuses(projectRoot || "", manifest));
       setStoredInspectionPointsByMap(new Map(inspectionEntries));
       // 通知 workspace 扫描区域文件
-      onMapTreeLoaded?.(nodes);
+      onMapTreeLoaded?.(filterMapTreeNodes(nodes));
     } catch {
       if (requestVersion !== mapTreeRequestVersion.current) return;
       setMapTreeData([]);
@@ -400,7 +453,6 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
   useEffect(() => {
     let cancelled = false;
     const api = window.electronAPI;
-    setPointCatalogReady(false);
     if (!selectedProject || !api?.db?.point) {
       setPointBayByCode(new Map());
       return () => { cancelled = true; };
@@ -419,12 +471,10 @@ export default function SidePanel({ panelWidth, onLoadLas, onToggleVisible, onUn
           });
         });
         setPointBayByCode(bayMap);
-        setPointCatalogReady(true);
       })
       .catch(() => {
         if (!cancelled) {
           setPointBayByCode(new Map());
-          setPointCatalogReady(false);
         }
       });
     return () => { cancelled = true; };

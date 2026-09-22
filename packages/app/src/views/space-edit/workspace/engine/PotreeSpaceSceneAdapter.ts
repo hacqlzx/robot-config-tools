@@ -597,7 +597,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.inspectionPointEditor?.setComponentType(id, componentType);
   }
   setInspectionPointLength(id: string, length: number): void { this.inspectionPointEditor?.setLength(id, length); }
-  bindInspectionPointPoint(id: string, point: { pointCode: string; pointName?: string }): void { this.inspectionPointEditor?.bindPoint(id, point); }
+  bindInspectionPointPoint(id: string, point: { pointCode: string; pointName?: string; bayCode?: string; bayName?: string }): void { this.inspectionPointEditor?.bindPoint(id, point); }
   unbindInspectionPointPoint(id: string): void { this.inspectionPointEditor?.unbindPoint(id); }
   deleteInspectionPoint(id: string): void { this.inspectionPointEditor?.delete(id); }
   markInspectionPointsSaved(): void { this.inspectionPointEditor?.markSaved(); }

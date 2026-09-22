@@ -124,6 +124,9 @@ export interface InspectionPointItem {
   length: number;
   pointCode?: string;
   pointName?: string;
+  /** 绑定点位时保存的间隔快照；本地库找不到点位时供左侧树回退使用。 */
+  bayCode?: string;
+  bayName?: string;
   updatedAt: string;
 }
 

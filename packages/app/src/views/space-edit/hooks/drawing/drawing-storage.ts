@@ -211,6 +211,8 @@ function inspectionPointRecords(data: unknown): InspectionPointItem[] {
       length: Number.isFinite(storedLength) && storedLength > 0 ? storedLength : 0.8,
       pointCode: typeof record.pointCode === "string" && record.pointCode.trim() ? record.pointCode : undefined,
       pointName: typeof record.pointName === "string" && record.pointName.trim() ? record.pointName : undefined,
+      bayCode: valueText(record.bayCode ?? record.bay_code ?? record.intervalCode ?? record.interval_code).trim() || undefined,
+      bayName: valueText(record.bayName ?? record.bay_name ?? record.intervalName ?? record.interval_name).trim() || undefined,
       updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : "",
     }];
   });

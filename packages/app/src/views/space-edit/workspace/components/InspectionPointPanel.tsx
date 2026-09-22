@@ -17,7 +17,7 @@ interface Props {
   onRename: (id: string, name: string) => void;
   onSave: () => void;
   onBayFilterChange: (value: string | undefined) => void;
-  onBindPoint: (id: string, point: { pointCode: string; pointName: string }) => void;
+  onBindPoint: (id: string, point: { pointCode: string; pointName: string; bayCode?: string; bayName?: string }) => void;
   onUnbindPoint: (id: string) => void;
   onDelete: (id: string) => void;
 }
@@ -132,7 +132,7 @@ export default function InspectionPointPanel({ item, count, items, marking, savi
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "64px minmax(0, 1fr)", gap: 8, alignItems: "center" }}>
             <span style={{ color: "#595959", fontSize: 12, whiteSpace: "nowrap" }}>绑定点位 <span style={{ color: "#ff4d4f" }}>*</span></span>
-            <Select size="small" allowClear showSearch optionFilterProp="label" value={item.pointCode || undefined} options={options} loading={loading} disabled={saving} placeholder="选择点位（可搜索）" style={{ width: "100%" }} notFoundContent={<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无点位" style={{ margin: 8 }} />} onChange={(value) => { if (!value) { onUnbindPoint(item.id); return; } const point = points.find((candidate) => candidate.pointCode === value); if (point) onBindPoint(item.id, { pointCode: point.pointCode, pointName: point.pointName }); }} />
+            <Select size="small" allowClear showSearch optionFilterProp="label" value={item.pointCode || undefined} options={options} loading={loading} disabled={saving} placeholder="选择点位（可搜索）" style={{ width: "100%" }} notFoundContent={<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无点位" style={{ margin: 8 }} />} onChange={(value) => { if (!value) { onUnbindPoint(item.id); return; } const point = points.find((candidate) => candidate.pointCode === value); if (point) onBindPoint(item.id, { pointCode: point.pointCode, pointName: point.pointName, bayCode: point.bayCode, bayName: point.bayName }); }} />
           </div>
         </div>
       )}
