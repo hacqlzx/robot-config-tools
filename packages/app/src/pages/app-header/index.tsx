@@ -11,6 +11,7 @@ import SettingsModal from "@/pages/settings-modal";
 import ProjectManagerModal from "./ProjectManagerModal";
 import {
   clearRobotOptions,
+  getBackendIp,
   getSelectedProject,
   setConnectionStatus,
   setSelectedProject,
@@ -23,6 +24,7 @@ import { confirmWorkspaceTransition } from "@/services/workspace-transition-guar
 import { MESSAGE_TOP_OFFSET } from "@/App";
 
 const menuItems: MenuProps["items"] = menuConfig.map((item) => ({ key: item.key, label: item.label }));
+const BACKEND_HEALTH_INTERVAL_MS = 30_000;
 
 function joinProjectPath(root: string, projectName: string): string {
   if (!root || !projectName) return root || "";
@@ -70,13 +72,32 @@ export default function AppHeader() {
     if (backendVersionChanged && backendIpVersion > 0) clearRobotOptions();
     if (connStatus === "connected") loadRobotList();
   }, [backendIpVersion, connStatus, loadRobotList]);
-  // 启动时自动检查已保存后台。
-  useEffect(() => {
+  // 启动、切回窗口以及空闲期间定期检查后台，避免连接状态长期停留在失败。
+  const checkBackendHealth = useCallback(async () => {
     if (!backendIp || !window.electronAPI?.ping) return;
-    window.electronAPI.ping(backendIp).then((ok: boolean) => {
-      setConnectionStatus(ok ? "connected" : "failed");
-    });
+    try {
+      const ok = await window.electronAPI.ping(backendIp);
+      // 旧 IP 的探测结果不能覆盖用户刚刚切换后的新连接状态。
+      if (getBackendIp() === backendIp) setConnectionStatus(ok ? "connected" : "failed");
+    } catch {
+      if (getBackendIp() === backendIp) setConnectionStatus("failed");
+    }
   }, [backendIp]);
+
+  useEffect(() => {
+    void checkBackendHealth();
+    const timer = window.setInterval(() => {
+      void checkBackendHealth();
+    }, BACKEND_HEALTH_INTERVAL_MS);
+    const handleFocus = (): void => {
+      void checkBackendHealth();
+    };
+    window.addEventListener("focus", handleFocus);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [checkBackendHealth]);
 
   useEffect(() => {
     const api = window.electronAPI;

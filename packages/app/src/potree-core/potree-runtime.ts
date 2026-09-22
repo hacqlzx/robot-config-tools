@@ -132,6 +132,36 @@ export interface PotreeBoxVolume {
   removeEventListener?: (type: string, listener: (event: unknown) => void) => void;
 }
 
+export interface PotreeTransformMaterial {
+  opacity?: number;
+  transparent?: boolean;
+  depthTest?: boolean;
+  depthWrite?: boolean;
+  needsUpdate?: boolean;
+  color?: { setHex: (value: number) => void };
+}
+
+export interface PotreeTransformObject {
+  name?: string;
+  visible: boolean;
+  renderOrder?: number;
+  position?: { set: (x: number, y: number, z: number) => void };
+  scale?: {
+    x?: number;
+    y?: number;
+    z?: number;
+    multiplyScalar?: (value: number) => void;
+  };
+  material?: PotreeTransformMaterial | PotreeTransformMaterial[];
+  add?: (...objects: PotreeTransformObject[]) => void;
+  setOpacity?: (opacity: number) => void;
+  traverse?: (callback: (object: PotreeTransformObject) => void) => void;
+}
+
+export interface PotreeTransformHandle {
+  node?: PotreeTransformObject;
+}
+
 export interface PotreeView {
   direction: PotreeVector3;
   position: PotreeVector3;
@@ -172,12 +202,16 @@ export interface PotreeThreeBufferGeometry extends PotreeThreeDisposable {
 }
 
 export interface PotreeThreeObject3D {
+  name?: string;
+  visible?: boolean;
+  renderOrder?: number;
   position: { set: (x: number, y: number, z: number) => void };
   scale: { set: (x: number, y: number, z: number) => void };
   up: { set: (x: number, y: number, z: number) => void };
   matrixWorld?: { elements?: ArrayLike<number> };
   geometry?: PotreeThreeDisposable;
   material?: PotreeThreeDisposable | PotreeThreeDisposable[];
+  target?: PotreeThreeObject3D;
   add: (...objects: PotreeThreeObject3D[]) => void;
   remove: (...objects: PotreeThreeObject3D[]) => void;
   lookAt: (x: number, y: number, z: number) => void;
@@ -225,13 +259,20 @@ export interface PotreeThreeNamespace {
     heightSegments?: number,
     openEnded?: boolean,
   ) => PotreeThreeBufferGeometry;
+  TorusGeometry: new (
+    radius?: number,
+    tube?: number,
+    radialSegments?: number,
+    tubularSegments?: number,
+    arc?: number,
+  ) => PotreeThreeBufferGeometry;
   SphereGeometry: new (
     radius?: number,
     widthSegments?: number,
     heightSegments?: number,
   ) => PotreeThreeDisposable;
-  MeshBasicMaterial: new (parameters: Record<string, unknown>) => PotreeThreeDisposable;
-  MeshPhongMaterial: new (parameters: Record<string, unknown>) => PotreeThreeDisposable;
+  MeshBasicMaterial: new (parameters: Record<string, unknown>) => PotreeThreeDisposable & PotreeTransformMaterial;
+  MeshPhongMaterial: new (parameters: Record<string, unknown>) => PotreeThreeDisposable & PotreeTransformMaterial;
   Mesh: new (
     geometry: PotreeThreeDisposable,
     material: PotreeThreeDisposable,
@@ -275,8 +316,12 @@ export interface PotreeViewerInstance {
     toggleSelection: (object: PotreeBoxVolume) => void;
   };
   transformationTool?: {
-    scene?: unknown;
-    rotationHandles?: Record<string, { node?: { visible: boolean } }>;
+    scene?: PotreeThreeObject3D;
+    selection?: PotreeBoxVolume[];
+    scaleHandles?: Record<string, PotreeTransformHandle>;
+    focusHandles?: Record<string, PotreeTransformHandle>;
+    translationHandles?: Record<string, PotreeTransformHandle>;
+    rotationHandles?: Record<string, PotreeTransformHandle>;
   };
   addEventListener: (type: string, listener: (event: unknown) => void) => void;
   removeEventListener: (type: string, listener: (event: unknown) => void) => void;
@@ -392,8 +437,9 @@ export function loadPotreeThreeRuntime(): Promise<PotreeThreeNamespace> {
   const url = resolvePotreeAssetUrl(POTREE_THREE_MODULE, document.baseURI);
   threeRuntimePromise = import(/* @vite-ignore */ url)
     .then((module) => {
-      if (!module.Scene || !module.Group || !module.Mesh || !module.BoxGeometry || !module.SphereGeometry
-        || !module.BufferGeometry || !module.Float32BufferAttribute || !module.LineBasicMaterial || !module.LineSegments) {
+      if (!module.Scene || !module.Group || !module.Mesh || !module.BoxGeometry || !module.SphereGeometry || !module.TorusGeometry
+        || !module.BufferGeometry || !module.Float32BufferAttribute || !module.LineBasicMaterial || !module.LineSegments
+        || !module.AmbientLight || !module.DirectionalLight || !module.MeshPhongMaterial) {
         throw new Error("Potree Three.js 运行时初始化失败");
       }
       return module as unknown as PotreeThreeNamespace;

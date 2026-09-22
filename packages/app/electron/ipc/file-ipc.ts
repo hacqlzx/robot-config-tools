@@ -64,7 +64,7 @@ export function registerFileIpc(): void {
       const filePath = path.join(outputDir, fileName);
       tempPath = `${filePath}.download-${process.pid}-${Date.now()}`;
 
-      const response = await net.fetch(url.toString(), { credentials: "include" });
+      const response = await fetchRemoteFile(url.toString());
       if (!response.ok) throw new Error(`下载失败（${response.status}）`);
       if (!response.body) throw new Error("下载内容为空");
 
@@ -78,12 +78,45 @@ export function registerFileIpc(): void {
       return { success: true, filePath, fileName };
     } catch (error: any) {
       if (tempPath) {
-        await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
+        await fs.promises.rm(tempPath, { force: true }).catch((): undefined => undefined);
       }
       console.error("[download-remote-file] 下载失败:", error?.message || error);
       return { success: false, error: error?.message || "下载失败" };
     }
   });
+}
+
+async function fetchRemoteFile(url: string): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const requestId = Date.now().toString() + Math.random().toString(36).slice(2, 8);
+    const startedAt = Date.now();
+    console.info("[后台请求][主进程] 开始", { label: "远程文件下载", requestId, url, attempt: attempt + 1 });
+    try {
+      const response = await net.fetch(url, {
+        credentials: "include",
+        headers: { "req-id": requestId, Accept: "*/*" },
+      });
+      console.info("[后台请求][主进程] 完成", {
+        label: "远程文件下载",
+        requestId,
+        status: response.status,
+        elapsedMs: Date.now() - startedAt,
+      });
+      return response;
+    } catch (error) {
+      lastError = error;
+      console.warn("[后台请求][主进程] 失败", {
+        label: "远程文件下载",
+        requestId,
+        elapsedMs: Date.now() - startedAt,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      if (attempt > 0) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("下载失败");
 }
 
 function normalizeDownloadFileName(value: string): string {

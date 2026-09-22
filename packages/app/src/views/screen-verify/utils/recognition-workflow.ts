@@ -479,7 +479,7 @@ function completeDeviceBoxesByOcrRows(
 
     const deviceRows = splitRectRows(groupDeviceRects);
     const labelRows = selectRelevantLabelRowsForDeviceRows(splitRectRows(groupLabelRects), deviceRows);
-    if (!hasDeviceLabelCountMismatch(labelRows, deviceRows)) continue;
+    if (!hasDeviceLabelCountMismatch(labelRows, deviceRows, groupLabelRects)) continue;
 
     const completedRows = completeDeviceRowsByLabelRows(
       labelRows,
@@ -501,6 +501,7 @@ function completeDeviceBoxesByOcrRows(
  *
  * 当标签少于设备时，优先按“相关设备行中的最大列数”作为目标数量。
  * 一排标签同时对应上下两排设备时，只补一套共享标签列，后续绑定时复用到上下两排。
+ * 真正的单标签多设备场景保留共享；同一来源区域存在多个标签时，缺失列使用空标签框补齐。
  */
 function completeLabelBoxesByDeviceRows(
   labelRects: ImageRect[],
@@ -532,9 +533,9 @@ function completeLabelBoxesByDeviceRows(
     for (const labelRow of candidateLabelRows) {
       const sortedLabels = sortRectsByCenterX(labelRow);
       const relatedRows = uniqueRectRows(findRelatedDeviceRowsForLabelRow(sortedLabels, deviceRows));
-      // 一个真实标签可能同时描述同一部件框内的多个设备。
-      // 这种情况下标签应被多个设备共享，不能因为数量少于设备框而生成虚线补标签。
-      if (shouldShareLabelAcrossDeviceRows(sortedLabels, relatedRows)) {
+      // 仅当原始框选区域确实只识别出一个标签时，才允许该标签描述多个设备。
+      // 避免完整标签行被几何拆分后，孤立标签误触发一对多复用。
+      if (shouldShareLabelAcrossDeviceRows(sortedLabels, relatedRows, groupLabels)) {
         console.info("[screen-verify] shared label matched multiple devices", {
           labelRects: sortedLabels.map(toDebugRect),
           deviceRows: relatedRows.map((row) => row.map(toDebugRect)),
@@ -709,9 +710,13 @@ function createInferredLabelRectAtCenter(
 
 /**
  * 判断标签行和设备行是否存在数量或关系不一致。
- * 支持“一排标签对应上下两排设备”的情况，因此会把相关设备行合并计数。
+ * 支持“一排标签对应上下两排设备”和真正的单标签多设备场景。
  */
-function hasDeviceLabelCountMismatch(labelRows: ImageRect[][], deviceRows: ImageRect[][]): boolean {
+function hasDeviceLabelCountMismatch(
+  labelRows: ImageRect[][],
+  deviceRows: ImageRect[][],
+  allGroupLabelRects: ImageRect[],
+): boolean {
   if (!labelRows.length || !deviceRows.length) return false;
   const deviceRowsById = new Map(deviceRows.map((row) => [getRectRowKey(row), row]));
   const usedDeviceRowKeys = new Set<string>();
@@ -720,7 +725,7 @@ function hasDeviceLabelCountMismatch(labelRows: ImageRect[][], deviceRows: Image
     const relatedRows = findRelatedDeviceRowsForLabelRow(labelRow, deviceRows);
     if (!relatedRows.length) return true;
     const uniqueRelatedRows = uniqueRectRows(relatedRows);
-    if (shouldShareLabelAcrossDeviceRows(labelRow, uniqueRelatedRows)) {
+    if (shouldShareLabelAcrossDeviceRows(labelRow, uniqueRelatedRows, allGroupLabelRects)) {
       uniqueRelatedRows.forEach((row) => usedDeviceRowKeys.add(getRectRowKey(row)));
       continue;
     }
@@ -1314,7 +1319,7 @@ export function buildSortedPointRowsFromAnnotations(annotations: ComponentAnnota
 /**
  * 组内点位生成逻辑。
  *
- * 支持 1:1、一排标签对应上下两排设备、单标签对应多个设备等场景。
+ * 支持 1:1、一排标签对应上下两排设备，以及来源区域中确实只有一个标签时的一对多场景。
  */
 function buildSortedPointRowsForGroup(labelRects: ImageRect[], deviceRects: ImageRect[]): {
   rows: CabinetPointRow[];
@@ -1360,7 +1365,7 @@ function buildSortedPointRowsForGroup(labelRects: ImageRect[], deviceRects: Imag
     for (const deviceRow of relatedDeviceRows) {
       const sortedDevices = sortRectsByCenterX(deviceRow).filter((deviceRect) => !usedDeviceIds.has(deviceRect.id));
       if (!sortedDevices.length) continue;
-      const alignedRows = createAlignedRowsForLabelAndDeviceRow(sortedLabels, sortedDevices);
+      const alignedRows = createAlignedRowsForLabelAndDeviceRow(sortedLabels, sortedDevices, labelRects);
       rows.push(...alignedRows.rows);
       alignedRows.usedDeviceIds.forEach((id) => usedDeviceIds.add(id));
       unboundLabelCount += alignedRows.unboundLabelCount;
@@ -1492,9 +1497,13 @@ function isShortStatusLabelText(text: string): boolean {
 
 /**
  * 单个标签行和单个设备行的绑定。
- * 数量一致时直接按列绑定；数量不一致时先判断单标签多设备，再按最近列匹配。
+ * 数量一致时直接按列绑定；真正的单标签多设备允许复用，否则按最近列做一一匹配。
  */
-function createAlignedRowsForLabelAndDeviceRow(labelRow: ImageRect[], deviceRow: ImageRect[]): {
+function createAlignedRowsForLabelAndDeviceRow(
+  labelRow: ImageRect[],
+  deviceRow: ImageRect[],
+  allGroupLabelRects: ImageRect[],
+): {
   rows: CabinetPointRow[];
   usedDeviceIds: Set<string>;
   unboundLabelCount: number;
@@ -1508,7 +1517,7 @@ function createAlignedRowsForLabelAndDeviceRow(labelRow: ImageRect[], deviceRow:
   let unboundLabelCount = 0;
   let unboundDeviceCount = 0;
 
-  if (shouldUseSingleLabelForMultipleDevices(sortedLabels, sortedDevices)) {
+  if (shouldUseSingleLabelForMultipleDevices(sortedLabels, sortedDevices, allGroupLabelRects)) {
     sortedDevices.forEach((deviceRect) => {
       usedDeviceIds.add(deviceRect.id);
       usedLabelIds.add(sortedLabels[0].id);
@@ -1553,12 +1562,17 @@ function createAlignedRowsForLabelAndDeviceRow(labelRow: ImageRect[], deviceRow:
  * 识别单标签对应多个设备的特殊场景。
  *
  * 典型例子是一个铭牌描述同一个局部区域，下面或旁边同时有指示灯、旋钮等多个设备。
- * 判断时要求设备簇足够紧凑，并且和标签在水平、垂直方向都保持局部关联。
+ * 除空间关系外，还要求该 OCR 来源区域确实只产出一个有效标签，防止完整标签行被拆行后误复用。
  */
-function shouldUseSingleLabelForMultipleDevices(labelRow: ImageRect[], deviceRow: ImageRect[]): boolean {
+function shouldUseSingleLabelForMultipleDevices(
+  labelRow: ImageRect[],
+  deviceRow: ImageRect[],
+  allGroupLabelRects: ImageRect[],
+): boolean {
   if (labelRow.length !== 1 || deviceRow.length <= 1) return false;
   const labelRect = labelRow[0];
   if (!hasVisibleLabelTextRect(labelRect)) return false;
+  if (!isOnlyVisibleLabelFromSource(labelRect, allGroupLabelRects)) return false;
 
   const deviceSpan = getRowHorizontalSpan(deviceRow);
   const deviceCenterX = (deviceSpan.left + deviceSpan.right) / 2;
@@ -1583,14 +1597,22 @@ function shouldUseSingleLabelForMultipleDevices(labelRow: ImageRect[], deviceRow
   return Math.abs(deviceCenterY - labelCenterY) <= maxVerticalDistance;
 }
 
-/**
- * 判断标签行是否应当在多排设备之间共享。
- *
- * 目前主要覆盖“一张标签对应同一部件框内多个设备”的场景；
- * 也兼容一张标签位于上下两排设备之间、分别关联多排设备的场景。
- */
-function shouldShareLabelAcrossDeviceRows(labelRow: ImageRect[], deviceRows: ImageRect[][]): boolean {
-  return deviceRows.some((deviceRow) => shouldUseSingleLabelForMultipleDevices(labelRow, deviceRow));
+function isOnlyVisibleLabelFromSource(labelRect: ImageRect, allGroupLabelRects: ImageRect[]): boolean {
+  const sourceRectId = labelRect.generatedFromRectId;
+  if (!sourceRectId) return true;
+  return allGroupLabelRects.filter((rect) => (
+    rect.generatedFromRectId === sourceRectId && hasVisibleLabelTextRect(rect)
+  )).length === 1;
+}
+
+function shouldShareLabelAcrossDeviceRows(
+  labelRow: ImageRect[],
+  deviceRows: ImageRect[][],
+  allGroupLabelRects: ImageRect[],
+): boolean {
+  return deviceRows.some((deviceRow) => (
+    shouldUseSingleLabelForMultipleDevices(labelRow, deviceRow, allGroupLabelRects)
+  ));
 }
 
 function hasVisibleLabelTextRect(rect: ImageRect): boolean {

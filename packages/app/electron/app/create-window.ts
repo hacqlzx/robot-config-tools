@@ -89,7 +89,12 @@ export function createWindow(): BrowserWindow {
     win.isMaximized() ? win.unmaximize() : win.maximize();
   });
   ipcMain.handle("win:get-state", () => getWindowState());
-  ipcMain.on("win:close", () => app.quit());
+  ipcMain.on("win:close", () => {
+    // 标题栏关闭属于明确退出操作，不允许渲染进程的 beforeunload
+    // 或编辑/保存状态把窗口留在无法退出的状态。
+    if (!win.isDestroyed()) win.destroy();
+    app.quit();
+  });
 
   // 渲染进程崩溃时记录日志，便于排查 GPU/内存问题
   win.webContents.on("render-process-gone", (_event, details) => {

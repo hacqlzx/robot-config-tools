@@ -5,6 +5,7 @@ import {
   type PotreeGeometryNode,
   type PotreeNodeCache,
   type PotreePointCloud,
+  type PotreeTransformObject,
   type PotreeThreeNamespace,
   type PotreeViewerInstance,
 } from "@/potree-core/potree-runtime";
@@ -29,6 +30,7 @@ import {
   type SpaceRenderDetailLevel,
   type SpaceRenderSettings,
   type SpaceClipBounds,
+  type SpaceClipBox,
   type SpaceChargingAreaCallbacks,
   type SpaceCabinetCallbacks,
   type SpaceDeviceAreaBox,
@@ -57,6 +59,51 @@ const INTERACTION_LOD_MULTIPLIER = 2;
 const FOCUS_INTERACTION_LOD_SETTLE_MS = 650;
 const NAVIGATION_INTERACTION_LOD_SETTLE_MS = 180;
 const INTERACTION_POINT_BUDGET = 250_000;
+const CLIP_HANDLE_BODY_OPACITY = 1;
+const CLIP_HANDLE_IDLE_TARGET_OPACITY = 0.4;
+const CLIP_HANDLE_BODY_RENDER_ORDER = 1_002;
+const CLIP_HANDLE_OUTLINE_RENDER_ORDER = 1_001;
+const CLIP_TRANSLATION_THICKNESS_SCALE = 1.25;
+const CLIP_TRANSLATION_LENGTH_SCALE = 0.25;
+const CLIP_TRANSLATION_OUTLINE_THICKNESS_SCALE = 0.48;
+const CLIP_ROTATION_SIZE_SCALE = 0.72;
+const CLIP_TRANSLATION_ARROW_COLOR = 0xffe600;
+const CLIP_TRANSLATION_ARROW_EMISSIVE = 0x302900;
+const CLIP_TRANSLATION_ARROW_SHAFT_RADIUS = 0.42;
+const CLIP_TRANSLATION_ARROW_SHAFT_LENGTH = 7.2;
+const CLIP_TRANSLATION_ARROW_HEAD_RADIUS = 1.5;
+const CLIP_TRANSLATION_ARROW_HEAD_LENGTH = 2.5;
+const CLIP_TRANSLATION_ARROW_CENTER_RADIUS = 1.2;
+const CLIP_TRANSLATION_PICK_CENTER = (CLIP_TRANSLATION_ARROW_SHAFT_LENGTH + CLIP_TRANSLATION_ARROW_HEAD_LENGTH) / 2;
+const CLIP_TRANSLATION_HANDLE_CORNER = -0.5;
+const CLIP_SCALE_ARROW_SHAFT_RADIUS = 0.68;
+const CLIP_SCALE_ARROW_SHAFT_BACK_LENGTH = 2.1;
+const CLIP_SCALE_ARROW_SHAFT_FRONT_LENGTH = 4.2;
+const CLIP_SCALE_ARROW_SHAFT_LENGTH = CLIP_SCALE_ARROW_SHAFT_BACK_LENGTH + CLIP_SCALE_ARROW_SHAFT_FRONT_LENGTH;
+const CLIP_SCALE_ARROW_HEAD_RADIUS = 2.35;
+const CLIP_SCALE_ARROW_HEAD_LENGTH = 3.4;
+const CLIP_SCALE_ARROW_RING_RADIUS = 2.1;
+const CLIP_SCALE_ARROW_RING_TUBE = 0.58;
+const CLIP_SCALE_PICK_RADIAL_SCALE = 2.1;
+const CLIP_SCALE_PICK_AXIS_SCALE = 4;
+const CLIP_SCALE_PICK_AXIS_OFFSET = 2;
+const CLIP_HANDLE_AXIS_COLORS = {
+  x: 0xff0000,
+  y: 0x00ff00,
+  z: 0x0000ff,
+} as const;
+const CLIP_HANDLE_AXIS_EMISSIVE = {
+  x: 0x200000,
+  y: 0x002000,
+  z: 0x000020,
+} as const;
+const CLIP_HANDLE_RING_COLOR = 0xd0ccff;
+const CLIP_HANDLE_RING_EMISSIVE = 0x28244d;
+const CLIP_HANDLE_AMBIENT_LIGHT_INTENSITY = 0.48;
+const CLIP_HANDLE_KEY_LIGHT_INTENSITY = 0.68;
+const CLIP_HANDLE_FILL_LIGHT_INTENSITY = 0.2;
+const CLIP_HANDLE_SHININESS = 52;
+const CLIP_HANDLE_RING_SHININESS = 92;
 const MIN_NODE_SIZE_BY_DETAIL: Record<SpaceRenderDetailLevel, number> = {
   1: 80,
   2: 30,
@@ -122,6 +169,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   private inspectionPointEditor: PotreeInspectionPointEditor | null = null;
   private inspectionPointCallbacks: SpaceInspectionPointCallbacks | null = null;
   private inspectionPointDefaultComponentType: string | undefined;
+  private inspectionPointNamesVisible = true;
   private mountPromise: Promise<void> | null = null;
   private fitTimer: number | null = null;
   private mountVersion = 0;
@@ -131,10 +179,22 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   private modelClipBounds: SpaceClipBounds | null = null;
   private renderSettings = { ...DEFAULT_SPACE_RENDER_SETTINGS };
   private clipVolume: NonNullable<PotreeViewerInstance["scene"]["volumes"]>[number] | null = null;
-  private clipBoundsListener: ((bounds: SpaceClipBounds) => void) | null = null;
+  private clipBoxListener: ((box: SpaceClipBox) => void) | null = null;
   private clipVolumeListener: ((event: unknown) => void) | null = null;
-  private clipOrientationListener: ((event: unknown) => void) | null = null;
   private clipOverlayRenderer: ((event: unknown) => void) | null = null;
+  private readonly styledClipHandleNodes = new WeakSet<object>();
+  private readonly styledClipHandleObjects = new WeakSet<object>();
+  private readonly litClipHandleObjects = new WeakSet<object>();
+  private readonly litClipHandleScenes = new WeakSet<object>();
+  private readonly clipScaleArrowNodes = new WeakSet<object>();
+  private readonly clipScaleArrowVisuals = new WeakSet<object>();
+  private readonly clipScaleOriginalVisuals = new WeakSet<object>();
+  private readonly clipTranslationArrowNodes = new WeakSet<object>();
+  private readonly clipTranslationArrowVisuals = new WeakSet<object>();
+  private readonly clipTranslationOriginalVisuals = new WeakSet<object>();
+  private readonly clipHandleKinds = new WeakMap<object, "scale" | "translate" | "rotate">();
+  private readonly clipFocusHandleOpacity = new Map<PotreeTransformObject, (opacity: number) => void>();
+  private clipRotationVisible = false;
   private clipPreviousTask: number | null = null;
   private clipPreviousMethod: number | null = null;
   private interactionLodTimer: number | null = null;
@@ -215,6 +275,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
       (mouse) => this.normalAnnotationEditor?.pickSurfaceNormal(mouse) ?? null,
     );
     this.inspectionPointEditor.setDefaultComponentType(this.inspectionPointDefaultComponentType);
+    this.inspectionPointEditor.setNamesVisible(this.inspectionPointNamesVisible);
     this.inspectionPointEditor.setCallbacks(this.inspectionPointCallbacks);
     this.inspectionPointEditor.setActive(this.active);
     this.rotationPivotIndicator = new PotreeRotationPivotIndicator(viewer, potree, three, renderArea, this.interactions);
@@ -525,6 +586,10 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   }
   setInspectionPoints(items: SpaceInspectionPoint[]): void { this.inspectionPointEditor?.setData(items); }
   setVisibleInspectionPointIds(ids: string[]): void { this.inspectionPointEditor?.setVisibleIds(ids); }
+  setInspectionPointNamesVisible(visible: boolean): void {
+    this.inspectionPointNamesVisible = visible;
+    this.inspectionPointEditor?.setNamesVisible(visible);
+  }
   getInspectionPoints(): SpaceInspectionPoint[] { return this.inspectionPointEditor?.getData() ?? []; }
   selectInspectionPoint(id: string | null): void { this.inspectionPointEditor?.select(id); }
   renameInspectionPoint(id: string, name: string): void { this.inspectionPointEditor?.rename(id, name); }
@@ -911,16 +976,33 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     viewer.controls?.stop?.();
   }
 
-  private getVolumeBounds(): SpaceClipBounds | null {
+  private getVolumeBox(): SpaceClipBox | null {
     const volume = this.clipVolume;
     if (!volume) return null;
     return {
-      minX: volume.position.x - Math.abs(volume.scale.x) / 2,
-      maxX: volume.position.x + Math.abs(volume.scale.x) / 2,
-      minY: volume.position.y - Math.abs(volume.scale.y) / 2,
-      maxY: volume.position.y + Math.abs(volume.scale.y) / 2,
-      minZ: volume.position.z - Math.abs(volume.scale.z) / 2,
-      maxZ: volume.position.z + Math.abs(volume.scale.z) / 2,
+      centerX: volume.position.x,
+      centerY: volume.position.y,
+      centerZ: volume.position.z,
+      sizeX: Math.abs(volume.scale.x),
+      sizeY: Math.abs(volume.scale.y),
+      sizeZ: Math.abs(volume.scale.z),
+      rotationX: volume.rotation.x,
+      rotationY: volume.rotation.y,
+      rotationZ: volume.rotation.z,
+    };
+  }
+
+  private clipBoxFromBounds(bounds: SpaceClipBounds): SpaceClipBox {
+    return {
+      centerX: (bounds.minX + bounds.maxX) / 2,
+      centerY: (bounds.minY + bounds.maxY) / 2,
+      centerZ: (bounds.minZ + bounds.maxZ) / 2,
+      sizeX: Math.max(bounds.maxX - bounds.minX, 1e-6),
+      sizeY: Math.max(bounds.maxY - bounds.minY, 1e-6),
+      sizeZ: Math.max(bounds.maxZ - bounds.minZ, 1e-6),
+      rotationX: 0,
+      rotationY: 0,
+      rotationZ: 0,
     };
   }
 
@@ -933,7 +1015,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     }
   }
 
-  startClipping(onBoundsChange: (bounds: SpaceClipBounds) => void, initialBounds?: SpaceClipBounds | null): SpaceClipBounds | null {
+  startClipping(onBoxChange: (box: SpaceClipBox) => void, initialBox?: SpaceClipBox | null): SpaceClipBox | null {
     const viewer = this.viewer;
     const potree = this.potree;
     const modelBounds = this.getModelWorldBounds();
@@ -943,12 +1025,11 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.cabinetEditor?.setEnabled(false);
     this.deviceAreaEditor?.setEnabled(false);
 
-    const bounds = initialBounds ?? this.getVolumeBounds() ?? modelBounds;
+    const box = initialBox ?? this.getVolumeBox() ?? this.clipBoxFromBounds(modelBounds);
     if (!this.clipVolume) {
       const volume = new potree.BoxVolume();
-      volume.rotation.set(0, 0, 0);
       volume.clip = true;
-      volume.frame?.material?.color?.setHex(0x39d98a);
+      volume.frame?.material?.color?.setHex(0xffff00);
       if (volume.frame?.material) {
         volume.frame.material.depthTest = false;
         volume.frame.material.depthWrite = false;
@@ -956,31 +1037,37 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
       this.clipPreviousTask = viewer.clipTask ?? potree.ClipTask.NONE;
       this.clipPreviousMethod = viewer.clipMethod ?? potree.ClipMethod.INSIDE_ANY;
       this.clipVolume = volume;
-      this.applyVolumeBounds(volume, bounds);
+      this.applyVolumeBox(volume, box);
       viewer.scene.addVolume(volume);
       viewer.setClipMethod(potree.ClipMethod.INSIDE_ALL);
       viewer.setClipTask(potree.ClipTask.SHOW_INSIDE);
     } else {
-      this.applyVolumeBounds(this.clipVolume, bounds);
+      this.applyVolumeBox(this.clipVolume, box);
     }
 
-    this.enterClipEditMode(onBoundsChange);
-    return this.getVolumeBounds() ?? bounds;
+    this.enterClipEditMode(onBoxChange);
+    return this.getVolumeBox() ?? box;
   }
 
-  setClipBounds(bounds: SpaceClipBounds): void {
+  setClipBox(box: SpaceClipBox): void {
     const volume = this.clipVolume;
     if (!volume) return;
-    this.applyVolumeBounds(volume, bounds);
-    this.clipBoundsListener?.(bounds);
+    this.applyVolumeBox(volume, box);
+    this.clipBoxListener?.(box);
   }
 
-  commitClipping(): SpaceClipBounds | null {
-    const bounds = this.getVolumeBounds();
-    if (!this.clipVolume || !bounds) return null;
+  setClipRotationVisible(visible: boolean): void {
+    this.clipRotationVisible = visible;
+    this.styleClipTransformationHandles();
+    this.keepClipTransformationHandlesVisible();
+  }
+
+  commitClipping(): SpaceClipBox | null {
+    const box = this.getVolumeBox();
+    if (!this.clipVolume || !box) return null;
     this.leaveClipEditMode();
     this.setClipVolumeVisible(false);
-    return bounds;
+    return box;
   }
 
   stopClipping(): void {
@@ -998,23 +1085,23 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.clipPreviousMethod = null;
   }
 
-  private applyVolumeBounds(
+  private applyVolumeBox(
     volume: NonNullable<PotreeViewerInstance["scene"]["volumes"]>[number],
-    bounds: SpaceClipBounds,
+    box: SpaceClipBox,
   ): void {
     this.setVector(
       volume.position,
-      (bounds.minX + bounds.maxX) / 2,
-      (bounds.minY + bounds.maxY) / 2,
-      (bounds.minZ + bounds.maxZ) / 2,
+      box.centerX,
+      box.centerY,
+      box.centerZ,
     );
     this.setVector(
       volume.scale,
-      Math.max(bounds.maxX - bounds.minX, 1e-6),
-      Math.max(bounds.maxY - bounds.minY, 1e-6),
-      Math.max(bounds.maxZ - bounds.minZ, 1e-6),
+      Math.max(box.sizeX, 1e-6),
+      Math.max(box.sizeY, 1e-6),
+      Math.max(box.sizeZ, 1e-6),
     );
-    volume.rotation.set(0, 0, 0);
+    volume.rotation.set(box.rotationX, box.rotationY, box.rotationZ);
     volume.update?.();
   }
 
@@ -1025,41 +1112,440 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     if (volume.frame) volume.frame.visible = visible;
   }
 
-  private setRotationHandlesVisible(visible: boolean): void {
-    const rotationHandles = this.viewer?.transformationTool?.rotationHandles;
-    if (!rotationHandles) return;
-    Object.values(rotationHandles).forEach((handle) => {
-      if (handle.node) handle.node.visible = visible;
+  private setClipHandleOpacity(node: PotreeTransformObject, opacity: number): void {
+    const kind = this.clipHandleKinds.get(node);
+    const visible = opacity > 0 && (kind !== "rotate" || this.clipRotationVisible);
+    node.visible = visible;
+    node.traverse?.((object) => {
+      const name = object.name ?? "";
+      const isBody = name.endsWith(".handle");
+      const isOutline = name.endsWith(".outline");
+      const isPickVolume = name.endsWith(".pick_volume");
+      if (this.clipScaleOriginalVisuals.has(object) || this.clipTranslationOriginalVisuals.has(object)) {
+        object.visible = visible;
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        for (const material of materials) {
+          if (!material) continue;
+          material.transparent = true;
+          material.opacity = 0;
+          material.depthTest = false;
+          material.depthWrite = false;
+          material.needsUpdate = true;
+        }
+        return;
+      }
+      if (isBody || isOutline || isPickVolume) object.visible = visible;
+      if (!isBody && !isOutline) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        if (!material) continue;
+        material.opacity = CLIP_HANDLE_BODY_OPACITY;
+      }
     });
   }
 
-  private enterClipEditMode(onBoundsChange: (bounds: SpaceClipBounds) => void): void {
+  private resizeClipHandlePart(object: PotreeTransformObject): void {
+    if (this.styledClipHandleObjects.has(object)) return;
+    const name = object.name ?? "";
+    const scale = object.scale;
+    if (!scale) return;
+
+    const isBody = name.endsWith(".handle");
+    const isOutline = name.endsWith(".outline");
+    const isPickVolume = name.endsWith(".pick_volume");
+    if (name.startsWith("translation.")) {
+      if (isBody) {
+        if (typeof scale.x === "number") scale.x *= CLIP_TRANSLATION_THICKNESS_SCALE;
+        if (typeof scale.y === "number") scale.y *= CLIP_TRANSLATION_THICKNESS_SCALE;
+        if (typeof scale.z === "number") scale.z *= CLIP_TRANSLATION_LENGTH_SCALE;
+        object.position?.set(
+          name.includes(".x") ? -CLIP_TRANSLATION_PICK_CENTER : 0,
+          name.includes(".y") ? -CLIP_TRANSLATION_PICK_CENTER : 0,
+          name.includes(".z") ? -CLIP_TRANSLATION_PICK_CENTER : 0,
+        );
+      } else if (isOutline) {
+        if (typeof scale.x === "number") scale.x *= CLIP_TRANSLATION_OUTLINE_THICKNESS_SCALE;
+        if (typeof scale.y === "number") scale.y *= CLIP_TRANSLATION_OUTLINE_THICKNESS_SCALE;
+      }
+    } else if (name.startsWith("rotation.") && isBody) {
+      scale.multiplyScalar?.(CLIP_ROTATION_SIZE_SCALE);
+    } else if (name.startsWith("scale.") && isPickVolume) {
+      const axis = this.clipHandleAxis(name);
+      const direction = name.includes("-") ? -1 : 1;
+      scale.x = axis === "x" ? CLIP_SCALE_PICK_AXIS_SCALE : CLIP_SCALE_PICK_RADIAL_SCALE;
+      scale.y = axis === "y" ? CLIP_SCALE_PICK_AXIS_SCALE : CLIP_SCALE_PICK_RADIAL_SCALE;
+      scale.z = axis === "z" ? CLIP_SCALE_PICK_AXIS_SCALE : CLIP_SCALE_PICK_RADIAL_SCALE;
+      object.position?.set(
+        axis === "x" ? direction * CLIP_SCALE_PICK_AXIS_OFFSET : 0,
+        axis === "y" ? direction * CLIP_SCALE_PICK_AXIS_OFFSET : 0,
+        axis === "z" ? direction * CLIP_SCALE_PICK_AXIS_OFFSET : 0,
+      );
+    }
+    this.styledClipHandleObjects.add(object);
+  }
+
+  private clipHandleAxisColor(name: string): number | null {
+    if (name.includes(".x")) return CLIP_HANDLE_AXIS_COLORS.x;
+    if (name.includes(".y")) return CLIP_HANDLE_AXIS_COLORS.y;
+    if (name.includes(".z")) return CLIP_HANDLE_AXIS_COLORS.z;
+    return null;
+  }
+
+  private clipHandleAxis(name: string): keyof typeof CLIP_HANDLE_AXIS_COLORS | null {
+    if (name.includes(".x")) return "x";
+    if (name.includes(".y")) return "y";
+    if (name.includes(".z")) return "z";
+    return null;
+  }
+
+  private createClipHandleMaterial(
+    axis: keyof typeof CLIP_HANDLE_AXIS_COLORS,
+    tone: "axis" | "ring" = "axis",
+  ) {
+    const three = this.three;
+    if (!three) return null;
+    return new three.MeshPhongMaterial({
+      color: tone === "ring" ? CLIP_HANDLE_RING_COLOR : CLIP_HANDLE_AXIS_COLORS[axis],
+      emissive: tone === "ring" ? CLIP_HANDLE_RING_EMISSIVE : CLIP_HANDLE_AXIS_EMISSIVE[axis],
+      specular: tone === "ring" ? 0xd8d8ff : 0x202020,
+      shininess: tone === "ring" ? CLIP_HANDLE_RING_SHININESS : CLIP_HANDLE_SHININESS,
+      depthTest: false,
+      depthWrite: false,
+      transparent: false,
+    });
+  }
+
+  private lightClipTransformationScene(): void {
+    const three = this.three;
+    const scene = this.viewer?.transformationTool?.scene;
+    if (!three || !scene || this.litClipHandleScenes.has(scene)) return;
+
+    const ambientLight = new three.AmbientLight(0xffffff, CLIP_HANDLE_AMBIENT_LIGHT_INTENSITY);
+    const keyLight = new three.DirectionalLight(0xffffff, CLIP_HANDLE_KEY_LIGHT_INTENSITY);
+    const fillLight = new three.DirectionalLight(0xffffff, CLIP_HANDLE_FILL_LIGHT_INTENSITY);
+    keyLight.position.set(-3, 4, 5);
+    fillLight.position.set(4, -2, -3);
+    scene.add(ambientLight, keyLight, fillLight);
+    if (keyLight.target) scene.add(keyLight.target);
+    if (fillLight.target) scene.add(fillLight.target);
+    this.litClipHandleScenes.add(scene);
+  }
+
+  private applyClipHandleMaterial(object: PotreeTransformObject): void {
+    if (this.litClipHandleObjects.has(object)) return;
+    const axis = this.clipHandleAxis(object.name ?? "");
+    const material = axis ? this.createClipHandleMaterial(axis) : null;
+    if (!material) return;
+    object.material = material;
+    this.litClipHandleObjects.add(object);
+  }
+
+  private createClipTranslationMaterial() {
+    const three = this.three;
+    if (!three) return null;
+    return new three.MeshPhongMaterial({
+      color: CLIP_TRANSLATION_ARROW_COLOR,
+      emissive: CLIP_TRANSLATION_ARROW_EMISSIVE,
+      specular: 0x282000,
+      shininess: 42,
+      depthTest: false,
+      depthWrite: false,
+      transparent: false,
+    });
+  }
+
+  private createClipTranslationArrow(handleName: string, node: PotreeTransformObject): void {
+    const three = this.three;
+    if (!three || !node.add || this.clipTranslationArrowNodes.has(node)) return;
+    const axis = handleName.includes(".x") ? "x" : handleName.includes(".y") ? "y" : "z";
+    const target = {
+      x: axis === "x" ? -1 : 0,
+      y: axis === "y" ? -1 : 0,
+      z: axis === "z" ? -1 : 0,
+    };
+    const material = this.createClipTranslationMaterial();
+    if (!material) return;
+    const group = new three.Group();
+    group.name = `${handleName}.clip_translation`;
+    if (axis === "y") group.up.set(1, 0, 0);
+    group.lookAt(target.x, target.y, target.z);
+
+    const shaftGeometry = new three.CylinderGeometry(
+      CLIP_TRANSLATION_ARROW_SHAFT_RADIUS,
+      CLIP_TRANSLATION_ARROW_SHAFT_RADIUS,
+      CLIP_TRANSLATION_ARROW_SHAFT_LENGTH,
+      20,
+      1,
+      false,
+    );
+    shaftGeometry.rotateX(Math.PI / 2);
+    const shaft = new three.Mesh(shaftGeometry, material);
+    shaft.name = `${handleName}.clip_translation_shaft.handle`;
+    shaft.position.set(0, 0, CLIP_TRANSLATION_ARROW_SHAFT_LENGTH / 2);
+    shaft.renderOrder = CLIP_HANDLE_BODY_RENDER_ORDER + 2;
+
+    const headGeometry = new three.ConeGeometry(
+      CLIP_TRANSLATION_ARROW_HEAD_RADIUS,
+      CLIP_TRANSLATION_ARROW_HEAD_LENGTH,
+      24,
+      1,
+      false,
+    );
+    headGeometry.rotateX(Math.PI / 2);
+    const head = new three.Mesh(headGeometry, material);
+    head.name = `${handleName}.clip_translation_head.handle`;
+    head.position.set(
+      0,
+      0,
+      CLIP_TRANSLATION_ARROW_SHAFT_LENGTH + CLIP_TRANSLATION_ARROW_HEAD_LENGTH / 2,
+    );
+    head.renderOrder = CLIP_HANDLE_BODY_RENDER_ORDER + 2;
+
+    group.add(shaft, head);
+    const visuals = [shaft, head];
+    if (axis === "x") {
+      const centerGeometry = new three.SphereGeometry(CLIP_TRANSLATION_ARROW_CENTER_RADIUS, 24, 16);
+      const center = new three.Mesh(centerGeometry, material);
+      center.name = `${handleName}.clip_translation_center.handle`;
+      center.renderOrder = CLIP_HANDLE_BODY_RENDER_ORDER + 3;
+      group.add(center);
+      visuals.push(center);
+    }
+    node.add(group as unknown as PotreeTransformObject);
+    for (const visual of visuals) {
+      this.clipTranslationArrowVisuals.add(visual as unknown as object);
+      this.litClipHandleObjects.add(visual as unknown as object);
+    }
+    this.clipTranslationArrowNodes.add(node);
+  }
+
+  private createClipScaleArrow(handleName: string, node: PotreeTransformObject): void {
+    const three = this.three;
+    if (!three || !node.add || this.clipScaleArrowNodes.has(node)) return;
+    const axis = handleName.includes(".x") ? "x" : handleName.includes(".y") ? "y" : "z";
+    const direction = handleName.endsWith("-") ? -1 : 1;
+    const target = {
+      x: axis === "x" ? direction : 0,
+      y: axis === "y" ? direction : 0,
+      z: axis === "z" ? direction : 0,
+    };
+    const material = this.createClipHandleMaterial(axis);
+    if (!material) return;
+    const group = new three.Group();
+    group.name = `${handleName}.clip_arrow`;
+    if (axis === "y") group.up.set(1, 0, 0);
+    group.lookAt(target.x, target.y, target.z);
+
+    const shaftGeometry = new three.CylinderGeometry(
+      CLIP_SCALE_ARROW_SHAFT_RADIUS,
+      CLIP_SCALE_ARROW_SHAFT_RADIUS,
+      CLIP_SCALE_ARROW_SHAFT_LENGTH,
+      24,
+      1,
+      false,
+    );
+    shaftGeometry.rotateX(Math.PI / 2);
+    const shaft = new three.Mesh(shaftGeometry, material);
+    shaft.name = `${handleName}.clip_arrow_shaft.handle`;
+    shaft.position.set(
+      0,
+      0,
+      (CLIP_SCALE_ARROW_SHAFT_FRONT_LENGTH - CLIP_SCALE_ARROW_SHAFT_BACK_LENGTH) / 2,
+    );
+    shaft.renderOrder = CLIP_HANDLE_BODY_RENDER_ORDER;
+
+    const headGeometry = new three.ConeGeometry(
+      CLIP_SCALE_ARROW_HEAD_RADIUS,
+      CLIP_SCALE_ARROW_HEAD_LENGTH,
+      32,
+      1,
+      false,
+    );
+    headGeometry.rotateX(Math.PI / 2);
+    const head = new three.Mesh(headGeometry, this.createClipHandleMaterial(axis) ?? material);
+    head.name = `${handleName}.clip_arrow_head.handle`;
+    head.position.set(0, 0, CLIP_SCALE_ARROW_SHAFT_FRONT_LENGTH + CLIP_SCALE_ARROW_HEAD_LENGTH / 2);
+    head.renderOrder = CLIP_HANDLE_BODY_RENDER_ORDER;
+
+    const ringGeometry = new three.TorusGeometry(
+      CLIP_SCALE_ARROW_RING_RADIUS,
+      CLIP_SCALE_ARROW_RING_TUBE,
+      16,
+      48,
+    );
+    const ring = new three.Mesh(ringGeometry, this.createClipHandleMaterial(axis, "ring") ?? material);
+    ring.name = `${handleName}.clip_arrow_ring.outline`;
+    ring.position.set(0, 0, 0);
+    ring.renderOrder = CLIP_HANDLE_BODY_RENDER_ORDER + 1;
+
+    group.add(shaft, head, ring);
+    node.add(group as unknown as PotreeTransformObject);
+    this.clipScaleArrowVisuals.add(shaft as unknown as object);
+    this.clipScaleArrowVisuals.add(head as unknown as object);
+    this.clipScaleArrowVisuals.add(ring as unknown as object);
+    this.litClipHandleObjects.add(shaft as unknown as object);
+    this.litClipHandleObjects.add(head as unknown as object);
+    this.litClipHandleObjects.add(ring as unknown as object);
+    this.clipScaleArrowNodes.add(node);
+  }
+
+  private styleClipTransformationHandles(): void {
+    const tool = this.viewer?.transformationTool;
+    if (!tool) return;
+    this.lightClipTransformationScene();
+    Object.values(tool.focusHandles ?? {}).forEach((handle) => {
+      const node = handle.node;
+      if (!node) return;
+      if (node.setOpacity && !this.clipFocusHandleOpacity.has(node)) {
+        this.clipFocusHandleOpacity.set(node, node.setOpacity.bind(node));
+        node.setOpacity = () => {
+          node.visible = false;
+          node.traverse?.((object) => { object.visible = false; });
+        };
+      }
+      node.setOpacity?.(0);
+      node.visible = false;
+      node.traverse?.((object) => { object.visible = false; });
+    });
+    const handles: Array<{ handle: { node?: PotreeTransformObject }; kind: "scale" | "translate" | "rotate"; name: string }> = [
+      ...Object.entries(tool.scaleHandles ?? {}).map(([name, handle]) => ({ handle, kind: "scale" as const, name })),
+      ...Object.entries(tool.translationHandles ?? {}).map(([name, handle]) => ({ handle, kind: "translate" as const, name })),
+      ...Object.entries(tool.rotationHandles ?? {}).map(([name, handle]) => ({ handle, kind: "rotate" as const, name })),
+    ];
+
+    for (const { handle, kind, name: handleName } of handles) {
+      const node = handle.node;
+      if (!node) continue;
+      this.clipHandleKinds.set(node, kind);
+      if (kind === "scale") this.createClipScaleArrow(handleName, node);
+      if (kind === "translate") {
+        this.createClipTranslationArrow(handleName, node);
+        node.position?.set(
+          CLIP_TRANSLATION_HANDLE_CORNER,
+          CLIP_TRANSLATION_HANDLE_CORNER,
+          CLIP_TRANSLATION_HANDLE_CORNER,
+        );
+      }
+      node.visible = kind !== "rotate" || this.clipRotationVisible;
+      if (node.setOpacity && !this.styledClipHandleNodes.has(node)) {
+        node.setOpacity = (opacity) => this.setClipHandleOpacity(node, opacity);
+        this.styledClipHandleNodes.add(node);
+      }
+      node.traverse?.((object: PotreeTransformObject) => {
+        const name = object.name ?? "";
+        const isBody = name.endsWith(".handle");
+        const isOutline = name.endsWith(".outline");
+        const isPickVolume = name.endsWith(".pick_volume");
+        const isClipArrowRing = name.includes(".clip_arrow_ring.");
+        const isClipTranslationVisual = this.clipTranslationArrowVisuals.has(object);
+        if (kind === "scale" && isPickVolume) {
+          this.resizeClipHandlePart(object);
+          return;
+        }
+        if (!isBody && !isOutline) return;
+        if (kind === "scale" && !this.clipScaleArrowVisuals.has(object)) {
+          this.clipScaleOriginalVisuals.add(object);
+          object.visible = true;
+          const materials = Array.isArray(object.material) ? object.material : [object.material];
+          for (const material of materials) {
+            if (!material) continue;
+            material.transparent = true;
+            material.opacity = 0;
+            material.depthTest = false;
+            material.depthWrite = false;
+            material.needsUpdate = true;
+          }
+          return;
+        }
+        if (kind === "translate" && !isClipTranslationVisual && (isBody || isOutline)) {
+          this.clipTranslationOriginalVisuals.add(object);
+          object.visible = true;
+          const materials = Array.isArray(object.material) ? object.material : [object.material];
+          for (const material of materials) {
+            if (!material) continue;
+            material.transparent = true;
+            material.opacity = 0;
+            material.depthTest = false;
+            material.depthWrite = false;
+            material.needsUpdate = true;
+          }
+          this.resizeClipHandlePart(object);
+          return;
+        }
+        object.renderOrder = isBody ? CLIP_HANDLE_BODY_RENDER_ORDER : CLIP_HANDLE_OUTLINE_RENDER_ORDER;
+        this.applyClipHandleMaterial(object);
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        for (const material of materials) {
+          if (!material) continue;
+          material.depthTest = false;
+          material.depthWrite = false;
+          material.transparent = false;
+          material.opacity = CLIP_HANDLE_BODY_OPACITY;
+          const color = isClipArrowRing || isClipTranslationVisual ? null : this.clipHandleAxisColor(name);
+          if (color !== null) material.color?.setHex(color);
+          material.needsUpdate = true;
+        }
+        if (!isClipTranslationVisual) this.resizeClipHandlePart(object);
+      });
+      node.setOpacity?.(CLIP_HANDLE_IDLE_TARGET_OPACITY);
+    }
+  }
+
+  private keepClipTransformationHandlesVisible(): void {
+    const tool = this.viewer?.transformationTool;
+    if (!tool) return;
+    if (tool.scene) tool.scene.visible = true;
+
+    const visibleHandles = [
+      ...Object.values(tool.scaleHandles ?? {}),
+      ...Object.values(tool.translationHandles ?? {}),
+      ...(this.clipRotationVisible ? Object.values(tool.rotationHandles ?? {}) : []),
+    ];
+    for (const handle of visibleHandles) {
+      const node = handle.node;
+      if (!node) continue;
+      node.setOpacity?.(CLIP_HANDLE_IDLE_TARGET_OPACITY);
+    }
+    if (!this.clipRotationVisible) {
+      for (const handle of Object.values(tool.rotationHandles ?? {})) {
+        handle.node?.setOpacity?.(0);
+      }
+    }
+  }
+
+  private enterClipEditMode(onBoxChange: (box: SpaceClipBox) => void): void {
     const viewer = this.viewer;
     const volume = this.clipVolume;
     if (!viewer || !volume) return;
     this.leaveClipEditMode();
     this.setClipVolumeVisible(true);
     volume.clip = true;
-    this.clipBoundsListener = onBoundsChange;
+    this.clipBoxListener = onBoxChange;
     this.clipVolumeListener = () => {
-      const next = this.getVolumeBounds();
-      if (next) this.clipBoundsListener?.(next);
-    };
-    this.clipOrientationListener = () => {
-      volume.rotation.set(0, 0, 0);
+      const next = this.getVolumeBox();
+      if (next) this.clipBoxListener?.(next);
     };
     volume.addEventListener?.("position_changed", this.clipVolumeListener);
     volume.addEventListener?.("scale_changed", this.clipVolumeListener);
-    volume.addEventListener?.("orientation_changed", this.clipOrientationListener);
+    volume.addEventListener?.("orientation_changed", this.clipVolumeListener);
     this.clipOverlayRenderer = () => {
-      const toolScene = viewer.transformationTool?.scene;
+      const tool = viewer.transformationTool;
+      if (tool?.selection && !tool.selection.includes(volume)) {
+        viewer.inputHandler?.deselectAll();
+        viewer.inputHandler?.toggleSelection(volume);
+      }
+      this.keepClipTransformationHandlesVisible();
+      const toolScene = tool?.scene;
       const camera = viewer.scene.getActiveCamera?.();
       if (toolScene && camera) viewer.renderer.render(toolScene, camera);
     };
     viewer.addEventListener("render.pass.perspective_overlay", this.clipOverlayRenderer);
-    this.setRotationHandlesVisible(false);
+    // Override Potree's tweened opacity handlers before selection changes can
+    // schedule a fade back to the original dark 40% materials.
+    this.styleClipTransformationHandles();
     viewer.inputHandler?.deselectAll();
     viewer.inputHandler?.toggleSelection(volume);
+    this.styleClipTransformationHandles();
   }
 
   private leaveClipEditMode(): void {
@@ -1072,14 +1558,16 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     if (volume && this.clipVolumeListener) {
       volume.removeEventListener?.("position_changed", this.clipVolumeListener);
       volume.removeEventListener?.("scale_changed", this.clipVolumeListener);
+      volume.removeEventListener?.("orientation_changed", this.clipVolumeListener);
     }
-    if (volume && this.clipOrientationListener) {
-      volume.removeEventListener?.("orientation_changed", this.clipOrientationListener);
+    for (const [node, setOpacity] of this.clipFocusHandleOpacity) {
+      node.setOpacity = setOpacity;
+      node.visible = true;
+      setOpacity(0.4);
     }
-    this.setRotationHandlesVisible(true);
-    this.clipBoundsListener = null;
+    this.clipFocusHandleOpacity.clear();
+    this.clipBoxListener = null;
     this.clipVolumeListener = null;
-    this.clipOrientationListener = null;
     this.clipOverlayRenderer = null;
   }
 

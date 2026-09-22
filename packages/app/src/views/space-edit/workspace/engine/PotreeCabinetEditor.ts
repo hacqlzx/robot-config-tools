@@ -377,9 +377,8 @@ export class PotreeCabinetEditor {
     if (event.button !== 0) return;
     if (this.selectedVertex >= 0 && this.dragBefore) {
       const before = this.dragBefore;
-      const mouse = this.mousePosition(event);
-      const snap = this.pickPoint(mouse);
-      if (snap) this.moveVertex(this.selectedVertex, snap);
+      // Keep the freely dragged position. Cabinet scans are often hollow, so
+      // snapping again on mouseup can pull the vertex onto an unrelated surface.
       this.selectedVertex = -1;
       this.dragBefore = null;
       this.interactions.setClaim("drawing-drag", false);

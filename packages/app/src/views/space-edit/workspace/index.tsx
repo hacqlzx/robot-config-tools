@@ -85,7 +85,7 @@ import {
   DEFAULT_SPACE_RENDER_SETTINGS,
   type SpaceCabinetState,
   type SpaceChargingAreaState,
-  type SpaceClipBounds,
+  type SpaceClipBox,
   type SpaceDeviceAreaBox,
   type SpaceDeviceAreaState,
   type SpaceDrawingHistoryScope,
@@ -378,12 +378,13 @@ export default function SpaceEditWorkspace() {
   const [modelOperationBusy, setModelOperationBusy] = useState(false);
   const [activeModelPath, setActiveModelPath] = useState<string | null>(null);
   const [activeSourcePath, setActiveSourcePath] = useState<string | null>(null);
-  const [hideDraftBounds, setHideDraftBounds] = useState<SpaceClipBounds | null>(null);
-  const [hiddenModelBounds, setHiddenModelBounds] = useState<SpaceClipBounds | null>(null);
-  const hideDraftBoundsRef = useRef<SpaceClipBounds | null>(null);
-  const hiddenModelBoundsRef = useRef<SpaceClipBounds | null>(null);
-  hideDraftBoundsRef.current = hideDraftBounds;
-  hiddenModelBoundsRef.current = hiddenModelBounds;
+  const [hideDraftBox, setHideDraftBox] = useState<SpaceClipBox | null>(null);
+  const [hiddenModelBox, setHiddenModelBox] = useState<SpaceClipBox | null>(null);
+  const [clipRotationVisible, setClipRotationVisible] = useState(false);
+  const hideDraftBoxRef = useRef<SpaceClipBox | null>(null);
+  const hiddenModelBoxRef = useRef<SpaceClipBox | null>(null);
+  hideDraftBoxRef.current = hideDraftBox;
+  hiddenModelBoxRef.current = hiddenModelBox;
   const [correctionMode, setCorrectionMode] = useState(false);
   const [correctionOrigin, setCorrectionOrigin] = useState<[number, number, number] | null>(null);
   const [correctionSaving, setCorrectionSaving] = useState(false);
@@ -424,6 +425,7 @@ export default function SpaceEditWorkspace() {
   const [inspectionExporting, setInspectionExporting] = useState(false);
   const [inspectionMode, setInspectionMode] = useState(false);
   const [inspectionItems, setInspectionItems] = useState<InspectionPointItem[]>([]);
+  const [inspectionNamesVisible, setInspectionNamesVisible] = useState(true);
   const [shownInspectionPointIds, setShownInspectionPointIds] = useState<Set<string>>(new Set());
   const [inspectionState, setInspectionState] = useState<SpaceInspectionPointState>(DEFAULT_INSPECTION_POINT_STATE);
   const [inspectionBayFilter, setInspectionBayFilter] = useState<string | undefined>(undefined);
@@ -650,21 +652,21 @@ export default function SpaceEditWorkspace() {
   );
 
   const cancelHideDraft = useCallback(() => {
-    if (!hideDraftBoundsRef.current) return;
-    const committed = hiddenModelBoundsRef.current;
+    if (!hideDraftBoxRef.current) return;
+    const committed = hiddenModelBoxRef.current;
     if (committed) {
-      adapter.setClipBounds(committed);
+      adapter.setClipBox(committed);
       adapter.commitClipping();
     } else {
       adapter.stopClipping();
     }
-    setHideDraftBounds(null);
+    setHideDraftBox(null);
   }, [adapter]);
 
   const clearHideState = useCallback(() => {
     adapter.stopClipping();
-    setHideDraftBounds(null);
-    setHiddenModelBounds(null);
+    setHideDraftBox(null);
+    setHiddenModelBox(null);
   }, [adapter]);
 
   const clearDrawingVisibility = useCallback(() => {
@@ -736,8 +738,8 @@ export default function SpaceEditWorkspace() {
     adapter.clearModel();
     setActiveModelPath(null);
     setActiveSourcePath(null);
-    setHideDraftBounds(null);
-    setHiddenModelBounds(null);
+    setHideDraftBox(null);
+    setHiddenModelBox(null);
     setCorrectionMode(false);
     setCorrectionOrigin(null);
     setCorrectionSaving(false);
@@ -1037,6 +1039,39 @@ export default function SpaceEditWorkspace() {
     adapter.setCabinetDrawingEnabled(false);
     setCabinetMode(false);
   }, [adapter]);
+
+  const discardCabinetMode = useCallback(() => {
+    closeCabinetMode();
+    adapter.clearCabinetDrawing();
+    adapter.setCabinetNames([]);
+    cabinetSession.current = null;
+    cabinetDraftRef.current = null;
+    dirtyScopesRef.current.delete("cabinet");
+    dirtyScopeVersionsRef.current.delete("cabinet");
+    drawingHistory.clearScope("cabinet");
+    setCabinetState(DEFAULT_CABINET_STATE);
+    setSaveStatus((current) => current === "saving"
+      ? current
+      : dirtyScopesRef.current.size > 0 ? "dirty" : "idle");
+  }, [adapter, closeCabinetMode, drawingHistory.clearScope]);
+
+  const requestCloseCabinetMode = useCallback(() => {
+    const hasUnsavedCabinet = adapter.hasCabinetDraft()
+      || dirtyScopesRef.current.has("cabinet");
+    if (!hasUnsavedCabinet) {
+      discardCabinetMode();
+      return;
+    }
+
+    Modal.confirm({
+      title: "存在未保存的屏柜",
+      content: "关闭后，本次屏柜绘制、顶点调整和切分内容将丢失。",
+      okText: "放弃并关闭",
+      cancelText: "继续编辑",
+      okButtonProps: { danger: true },
+      onOk: discardCabinetMode,
+    });
+  }, [adapter, discardCabinetMode]);
 
   const closeChargingMode = useCallback(() => {
     adapter.setChargingAreaDrawingEnabled(false);
@@ -1420,6 +1455,14 @@ export default function SpaceEditWorkspace() {
   useEffect(() => {
     adapter.setVisibleInspectionPointIds([...shownInspectionPointIds]);
   }, [adapter, shownInspectionPointIds]);
+
+  useEffect(() => {
+    adapter.setInspectionPointNamesVisible(inspectionNamesVisible);
+  }, [adapter, inspectionNamesVisible]);
+
+  const handleToggleInspectionNames = useCallback(() => {
+    setInspectionNamesVisible((visible) => !visible);
+  }, []);
 
   const handleInspectionRename = useCallback((inspectionId: string, name: string) => {
     adapter.renameInspectionPoint(inspectionId, name);
@@ -1827,7 +1870,7 @@ export default function SpaceEditWorkspace() {
 
   const handleToggleCabinet = useCallback(async () => {
     if (cabinetMode) {
-      closeCabinetMode();
+      requestCloseCabinetMode();
       return;
     }
     if (!activeSourcePath) {
@@ -1898,7 +1941,7 @@ export default function SpaceEditWorkspace() {
     const existingNames = cabinetItems.flatMap((item) => item.cabinets?.map((c: any) => c.name) || []).filter(Boolean);
     setExistingCabinetNames(existingNames);
     setCabinetMode(true);
-  }, [activeSourcePath, adapter, cabinetMode, cancelHideDraft, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, drawingShown, message, recordDrawingHistory, selectedProject, syncDrawingFileLayers]);
+  }, [activeSourcePath, adapter, cabinetMode, cancelHideDraft, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, drawingShown, message, recordDrawingHistory, requestCloseCabinetMode, selectedProject, syncDrawingFileLayers]);
 
   const handleCabinetUndo = useCallback(() => {
     adapter.undoCabinet();
@@ -2659,10 +2702,10 @@ export default function SpaceEditWorkspace() {
 
   useEffect(() => {
     const busy = saveStatus === "saving" || !!loading || correctionSaving;
-    const mode = busy ? "busy" : hideDraftBounds ? "clip" : correctionMode ? "correction" : cabinetMode ? "cabinet" : chargingMode ? "charging" : deviceAreaMode ? "device-area" : pathMode ? "path" : inspectionMode ? "inspection-point" : normalMode ? "normal" : "idle";
+    const mode = busy ? "busy" : hideDraftBox ? "clip" : correctionMode ? "correction" : cabinetMode ? "cabinet" : chargingMode ? "charging" : deviceAreaMode ? "device-area" : pathMode ? "path" : inspectionMode ? "inspection-point" : normalMode ? "normal" : "idle";
     adapter.setInteractionMode(mode);
     return () => adapter.setInteractionMode("idle");
-  }, [adapter, cabinetMode, chargingMode, hideDraftBounds, correctionMode, correctionSaving, deviceAreaMode, inspectionMode, loading, normalMode, pathMode, saveStatus]);
+  }, [adapter, cabinetMode, chargingMode, hideDraftBox, correctionMode, correctionSaving, deviceAreaMode, inspectionMode, loading, normalMode, pathMode, saveStatus]);
 
   useEffect(() => {
     adapter.setDrawingInteractionCallbacks({
@@ -2974,20 +3017,26 @@ export default function SpaceEditWorkspace() {
     closePathMode();
     closeNormalMode();
     closeCorrectionMode();
-    const initialBounds = adapter.startClipping(
-      (bounds) => setHideDraftBounds(bounds),
-      hideDraftBoundsRef.current ?? hiddenModelBoundsRef.current,
+    adapter.setClipRotationVisible(clipRotationVisible);
+    const initialBox = adapter.startClipping(
+      (box) => setHideDraftBox(box),
+      hideDraftBoxRef.current ?? hiddenModelBoxRef.current,
     );
-    if (!initialBounds) {
+    if (!initialBox) {
       message.error("无法读取当前模型范围");
       return;
     }
-    setHideDraftBounds(initialBounds);
-  }, [activeModelPath, activeSourcePath, adapter, closeCabinetMode, closeChargingMode, closeCorrectionMode, closeDeviceAreaMode, closeNormalMode, closePathMode, message]);
+    setHideDraftBox(initialBox);
+  }, [activeModelPath, activeSourcePath, adapter, clipRotationVisible, closeCabinetMode, closeChargingMode, closeCorrectionMode, closeDeviceAreaMode, closeNormalMode, closePathMode, message]);
 
-  const handleHideBoundsChange = useCallback((bounds: SpaceClipBounds) => {
-    setHideDraftBounds(bounds);
-    adapter.setClipBounds(bounds);
+  const handleHideBoxChange = useCallback((box: SpaceClipBox) => {
+    setHideDraftBox(box);
+    adapter.setClipBox(box);
+  }, [adapter]);
+
+  const handleClipRotationVisibleChange = useCallback((visible: boolean) => {
+    setClipRotationVisible(visible);
+    adapter.setClipRotationVisible(visible);
   }, [adapter]);
 
   const handleHideCancel = useCallback(() => {
@@ -2995,13 +3044,13 @@ export default function SpaceEditWorkspace() {
   }, [cancelHideDraft]);
 
   const handleHideConfirm = useCallback(() => {
-    const bounds = adapter.commitClipping() ?? hideDraftBoundsRef.current;
-    if (!bounds) {
+    const box = adapter.commitClipping() ?? hideDraftBoxRef.current;
+    if (!box) {
       message.error("无法保存隐藏范围");
       return;
     }
-    setHiddenModelBounds(bounds);
-    setHideDraftBounds(null);
+    setHiddenModelBox(box);
+    setHideDraftBox(null);
   }, [adapter, message]);
 
   const handleRestoreModel = useCallback(() => {
@@ -3128,10 +3177,12 @@ export default function SpaceEditWorkspace() {
             onTogglePath={() => void handleTogglePathMode()}
             inspectionMode={inspectionMode}
             inspectionCount={inspectionState.count}
+            inspectionNamesVisible={inspectionNamesVisible}
             inspectionSaving={inspectionSaving}
             inspectionImporting={inspectionImporting}
             inspectionExporting={inspectionExporting}
             onToggleInspection={handleToggleInspection}
+            onToggleInspectionNames={handleToggleInspectionNames}
             onImportInspection={handleInspectionImport}
             onExportInspection={handleInspectionExport}
             onUndo={handleHistoryUndo}
@@ -3148,8 +3199,8 @@ export default function SpaceEditWorkspace() {
         viewControls={(
           <ViewCube
             onViewChange={handleViewChange}
-            hideMode={!!hideDraftBounds}
-            modelHidden={!!(hideDraftBounds || hiddenModelBounds)}
+            hideMode={!!hideDraftBox}
+            modelHidden={!!(hideDraftBox || hiddenModelBox)}
             modelBusy={modelOperationBusy || saveStatus === "saving" || !!loading || correctionSaving || inspectionImporting}
             canHideModel={!!(activeModelPath && activeSourcePath)}
             onToggleHide={handleHide}
@@ -3264,7 +3315,7 @@ export default function SpaceEditWorkspace() {
                     cabinetCount={cabinetState.cabinetCount}
                     nameSequence={cabinetNameSequence}
                     existingCabinetNames={existingCabinetNames}
-                    onClose={closeCabinetMode}
+                    onClose={requestCloseCabinetMode}
                     onSave={(data) => { void runSaveOperation(() => persistCabinet(data)); }}
                     onDraftChange={handleCabinetDraftChange}
                     onNamesChange={(names) => adapter.setCabinetNames(names)}
@@ -3300,11 +3351,13 @@ export default function SpaceEditWorkspace() {
                     saving={deviceAreaSaving}
                   />
                 )}
-                {hideDraftBounds && (
+                {hideDraftBox && (
                   <PotreeClipController
-                    bounds={hideDraftBounds}
+                    box={hideDraftBox}
                     saving={false}
-                    onChange={handleHideBoundsChange}
+                    rotationVisible={clipRotationVisible}
+                    onChange={handleHideBoxChange}
+                    onRotationVisibleChange={handleClipRotationVisibleChange}
                     onConfirm={handleHideConfirm}
                     onCancel={handleHideCancel}
                   />

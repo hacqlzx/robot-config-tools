@@ -297,10 +297,10 @@ class ExportTaskManager {
       const outputPath = path.join(task.outputDir, fileName);
       tempPath = `${outputPath}.download-${process.pid}-${Date.now()}`;
 
-      const response = await net.fetch(downloadUrl, {
+      const response = await fetchBackendResource(downloadUrl, {
         credentials: "include",
         signal: abortController.signal,
-      } as any);
+      }, "导出文件下载");
       if (!response.ok) throw new Error(`下载失败（${response.status}）`);
       if (!response.body) throw new Error("下载内容为空");
 
@@ -356,10 +356,10 @@ class ExportTaskManager {
       const outputPath = path.join(task.outputDir, fileName);
       tempPath = `${outputPath}.download-${process.pid}-${Date.now()}`;
 
-      const response = await net.fetch(downloadUrl, {
+      const response = await fetchBackendResource(downloadUrl, {
         credentials: "include",
         signal: abortController.signal,
-      } as any);
+      }, "后台文件下载");
       if (!response.ok) throw new Error(`下载失败（${response.status}）`);
       if (!response.body) throw new Error("下载内容为空");
 
@@ -529,11 +529,11 @@ export function registerExportTaskIpc(): void {
 }
 
 async function requestRemoteExportFile(url: string, signal: AbortSignal): Promise<string> {
-  const response = await net.fetch(url, {
+  const response = await fetchBackendResource(url, {
     credentials: "include",
     signal,
     headers: createBackendJsonHeaders(),
-  } as any);
+  }, "后台导出接口");
   if (!response.ok) {
     throw new Error(await buildBackendResponseError(response, "导出接口失败"));
   }
@@ -550,6 +550,46 @@ function createBackendJsonHeaders(): Record<string, string> {
     "Content-Type": "application/json",
     "Accept": "application/json, text/plain, */*",
   };
+}
+
+async function fetchBackendResource(
+  url: string,
+  options: Record<string, unknown>,
+  label: string,
+): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const requestId = Date.now().toString() + Math.random().toString(36).slice(2, 8);
+    const startedAt = Date.now();
+    const headers = {
+      "req-id": requestId,
+      "Accept": "*/*",
+      ...(options.headers as Record<string, string> | undefined),
+    };
+    console.info("[后台请求][主进程] 开始", { label, requestId, url, attempt: attempt + 1 });
+    try {
+      const response = await net.fetch(url, { ...options, headers } as any);
+      console.info("[后台请求][主进程] 完成", {
+        label,
+        requestId,
+        status: response.status,
+        elapsedMs: Date.now() - startedAt,
+      });
+      return response;
+    } catch (error) {
+      lastError = error;
+      const aborted = Boolean((options.signal as AbortSignal | undefined)?.aborted);
+      console.warn("[后台请求][主进程] 失败", {
+        label,
+        requestId,
+        elapsedMs: Date.now() - startedAt,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      if (aborted || attempt > 0) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("后台请求失败");
 }
 
 async function buildBackendResponseError(response: Response, fallback: string): Promise<string> {

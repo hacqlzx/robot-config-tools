@@ -124,6 +124,7 @@ export class PotreeInspectionPointEditor {
   private callbacks: SpaceInspectionPointCallbacks | null = null;
   private items: InspectionPointItem[] = [];
   private visibleIds = new Set<string>();
+  private namesVisible = true;
   private selectedId: string | null = null;
   private pendingNewId: string | null = null;
   private defaultComponentType: string | undefined;
@@ -180,6 +181,11 @@ export class PotreeInspectionPointEditor {
   setVisibleIds(ids: Iterable<string>): void {
     const itemIds = new Set(this.items.map((item) => item.id));
     this.visibleIds = new Set([...ids].filter((id) => itemIds.has(id)));
+    this.rebuildVisuals();
+  }
+  setNamesVisible(visible: boolean): void {
+    if (this.namesVisible === visible) return;
+    this.namesVisible = visible;
     this.rebuildVisuals();
   }
   getData(): InspectionPointItem[] { return cloneItems(this.items); }
@@ -590,26 +596,28 @@ export class PotreeInspectionPointEditor {
       this.addLine(group, lineStart, lineEnd, origin, guideColor, lineWidth, lineOpacity);
       this.addArrowHead(group, item.position, end, origin, guideColor, lineOpacity);
 
-      const label = document.createElement("div");
-      label.textContent = item.name?.trim() || `巡检点 ${itemIndex + 1}`;
-      Object.assign(label.style, {
-        position: "absolute",
-        color: "#ffffff",
-        background: "rgba(15, 23, 42, 0.86)",
-        border: `1px solid ${selected ? "#d4ff3f" : "rgba(82, 196, 26, 0.72)"}`,
-        borderRadius: "4px",
-        padding: "2px 6px",
-        fontSize: "12px",
-        fontWeight: "600",
-        lineHeight: "17px",
-        boxShadow: selected
-          ? "0 0 0 2px rgba(212, 255, 63, 0.26), 0 2px 5px rgba(0, 0, 0, 0.42)"
-          : "0 1px 3px rgba(0, 0, 0, 0.45)",
-        transform: "translate(-50%, -125%)",
-        whiteSpace: "nowrap",
-      });
-      this.labelContainer.appendChild(label);
-      this.labels.push({ position: item.position, element: label });
+      if (this.namesVisible) {
+        const label = document.createElement("div");
+        label.textContent = item.name?.trim() || `巡检点 ${itemIndex + 1}`;
+        Object.assign(label.style, {
+          position: "absolute",
+          color: "#ffffff",
+          background: "rgba(15, 23, 42, 0.86)",
+          border: `1px solid ${selected ? "#d4ff3f" : "rgba(82, 196, 26, 0.72)"}`,
+          borderRadius: "4px",
+          padding: "2px 6px",
+          fontSize: "12px",
+          fontWeight: "600",
+          lineHeight: "17px",
+          boxShadow: selected
+            ? "0 0 0 2px rgba(212, 255, 63, 0.26), 0 2px 5px rgba(0, 0, 0, 0.42)"
+            : "0 1px 3px rgba(0, 0, 0, 0.45)",
+          transform: "translate(-50%, -125%)",
+          whiteSpace: "nowrap",
+        });
+        this.labelContainer.appendChild(label);
+        this.labels.push({ position: item.position, element: label });
+      }
     });
     this.visualGroup = group;
     this.scene.add(group);

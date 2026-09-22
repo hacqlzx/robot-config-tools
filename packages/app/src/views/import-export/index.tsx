@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { App, Button, Card, Modal, Radio, Upload } from "antd";
+import { App, Button, Card, DatePicker, Modal, Radio, Upload } from "antd";
 import type { UploadFile } from "antd";
 import { DownloadOutlined, InboxOutlined, UploadOutlined } from "@ant-design/icons";
+import dayjs, { type Dayjs } from "dayjs";
 import {
   getFacInfo,
   importDevicePoint,
@@ -21,7 +22,7 @@ import {
   exportBack,
   databaseBackup,
   exportBackendLog,
-  getRecentMonthRobotLog,
+  getRobotLog,
   downLoadExcelTemplate,
   downloadCommunicateExcel,
 } from "@/api/config.js";
@@ -56,6 +57,7 @@ interface IECard {
 }
 
 type BackupImportType = "1" | "2";
+type RobotLogRange = [Dayjs, Dayjs];
 
 interface ImportDialogConfig {
   /** 弹窗标题，同时作为上传 loading 状态的显示文案。 */
@@ -194,6 +196,18 @@ function matchImportAccept(fileName: string, accept: string): boolean {
   return rules.some((rule) => rule.startsWith(".") && name.endsWith(rule));
 }
 
+function createRobotLogRange(amount = 1, unit: "day" | "week" | "month" | "year" = "month"): RobotLogRange {
+  const end = dayjs();
+  return [end.subtract(amount, unit).startOf("day"), end.endOf("day")];
+}
+
+const ROBOT_LOG_RANGE_PRESETS = [
+  { label: "一天", value: () => createRobotLogRange(1, "day") },
+  { label: "一周", value: () => createRobotLogRange(1, "week") },
+  { label: "一月", value: () => createRobotLogRange(1, "month") },
+  { label: "一年", value: () => createRobotLogRange(1, "year") },
+];
+
 export default function ImportExport() {
   const { message } = App.useApp();
   const { selectedRobot, backendIp } = useAppContext();
@@ -204,6 +218,9 @@ export default function ImportExport() {
   const [importDialog, setImportDialog] = useState<ImportDialogConfig | null>(null);
   const [importFileList, setImportFileList] = useState<UploadFile[]>([]);
   const [backupImportType, setBackupImportType] = useState<BackupImportType>("1");
+  const [robotLogDialogOpen, setRobotLogDialogOpen] = useState(false);
+  const [robotLogRange, setRobotLogRange] = useState<RobotLogRange>(() => createRobotLogRange());
+  const [robotLogTriggerElement, setRobotLogTriggerElement] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -261,7 +278,10 @@ export default function ImportExport() {
     }
   }, [backendIp, message]);
 
-  /** 创建后台导出任务：先选择保存目录，再由下载任务中心调用后台导出接口并下载。 */
+  /**
+   * 创建后台导出任务：导出接口本身统一走渲染层 http，任务中心只负责文件流下载。
+   * 这样接口请求能复用 req-id、连接状态、自动重试和控制台日志；主进程不再悄悄发起一次同名 API 请求。
+   */
   const createRemoteExportTask = useCallback(async ({
     label,
     exportPath,
@@ -276,24 +296,36 @@ export default function ImportExport() {
     }
 
     if (window.electronAPI?.downloadTasks) {
-      const tasks = await window.electronAPI.downloadTasks.list().catch(() => []);
+      const tasks = await window.electronAPI.downloadTasks.list().catch(() => [] as ExportTaskInfo[]);
       if (tasks.some((task) => task.status === "pending" || task.status === "running")) {
         message.warning("已有导出任务进行中");
         return;
       }
     }
 
-    if (window.electronAPI) {
-      const destDir = await window.electronAPI.selectDir(destTitle);
-      if (!destDir) return;
+    setUploadingLabel(label);
+    try {
+      console.info("[后台导出] 请求导出接口", { path: exportPath, query: query || {} });
+      const res = await fallbackExport();
+      const body = res?.data;
+      if (!body?.success || !body?.data) {
+        message.error(body?.message || "获取下载路径失败");
+        return;
+      }
 
-      if (window.electronAPI.downloadTasks) {
-        const result = await window.electronAPI.downloadTasks.create({
-          type: "remote-export",
+      const downloadPath = String(body.data);
+      const downloadTasks = window.electronAPI?.downloadTasks;
+      let destDir: string | undefined;
+      if (window.electronAPI?.selectDir) {
+        destDir = await window.electronAPI.selectDir(destTitle) || undefined;
+        if (!destDir) return;
+      }
+      if (downloadTasks && destDir) {
+        const result = await downloadTasks.create({
+          type: "remote-download",
           name: label,
           backendIp,
-          exportPath,
-          query,
+          downloadPath,
           destDir,
         });
         if (!result.success) {
@@ -304,30 +336,7 @@ export default function ImportExport() {
         return;
       }
 
-      setUploadingLabel(label);
-      try {
-        const res = await fallbackExport();
-        const body = res?.data;
-        if (!body?.success || !body?.data) {
-          message.error(body?.message || "获取下载路径失败");
-          return;
-        }
-        await downloadFileToSelectedDir(String(body.data || ""), label, destDir);
-      } finally {
-        setUploadingLabel(null);
-      }
-      return;
-    }
-
-    setUploadingLabel(label);
-    try {
-      const res = await fallbackExport();
-      const body = res?.data;
-      if (!body?.success || !body?.data) {
-        message.error(body?.message || "获取下载路径失败");
-        return;
-      }
-      await downloadFileToSelectedDir(String(body.data || ""), label);
+      await downloadFileToSelectedDir(downloadPath, label, destDir);
     } finally {
       setUploadingLabel(null);
     }
@@ -487,23 +496,35 @@ export default function ImportExport() {
     }
   }, [createRemoteExportTask, message]);
 
-  /** 机器人最近一个月运行日志导出 */
-  const handleRobotLogExport = useCallback(async (triggerElement?: HTMLElement) => {
+  const openRobotLogExportDialog = useCallback((triggerElement?: HTMLElement) => {
+    const robot = resolveSelectedRobot();
+    if (!robot) return;
+    setRobotLogRange(createRobotLogRange());
+    setRobotLogTriggerElement(triggerElement || null);
+    setRobotLogDialogOpen(true);
+  }, [resolveSelectedRobot]);
+
+  /** 按所选时间范围导出机器人运行日志。 */
+  const handleRobotLogExport = useCallback(async () => {
     try {
       const robot = await resolveSelectedRobot();
       if (!robot) return;
+      const [start, end] = robotLogRange;
+      const startDate = start.startOf("day").format("YYYY-MM-DD HH:mm:ss");
+      const endDate = end.endOf("day").format("YYYY-MM-DD HH:mm:ss");
       await createRemoteExportTask({
         label: "机器人运行日志导出",
-        exportPath: "/robot/tool/file/getRecentMonthRobotLog",
-        query: { robotId: robot.id },
+        exportPath: "/robot/tool/file/getRobotLog",
+        query: { robotId: robot.id, startDate, endDate },
         destTitle: "选择机器人运行日志保存目录",
-        triggerElement,
-        fallbackExport: () => getRecentMonthRobotLog(robot.id),
+        triggerElement: robotLogTriggerElement || undefined,
+        fallbackExport: () => getRobotLog({ robotId: robot.id, startDate, endDate }),
       });
+      setRobotLogDialogOpen(false);
     } catch (e: any) {
       message.error("机器人运行日志导出失败: " + (e?.message || e));
     }
-  }, [createRemoteExportTask, message, resolveSelectedRobot]);
+  }, [createRemoteExportTask, message, resolveSelectedRobot, robotLogRange, robotLogTriggerElement]);
 
   /** 后台运行日志导出 */
   const handleBackendLogExport = useCallback(async (triggerElement?: HTMLElement) => {
@@ -743,7 +764,7 @@ export default function ImportExport() {
       const downloadPath = String(body.data);
       const downloadTasks = window.electronAPI?.downloadTasks;
       if (downloadTasks && window.electronAPI?.selectDir) {
-        const tasks = await downloadTasks.list().catch(() => []);
+        const tasks = await downloadTasks.list().catch(() => [] as ExportTaskInfo[]);
         if (tasks.some((task) => task.status === "pending" || task.status === "running")) {
           message.warning("已有导出任务进行中");
           return;
@@ -924,7 +945,7 @@ export default function ImportExport() {
     }
 
     if (card.key === "robot-log" && actionKey === "export") {
-      handleRobotLogExport(triggerElement);
+      openRobotLogExportDialog(triggerElement);
       return;
     }
 
@@ -1042,6 +1063,34 @@ export default function ImportExport() {
           </Card>
         ))}
       </div>
+
+      <Modal
+        className="ie-log-export-modal"
+        title="机器人运行日志导出"
+        open={robotLogDialogOpen}
+        centered
+        okText="导出"
+        cancelText="取消"
+        confirmLoading={uploadingLabel === "机器人运行日志导出"}
+        onOk={handleRobotLogExport}
+        onCancel={() => {
+          if (uploadingLabel !== "机器人运行日志导出") setRobotLogDialogOpen(false);
+        }}
+        destroyOnHidden
+      >
+        <div className="ie-log-range-label">日志时间范围</div>
+        <DatePicker.RangePicker
+          className="ie-log-range-picker"
+          value={robotLogRange}
+          presets={ROBOT_LOG_RANGE_PRESETS}
+          format="YYYY-MM-DD"
+          allowClear={false}
+          disabledDate={(current) => current.isAfter(dayjs(), "day")}
+          onChange={(range) => {
+            if (range?.[0] && range[1]) setRobotLogRange([range[0], range[1]]);
+          }}
+        />
+      </Modal>
 
       <Modal
         className="ie-import-modal"

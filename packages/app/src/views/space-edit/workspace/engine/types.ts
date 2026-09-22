@@ -143,6 +143,18 @@ export interface SpaceClipBounds {
   maxZ: number;
 }
 
+export interface SpaceClipBox {
+  centerX: number;
+  centerY: number;
+  centerZ: number;
+  sizeX: number;
+  sizeY: number;
+  sizeZ: number;
+  rotationX: number;
+  rotationY: number;
+  rotationZ: number;
+}
+
 export const SPACE_RENDER_DETAIL_LEVELS = [1, 2, 3, 4] as const;
 export type SpaceRenderDetailLevel = (typeof SPACE_RENDER_DETAIL_LEVELS)[number];
 
@@ -304,6 +316,7 @@ export interface SpaceSceneAdapter {
   setInspectionPointDefaultComponentType(componentType: string | undefined): void;
   setInspectionPoints(items: SpaceInspectionPoint[]): void;
   setVisibleInspectionPointIds(ids: string[]): void;
+  setInspectionPointNamesVisible(visible: boolean): void;
   getInspectionPoints(): SpaceInspectionPoint[];
   selectInspectionPoint(id: string | null): void;
   renameInspectionPoint(id: string, name: string): void;
@@ -317,9 +330,10 @@ export interface SpaceSceneAdapter {
   clearInspectionPoints(): void;
   undoInspectionPoint(): void;
   redoInspectionPoint(): void;
-  startClipping(onBoundsChange: (bounds: SpaceClipBounds) => void, initialBounds?: SpaceClipBounds | null): SpaceClipBounds | null;
-  setClipBounds(bounds: SpaceClipBounds): void;
-  commitClipping(): SpaceClipBounds | null;
+  startClipping(onBoxChange: (box: SpaceClipBox) => void, initialBox?: SpaceClipBox | null): SpaceClipBox | null;
+  setClipRotationVisible(visible: boolean): void;
+  setClipBox(box: SpaceClipBox): void;
+  commitClipping(): SpaceClipBox | null;
   stopClipping(): void;
   clearModel(): void;
   resize(): void;

@@ -34,6 +34,9 @@ importers:
       axios:
         specifier: ^1.17.0
         version: 1.17.0
+      dayjs:
+        specifier: 1.11.21
+        version: 1.11.21
       laz-perf:
         specifier: 0.0.7
         version: 0.0.7

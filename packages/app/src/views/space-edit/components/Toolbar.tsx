@@ -1,5 +1,5 @@
 ﻿import { useRef } from "react";
-import { UploadOutlined, TableOutlined, SaveOutlined, BorderOutlined, ThunderboltOutlined, AppstoreOutlined, NodeIndexOutlined, EnvironmentOutlined, ExportOutlined, ImportOutlined, ArrowLeftOutlined, ArrowRightOutlined, AimOutlined } from "@ant-design/icons";
+import { UploadOutlined, TableOutlined, SaveOutlined, BorderOutlined, ThunderboltOutlined, AppstoreOutlined, NodeIndexOutlined, EnvironmentOutlined, ExportOutlined, ImportOutlined, ArrowLeftOutlined, ArrowRightOutlined, AimOutlined, EyeOutlined, EyeInvisibleOutlined } from "@ant-design/icons";
 import { POINT_TABLE_FILE_ACCEPT } from "../utils/space-paths";
 
 interface Props {
@@ -13,10 +13,12 @@ interface Props {
   onTogglePath?: () => void;
   inspectionMode?: boolean;
   inspectionCount?: number;
+  inspectionNamesVisible?: boolean;
   inspectionSaving?: boolean;
   inspectionImporting?: boolean;
   inspectionExporting?: boolean;
   onToggleInspection?: () => void;
+  onToggleInspectionNames?: () => void;
   onImportInspection?: (file: File) => void;
   onExportInspection?: (triggerElement?: HTMLElement) => void;
   onUndo?: () => void;
@@ -71,6 +73,7 @@ const BUTTON_GROUPS = [
     label: "巡检点",
     buttons: [
       { icon: <EnvironmentOutlined style={{ fontSize: 20 }} />, label: "巡检点标注", action: "inspection" as const },
+      { icon: <EyeOutlined style={{ fontSize: 20 }} />, label: "巡检点名称", action: "inspectionNames" as const },
       { icon: <ImportOutlined style={{ fontSize: 20 }} />, label: "巡检点导入", action: "inspectionImport" as const },
       { icon: <ExportOutlined style={{ fontSize: 20 }} />, label: "巡检点导出", action: "inspectionExport" as const },
     ],
@@ -92,7 +95,7 @@ const BUTTON_GROUPS = [
  * - "点表加载"仍使用隐藏 input，因为点表导入不需要额外的弹窗交互。
  * - 绘制模式按钮互斥由父级 useDrawingModeToggles 控制，Toolbar 仅根据 mode 显示激活态。
  */
-export default function Toolbar({ onOpenLoadModel, correctionMode, onToggleCorrection, cabinetMode, onToggleCabinet, chargingMode, onToggleCharging, deviceAreaMode, onToggleDeviceArea, pathMode, onTogglePath, inspectionMode, inspectionCount = 0, inspectionSaving, inspectionImporting, inspectionExporting, onToggleInspection, onImportInspection, onExportInspection, onUndo, onRedo, canUndo, canRedo, onSaveAll, onImportPointTable, onExportModel, importing, modelBusy }: Props) {
+export default function Toolbar({ onOpenLoadModel, correctionMode, onToggleCorrection, cabinetMode, onToggleCabinet, chargingMode, onToggleCharging, deviceAreaMode, onToggleDeviceArea, pathMode, onTogglePath, inspectionMode, inspectionCount = 0, inspectionNamesVisible = true, inspectionSaving, inspectionImporting, inspectionExporting, onToggleInspection, onToggleInspectionNames, onImportInspection, onExportInspection, onUndo, onRedo, canUndo, canRedo, onSaveAll, onImportPointTable, onExportModel, importing, modelBusy }: Props) {
   const pointInputRef = useRef<HTMLInputElement>(null);
   const inspectionInputRef = useRef<HTMLInputElement>(null);
 
@@ -122,6 +125,7 @@ export default function Toolbar({ onOpenLoadModel, correctionMode, onToggleCorre
       case "deviceArea": onToggleDeviceArea?.(); break;
       case "path": onTogglePath?.(); break;
       case "inspection": onToggleInspection?.(); break;
+      case "inspectionNames": onToggleInspectionNames?.(); break;
       case "inspectionImport": inspectionInputRef.current?.click(); break;
       case "inspectionExport": onExportInspection?.(triggerElement); break;
       case "undo": onUndo?.(); break;
@@ -196,22 +200,33 @@ export default function Toolbar({ onOpenLoadModel, correctionMode, onToggleCorre
             {groupIndex > 0 && <div className="space-edit-toolbar-divider" aria-hidden="true" />}
             <div className="space-edit-toolbar-group" role="group" aria-label={group.label}>
               {group.buttons.map(({ icon, label, action }) => {
+                const isInspectionNamesAction = action === "inspectionNames";
+                const buttonLabel = isInspectionNamesAction
+                  ? (inspectionNamesVisible ? "隐藏名称" : "显示名称")
+                  : label;
                 const isActive = (action === "cabinet" && cabinetMode) ||
                   (action === "charging" && chargingMode) ||
                   (action === "deviceArea" && deviceAreaMode) ||
                   (action === "path" && pathMode) ||
                   (action === "correction" && correctionMode) ||
-                  (action === "inspection" && inspectionMode);
+                  (action === "inspection" && inspectionMode) ||
+                  (isInspectionNamesAction && !inspectionNamesVisible);
+                const buttonIcon = isInspectionNamesAction
+                  ? (inspectionNamesVisible
+                    ? <EyeOutlined style={{ fontSize: 20 }} />
+                    : <EyeInvisibleOutlined style={{ fontSize: 20 }} />)
+                  : icon;
                 return (
                   <button
-                    key={label}
+                    key={action}
                     className={`space-edit-toolbar-btn${isActive ? " active" : ""}`}
                     onClick={(event) => handleClick(action, event.currentTarget)}
-                    aria-label={`${label}${action === "inspection" && inspectionCount > 0 ? `，已有 ${inspectionCount} 个` : ""}`}
-                    disabled={modelBusy || (action === "point" && importing) || (action === "undo" && !canUndo) || (action === "redo" && !canRedo) || (action === "inspection" && (inspectionSaving || inspectionImporting)) || (action === "inspectionImport" && (inspectionSaving || inspectionImporting || inspectionExporting)) || (action === "inspectionExport" && (inspectionSaving || inspectionImporting || inspectionExporting || inspectionCount === 0))}
+                    aria-label={`${buttonLabel}${action === "inspection" && inspectionCount > 0 ? `，已有 ${inspectionCount} 个` : ""}`}
+                    title={isInspectionNamesAction ? `${inspectionNamesVisible ? "隐藏" : "显示"}巡检点名称` : undefined}
+                    disabled={modelBusy || (action === "point" && importing) || (action === "undo" && !canUndo) || (action === "redo" && !canRedo) || (action === "inspection" && (inspectionSaving || inspectionImporting)) || (isInspectionNamesAction && inspectionCount === 0) || (action === "inspectionImport" && (inspectionSaving || inspectionImporting || inspectionExporting)) || (action === "inspectionExport" && (inspectionSaving || inspectionImporting || inspectionExporting || inspectionCount === 0))}
                   >
-                    {icon}
-                    <span>{label}{action === "point" && importing ? "..." : action === "inspectionImport" && inspectionImporting ? "..." : action === "inspectionExport" && inspectionExporting ? "..." : ""}</span>
+                    {buttonIcon}
+                    <span>{buttonLabel}{action === "point" && importing ? "..." : action === "inspectionImport" && inspectionImporting ? "..." : action === "inspectionExport" && inspectionExporting ? "..." : ""}</span>
                   </button>
                 );
               })}

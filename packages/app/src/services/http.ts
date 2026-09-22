@@ -1,11 +1,11 @@
 import axios, { AxiosResponse } from "axios";
 import {
   getBackendIp,
-  getConnectionStatus,
   setConnectionStatus,
 } from "../stores/appContextStore";
 
 const instance = axios.create({ timeout: 6000000 });
+const NETWORK_RETRY_DELAY_MS = 250;
 
 /**
  * 后台请求统一异常。
@@ -46,6 +46,34 @@ function getBackendHttpErrorMessage(error: any): string {
   return `请求失败（${status}）`;
 }
 
+function getBackendOrigin(ip: string): string {
+  const value = String(ip || "").trim().replace(/\/+$/, "");
+  if (/^https?:\/\//i.test(value)) return value;
+  return `https://${value}`;
+}
+
+function getRequestLabel(config: any): string {
+  const method = String(config?.method || "get").toUpperCase();
+  const url = `${config?.baseURL || ""}${config?.url || ""}`;
+  return `${method} ${url}`;
+}
+
+function isNetworkFailure(error: any): boolean {
+  return error?.code === "ERR_NETWORK"
+    || error?.code === "ECONNABORTED"
+    || error?.code === "ETIMEDOUT"
+    || !error?.response;
+}
+
+function isRetryableMethod(config: any): boolean {
+  const method = String(config?.method || "get").toLowerCase();
+  return method === "get" || method === "head" || method === "options";
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** 供页面在保留业务兜底文案的同时展示统一的请求错误。 */
 export function getRequestErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
@@ -58,23 +86,23 @@ export function getRequestErrorMessage(error: unknown, fallback: string): string
  * data 为 FormData 时不强制设置 Content-Type，让浏览器自动生成 boundary。
  */
 instance.interceptors.request.use((config) => {
-  config.headers["req-id"] = Date.now().toString() + Math.random().toString(36).slice(2, 8);
-  if (!(config.data instanceof FormData)) {
+  config.headers = (config.headers || {}) as any;
+  const requestId = Date.now().toString() + Math.random().toString(36).slice(2, 8);
+  config.headers["req-id"] = requestId;
+  if (!(typeof FormData !== "undefined" && config.data instanceof FormData)) {
     config.headers["Content-Type"] = "application/json";
   }
 
   const ip = getBackendIp();
   if (!ip) throw new BackendRequestError("请先连接后台");
 
-  const connectionStatus = getConnectionStatus();
-  if (connectionStatus === "failed") {
-    throw new BackendRequestError("后台未连接");
-  }
-  if (connectionStatus !== "connected") {
-    throw new BackendRequestError("后台未连接");
-  }
-
-  config.baseURL = `https://${ip}`;
+  // connectionStatus 只反映最近一次探测结果，不能作为发送请求的闸门。
+  // 否则一次瞬时网络抖动会让所有后续请求在拦截器中永久失败，直到用户手动重连。
+  config.baseURL = getBackendOrigin(ip);
+  const meta = config as any;
+  meta.__backendIp = ip;
+  meta.__backendRequestStartedAt = Date.now();
+  console.debug("[后台请求] 开始", { requestId, request: getRequestLabel(config) });
   return config;
 });
 
@@ -83,18 +111,50 @@ instance.interceptors.request.use((config) => {
  * 网络不可达、超时等连接错误会同步标记后台连接失败。
  */
 instance.interceptors.response.use(
-  (res) => res,
-  (err) => {
+  (res) => {
+    const meta = res.config as any;
+    const requestId = meta?.headers?.["req-id"];
+    const elapsed = meta?.__backendRequestStartedAt ? Date.now() - meta.__backendRequestStartedAt : undefined;
+    if (!meta?.__backendIp || meta.__backendIp === getBackendIp()) {
+      setConnectionStatus("connected");
+    }
+    console.debug("[后台请求] 完成", {
+      requestId,
+      request: getRequestLabel(res.config),
+      status: res.status,
+      elapsedMs: elapsed,
+    });
+    return res;
+  },
+  async (err) => {
     if (err instanceof BackendRequestError) return Promise.reject(err);
 
-    const isConnectionFailure = err?.code === "ERR_NETWORK"
-      || err?.code === "ECONNABORTED"
-      || err?.code === "ETIMEDOUT"
-      || !err?.response;
-    if (isConnectionFailure && err?.code !== "ERR_CANCELED") {
-      setConnectionStatus("failed");
+    const config = err?.config as any;
+    const connectionFailure = isNetworkFailure(err);
+    const canRetry = connectionFailure
+      && err?.code !== "ERR_CANCELED"
+      && isRetryableMethod(config)
+      && !config?.__backendRetried;
+    if (canRetry) {
+      config.__backendRetried = true;
+      console.warn("[后台请求] 网络异常，自动重试一次", { request: getRequestLabel(config) });
+      await delay(NETWORK_RETRY_DELAY_MS);
+      return instance.request(config);
     }
 
+    if (connectionFailure && err?.code !== "ERR_CANCELED") {
+      const requestIp = config?.__backendIp;
+      if (!requestIp || requestIp === getBackendIp()) {
+        setConnectionStatus("failed");
+      }
+    }
+
+    console.warn("[后台请求] 失败", {
+      request: getRequestLabel(config),
+      code: err?.code,
+      status: err?.response?.status,
+      message: getBackendHttpErrorMessage(err),
+    });
     return Promise.reject(new BackendRequestError(getBackendHttpErrorMessage(err)));
   },
 );
