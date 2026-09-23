@@ -17,7 +17,9 @@ interface Props {
 function upsertChildren(nodes: TreeDataNode[], targetKey: string, children: TreeDataNode[]): TreeDataNode[] {
   return nodes.map((node) => {
     if (node.key === targetKey) {
-      return (node.children && node.children.length > 0) ? node : { ...node, children };
+      return (node.children && node.children.length > 0)
+        ? node
+        : { ...node, children, isLeaf: children.length === 0 };
     }
     if (node.children) return { ...node, children: upsertChildren(node.children, targetKey, children) };
     return node;
@@ -31,29 +33,44 @@ function buildDeviceTree(
   mainList: any[],
   compList: any[],
 ): TreeDataNode[] {
-  return voltList.map((v) => ({
-    key: `volt/${v.id}`,
-    title: v.voltName || "(未命名)",
-    children: bayList
+  return voltList.map((v) => {
+    const bayChildren = bayList
       .filter((b: any) => b.voltId === v.id)
-      .map((b: any) => ({
-        key: `bay/${b.id}`,
-        title: b.bayName || "(未命名)",
-        children: mainList
+      .map((b: any) => {
+        const mainChildren = mainList
           .filter((m: any) => m.bayId === b.id)
-          .map((m: any) => ({
-            key: `main/${m.id}`,
-            title: m.mainDeviceName || "(未命名)",
-            children: compList
+          .map((m: any) => {
+            const componentChildren = compList
               .filter((c: any) => c.mainDeviceId === m.id)
               .map((c: any) => ({
                 key: `component/${c.id}`,
                 title: c.componentName || "(未命名)",
                 isLeaf: false,
-              })),
-          })),
-      })),
-  }));
+              }));
+
+            return {
+              key: `main/${m.id}`,
+              title: m.mainDeviceName || "(未命名)",
+              children: componentChildren,
+              isLeaf: componentChildren.length === 0,
+            };
+          });
+
+        return {
+          key: `bay/${b.id}`,
+          title: b.bayName || "(未命名)",
+          children: mainChildren,
+          isLeaf: mainChildren.length === 0,
+        };
+      });
+
+    return {
+      key: `volt/${v.id}`,
+      title: v.voltName || "(未命名)",
+      children: bayChildren,
+      isLeaf: bayChildren.length === 0,
+    };
+  });
 }
 
 /** 收集需要展开的 key（按层级） */

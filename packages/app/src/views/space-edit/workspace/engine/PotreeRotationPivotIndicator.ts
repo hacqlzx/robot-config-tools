@@ -6,7 +6,7 @@ import type {
 } from "@/potree-core/potree-runtime";
 import type { SpaceInteractionCoordinator, SpaceInteractionMode } from "./SpaceInteractionCoordinator";
 
-const DRAG_THRESHOLD_PX = 3;
+const DRAG_THRESHOLD_PX = 4;
 const ROTATION_SPEED = 5;
 
 type Point3 = { x: number; y: number; z: number };

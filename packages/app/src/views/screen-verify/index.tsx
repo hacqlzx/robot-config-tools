@@ -829,7 +829,7 @@ export default function ScreenVerify() {
       ...annotations,
       deviceBoxRects: annotations.deviceBoxRects.filter((rect) => !singlePointDeviceRectIds.has(rect.id)),
     };
-    const result = buildSortedPointRowsFromAnnotations(sortableAnnotations);
+    const result = buildSortedPointRowsFromAnnotations(sortableAnnotations, existingRows);
     console.info("[screen-verify] one-click sort output", {
       componentCode: selectedComponentCode,
       recognizedSupplementLabelCount: recognizedLabelCount,

@@ -95,6 +95,7 @@ export interface SpaceDeviceAreaState {
   boxCount: number;
   height: number;
   selectedBoxId: string | null;
+  selectedBoxName: string;
   selectedBoxBay: SpaceDeviceAreaBay | null;
   boundBayIds: number[];
   hasDraft: boolean;
@@ -277,6 +278,8 @@ export interface SpaceSceneAdapter {
   getDeviceAreaBoxes(): SpaceDeviceAreaBox[];
   loadDeviceAreaBoxes(boxes: SpaceDeviceAreaBox[]): void;
   hasDeviceAreaDraft(): boolean;
+  clearDeviceAreaSelection(): void;
+  renameSelectedDeviceArea(name: string): void;
   bindSelectedDeviceAreaBay(bay: SpaceDeviceAreaBay): void;
   unbindSelectedDeviceAreaBay(): void;
   discardUnboundDeviceAreas(): void;

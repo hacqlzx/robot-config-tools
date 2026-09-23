@@ -426,6 +426,14 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     return this.deviceAreaEditor?.hasDraft() ?? false;
   }
 
+  clearDeviceAreaSelection(): void {
+    this.deviceAreaEditor?.clearSelection();
+  }
+
+  renameSelectedDeviceArea(name: string): void {
+    this.deviceAreaEditor?.renameSelected(name);
+  }
+
   bindSelectedDeviceAreaBay(bay: { id: number; name: string; code: string }): void {
     this.deviceAreaEditor?.bindSelectedBay(bay);
   }

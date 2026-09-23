@@ -72,6 +72,11 @@ interface DrawingHitItem {
   points: Vec3[];
 }
 
+interface DrawingHit {
+  selection: SpaceDrawingSelection;
+  distance: number;
+}
+
 function drawingItemKey(item: DrawingItem): string {
   return `${item.type}:${item.id}`;
 }
@@ -425,6 +430,7 @@ export class PotreeDrawingRenderer {
   private active = true;
   private mouseDown: { x: number; y: number } | null = null;
   private pendingSelection: SpaceDrawingSelection | null = null;
+  private readonly unregisterSelectionTarget: () => void;
 
   constructor(
     private readonly viewer: PotreeViewerInstance,
@@ -435,6 +441,10 @@ export class PotreeDrawingRenderer {
   ) {
     this.scene = new three.Scene();
     this.labelContainer = this.createLabelContainer(host);
+    this.unregisterSelectionTarget = interactions.registerSelectionTarget("drawing", {
+      hitDistance: (event) => this.selectionDistance(event),
+      clearSelection: () => this.clearSelection(),
+    });
     host.addEventListener("mousedown", this.handleMouseDown, true);
     window.addEventListener("mouseup", this.handleMouseUp, true);
     document.addEventListener("keydown", this.handleKeyDown);
@@ -485,6 +495,7 @@ export class PotreeDrawingRenderer {
   }
 
   dispose(): void {
+    this.unregisterSelectionTarget();
     this.host.removeEventListener("mousedown", this.handleMouseDown, true);
     window.removeEventListener("mouseup", this.handleMouseUp, true);
     document.removeEventListener("keydown", this.handleKeyDown);
@@ -559,12 +570,13 @@ export class PotreeDrawingRenderer {
 
   private readonly handleMouseDown = (event: MouseEvent): void => {
     if (event.button !== 0 || !this.canSelectDrawing()) return;
+    const idle = this.interactions.isMode("idle");
+    const winner = idle ? this.interactions.getSelectionWinner(event) : "drawing";
+    if (winner && winner !== "drawing") return;
     this.mouseDown = { x: event.clientX, y: event.clientY };
     this.pendingSelection = this.hitTest(this.mousePosition(event));
-    if (this.pendingSelection) {
+    if (this.pendingSelection && !idle) {
       this.interactions.setClaim("drawing-selection", true);
-      // Block Potree's default navigation, but let the pivot-rotation listener
-      // on this host distinguish a drag from a selection click.
       event.preventDefault();
       event.stopPropagation();
       this.viewer.controls?.stop?.();
@@ -589,6 +601,7 @@ export class PotreeDrawingRenderer {
     const previousSelectedLayers = [...this.selectedItems.keys()];
     this.selectedItems.clear();
     if (selection) {
+      if (this.interactions.isMode("idle")) this.interactions.activateSelection("drawing");
       this.selectedItems.set(selection.layerId, drawingItemKey(selection.item));
       this.interactionCallbacks?.onSelect(selection);
       new Set([...previousSelectedLayers, selection.layerId]).forEach((layerId) => {
@@ -607,6 +620,14 @@ export class PotreeDrawingRenderer {
     this.interactionCallbacks?.onSelect(null);
     [...this.layers.keys()].forEach((layerId) => this.rebuildLayer(layerId));
   };
+
+  private clearSelection(): void {
+    if (this.selectedItems.size === 0) return;
+    const previousSelectedLayers = [...this.selectedItems.keys()];
+    this.selectedItems.clear();
+    previousSelectedLayers.forEach((layerId) => this.rebuildLayer(layerId));
+    this.interactionCallbacks?.onSelect(null);
+  }
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== "Delete" && event.key !== "Backspace") return;
@@ -659,7 +680,18 @@ export class PotreeDrawingRenderer {
     };
   }
 
+  private selectionDistance(event: MouseEvent): number | null {
+    if (!this.active
+      || !this.interactions.isMode("idle")
+      || this.host.closest("[data-space-edit-busy='true']")) return null;
+    return this.hitTestCandidate(this.mousePosition(event))?.distance ?? null;
+  }
+
   private hitTest(mouse: { x: number; y: number }): SpaceDrawingSelection | null {
+    return this.hitTestCandidate(mouse)?.selection ?? null;
+  }
+
+  private hitTestCandidate(mouse: { x: number; y: number }): DrawingHit | null {
     const camera = this.viewer.scene.getActiveCamera?.();
     if (!camera) return null;
     const mouseToRay = this.potree.Utils?.mouseToRay;
@@ -672,7 +704,7 @@ export class PotreeDrawingRenderer {
       return null;
     }
 
-    let best: { selection: SpaceDrawingSelection; distance: number } | null = null;
+    let best: DrawingHit | null = null;
     const cabinetOnly = this.interactions.isMode("cabinet");
     for (const [layerId, layer] of this.layers) {
       for (const hitItem of layer.hitItems) {
@@ -688,7 +720,7 @@ export class PotreeDrawingRenderer {
         }
       }
     }
-    return best?.selection ?? null;
+    return best;
   }
 
   private localPoint(point: Vec3, origin: Vec3): Vec3 {

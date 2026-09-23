@@ -18,7 +18,7 @@ const LINE_THICKNESS = 0.01;
 const HIGHLIGHT_THICKNESS = 0.025;
 const POINT_SCALE = 0.06;
 const MOVE_STEP = 0.1;
-const CLICK_THRESHOLD = 3;
+const CLICK_THRESHOLD = 4;
 const EDGE_HIT_DISTANCE_SQ = 144;
 const BOX_EDGES: [number, number][] = [
   [0, 1], [1, 2], [2, 3], [3, 0],
@@ -142,6 +142,7 @@ export class PotreeChargingAreaEditor {
   private mouseDown: { x: number; y: number } | null = null;
   private undoStack: ChargingSnapshot[] = [];
   private redoStack: ChargingSnapshot[] = [];
+  private readonly unregisterSelectionTarget: () => void;
 
   constructor(
     private readonly viewer: PotreeViewerInstance,
@@ -153,6 +154,11 @@ export class PotreeChargingAreaEditor {
     this.scene = new three.Scene();
     this.labelContainer = this.createLabelContainer();
     this.labelElement = this.createLabel();
+    this.unregisterSelectionTarget = interactions.registerSelectionTarget("charging-area", {
+      hitDistance: (event) => this.selectionDistance(event),
+      clearSelection: () => this.clearSelection(),
+      priority: 1,
+    });
     this.host.addEventListener("mousedown", this.handleMouseDown, true);
     this.host.addEventListener("mouseup", this.handleMouseUp, true);
     document.addEventListener("keydown", this.handleKeyDown);
@@ -227,6 +233,7 @@ export class PotreeChargingAreaEditor {
   }
 
   dispose(): void {
+    this.unregisterSelectionTarget();
     this.host.removeEventListener("mousedown", this.handleMouseDown, true);
     this.host.removeEventListener("mouseup", this.handleMouseUp, true);
     document.removeEventListener("keydown", this.handleKeyDown);
@@ -339,6 +346,10 @@ export class PotreeChargingAreaEditor {
   private readonly handleMouseDown = (event: MouseEvent): void => {
     if (event.button !== 0 || !this.canHandlePointer()) return;
     if (this.interactions.hasClaim("drawing-drag")) return;
+    if (this.interactions.isMode("idle")) {
+      const winner = this.interactions.getSelectionWinner(event);
+      if (winner && winner !== "charging-area") return;
+    }
     this.mouseDown = { x: event.clientX, y: event.clientY };
   };
 
@@ -358,7 +369,10 @@ export class PotreeChargingAreaEditor {
         this.rebuildVisuals();
         this.emitChange();
       }
-      if (selected) this.consumePointer(event);
+      if (selected) {
+        if (this.interactions.isMode("idle")) this.interactions.activateSelection("charging-area");
+        this.consumePointer(event);
+      }
       return;
     }
 
@@ -391,6 +405,13 @@ export class PotreeChargingAreaEditor {
   private consumePointer(event: MouseEvent): void {
     event.preventDefault();
     this.viewer.controls?.stop?.();
+  }
+
+  private clearSelection(): void {
+    if (!this.selected) return;
+    this.selected = false;
+    this.rebuildVisuals();
+    this.emitChange();
   }
 
   private mousePosition(event: MouseEvent): { x: number; y: number } {
@@ -443,40 +464,57 @@ export class PotreeChargingAreaEditor {
     ];
   }
 
+  private selectionDistance(event: MouseEvent): number | null {
+    if (!this.canHandlePointer() || !this.interactions.isMode("idle")) return null;
+    return this.hitTestBoxDistance(this.mousePosition(event));
+  }
+
   private hitTestBox(mouse: { x: number; y: number }): boolean {
+    return this.hitTestBoxDistance(mouse) !== null;
+  }
+
+  private hitTestBoxDistance(mouse: { x: number; y: number }): number | null {
     const camera = this.viewer.scene.getActiveCamera?.();
-    if (!camera || !this.box) return false;
+    if (!camera || !this.box) return null;
     const ray = this.mouseRay(camera, mouse);
-    if (ray && this.rayHitsBox(ray, this.box)) return true;
+    const rayDistance = ray ? this.rayBoxDistance(ray, this.box) : null;
+    if (rayDistance !== null) return rayDistance;
 
     const projected = this.box.map((point) => this.projectPoint(point, camera));
-    if (projected.some((point) => !point)) return false;
-    return BOX_EDGES.some(([from, to]) => {
+    if (projected.some((point) => !point)) return null;
+    const edgeHit = BOX_EDGES.some(([from, to]) => {
       const a = projected[from]!;
       const b = projected[to]!;
       return distanceSquaredToSegment(mouse.x, mouse.y, a.x, a.y, b.x, b.y) <= EDGE_HIT_DISTANCE_SQ;
     });
+    if (!edgeHit) return null;
+    const position = this.viewer.scene.view.position;
+    const center = this.box.reduce(
+      (sum, point) => [sum[0] + point[0], sum[1] + point[1], sum[2] + point[2]] as Vec3,
+      [0, 0, 0] as Vec3,
+    ).map((value) => value / this.box!.length) as Vec3;
+    return Math.hypot(center[0] - position.x, center[1] - position.y, center[2] - position.z);
   }
 
-  private rayHitsBox(ray: PotreeRay, box: Vec3[]): boolean {
+  private rayBoxDistance(ray: PotreeRay, box: Vec3[]): number | null {
     const origin: Vec3 = [ray.origin.x, ray.origin.y, ray.origin.z];
     const direction: Vec3 = [ray.direction.x, ray.direction.y, ray.direction.z];
     const basis = [subtract(box[1], box[0]), subtract(box[3], box[0]), subtract(box[4], box[0])]
       .map(normalize);
-    if (basis.some((value) => !value)) return false;
+    if (basis.some((value) => !value)) return null;
 
     const relativeOrigin = subtract(origin, box[0]);
     let near = 0;
     let far = Number.POSITIVE_INFINITY;
     for (const value of basis) {
-      if (!value) return false;
+      if (!value) return null;
       const originAmount = dot(relativeOrigin, value.axis);
       const directionAmount = dot(direction, value.axis);
       const tolerance = Math.max(value.length * 0.015, 0.005);
       const min = -tolerance;
       const max = value.length + tolerance;
       if (Math.abs(directionAmount) < 1e-9) {
-        if (originAmount < min || originAmount > max) return false;
+        if (originAmount < min || originAmount > max) return null;
         continue;
       }
       let first = (min - originAmount) / directionAmount;
@@ -484,9 +522,9 @@ export class PotreeChargingAreaEditor {
       if (first > second) [first, second] = [second, first];
       near = Math.max(near, first);
       far = Math.min(far, second);
-      if (near > far) return false;
+      if (near > far) return null;
     }
-    return far >= 0;
+    return far >= 0 ? Math.max(0, near) : null;
   }
 
   private projectPoint(point: Vec3, camera: PotreeCamera): { x: number; y: number } | null {

@@ -18,6 +18,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const POTREE_OUTPUT_DIR_NAME = ".potree";
 const CONVERTER_ALIAS_DIR_NAME = ".potree-converter-runtime";
 const REQUIRED_OUTPUT_FILES = ["metadata.json", "octree.bin", "hierarchy.bin"] as const;
+const WINDOWS_DLL_NOT_FOUND_EXIT_CODE = 0xC0000135;
+const VC_RUNTIME_DOWNLOAD_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe";
 
 export type PotreeConversionPhase = "checking" | "converting" | "validating" | "complete";
 
@@ -63,6 +65,24 @@ function isAsciiPath(filePath: string): boolean {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isWindowsDllNotFoundExitCode(code: number | null): boolean {
+  if (code == null) return false;
+  // Node may expose a Windows NTSTATUS exit code as either its unsigned
+  // value (3221225781) or its signed 32-bit representation (-1073741515).
+  return (code >>> 0) === WINDOWS_DLL_NOT_FOUND_EXIT_CODE;
+}
+
+function converterExitError(code: number | null, detail: string): Error {
+  if (isWindowsDllNotFoundExitCode(code)) {
+    return new Error(
+      "PotreeConverter 无法启动：当前电脑缺少 Microsoft Visual C++ 运行库（错误码 0xC0000135）。"
+      + `\n请安装或修复 Microsoft Visual C++ 2015-2022 Redistributable x64：${VC_RUNTIME_DOWNLOAD_URL}`
+      + "\n安装完成后请重启 RobotConfigTools 再试；如果仍失败，请检查安装目录中的 laszip.dll 是否存在且未被安全软件隔离。",
+    );
+  }
+  return new Error(`PotreeConverter 转换失败（退出码 ${code ?? "未知"}）${detail ? `\n${detail}` : ""}`);
 }
 
 function resolveVolumeRuntimeBase(targetPath: string): string {
@@ -401,7 +421,7 @@ async function runConverter(
           return;
         }
         const detail = logTail.trim().split(/\r?\n/).slice(-8).join("\n");
-        reject(new Error(`PotreeConverter 转换失败（退出码 ${code ?? "未知"}）${detail ? `\n${detail}` : ""}`));
+        reject(converterExitError(code, detail));
       });
     });
     await pathAlias.finalize();

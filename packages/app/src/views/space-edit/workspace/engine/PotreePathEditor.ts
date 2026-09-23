@@ -32,7 +32,23 @@ interface PointVisualStyle {
   labelColor: string;
 }
 
-const CLICK_THRESHOLD = 3;
+interface PathPointHit {
+  kind: "point";
+  point: PathPoint;
+  distance: number;
+  screenDistance: number;
+}
+
+interface PathSegmentHit {
+  kind: "path";
+  segment: PathSegment;
+  distance: number;
+  screenDistance: number;
+}
+
+type PathSelectionHit = PathPointHit | PathSegmentHit;
+
+const CLICK_THRESHOLD = 4;
 const POINT_HIT_DISTANCE_SQ = 100;
 const PATH_HIT_DISTANCE_SQ = 64;
 const CONTROL_HIT_DISTANCE_SQ = 100;
@@ -83,22 +99,22 @@ function pointVisualStyle(point: PathPoint, selected: boolean): PointVisualStyle
   };
 }
 
-function distanceSquaredToSegment(
+function closestScreenSegment(
   px: number,
   py: number,
   ax: number,
   ay: number,
   bx: number,
   by: number,
-): number {
+): { distance: number; amount: number } {
   const dx = bx - ax;
   const dy = by - ay;
   const lengthSquared = dx * dx + dy * dy;
-  if (lengthSquared <= 1e-8) return (px - ax) ** 2 + (py - ay) ** 2;
+  if (lengthSquared <= 1e-8) return { distance: (px - ax) ** 2 + (py - ay) ** 2, amount: 0 };
   const amount = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSquared));
   const x = ax + dx * amount;
   const y = ay + dy * amount;
-  return (px - x) ** 2 + (py - y) ** 2;
+  return { distance: (px - x) ** 2 + (py - y) ** 2, amount };
 }
 
 function disposeObject(root: PotreeThreeObject3D): void {
@@ -140,6 +156,7 @@ export class PotreePathEditor {
   private pendingControl: { pathId: string; which: 1 | 2 } | null = null;
   private draggingControl: { pathId: string; which: 1 | 2 } | null = null;
   private controlDragBefore: PathSnapshot | null = null;
+  private readonly unregisterSelectionTarget: () => void;
 
   constructor(
     private readonly viewer: PotreeViewerInstance,
@@ -150,6 +167,11 @@ export class PotreePathEditor {
   ) {
     this.scene = new three.Scene();
     this.labelContainer = this.createLabelContainer(host);
+    this.unregisterSelectionTarget = interactions.registerSelectionTarget("path", {
+      hitDistance: (event) => this.selectionDistance(event),
+      clearSelection: () => this.clearSelection(),
+      priority: 1,
+    });
     host.addEventListener("mousedown", this.handleMouseDown, true);
     document.addEventListener("mousemove", this.handleMouseMove, true);
     document.addEventListener("mouseup", this.handleMouseUp, true);
@@ -234,6 +256,7 @@ export class PotreePathEditor {
   }
 
   dispose(): void {
+    this.unregisterSelectionTarget();
     this.clearPathSelectionClaim();
     this.host.removeEventListener("mousedown", this.handleMouseDown, true);
     document.removeEventListener("mousemove", this.handleMouseMove, true);
@@ -285,6 +308,14 @@ export class PotreePathEditor {
       selectedPointId: this.selectedPointId,
       selectedPathId: this.selectedPathId,
     });
+  }
+
+  private clearSelection(): void {
+    if (!this.selectedPointId && !this.selectedPathId) return;
+    this.selectedPointId = null;
+    this.selectedPathId = null;
+    this.rebuildVisuals();
+    this.emitChange();
   }
 
   private point(id: string | null): PathPoint | null {
@@ -375,6 +406,9 @@ export class PotreePathEditor {
     if (this.interactions.hasClaim("drawing-drag")) return;
 
     const mouse = this.mousePosition(event);
+    const idle = this.interactions.isMode("idle");
+    const winner = idle ? this.interactions.getSelectionWinner(event) : "path";
+    if (winner && winner !== "path") return;
     this.mouseDown = { x: event.clientX, y: event.clientY };
     this.pendingPointId = null;
     this.pendingPathId = null;
@@ -393,11 +427,13 @@ export class PotreePathEditor {
       return;
     }
 
-    const point = this.hitTestPoint(mouse);
+    const idleHit = idle ? this.hitTestSelection(mouse) : null;
+    const point = idleHit?.kind === "point" ? idleHit.point : idle ? null : this.hitTestPoint(mouse);
     if (point) {
+      this.pendingPointId = point.id;
+      if (idle) return;
       this.selectedPointId = point.id;
       this.selectedPathId = null;
-      this.pendingPointId = point.id;
       this.setPathSelectionClaim();
       this.rebuildVisuals();
       this.emitChange();
@@ -405,18 +441,16 @@ export class PotreePathEditor {
       return;
     }
 
-    const path = this.hitTestPath(mouse);
+    const path = idleHit?.kind === "path" ? idleHit.segment : idle ? null : this.hitTestPath(mouse);
     if (path) {
       this.pendingPathId = path.id;
+      if (idle) return;
       this.setPathSelectionClaim();
       this.consumePointer(event);
       return;
     }
 
-    this.selectedPointId = null;
-    this.selectedPathId = null;
-    this.rebuildVisuals();
-    this.emitChange();
+    if (!idle) this.clearSelection();
   };
 
   private readonly handleMouseMove = (event: MouseEvent): void => {
@@ -517,6 +551,9 @@ export class PotreePathEditor {
         return;
       }
       if (this.pendingPointId) {
+        this.interactions.activateSelection("path");
+        this.selectedPointId = this.pendingPointId;
+        this.selectedPathId = null;
         this.pendingPointId = null;
         this.rebuildVisuals();
         this.emitChange();
@@ -524,13 +561,16 @@ export class PotreePathEditor {
         return;
       }
       if (this.pendingPathId) {
+        this.interactions.activateSelection("path");
         this.selectedPointId = null;
         this.selectedPathId = this.pendingPathId;
         this.pendingPathId = null;
         this.rebuildVisuals();
         this.emitChange();
         this.consumePointer(event);
+        return;
       }
+      this.clearSelection();
       return;
     }
 
@@ -675,29 +715,62 @@ export class PotreePathEditor {
     return this.projectWorldPoint([point.x, point.y, point.z], camera);
   }
 
+  private distanceToCamera(point: Vec3): number {
+    const camera = this.viewer.scene.view.position;
+    return Math.hypot(point[0] - camera.x, point[1] - camera.y, point[2] - camera.z);
+  }
+
+  private selectionDistance(event: MouseEvent): number | null {
+    if (!this.pageActive
+      || !this.enabled
+      || !this.interactions.isMode("idle")
+      || this.interactions.hasClaim("drawing-drag")) return null;
+    return this.hitTestSelection(this.mousePosition(event))?.distance ?? null;
+  }
+
+  private hitTestSelection(mouse: { x: number; y: number }): PathSelectionHit | null {
+    const point = this.hitTestPointCandidate(mouse);
+    const path = this.hitTestPathCandidate(mouse);
+    if (!point) return path;
+    if (!path) return point;
+    if (Math.abs(point.distance - path.distance) > 1e-6) {
+      return point.distance < path.distance ? point : path;
+    }
+    return point.screenDistance <= path.screenDistance ? point : path;
+  }
+
   private hitTestPoint(mouse: { x: number; y: number }): PathPoint | null {
+    return this.hitTestPointCandidate(mouse)?.point ?? null;
+  }
+
+  private hitTestPointCandidate(mouse: { x: number; y: number }): PathPointHit | null {
     const camera = this.viewer.scene.getActiveCamera?.();
     if (!camera) return null;
-    let result: PathPoint | null = null;
-    let bestDistance = POINT_HIT_DISTANCE_SQ;
+    let result: PathPointHit | null = null;
     this.data.points.forEach((point) => {
       if (!pointVisualStyle(point, false)) return;
       const projected = this.projectPoint(point, camera);
       if (!projected) return;
-      const distance = (projected.x - mouse.x) ** 2 + (projected.y - mouse.y) ** 2;
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        result = point;
+      const screenDistance = (projected.x - mouse.x) ** 2 + (projected.y - mouse.y) ** 2;
+      if (screenDistance >= POINT_HIT_DISTANCE_SQ) return;
+      const distance = this.distanceToCamera([point.x, point.y, point.z]);
+      if (!result
+        || distance < result.distance - 1e-6
+        || (Math.abs(distance - result.distance) <= 1e-6 && screenDistance < result.screenDistance)) {
+        result = { kind: "point", point, distance, screenDistance };
       }
     });
     return result;
   }
 
   private hitTestPath(mouse: { x: number; y: number }): PathSegment | null {
+    return this.hitTestPathCandidate(mouse)?.segment ?? null;
+  }
+
+  private hitTestPathCandidate(mouse: { x: number; y: number }): PathSegmentHit | null {
     const camera = this.viewer.scene.getActiveCamera?.();
     if (!camera) return null;
-    let result: PathSegment | null = null;
-    let bestDistance = PATH_HIT_DISTANCE_SQ;
+    let result: PathSegmentHit | null = null;
     this.data.paths.forEach((segment) => {
       const from = this.point(segment.from);
       const to = this.point(segment.to);
@@ -707,10 +780,20 @@ export class PotreePathEditor {
         const first = this.projectPoint(samples[index - 1], camera);
         const second = this.projectPoint(samples[index], camera);
         if (!first || !second) continue;
-        const distance = distanceSquaredToSegment(mouse.x, mouse.y, first.x, first.y, second.x, second.y);
-        if (distance < bestDistance) {
-          bestDistance = distance;
-          result = segment;
+        const closest = closestScreenSegment(mouse.x, mouse.y, first.x, first.y, second.x, second.y);
+        if (closest.distance >= PATH_HIT_DISTANCE_SQ) continue;
+        const sampleFrom = samples[index - 1];
+        const sampleTo = samples[index];
+        const worldPoint: Vec3 = [
+          sampleFrom.x + (sampleTo.x - sampleFrom.x) * closest.amount,
+          sampleFrom.y + (sampleTo.y - sampleFrom.y) * closest.amount,
+          sampleFrom.z + (sampleTo.z - sampleFrom.z) * closest.amount,
+        ];
+        const distance = this.distanceToCamera(worldPoint);
+        if (!result
+          || distance < result.distance - 1e-6
+          || (Math.abs(distance - result.distance) <= 1e-6 && closest.distance < result.screenDistance)) {
+          result = { kind: "path", segment, distance, screenDistance: closest.distance };
         }
       }
     });

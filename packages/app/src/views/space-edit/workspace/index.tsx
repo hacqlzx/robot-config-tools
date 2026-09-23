@@ -10,6 +10,7 @@ import { parsePointExcel } from "@/utils/excel-parser";
 import ExportModal from "../components/ExportModal";
 import CabinetPanel, { type CabinetSaveData } from "../components/CabinetPanel";
 import ChargingAreaPanel from "../components/ChargingAreaPanel";
+import DeviceAreaNameEditPanel from "../components/DeviceAreaNameEditPanel";
 import DeviceAreaPanel from "../components/DeviceAreaPanel";
 import LoadModelModal from "../components/LoadModelModal";
 import SavedAreaEditModal from "../components/SavedAreaEditModal";
@@ -33,7 +34,6 @@ import {
   loadPathDrawingInLasCoordinates,
   loadNormalAnnotations,
   loadInspectionPoints,
-  getBoundBayIdsInProject,
   loadCabinetNameSequence,
   saveCabinetDrawingInLasCoordinates,
   saveChargingAreaInLasCoordinates,
@@ -113,6 +113,7 @@ const DEFAULT_DEVICE_AREA_STATE: SpaceDeviceAreaState = {
   boxCount: 0,
   height: 2,
   selectedBoxId: null,
+  selectedBoxName: "",
   selectedBoxBay: null,
   boundBayIds: [],
   hasDraft: false,
@@ -464,7 +465,6 @@ export default function SpaceEditWorkspace() {
   const [inspectionBayFilter, setInspectionBayFilter] = useState<string | undefined>(undefined);
   const [inspectionSaving, setInspectionSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
-  const [projectBoundBayIds, setProjectBoundBayIds] = useState<Set<number>>(new Set());
   const drawingLifecycleVersion = useRef(0);
   const drawingLayerVersions = useRef(new Map<string, number>());
   const drawingTypeScanVersions = useRef(new Map<string, number>());
@@ -757,7 +757,6 @@ export default function SpaceEditWorkspace() {
     setShownInspectionPointIds(new Set());
     setInspectionState(DEFAULT_INSPECTION_POINT_STATE);
     setInspectionSaving(false);
-    setProjectBoundBayIds(new Set());
     drawingShownRef.current = new Set();
     setDrawingShown(new Set());
     setPathShown(new Set());
@@ -2143,7 +2142,6 @@ export default function SpaceEditWorkspace() {
         deviceAreaSession.current = null;
         setDeviceAreaMode(false);
         setDeviceAreaState(DEFAULT_DEVICE_AREA_STATE);
-        setProjectBoundBayIds(new Set());
         clearedActiveDraft = true;
       }
 
@@ -2469,7 +2467,6 @@ export default function SpaceEditWorkspace() {
         setDeviceAreaMode(false);
         setDeviceAreaState(DEFAULT_DEVICE_AREA_STATE);
       }
-      if (closeAfterSave) setProjectBoundBayIds(new Set());
       const scopeSaved = clearDirtyScope("device-area", dirtyVersion);
       if (clearHistory && scopeSaved) drawingHistory.clearScope("device-area");
       if (markFileShown) setTreeKey((value) => value + 1);
@@ -2578,25 +2575,18 @@ export default function SpaceEditWorkspace() {
       }));
     adapter.loadDeviceAreaBoxes(boxes);
     setDeviceAreaMode(true);
-
-    if (selectedProject) {
-      try {
-        const boundIds = await getBoundBayIdsInProject(api, selectedProject);
-        if (version !== operationVersion.current) return;
-        // The current map's bindings are supplied by the editor state. Remove
-        // them here so an unbind takes effect immediately in the panel.
-        boxes.forEach((box) => {
-          if (box.bay?.id) boundIds.delete(box.bay.id);
-        });
-        setProjectBoundBayIds(boundIds);
-      } catch {
-        if (version === operationVersion.current) setProjectBoundBayIds(new Set());
-      }
-    }
   }, [activeSourcePath, adapter, cancelHideDraft, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, deviceAreaMode, drawingShown, message, recordDrawingHistory, selectedProject, syncDrawingFileLayers]);
 
   const handleDeviceAreaHeightChange = useCallback((height: number) => {
     adapter.setDeviceAreaHeight(height);
+  }, [adapter]);
+
+  const handleDeviceAreaRename = useCallback((name: string) => {
+    adapter.renameSelectedDeviceArea(name);
+  }, [adapter]);
+
+  const handleClearDeviceAreaSelection = useCallback(() => {
+    adapter.clearDeviceAreaSelection();
   }, [adapter]);
 
   const handleDeviceAreaBindBay = useCallback((bay: { id: number; name: string; code: string }) => {
@@ -3512,6 +3502,15 @@ export default function SpaceEditWorkspace() {
                     saving={chargingSaving}
                   />
                 )}
+                {deviceAreaMode && deviceAreaState.selectedBoxId && (
+                  <DeviceAreaNameEditPanel
+                    key={deviceAreaState.selectedBoxId}
+                    name={deviceAreaState.selectedBoxName}
+                    saving={deviceAreaSaving}
+                    onClose={handleClearDeviceAreaSelection}
+                    onConfirm={handleDeviceAreaRename}
+                  />
+                )}
                 {deviceAreaMode && (
                   <DeviceAreaPanel
                     boxCount={deviceAreaState.boxCount}
@@ -3519,10 +3518,7 @@ export default function SpaceEditWorkspace() {
                     height={deviceAreaState.height}
                     selectedBoxId={deviceAreaState.selectedBoxId}
                     selectedBoxBay={deviceAreaState.selectedBoxBay}
-                    boundBayIds={new Set([
-                      ...deviceAreaState.boundBayIds,
-                      ...projectBoundBayIds,
-                    ])}
+                    boundBayIds={new Set(deviceAreaState.boundBayIds)}
                     onClose={closeDeviceAreaMode}
                     onSave={() => { void runSaveOperation(handleSaveDeviceAreas); }}
                     onSetHeight={handleDeviceAreaHeightChange}

@@ -144,13 +144,13 @@ function parseProgressPercent(value: unknown): number {
 }
 
 function buildSurveyRunningState(data: any): SurveyRunningState | null {
-  // 后台以 status/progress 组合表达任务状态；完成返回 null，表示工具栏不再显示进度条。
+  // 后台以 status/progress 组合表达任务状态；运行中、成功和失败状态都保留展示。
   if (!data) return null;
-  const progressPercent = parseProgressPercent(data.progress);
+  const parsedProgressPercent = parseProgressPercent(data.progress);
   const statusText = String(data.status ?? "");
   const failed = statusText === "2" || ["fail", "failed", "error"].includes(statusText.toLowerCase());
-  const finished = !failed && (statusText === "1" || progressPercent >= 100);
-  if (finished) return null;
+  const finished = !failed && (statusText === "1" || parsedProgressPercent >= 100);
+  const progressPercent = finished ? 100 : parsedProgressPercent;
   return {
     robotId: Number(data.robotId) || undefined,
     robotCode: String(data.robotCode || ""),
@@ -158,13 +158,24 @@ function buildSurveyRunningState(data: any): SurveyRunningState | null {
     taskCode: String(data.taskCode || ""),
     taskName: String(data.taskName || ""),
     progressPercent,
-    progressText: String(data.progress || `${progressPercent}%`),
-    statusText: failed ? "执行失败" : "执行中",
-    running: !failed,
+    progressText: finished ? "100%" : String(data.progress || `${progressPercent}%`),
+    statusText: failed ? "执行失败" : finished ? "执行成功" : "执行中",
+    running: !failed && !finished,
     finished,
     failed,
-    errorMessage: "",
+    errorMessage: String(data.error || data.errorMessage || ""),
   };
+}
+
+function mergeSurveyRunningState(
+  previous: SurveyRunningState | null,
+  next: SurveyRunningState | null,
+): SurveyRunningState | null {
+  // 轮询接口暂时返回空数据时保留最后一次任务状态；
+  // 新状态没有任务名时，继续使用已经展示的任务名。
+  if (!next) return previous;
+  const taskName = String(next.taskName || "").trim() || previous?.taskName;
+  return taskName ? { ...next, taskName } : next;
 }
 
 function buildSurveyErrorState(error: unknown): SurveyRunningState {
@@ -696,20 +707,24 @@ export default function ImageEdit() {
       if (!body?.success) {
         if (!options?.silent) message.error(body?.message || "查询勘察进度失败");
         surveyPendingStartUntilRef.current = 0;
-        setSurveyRunning(buildSurveyFailureState(body?.message || "查询勘察进度失败"));
+        setSurveyRunning((prev) => mergeSurveyRunningState(
+          prev,
+          buildSurveyFailureState(body?.message || "查询勘察进度失败"),
+        ));
         return;
       }
       const nextState = buildSurveyRunningState(body.data);
-      if (!nextState && Date.now() < surveyPendingStartUntilRef.current) {
-        // 刚下发后接口可能还未生成任务记录，短时间内保持本地“执行中”状态，避免进度条闪退。
+      if ((!nextState || nextState.finished) && Date.now() < surveyPendingStartUntilRef.current) {
+        // 刚下发后接口可能还未生成新任务，或仍返回上一条已完成记录，
+        // 短时间内保持本地“执行中”状态，避免新任务被误判为已完成。
         setSurveyRunning((prev) => prev?.running ? prev : buildSurveyStartingState("勘察任务"));
         return;
       }
       if (nextState) surveyPendingStartUntilRef.current = 0;
-      setSurveyRunning(nextState);
+      setSurveyRunning((prev) => mergeSurveyRunningState(prev, nextState));
     } catch (e) {
       if (!options?.silent) message.error("查询勘察进度失败: " + (e instanceof Error ? e.message : String(e)));
-      setSurveyRunning(buildSurveyErrorState(e));
+      setSurveyRunning((prev) => mergeSurveyRunningState(prev, buildSurveyErrorState(e)));
     } finally {
       surveyProgressRequestRef.current = false;
       setSurveyProgressLoading(false);

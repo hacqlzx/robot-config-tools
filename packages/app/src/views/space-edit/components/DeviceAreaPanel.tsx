@@ -68,7 +68,6 @@ export default function DeviceAreaPanel({
   const bayList = allBays.filter((b) =>
     b.bayType === "设备区" && (!areaId || b.voltId === areaId),
   );
-
   const columns = [
     { title: "序号", width: 60, render: (_: any, __: any, idx: number) => idx + 1 },
     { title: "间隔名称", dataIndex: "bayName", ellipsis: true },
@@ -96,7 +95,7 @@ export default function DeviceAreaPanel({
       style={{
         position: "absolute",
         right: 16 - offset.x,
-        top: 120 + offset.y,
+        top: (selectedBoxId ? 176 : 120) + offset.y,
         width: 360,
         background: "#fff",
         borderRadius: 8,

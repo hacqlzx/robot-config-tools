@@ -1221,7 +1221,10 @@ export interface SortedPointRowsResult {
 /**
  * 一键排序入口：先按标准部件框分组，再在组内按行列建立标签和设备的绑定关系。
  */
-export function buildSortedPointRowsFromAnnotations(annotations: ComponentAnnotations): SortedPointRowsResult {
+export function buildSortedPointRowsFromAnnotations(
+  annotations: ComponentAnnotations,
+  existingRows: CabinetPointRow[] = [],
+): SortedPointRowsResult {
   const reusableLabelRects = annotations.deviceLabelRects.filter((rect) => (
     rect.source !== "inferred" || hasVisibleLabelTextRect(rect)
   ));
@@ -1286,7 +1289,8 @@ export function buildSortedPointRowsFromAnnotations(annotations: ComponentAnnota
     deviceLabelRects: labelAssignments.rects,
     deviceBoxRects: deviceAssignments.rects,
   };
-  const indexedRows = applyCabinetGeneratedPointNames(rows);
+  const indexedRows = preserveExistingPointRowNames(applyCabinetGeneratedPointNames(rows), existingRows);
+  const emptyNameCount = indexedRows.filter((row) => !row.name.trim()).length;
   console.info("[screen-verify] one-click sort grouping detail", {
     inputCounts: {
       standardPart: annotations.standardPartRects.length,
@@ -1299,7 +1303,7 @@ export function buildSortedPointRowsFromAnnotations(annotations: ComponentAnnota
     groups: groupDebugs,
     result: {
       rowCount: indexedRows.length,
-      emptyNameCount: rows.filter((row) => !row.name.trim()).length,
+      emptyNameCount,
       unboundLabelCount,
       unboundDeviceCount,
       rows: indexedRows.map(toDebugPointRow),
@@ -1310,10 +1314,42 @@ export function buildSortedPointRowsFromAnnotations(annotations: ComponentAnnota
   return {
     annotations: nextAnnotations,
     rows: indexedRows,
-    emptyNameCount: rows.filter((row) => !row.name.trim()).length,
+    emptyNameCount,
     unboundLabelCount,
     unboundDeviceCount,
   };
+}
+
+/**
+ * 一键排序会重建点位行。按原框 ID 继承人工修改过的非空名称，避免后续补框再排序时丢失名称。
+ * 设备框是点位的稳定锚点；无设备框的行再退回标签框匹配。
+ */
+function preserveExistingPointRowNames(
+  rows: CabinetPointRow[],
+  existingRows: CabinetPointRow[],
+): CabinetPointRow[] {
+  const availableExistingRows = existingRows
+    .map((row) => ({ row, used: false }))
+    .filter((item) => Boolean(item.row.name.trim()));
+
+  return rows.map((row) => {
+    const match = availableExistingRows.find((item) => !item.used && item.row.key === row.key)
+      || availableExistingRows.find((item) => (
+        !item.used
+        && Boolean(row.relatedRectId)
+        && item.row.relatedRectId === row.relatedRectId
+        && item.row.relatedRectTool === row.relatedRectTool
+      ))
+      || availableExistingRows.find((item) => (
+        !item.used
+        && !row.relatedRectId
+        && item.row.boundRectId === row.boundRectId
+        && item.row.boundRectTool === row.boundRectTool
+      ));
+    if (!match) return row;
+    match.used = true;
+    return { ...row, name: match.row.name };
+  });
 }
 
 /**

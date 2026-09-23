@@ -7,7 +7,8 @@ import { getConnectionStatus, subscribeBackendContext } from "@/stores/appContex
 
 export interface NetworkRecord {
   id: number;
-  type: number;
+  robotId: number | null;
+  type: string | number;
   name: string;
   ip: string;
   subnetMask: string;
@@ -23,7 +24,7 @@ interface ApiResponse<T> {
 }
 
 export default function NetworkConfig() {
-  const [robotList, setRobotList] = useState<NetworkRecord[]>([]);
+  const [networkList, setNetworkList] = useState<NetworkRecord[]>([]);
   const fetchedRef = useRef(false);
 
   const fetchNetworks = async () => {
@@ -32,7 +33,7 @@ export default function NetworkConfig() {
       const body = res.data as ApiResponse<NetworkRecord[]>;
       if (body.success) {
         const networks = Array.isArray(body.data) ? body.data : [];
-        setRobotList(networks.filter((item) => item.type !== 0 && item.type !== 1));
+        setNetworkList(networks);
       } else {
         message.error(body.message || "获取网络列表失败");
       }
@@ -67,8 +68,8 @@ export default function NetworkConfig() {
         style={{ marginBottom: 16 }}
       />
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        {robotList.map((robot) => (
-          <NetworkCard key={robot.id} record={robot} />
+        {networkList.map((network) => (
+          <NetworkCard key={network.id} record={network} />
         ))}
       </div>
     </div>

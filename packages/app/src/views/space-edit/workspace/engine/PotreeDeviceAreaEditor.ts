@@ -18,11 +18,12 @@ import type { SpaceInteractionCoordinator } from "./SpaceInteractionCoordinator"
 type Vec3 = [number, number, number];
 
 const DEVICE_BLUE = 0x3399ff;
+const DEVICE_SELECTED_YELLOW = 0xffe14b;
 const LINE_THICKNESS = 0.01;
 const HIGHLIGHT_THICKNESS = 0.025;
 const POINT_SCALE = 0.06;
 const MOVE_STEP = 0.1;
-const CLICK_THRESHOLD = 3;
+const CLICK_THRESHOLD = 4;
 const EDGE_HIT_DISTANCE_SQ = 144;
 const BOX_EDGES: [number, number][] = [
   [0, 1], [1, 2], [2, 3], [3, 0],
@@ -33,6 +34,11 @@ const BOX_EDGES: [number, number][] = [
 interface DeviceBox extends Omit<SpaceDeviceAreaBox, "verts"> {
   verts: Vec3[];
   selected: boolean;
+}
+
+interface DeviceBoxHit {
+  box: DeviceBox;
+  distance: number;
 }
 
 interface DeviceSnapshot {
@@ -165,6 +171,7 @@ export class PotreeDeviceAreaEditor {
   private mouseDown: { x: number; y: number } | null = null;
   private undoStack: DeviceSnapshot[] = [];
   private redoStack: DeviceSnapshot[] = [];
+  private readonly unregisterSelectionTarget: () => void;
 
   constructor(
     private readonly viewer: PotreeViewerInstance,
@@ -175,6 +182,11 @@ export class PotreeDeviceAreaEditor {
   ) {
     this.scene = new three.Scene();
     this.labelContainer = this.createLabelContainer();
+    this.unregisterSelectionTarget = interactions.registerSelectionTarget("device-area", {
+      hitDistance: (event) => this.selectionDistance(event),
+      clearSelection: () => this.clearSelection(),
+      priority: 1,
+    });
     this.host.addEventListener("mousedown", this.handleMouseDown, true);
     this.host.addEventListener("mouseup", this.handleMouseUp, true);
     document.addEventListener("keydown", this.handleKeyDown);
@@ -230,12 +242,25 @@ export class PotreeDeviceAreaEditor {
     return this.points.length > 0 || this.boxes.length > 0;
   }
 
+  clearSelection(): void {
+    this.selectBox(null);
+  }
+
+  renameSelected(name: string): void {
+    const selected = this.selectedBox();
+    const nextName = name.trim();
+    if (!selected || !nextName || selected.name === nextName) return;
+    const before = this.snapshot();
+    selected.name = nextName;
+    this.commit(before, "修改设备区域名称");
+  }
+
   bindSelectedBay(bay: { id: number; name: string; code: string }): void {
     const selected = this.selectedBox();
     if (!selected) return;
     const before = this.snapshot();
     selected.bay = { ...bay };
-    selected.name = bay.name;
+    selected.name = selected.name?.trim() || bay.name;
     this.commit(before, "绑定设备区域间隔");
   }
 
@@ -244,7 +269,6 @@ export class PotreeDeviceAreaEditor {
     if (!selected || !selected.bay) return;
     const before = this.snapshot();
     selected.bay = null;
-    selected.name = undefined;
     this.commit(before, "解绑设备区域间隔");
   }
 
@@ -301,6 +325,7 @@ export class PotreeDeviceAreaEditor {
   }
 
   dispose(): void {
+    this.unregisterSelectionTarget();
     this.host.removeEventListener("mousedown", this.handleMouseDown, true);
     this.host.removeEventListener("mouseup", this.handleMouseUp, true);
     document.removeEventListener("keydown", this.handleKeyDown);
@@ -355,6 +380,7 @@ export class PotreeDeviceAreaEditor {
       boxCount: this.boxes.length,
       height: selected?.height ?? this.height,
       selectedBoxId: selected?.id ?? null,
+      selectedBoxName: selected?.name?.trim() || selected?.bay?.name || "",
       selectedBoxBay: selected?.bay ? { ...selected.bay } : null,
       boundBayIds: this.boxes.flatMap((box) => box.bay?.id ? [box.bay.id] : []),
       hasDraft: this.hasDraft(),
@@ -444,6 +470,10 @@ export class PotreeDeviceAreaEditor {
   private readonly handleMouseDown = (event: MouseEvent): void => {
     if (event.button !== 0 || !this.canHandlePointer()) return;
     if (this.interactions.hasClaim("drawing-drag")) return;
+    if (this.interactions.isMode("idle")) {
+      const winner = this.interactions.getSelectionWinner(event);
+      if (winner && winner !== "device-area") return;
+    }
     this.mouseDown = { x: event.clientX, y: event.clientY };
   };
 
@@ -458,6 +488,7 @@ export class PotreeDeviceAreaEditor {
     const mouse = this.mousePosition(event);
     const hit = this.hitTestBox(mouse);
     if (hit) {
+      if (this.interactions.isMode("idle")) this.interactions.activateSelection("device-area");
       this.selectBox(hit);
       this.consumePointer(event);
       return;
@@ -503,6 +534,11 @@ export class PotreeDeviceAreaEditor {
     };
   }
 
+  private selectionDistance(event: MouseEvent): number | null {
+    if (!this.canHandlePointer() || !this.interactions.isMode("idle")) return null;
+    return this.hitTestBoxCandidate(this.mousePosition(event))?.distance ?? null;
+  }
+
   private pickPoint(mouse: { x: number; y: number }): Vec3 | null {
     const camera = this.viewer.scene.getActiveCamera?.();
     if (!camera) return null;
@@ -546,42 +582,58 @@ export class PotreeDeviceAreaEditor {
   }
 
   private hitTestBox(mouse: { x: number; y: number }): DeviceBox | null {
+    return this.hitTestBoxCandidate(mouse)?.box ?? null;
+  }
+
+  private hitTestBoxCandidate(mouse: { x: number; y: number }): DeviceBoxHit | null {
     const camera = this.viewer.scene.getActiveCamera?.();
     if (!camera) return null;
-    for (let index = this.boxes.length - 1; index >= 0; index -= 1) {
-      const box = this.boxes[index];
-      const ray = this.mouseRay(camera, mouse);
-      if (ray && this.rayHitsBox(ray, box.verts)) return box;
+    const ray = this.mouseRay(camera, mouse);
+    const position = this.viewer.scene.view.position;
+    let best: DeviceBoxHit | null = null;
+    for (const box of this.boxes) {
+      const rayDistance = ray ? this.rayBoxDistance(ray, box.verts) : null;
+      if (rayDistance !== null) {
+        if (!best || rayDistance < best.distance) best = { box, distance: rayDistance };
+        continue;
+      }
       const projected = box.verts.map((point) => this.projectPoint(point, camera));
       if (projected.some((point) => !point)) continue;
-      if (BOX_EDGES.some(([from, to]) => {
+      const edgeHit = BOX_EDGES.some(([from, to]) => {
         const a = projected[from]!;
         const b = projected[to]!;
         return distanceSquaredToSegment(mouse.x, mouse.y, a.x, a.y, b.x, b.y) <= EDGE_HIT_DISTANCE_SQ;
-      })) return box;
+      });
+      if (!edgeHit) continue;
+      const center = box.verts.reduce(
+        (sum, point) => [sum[0] + point[0], sum[1] + point[1], sum[2] + point[2]] as Vec3,
+        [0, 0, 0] as Vec3,
+      ).map((value) => value / box.verts.length) as Vec3;
+      const distance = Math.hypot(center[0] - position.x, center[1] - position.y, center[2] - position.z);
+      if (!best || distance < best.distance) best = { box, distance };
     }
-    return null;
+    return best;
   }
 
-  private rayHitsBox(ray: PotreeRay, box: Vec3[]): boolean {
+  private rayBoxDistance(ray: PotreeRay, box: Vec3[]): number | null {
     const origin: Vec3 = [ray.origin.x, ray.origin.y, ray.origin.z];
     const direction: Vec3 = [ray.direction.x, ray.direction.y, ray.direction.z];
     const basis = [subtract(box[1], box[0]), subtract(box[3], box[0]), subtract(box[4], box[0])]
       .map(normalize);
-    if (basis.some((value) => !value)) return false;
+    if (basis.some((value) => !value)) return null;
 
     const relativeOrigin = subtract(origin, box[0]);
     let near = 0;
     let far = Number.POSITIVE_INFINITY;
     for (const value of basis) {
-      if (!value) return false;
+      if (!value) return null;
       const originAmount = dot(relativeOrigin, value.axis);
       const directionAmount = dot(direction, value.axis);
       const tolerance = Math.max(value.length * 0.015, 0.005);
       const min = -tolerance;
       const max = value.length + tolerance;
       if (Math.abs(directionAmount) < 1e-9) {
-        if (originAmount < min || originAmount > max) return false;
+        if (originAmount < min || originAmount > max) return null;
         continue;
       }
       let first = (min - originAmount) / directionAmount;
@@ -589,9 +641,9 @@ export class PotreeDeviceAreaEditor {
       if (first > second) [first, second] = [second, first];
       near = Math.max(near, first);
       far = Math.min(far, second);
-      if (near > far) return false;
+      if (near > far) return null;
     }
-    return far >= 0;
+    return far >= 0 ? Math.max(0, near) : null;
   }
 
   private projectPoint(point: Vec3, camera: PotreeCamera): { x: number; y: number } | null {
@@ -615,7 +667,13 @@ export class PotreeDeviceAreaEditor {
       const boxGroup = new this.three.Group();
       boxGroup.position.set(origin[0], origin[1], origin[2]);
       const segments = BOX_EDGES.flatMap(([from, to]) => [box.verts[from], box.verts[to]]);
-      this.addLines(boxGroup, segments, origin, box.selected ? HIGHLIGHT_THICKNESS : LINE_THICKNESS);
+      this.addLines(
+        boxGroup,
+        segments,
+        origin,
+        box.selected ? DEVICE_SELECTED_YELLOW : DEVICE_BLUE,
+        box.selected ? HIGHLIGHT_THICKNESS : LINE_THICKNESS,
+      );
       group.add(boxGroup);
       hasVisual = true;
     }
@@ -627,7 +685,7 @@ export class PotreeDeviceAreaEditor {
       for (let index = 1; index < this.points.length; index += 1) {
         segments.push(this.points[index - 1], this.points[index]);
       }
-      this.addLines(pointGroup, segments, origin, LINE_THICKNESS);
+      this.addLines(pointGroup, segments, origin, DEVICE_BLUE, LINE_THICKNESS);
       this.addPoints(pointGroup, this.points, origin);
       group.add(pointGroup);
       hasVisual = true;
@@ -652,10 +710,10 @@ export class PotreeDeviceAreaEditor {
     return [point[0] - origin[0], point[1] - origin[1], point[2] - origin[2]];
   }
 
-  private addLines(group: PotreeThreeObject3D, points: Vec3[], origin: Vec3, thickness: number): void {
+  private addLines(group: PotreeThreeObject3D, points: Vec3[], origin: Vec3, color: number, thickness: number): void {
     if (points.length === 0) return;
     const geometry = new this.three.BoxGeometry(1, 1, 1);
-    const material = new this.three.MeshBasicMaterial({ color: DEVICE_BLUE, depthTest: true, depthWrite: true });
+    const material = new this.three.MeshBasicMaterial({ color, depthTest: true, depthWrite: true });
     let count = 0;
     for (let index = 0; index + 1 < points.length; index += 2) {
       const from = this.localPoint(points[index], origin);
@@ -721,7 +779,7 @@ export class PotreeDeviceAreaEditor {
   }
 
   private labelText(box: DeviceBox): string {
-    return box.bay?.name || box.name || "未绑定";
+    return box.name || box.bay?.name || "未绑定";
   }
 
   private syncLabels(): void {
@@ -738,6 +796,7 @@ export class PotreeDeviceAreaEditor {
         this.labels.set(box.id, label);
       }
       label.textContent = this.labelText(box);
+      label.style.color = box.selected ? "#ffe14b" : "#3399ff";
     });
   }
 

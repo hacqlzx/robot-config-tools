@@ -12,7 +12,6 @@
  * 对外仍是按 type 区分区域的 flat 数组；更新某类绘制时必须保留其他类型及未知扩展字段。
  */
 
-import type { SpaceTreeNode } from "../../types";
 import { fileNameFromPath, MAP_DIR_NAME, mapSiblingFilePath, mapSiblingSubPath, projectSubPathFromDir } from "../../utils/space-paths";
 import { loadLasCoordinateTransform } from "../../utils/las-coordinate-transform";
 import {
@@ -529,33 +528,6 @@ export async function loadDeviceAreas(api: ElectronAPI, modelPath: string): Prom
   const coordinate = await loadLasCoordinateTransform(api, modelPath);
   return robotAreasToSceneDrawingItems(await readAreaRecords(api, modelPath), coordinate)
     .filter((it): it is DeviceAreaItem => it.type === "device-area");
-}
-
-/** 递归收集目录下所有 JSON 文件中已绑定的间隔 ID（跨模型去重） */
-async function collectBoundBayIds(api: ElectronAPI, nodes: SpaceTreeNode[], ids: Set<number>) {
-  for (const node of nodes) {
-    if (node.isDir && node.children) {
-      await collectBoundBayIds(api, node.children, ids);
-    } else if (isDrawingDataFileName(node.name)) {
-      try {
-        const coordinate = await loadLasCoordinateTransform(api, node.path);
-        const records = await readAreaRecordsFromPath(api, node.path);
-        for (const it of robotAreasToSceneDrawingItems(records, coordinate)) {
-          if (it.type === "device-area" && it.bay?.id > 0) ids.add(it.bay.id);
-        }
-      } catch {}
-    }
-  }
-}
-
-/** 查询整个项目下所有模型里已被设备区绑定的间隔 ID 集合 */
-export async function getBoundBayIdsInProject(api: ElectronAPI, projectName: string): Promise<Set<number>> {
-  const ids = new Set<number>();
-  try {
-    const nodes = await api.project.listTree(projectName, MAP_DIR_NAME);
-    await collectBoundBayIds(api, nodes, ids);
-  } catch {}
-  return ids;
 }
 
 /** 直接按绘制 JSON 的绝对路径读取屏柜记录（地图树勾选 json 时用） */
