@@ -494,9 +494,34 @@ export async function saveDeviceAreasInLasCoordinates(params: {
       name: valueText(item.name) || item.bay?.name || defaultDeviceAreaName(id),
       pose,
       pose_3d: pose,
+      ...(item.bay ? { bay_id: item.bay.id, bay_name: item.bay.name, bay_code: item.bay.code } : {}),
     });
   }
   await writeAreaRecords(api, projectName, modelPath, next);
+}
+
+/** 只更新已保存设备区的名称，保留同文件中其他区域及未知协议字段。 */
+export async function updateSavedDeviceAreaNameInLasCoordinates(params: {
+  api: ElectronAPI;
+  projectName: string;
+  modelPath: string;
+  id: string;
+  name: string;
+}): Promise<void> {
+  const { api, projectName, modelPath, id, name } = params;
+  const records = await readAreaRecords(api, modelPath);
+  const index = records.findIndex((record) => areaType(record) === AREA_TYPE_DEVICE && valueText(record.id) === id);
+  if (index < 0) throw new Error("设备区域已被删除，请重新加载地图");
+  const record = records[index];
+  const oldName = valueText(record.name);
+  records[index] = {
+    ...record,
+    name,
+    ...(record.bay_id == null && oldName && oldName !== defaultDeviceAreaName(id)
+      ? { bay_id: record.id, bay_name: oldName, bay_code: valueText(record.bay_code) }
+      : {}),
+  };
+  await writeAreaRecords(api, projectName, modelPath, records);
 }
 
 /** 读取该模型已保存的全部设备区记录（用于回显） */

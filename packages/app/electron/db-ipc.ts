@@ -89,6 +89,11 @@ interface CabinetDeviceDeletePayload {
   devices?: { code?: string; name?: string }[];
 }
 
+interface CabinetDeviceRenameRow {
+  code: string;
+  name: string;
+}
+
 const MAIN_DEVICE_TYPE_CABINET = 29;
 
 function registerCabinetDeviceHandler(): void {
@@ -176,7 +181,17 @@ function registerCabinetDeviceHandler(): void {
           };
 
           if (existing) {
+            if (Number(existing.mainDeviceType) !== MAIN_DEVICE_TYPE_CABINET) {
+              throw new Error(`编码 ${row.code} 已被其他主设备使用`);
+            }
             mainRepo.update(existing.id, dto);
+            if (existing.mainDeviceName !== row.name) {
+              const now = new Date().toISOString();
+              db.prepare("UPDATE device_component SET main_device_name = ?, update_time = ? WHERE main_device_id = ? AND project_name = ?")
+                .run(row.name, now, existing.id, projectName);
+              db.prepare("UPDATE device_point SET main_device_name = ?, update_time = ? WHERE main_device_id = ? AND project_name = ?")
+                .run(row.name, now, existing.id, projectName);
+            }
             updated += 1;
             savedIds.push(existing.id);
           } else {
@@ -213,6 +228,38 @@ function registerCabinetDeviceHandler(): void {
         error: e?.message || e,
       });
       return { ok: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle("db:renameCabinetMainDevices", async (_event, projectName: string, rows: CabinetDeviceRenameRow[]) => {
+    try {
+      if (!projectName || !Array.isArray(rows) || rows.length === 0) throw new Error("屏柜改名参数无效");
+      const normalized = rows.map((row) => ({ code: String(row.code ?? "").trim(), name: String(row.name ?? "").trim() }));
+      if (normalized.some((row) => !row.code || !row.name)) throw new Error("屏柜名称和编码不能为空");
+      if (new Set(normalized.map((row) => row.code)).size !== normalized.length) throw new Error("屏柜编码不能重复");
+      const db = getDatabase();
+      const mainRepo = new DeviceMainRepo(db);
+      db.transaction(() => {
+        const mains = mainRepo.list(projectName);
+        const codes = new Set(normalized.map((row) => row.code));
+        const now = new Date().toISOString();
+        for (const row of normalized) {
+          const main = mains.find((record) => record.mainDeviceCode === row.code && Number(record.mainDeviceType) === MAIN_DEVICE_TYPE_CABINET);
+          if (!main) throw new Error(`本地点表中未找到屏柜编码 ${row.code}`);
+          if (mains.some((record) => record.bayId === main.bayId && record.mainDeviceName === row.name && !codes.has(record.mainDeviceCode))) {
+            throw new Error(`当前间隔已存在同名主设备：${row.name}`);
+          }
+          mainRepo.update(main.id, { mainDeviceName: row.name, updateBy: "space-edit" });
+          db.prepare("UPDATE device_component SET main_device_name = ?, update_time = ? WHERE main_device_id = ? AND project_name = ?")
+            .run(row.name, now, main.id, projectName);
+          db.prepare("UPDATE device_point SET main_device_name = ?, update_time = ? WHERE main_device_id = ? AND project_name = ?")
+            .run(row.name, now, main.id, projectName);
+        }
+      })();
+      db.saveToDisk("cabinet-main-rename");
+      return { ok: true, data: { updated: normalized.length } };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e) };
     }
   });
 

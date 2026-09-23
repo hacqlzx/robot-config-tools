@@ -453,6 +453,7 @@ declare global {
           rows: { key?: string; code: string; name: string }[];
         },
       ) => Promise<{ inserted: number; updated: number; total: number; ids: number[] }>;
+      renameCabinetMainDevices: (projectName: string, rows: { code: string; name: string }[]) => Promise<{ updated: number }>;
       deleteCabinetMainDevices: (
         projectName: string,
         payload: {

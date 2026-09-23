@@ -127,6 +127,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
         if (!r.ok) throw new Error(r.error);
         return r.data;
       }),
+  renameCabinetMainDevices: (projectName, rows) =>
+    ipcRenderer
+      .invoke("db:renameCabinetMainDevices", projectName, rows)
+      .then((r) => {
+        if (!r.ok) throw new Error(r.error);
+        return r.data;
+      }),
   deleteCabinetMainDevices: (projectName, payload) =>
     ipcRenderer
       .invoke("db:deleteCabinetMainDevices", projectName, payload)

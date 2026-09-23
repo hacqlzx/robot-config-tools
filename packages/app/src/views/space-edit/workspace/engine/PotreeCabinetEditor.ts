@@ -347,7 +347,7 @@ export class PotreeCabinetEditor {
 
   private readonly handleMouseDown = (event: MouseEvent): void => {
     if (event.button !== 0 || !this.canHandlePointer()) return;
-    if (this.interactions.hasClaim("drawing-drag")) return;
+    if (this.interactions.hasAnyClaim("drawing-drag", "drawing-selection")) return;
     this.mouseDown = { x: event.clientX, y: event.clientY };
     // Cabinet clicks are drawing gestures, including the first four points and
     // split placement. Claim them before Potree's camera controls see mousedown.
@@ -372,6 +372,7 @@ export class PotreeCabinetEditor {
 
   private readonly handleMouseUp = (event: MouseEvent): void => {
     if (!this.active) return;
+    if (this.interactions.hasClaim("drawing-selection")) return;
     const start = this.mouseDown;
     this.mouseDown = null;
     if (event.button !== 0) return;

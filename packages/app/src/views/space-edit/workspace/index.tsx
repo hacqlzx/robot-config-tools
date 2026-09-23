@@ -12,6 +12,7 @@ import CabinetPanel, { type CabinetSaveData } from "../components/CabinetPanel";
 import ChargingAreaPanel from "../components/ChargingAreaPanel";
 import DeviceAreaPanel from "../components/DeviceAreaPanel";
 import LoadModelModal from "../components/LoadModelModal";
+import SavedAreaEditModal from "../components/SavedAreaEditModal";
 import SaveStatusBadge from "../components/SaveStatusBadge";
 import SidePanel from "../components/SidePanel";
 import SpaceEditLayout from "../components/SpaceEditLayout";
@@ -37,6 +38,7 @@ import {
   saveCabinetDrawingInLasCoordinates,
   saveChargingAreaInLasCoordinates,
   saveDeviceAreasInLasCoordinates,
+  updateSavedDeviceAreaNameInLasCoordinates,
   savePathDrawingInLasCoordinates,
   saveNormalAnnotationsInLasCoordinates,
   saveInspectionPointsInLasCoordinates,
@@ -433,6 +435,9 @@ export default function SpaceEditWorkspace() {
   const [cabinetMode, setCabinetMode] = useState(false);
   const [cabinetState, setCabinetState] = useState<SpaceCabinetState>(DEFAULT_CABINET_STATE);
   const [cabinetSaving, setCabinetSaving] = useState(false);
+  const [cabinetResetToken, setCabinetResetToken] = useState(0);
+  const [savedAreaSelection, setSavedAreaSelection] = useState<SpaceDrawingSelection | null>(null);
+  const [savedAreaSaving, setSavedAreaSaving] = useState(false);
   const [cabinetNameSequence, setCabinetNameSequence] = useState({ cabinetRowStart: 1, cabinetStart: 1 });
   const [existingCabinetNames, setExistingCabinetNames] = useState<string[]>([]);
   const [chargingMode, setChargingMode] = useState(false);
@@ -453,7 +458,7 @@ export default function SpaceEditWorkspace() {
   const [inspectionExporting, setInspectionExporting] = useState(false);
   const [inspectionMode, setInspectionMode] = useState(false);
   const [inspectionItems, setInspectionItems] = useState<InspectionPointItem[]>([]);
-  const [inspectionNamesVisible, setInspectionNamesVisible] = useState(true);
+  const [inspectionNamesVisible, setInspectionNamesVisible] = useState(false);
   const [shownInspectionPointIds, setShownInspectionPointIds] = useState<Set<string>>(new Set());
   const [inspectionState, setInspectionState] = useState<SpaceInspectionPointState>(DEFAULT_INSPECTION_POINT_STATE);
   const [inspectionBayFilter, setInspectionBayFilter] = useState<string | undefined>(undefined);
@@ -766,6 +771,7 @@ export default function SpaceEditWorkspace() {
     adapter.clearModel();
     setActiveModelPath(null);
     setActiveSourcePath(null);
+    setSavedAreaSelection(null);
     setHideDraftBox(null);
     setHiddenModelBox(null);
     setCorrectionMode(false);
@@ -1107,6 +1113,7 @@ export default function SpaceEditWorkspace() {
   }, [adapter]);
 
   const closeDeviceAreaMode = useCallback(() => {
+    adapter.discardUnboundDeviceAreas();
     adapter.setDeviceAreaDrawingEnabled(false);
     setDeviceAreaMode(false);
   }, [adapter]);
@@ -1806,9 +1813,9 @@ export default function SpaceEditWorkspace() {
   }, [activeSourcePath, adapter, cancelHideDraft, closeCabinetMode, closeChargingMode, closeDeviceAreaMode, closeNormalMode, closePathMode, message, pathMode, recordDrawingHistory]);
 
   const getCabinetDraftError = useCallback((data: CabinetSaveData | null): string | null => {
-    if (!data) return "请先选择区域和间隔";
     const geometry = adapter.getCabinetGeometry();
     if (!geometry) return "请先完成屏柜区域绘制";
+    if (!data) return "请先选择区域和间隔";
     const rows = data.rows.map((row) => ({ ...row, code: row.code.trim(), name: row.name.trim() }));
     const requiresCabinetRow = geometry.splits.length > 0 || rows.length > 1;
     const cabinetRow = requiresCabinetRow && data.cabinetRow
@@ -1888,13 +1895,10 @@ export default function SpaceEditWorkspace() {
 
       const items = await loadAllItemsFromJsonInLasCoordinates(api, drawingFilePath);
       if (version !== operationVersion.current) return false;
-      adapter.setCabinetDrawingEnabled(false);
       adapter.clearCabinetDrawing();
       adapter.setCabinetNames([]);
-      cabinetSession.current = null;
       cabinetDraftRef.current = null;
       syncDrawingFileLayers(drawingFilePath, items, ["cabinet"]);
-      setCabinetMode(false);
       setCabinetState(DEFAULT_CABINET_STATE);
       try {
         setCabinetNameSequence(await loadCabinetNameSequence(api, drawingFilePath));
@@ -1905,6 +1909,7 @@ export default function SpaceEditWorkspace() {
       const cabinetItems = items.filter((item): item is CabinetItem => item.type === "cabinet");
       const updatedNames = cabinetItems.flatMap((item) => item.cabinets?.map((c: any) => c.name) || []).filter(Boolean);
       setExistingCabinetNames(updatedNames);
+      setCabinetResetToken((current) => current + 1);
       const scopeSaved = clearDirtyScope("cabinet", dirtyVersion);
       if (clearHistory && scopeSaved) drawingHistory.clearScope("cabinet");
       setTreeKey((value) => value + 1);
@@ -2007,9 +2012,99 @@ export default function SpaceEditWorkspace() {
   }, [adapter]);
 
   const handleDrawingSelection = useCallback((selection: SpaceDrawingSelection | null) => {
-    void selection;
     adapter.selectInspectionPoint(null);
+    setSavedAreaSelection(selection?.item.type === "cabinet" || selection?.item.type === "device-area" ? selection : null);
   }, [adapter]);
+
+  const handleSaveSavedArea = useCallback(async (edited: CabinetItem | DeviceAreaItem): Promise<boolean> => {
+    const selection = savedAreaSelection;
+    const api = window.electronAPI;
+    const modelPath = activeSourcePath;
+    if (!selection || !api || !selectedProject || !modelPath) return false;
+    const drawingFilePath = drawingFilePathFromLayerId(selection.layerId);
+    if (!sameDrawingFilePath(drawingFilePath, mapSiblingFilePath(modelPath, DRAWING_FILE_NAME))) {
+      message.warning("当前地图已切换，请重新选择区域");
+      return false;
+    }
+
+    setSavedAreaSaving(true);
+    try {
+      const items = await loadAllItemsFromJsonInLasCoordinates(api, drawingFilePath);
+      const original = items.find((item) => item.type === edited.type && item.id === edited.id);
+      if (!original) throw new Error("区域已被删除，请重新加载地图");
+      if (edited.type === "cabinet" && original.type === "cabinet") {
+        if (original.cabinets.length !== edited.cabinets.length
+          || original.cabinets.some((cabinet, index) => cabinet.code !== edited.cabinets[index].code)) {
+          throw new Error("屏柜数据已变化，请重新选择后编辑");
+        }
+        const names = edited.cabinets.map((cabinet) => cabinet.name.trim());
+        const duplicate = items
+          .filter((item): item is CabinetItem => item.type === "cabinet" && item.id !== original.id)
+          .flatMap((item) => item.cabinets)
+          .find((cabinet) => names.includes(cabinet.name));
+        if (duplicate) throw new Error(`当前地图已存在同名屏柜：${duplicate.name}`);
+
+        const mains = await api.db.mainDevice.list(selectedProject);
+        const rows = edited.cabinets.filter((cabinet) => mains.some((main) =>
+          main.mainDeviceCode === cabinet.code && Number(main.mainDeviceType) === 29))
+          .map((cabinet) => ({ code: cabinet.code, name: cabinet.name.trim() }));
+        const previousRows = rows.map((row) => ({
+          code: row.code,
+          name: mains.find((main) => main.mainDeviceCode === row.code && Number(main.mainDeviceType) === 29)!.mainDeviceName,
+        }));
+        if (rows.length > 0) {
+          const result = await api.renameCabinetMainDevices(selectedProject, rows);
+          if (result.updated !== rows.length) throw new Error("屏柜台账更新结果异常，请重试");
+        }
+        try {
+          await saveCabinetDrawingInLasCoordinates({
+            api,
+            projectName: selectedProject,
+            modelPath,
+            item: {
+              ...original,
+              cabinetRow: original.cabinetRow ? { ...original.cabinetRow, name: edited.cabinetRow?.name.trim() || original.cabinetRow.name } : null,
+              cabinets: original.cabinets.map((cabinet, index) => ({ ...cabinet, name: names[index] })),
+              updatedAt: new Date().toISOString(),
+            },
+          });
+        } catch (error) {
+          if (previousRows.length > 0) {
+            try {
+              await api.renameCabinetMainDevices(selectedProject, previousRows);
+            } catch (rollbackError) {
+              throw new Error(`模型保存失败，台账名称恢复也失败：${errorMessage(rollbackError)}`);
+            }
+          }
+          throw error;
+        }
+      } else if (edited.type === "device-area" && original.type === "device-area") {
+        await updateSavedDeviceAreaNameInLasCoordinates({
+          api,
+          projectName: selectedProject,
+          modelPath,
+          id: original.id,
+          name: edited.name?.trim() || original.name || "",
+        });
+      } else {
+        throw new Error("区域类型已变化，请重新选择后编辑");
+      }
+
+      const savedItems = await loadAllItemsFromJsonInLasCoordinates(api, drawingFilePath);
+      syncDrawingFileLayers(drawingFilePath, savedItems);
+      setExistingCabinetNames(savedItems.filter((item): item is CabinetItem => item.type === "cabinet")
+        .flatMap((item) => item.cabinets.map((cabinet) => cabinet.name)));
+      setTreeKey((value) => value + 1);
+      setSavedAreaSelection(null);
+      message.success(edited.type === "cabinet" ? "屏柜信息已更新" : "设备区域信息已更新");
+      return true;
+    } catch (error) {
+      message.error(`更新区域失败：${errorMessage(error)}`);
+      return false;
+    } finally {
+      setSavedAreaSaving(false);
+    }
+  }, [activeSourcePath, message, savedAreaSelection, selectedProject, syncDrawingFileLayers]);
 
   const handleDeleteDrawingType = useCallback(async (filePath: string, type: DrawingSubType): Promise<void> => {
     const api = window.electronAPI;
@@ -2071,6 +2166,12 @@ export default function SpaceEditWorkspace() {
         const cabinetItems = items.filter((item): item is CabinetItem => item.type === "cabinet");
         setExistingCabinetNames(cabinetItems.flatMap((item) => item.cabinets?.map((cabinet) => cabinet.name) || []).filter(Boolean));
       }
+      setSavedAreaSelection((current) => {
+        if (!current || !sameDrawingFilePath(drawingFilePathFromLayerId(current.layerId), drawingFilePath)) return current;
+        if (type === "cabinet" && current.item.type === "cabinet") return null;
+        if (type === "device" && current.item.type === "device-area") return null;
+        return current;
+      });
       setTreeKey((value) => value + 1);
       showSavedStatus();
     } catch (error) {
@@ -2101,6 +2202,11 @@ export default function SpaceEditWorkspace() {
         const cabinetItems = items.filter((item): item is CabinetItem => item.type === "cabinet");
         const updatedNames = cabinetItems.flatMap((item) => item.cabinets?.map((c: any) => c.name) || []).filter(Boolean);
         setExistingCabinetNames(updatedNames);
+        setSavedAreaSelection((current) => current?.layerId === selection.layerId
+          && current.item.type === selection.item.type
+          && current.item.id === selection.item.id
+          ? null
+          : current);
         setTreeKey((value) => value + 1);
         message.success("屏柜已删除");
       } catch (error) {
@@ -2138,6 +2244,11 @@ export default function SpaceEditWorkspace() {
       }
       const items = await loadAllItemsFromJsonInLasCoordinates(api, drawingFilePath);
       syncDrawingFileLayers(drawingFilePath, items);
+      setSavedAreaSelection((current) => current?.layerId === selection.layerId
+        && current.item.type === selection.item.type
+        && current.item.id === selection.item.id
+        ? null
+        : current);
       setTreeKey((value) => value + 1);
       message.success(selection.item.type === "charging-area" ? "充电区域已删除" : "设备区域已删除");
     } catch (error) {
@@ -3258,7 +3369,7 @@ export default function SpaceEditWorkspace() {
         viewControls={(
           <ViewCube
             onViewChange={handleViewChange}
-            hideMode={!!hideDraftBox}
+            hideMode={!!(hideDraftBox || hiddenModelBox)}
             modelHidden={!!(hideDraftBox || hiddenModelBox)}
             modelBusy={modelOperationBusy || saveStatus === "saving" || !!loading || correctionSaving || inspectionImporting}
             canHideModel={!!(activeModelPath && activeSourcePath)}
@@ -3368,17 +3479,27 @@ export default function SpaceEditWorkspace() {
                 )}
                 <SaveStatusBadge status={saveStatus} />
                 <PotreeRenderSettings settings={renderSettings} onChange={setRenderSettings} />
-                {cabinetMode && (
+                {cabinetMode && !savedAreaSelection && (
                   <CabinetPanel
                     cornerCount={cabinetState.cornerCount}
                     cabinetCount={cabinetState.cabinetCount}
                     nameSequence={cabinetNameSequence}
+                    resetToken={cabinetResetToken}
                     existingCabinetNames={existingCabinetNames}
                     onClose={requestCloseCabinetMode}
                     onSave={(data) => { void runSaveOperation(() => persistCabinet(data)); }}
                     onDraftChange={handleCabinetDraftChange}
                     onNamesChange={(names) => adapter.setCabinetNames(names)}
                     saving={cabinetSaving}
+                  />
+                )}
+                {savedAreaSelection && (savedAreaSelection.item.type === "cabinet" || savedAreaSelection.item.type === "device-area") && (
+                  <SavedAreaEditModal
+                    key={`${savedAreaSelection.layerId}:${savedAreaSelection.item.id}`}
+                    item={savedAreaSelection.item}
+                    saving={savedAreaSaving}
+                    onClose={() => setSavedAreaSelection(null)}
+                    onSave={(item) => runSaveOperation(() => handleSaveSavedArea(item))}
                   />
                 )}
                 {chargingMode && (

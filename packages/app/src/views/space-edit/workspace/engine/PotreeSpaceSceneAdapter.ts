@@ -434,6 +434,10 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.deviceAreaEditor?.unbindSelectedBay();
   }
 
+  discardUnboundDeviceAreas(): void {
+    this.deviceAreaEditor?.discardUnbound();
+  }
+
   undoDeviceArea(): void {
     this.deviceAreaEditor?.undo();
   }

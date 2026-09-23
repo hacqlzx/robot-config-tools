@@ -248,6 +248,15 @@ export class PotreeDeviceAreaEditor {
     this.commit(before, "解绑设备区域间隔");
   }
 
+  discardUnbound(): void {
+    const hasUnboundBox = this.boxes.some((box) => !box.bay);
+    if (!hasUnboundBox && this.points.length === 0) return;
+    const before = this.snapshot();
+    this.points = [];
+    this.boxes = this.boxes.filter((box) => !!box.bay);
+    this.commit(before, "清理未绑定设备区域");
+  }
+
   loadBoxes(boxes: SpaceDeviceAreaBox[]): void {
     this.points = [];
     this.boxes = boxes.flatMap((box) => {

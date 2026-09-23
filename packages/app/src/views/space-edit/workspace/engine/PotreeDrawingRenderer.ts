@@ -550,18 +550,19 @@ export class PotreeDrawingRenderer {
     };
   }
 
-  private canHandlePointer(): boolean {
+  private canSelectDrawing(): boolean {
     if (!this.active) return false;
-    return this.interactions.isMode("idle")
+    return this.interactions.isMode("idle", "cabinet")
       && !this.interactions.hasAnyClaim("drawing-drag", "path-selection")
       && !this.host.closest("[data-space-edit-busy='true']");
   }
 
   private readonly handleMouseDown = (event: MouseEvent): void => {
-    if (event.button !== 0 || !this.canHandlePointer()) return;
+    if (event.button !== 0 || !this.canSelectDrawing()) return;
     this.mouseDown = { x: event.clientX, y: event.clientY };
     this.pendingSelection = this.hitTest(this.mousePosition(event));
     if (this.pendingSelection) {
+      this.interactions.setClaim("drawing-selection", true);
       // Block Potree's default navigation, but let the pivot-rotation listener
       // on this host distinguish a drag from a selection click.
       event.preventDefault();
@@ -573,11 +574,16 @@ export class PotreeDrawingRenderer {
   private readonly handleMouseUp = (event: MouseEvent): void => {
     const pendingSelection = this.pendingSelection;
     this.pendingSelection = null;
-    this.interactions.setClaim("drawing-selection", false);
     const start = this.mouseDown;
     this.mouseDown = null;
-    if (event.button !== 0 || !start || !this.canHandlePointer()) return;
-    if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
+    if (event.button !== 0 || !start || !this.canSelectDrawing()) {
+      this.interactions.setClaim("drawing-selection", false);
+      return;
+    }
+    if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) {
+      this.interactions.setClaim("drawing-selection", false);
+      return;
+    }
 
     const selection = pendingSelection ?? this.hitTest(this.mousePosition(event));
     const previousSelectedLayers = [...this.selectedItems.keys()];
@@ -593,9 +599,11 @@ export class PotreeDrawingRenderer {
       // listener on window to clear its pending gesture.
       event.stopPropagation();
       this.viewer.controls?.stop?.();
+      this.interactions.setClaim("drawing-selection", false);
       return;
     }
 
+    this.interactions.setClaim("drawing-selection", false);
     this.interactionCallbacks?.onSelect(null);
     [...this.layers.keys()].forEach((layerId) => this.rebuildLayer(layerId));
   };
@@ -604,7 +612,7 @@ export class PotreeDrawingRenderer {
     if (event.key !== "Delete" && event.key !== "Backspace") return;
     if (!this.active) return;
     if ((event.target as HTMLElement | null)?.closest("input,textarea,select,[contenteditable='true']")) return;
-    if (!this.canHandlePointer()) return;
+    if (!this.interactions.isMode("idle") || !this.canSelectDrawing()) return;
     const selected = this.getSelectedItem();
     if (!selected) return;
     event.preventDefault();
@@ -665,8 +673,10 @@ export class PotreeDrawingRenderer {
     }
 
     let best: { selection: SpaceDrawingSelection; distance: number } | null = null;
+    const cabinetOnly = this.interactions.isMode("cabinet");
     for (const [layerId, layer] of this.layers) {
       for (const hitItem of layer.hitItems) {
+        if (cabinetOnly && hitItem.item.type !== "cabinet") continue;
         const obb = extractDrawingObb(hitItem.points);
         if (!obb) continue;
         const distance = rayDrawingObbHit(ray, obb);

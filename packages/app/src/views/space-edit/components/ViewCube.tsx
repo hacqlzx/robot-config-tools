@@ -78,6 +78,11 @@ export default function ViewCube({ onViewChange, hideMode, modelHidden, modelBus
           background: transparent;
           border-color: #e8e8e8;
         }
+        .space-edit-view-btn.active:disabled {
+          background: #1677ff;
+          border-color: #1677ff;
+          color: #fff;
+        }
         .space-edit-view-divider {
           width: 24px;
           height: 1px;

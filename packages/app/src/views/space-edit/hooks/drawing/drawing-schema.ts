@@ -209,6 +209,9 @@ export interface RobotAreaRecord {
   code?: string | number;
   /** 屏柜/柜排所属间隔编码。 */
   bay_code?: string | number;
+  /** 设备区自定义名称与绑定间隔名称分离，旧记录仍从 name 推断。 */
+  bay_id?: string | number;
+  bay_name?: string;
   [key: string]: unknown;
 }
 

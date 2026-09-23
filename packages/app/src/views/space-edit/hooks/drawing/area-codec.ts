@@ -96,6 +96,12 @@ function aggregateBayRecordFields(bays: Array<CabinetItem["bay"] | null | undefi
 }
 
 function deviceAreaBayFromRecord(record: RobotAreaRecord): DeviceAreaItem["bay"] {
+  const explicitId = positiveInt(record.bay_id);
+  if (explicitId) return {
+    id: explicitId,
+    name: valueText(record.bay_name) || valueText(record.name),
+    code: valueText(record.bay_code),
+  };
   // 默认名称表示“只有几何、尚未绑定间隔”，不能伪造一个设备台账关联。
   const id = positiveInt(record.id);
   const name = valueText(record.name);
@@ -446,6 +452,7 @@ function legacyItemsToRobotAreas(items: DrawingItem[]): RobotAreaRecord[] {
         name: valueText(item.name) || item.bay?.name || defaultDeviceAreaName(id),
         pose,
         pose_3d: pose,
+        ...(item.bay ? { bay_id: item.bay.id, bay_name: item.bay.name, bay_code: item.bay.code } : {}),
       });
     }
   }

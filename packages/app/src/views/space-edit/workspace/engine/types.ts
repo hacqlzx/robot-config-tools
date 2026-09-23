@@ -279,6 +279,7 @@ export interface SpaceSceneAdapter {
   hasDeviceAreaDraft(): boolean;
   bindSelectedDeviceAreaBay(bay: SpaceDeviceAreaBay): void;
   unbindSelectedDeviceAreaBay(): void;
+  discardUnboundDeviceAreas(): void;
   undoDeviceArea(): void;
   redoDeviceArea(): void;
   clearDeviceAreaDrawing(): void;

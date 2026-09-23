@@ -10,6 +10,8 @@ interface Props {
   cabinetCount: number;
   /** 当前地图内新增柜排、屏柜的默认名称起始序号 */
   nameSequence?: { cabinetRowStart: number; cabinetStart: number };
+  /** 成功保存后重置当前新增表单，保留区域/间隔选择。 */
+  resetToken?: number;
   /** 当前地图已有的屏柜名称列表（用于重复校验） */
   existingCabinetNames?: string[];
   /** 关闭绘制屏柜 */
@@ -46,7 +48,7 @@ function gen18(): string {
 }
 
 /** 绘制屏柜操作小窗（可拖动，提示 + 区域/间隔选择 + 屏柜表格） */
-export default function CabinetPanel({ cornerCount, cabinetCount, nameSequence, existingCabinetNames = [], onClose, onSave, onDraftChange, onNamesChange, saving }: Props) {
+export default function CabinetPanel({ cornerCount, cabinetCount, nameSequence, resetToken, existingCabinetNames = [], onClose, onSave, onDraftChange, onNamesChange, saving }: Props) {
   const projectName = useSelectedProject();
   const cabinetRowNameStart = nameSequence?.cabinetRowStart ?? 1;
   const cabinetNameStart = nameSequence?.cabinetStart ?? 1;
@@ -85,6 +87,13 @@ export default function CabinetPanel({ cornerCount, cabinetCount, nameSequence, 
   const [rows, setRows] = useState<CabinetRow[]>([]);
   const [cabinetRow, setCabinetRow] = useState<CabinetRow>(() => ({ key: gen18(), code: gen18(), name: `柜排${cabinetRowNameStart}` }));
   const isSplit = cabinetCount > 1;
+
+  useEffect(() => {
+    editedRowNameKeysRef.current.clear();
+    cabinetRowNameEditedRef.current = false;
+    setRows([]);
+    setCabinetRow({ key: gen18(), code: gen18(), name: `柜排${cabinetRowNameStart}` });
+  }, [resetToken]);
 
   useEffect(() => {
     setRows((prev) => {

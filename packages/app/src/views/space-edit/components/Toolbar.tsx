@@ -1,6 +1,6 @@
 ﻿import { useRef } from "react";
 import { useState } from "react";
-import { UploadOutlined, TableOutlined, SaveOutlined, BorderOutlined, ThunderboltOutlined, AppstoreOutlined, NodeIndexOutlined, EnvironmentOutlined, ExportOutlined, ImportOutlined, ArrowLeftOutlined, ArrowRightOutlined, AimOutlined, EyeOutlined, EyeInvisibleOutlined } from "@ant-design/icons";
+import { TableOutlined, SaveOutlined, BorderOutlined, ThunderboltOutlined, AppstoreOutlined, NodeIndexOutlined, EnvironmentOutlined, ExportOutlined, ImportOutlined, ArrowLeftOutlined, ArrowRightOutlined, AimOutlined, EyeOutlined, EyeInvisibleOutlined } from "@ant-design/icons";
 import { POINT_TABLE_FILE_ACCEPT, POINT_TABLE_FILE_RE } from "../utils/space-paths";
 
 interface Props {
@@ -48,7 +48,8 @@ const BUTTON_GROUPS = [
   {
     label: "数据加载",
     buttons: [
-      { icon: <UploadOutlined style={{ fontSize: 20 }} />, label: "空间模型加载", action: "file" as const },
+      { icon: <ImportOutlined style={{ fontSize: 20 }} />, label: "空间模型加载", action: "file" as const },
+      { icon: <ExportOutlined style={{ fontSize: 20 }} />, label: "空间模型导出", action: "export" as const },
       { icon: <TableOutlined style={{ fontSize: 20 }} />, label: "点表加载", action: "point" as const },
     ],
   },
@@ -77,12 +78,6 @@ const BUTTON_GROUPS = [
       { icon: <EyeOutlined style={{ fontSize: 20 }} />, label: "巡检点名称", action: "inspectionNames" as const },
       { icon: <ImportOutlined style={{ fontSize: 20 }} />, label: "巡检点导入", action: "inspectionImport" as const },
       { icon: <ExportOutlined style={{ fontSize: 20 }} />, label: "巡检点导出", action: "inspectionExport" as const },
-    ],
-  },
-  {
-    label: "模型导出",
-    buttons: [
-      { icon: <ExportOutlined style={{ fontSize: 20 }} />, label: "导出模型", action: "export" as const },
     ],
   },
 ];
