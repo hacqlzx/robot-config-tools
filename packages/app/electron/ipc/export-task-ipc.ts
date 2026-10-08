@@ -99,6 +99,8 @@ interface ExportTaskRecord {
 
 const MAX_TASK_HISTORY = 20;
 const EXPORT_TASK_CHANGED_CHANNEL = "export-task:changed";
+const MAX_BACKEND_FETCH_ATTEMPTS = 3;
+const RETRYABLE_BACKEND_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 class ExportTaskManager {
   private tasks: ExportTaskRecord[] = [];
@@ -301,7 +303,9 @@ class ExportTaskManager {
         credentials: "include",
         signal: abortController.signal,
       }, "导出文件下载");
-      if (!response.ok) throw new Error(`下载失败（${response.status}）`);
+      if (!response.ok) {
+        throw new Error(await buildBackendResponseError(response, "导出文件下载失败"));
+      }
       if (!response.body) throw new Error("下载内容为空");
 
       await pipeline(
@@ -360,7 +364,9 @@ class ExportTaskManager {
         credentials: "include",
         signal: abortController.signal,
       }, "后台文件下载");
-      if (!response.ok) throw new Error(`下载失败（${response.status}）`);
+      if (!response.ok) {
+        throw new Error(await buildBackendResponseError(response, "后台文件下载失败"));
+      }
       if (!response.body) throw new Error("下载内容为空");
 
       await pipeline(
@@ -558,7 +564,8 @@ async function fetchBackendResource(
   label: string,
 ): Promise<Response> {
   let lastError: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const signal = options.signal as AbortSignal | undefined;
+  for (let attempt = 0; attempt < MAX_BACKEND_FETCH_ATTEMPTS; attempt += 1) {
     const requestId = Date.now().toString() + Math.random().toString(36).slice(2, 8);
     const startedAt = Date.now();
     const headers = {
@@ -566,7 +573,12 @@ async function fetchBackendResource(
       "Accept": "*/*",
       ...(options.headers as Record<string, string> | undefined),
     };
-    console.info("[后台请求][主进程] 开始", { label, requestId, url, attempt: attempt + 1 });
+    console.info("[后台请求][主进程] 开始", {
+      label,
+      requestId,
+      url: redactRequestUrl(url),
+      attempt: attempt + 1,
+    });
     try {
       const response = await net.fetch(url, { ...options, headers } as any);
       console.info("[后台请求][主进程] 完成", {
@@ -575,21 +587,48 @@ async function fetchBackendResource(
         status: response.status,
         elapsedMs: Date.now() - startedAt,
       });
+
+      if (RETRYABLE_BACKEND_STATUSES.has(response.status) && attempt < MAX_BACKEND_FETCH_ATTEMPTS - 1) {
+        console.warn("[后台请求][主进程] 服务暂不可用，准备重试", {
+          label,
+          requestId,
+          status: response.status,
+          attempt: attempt + 1,
+        });
+        await response.body?.cancel().catch((): undefined => undefined);
+        await delay(300 * (attempt + 1));
+        if (signal?.aborted) throw new Error("请求已取消");
+        continue;
+      }
       return response;
     } catch (error) {
       lastError = error;
-      const aborted = Boolean((options.signal as AbortSignal | undefined)?.aborted);
+      const aborted = Boolean(signal?.aborted);
       console.warn("[后台请求][主进程] 失败", {
         label,
         requestId,
+        url: redactRequestUrl(url),
         elapsedMs: Date.now() - startedAt,
         message: error instanceof Error ? error.message : String(error),
       });
-      if (aborted || attempt > 0) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      if (aborted || attempt >= MAX_BACKEND_FETCH_ATTEMPTS - 1) throw error;
+      await delay(300 * (attempt + 1));
     }
   }
   throw lastError instanceof Error ? lastError : new Error("后台请求失败");
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function redactRequestUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return "<invalid-url>";
+  }
 }
 
 async function buildBackendResponseError(response: Response, fallback: string): Promise<string> {
@@ -783,10 +822,19 @@ function normalizeLocalExportResult(result: LocalExportResult, fallbackName: str
 function buildBackendUrl(backendIp: string, requestPath: string, query?: RemoteExportTaskRequest["query"]): string {
   const baseText = String(backendIp || "").trim();
   if (!baseText) throw new Error("请先连接后台");
+  const pathText = String(requestPath || "").trim();
+  if (!pathText) throw new Error("下载地址为空");
+  if (/^[a-z][a-z\d+.-]*:/i.test(pathText) && !/^https?:\/\//i.test(pathText)) {
+    throw new Error("仅支持 HTTP/HTTPS 下载地址");
+  }
+
   const base = /^https?:\/\//i.test(baseText) ? baseText : `https://${baseText}`;
-  const url = /^https?:\/\//i.test(requestPath)
-    ? new URL(requestPath)
-    : new URL(requestPath.startsWith("/") ? requestPath : `/${requestPath}`, base);
+  const url = /^https?:\/\//i.test(pathText)
+    ? new URL(pathText)
+    : new URL(pathText.startsWith("/") ? pathText : `/${pathText}`, base);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("仅支持 HTTP/HTTPS 下载地址");
+  }
   if (query) {
     for (const [key, value] of Object.entries(query)) {
       if (value == null) continue;

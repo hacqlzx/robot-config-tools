@@ -27,7 +27,7 @@ import {
   downloadCommunicateExcel,
 } from "@/api/config.js";
 import { startDownloadTaskFlyAnimation } from "@/components/download-task";
-import { useAppContext, useRobotOptions } from "@/stores/appContextStore";
+import { getBackendIp, useAppContext, useRobotOptions } from "@/stores/appContextStore";
 import "./index.scss";
 
 interface IEAction {
@@ -208,6 +208,32 @@ const ROBOT_LOG_RANGE_PRESETS = [
   { label: "一年", value: () => createRobotLogRange(1, "year") },
 ];
 
+function getResponseBackendOrigin(response: any): string {
+  const baseURL = String(response?.config?.baseURL || "").trim();
+  if (!baseURL) return "";
+  try {
+    const url = new URL(baseURL);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.origin : "";
+  } catch {
+    return "";
+  }
+}
+
+function resolveDownloadUrl(filePath: string, backendIp: string): string {
+  const value = String(filePath || "").trim();
+  if (!value) throw new Error("下载地址为空");
+  if (/^[a-z][a-z\d+.-]*:/i.test(value) && !/^https?:\/\//i.test(value)) {
+    throw new Error("仅支持 HTTP/HTTPS 下载地址");
+  }
+
+  const base = /^https?:\/\//i.test(backendIp) ? backendIp : `https://${backendIp}`;
+  const url = new URL(value, `${base.replace(/\/+$/, "")}/`);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("仅支持 HTTP/HTTPS 下载地址");
+  }
+  return url.toString();
+}
+
 export default function ImportExport() {
   const { message } = App.useApp();
   const { selectedRobot, backendIp } = useAppContext();
@@ -239,13 +265,18 @@ export default function ImportExport() {
   }, []);
 
   /** 下载后台返回的文件路径到指定目录；Electron 由主进程流式落盘，避免依赖项目临时目录。 */
-  const downloadFileToSelectedDir = useCallback(async (filePath: string, label: string, destDir?: string) => {
-    if (!backendIp) {
+  const downloadFileToSelectedDir = useCallback(async (
+    filePath: string,
+    label: string,
+    destDir?: string,
+    downloadBackendIp = getBackendIp(),
+  ) => {
+    if (!downloadBackendIp) {
       message.warning("请先连接后台");
       return;
     }
 
-    const downloadUrl = /^https?:\/\//i.test(filePath) ? filePath : `https://${backendIp}${filePath}`;
+    const downloadUrl = resolveDownloadUrl(filePath, downloadBackendIp);
     // 从路径中提取文件名，并替换 Windows 非法字符
     const rawName = filePath.split("/").pop() || `${label}.xlsx`;
     const fileName = rawName.replace(/[<>:"/\\|?*]/g, "-");
@@ -295,16 +326,28 @@ export default function ImportExport() {
       return;
     }
 
-    if (window.electronAPI?.downloadTasks) {
-      const tasks = await window.electronAPI.downloadTasks.list().catch(() => [] as ExportTaskInfo[]);
-      if (tasks.some((task) => task.status === "pending" || task.status === "running")) {
-        message.warning("已有导出任务进行中");
-        return;
-      }
-    }
-
     setUploadingLabel(label);
     try {
+      const electronAPI = window.electronAPI;
+      const downloadTasks = electronAPI?.downloadTasks;
+      if (downloadTasks) {
+        const tasks = await downloadTasks.list().catch(() => [] as ExportTaskInfo[]);
+        if (tasks.some((task) => task.status === "pending" || task.status === "running")) {
+          message.warning("已有导出任务进行中");
+          return;
+        }
+      }
+
+      let destDir: string | undefined;
+      if (electronAPI) {
+        if (!electronAPI.selectDir) {
+          message.error("当前版本不支持选择下载目录");
+          return;
+        }
+        destDir = await electronAPI.selectDir(destTitle) || undefined;
+        if (!destDir) return;
+      }
+
       console.info("[后台导出] 请求导出接口", { path: exportPath, query: query || {} });
       const res = await fallbackExport();
       const body = res?.data;
@@ -314,17 +357,12 @@ export default function ImportExport() {
       }
 
       const downloadPath = String(body.data);
-      const downloadTasks = window.electronAPI?.downloadTasks;
-      let destDir: string | undefined;
-      if (window.electronAPI?.selectDir) {
-        destDir = await window.electronAPI.selectDir(destTitle) || undefined;
-        if (!destDir) return;
-      }
+      const requestBackendIp = getResponseBackendOrigin(res) || getBackendIp();
       if (downloadTasks && destDir) {
         const result = await downloadTasks.create({
           type: "remote-download",
           name: label,
-          backendIp,
+          backendIp: requestBackendIp,
           downloadPath,
           destDir,
         });
@@ -336,7 +374,7 @@ export default function ImportExport() {
         return;
       }
 
-      await downloadFileToSelectedDir(downloadPath, label, destDir);
+      await downloadFileToSelectedDir(downloadPath, label, destDir, requestBackendIp);
     } finally {
       setUploadingLabel(null);
     }
@@ -754,6 +792,26 @@ export default function ImportExport() {
 
     setUploadingLabel(label);
     try {
+      const electronAPI = window.electronAPI;
+      const downloadTasks = electronAPI?.downloadTasks;
+      if (downloadTasks) {
+        const tasks = await downloadTasks.list().catch(() => [] as ExportTaskInfo[]);
+        if (tasks.some((task) => task.status === "pending" || task.status === "running")) {
+          message.warning("已有导出任务进行中");
+          return;
+        }
+      }
+
+      let destDir: string | undefined;
+      if (electronAPI) {
+        if (!electronAPI.selectDir) {
+          message.error("当前版本不支持选择下载目录");
+          return;
+        }
+        destDir = await electronAPI.selectDir(destTitle) || undefined;
+        if (!destDir) return;
+      }
+
       const res = await request();
       const body = res?.data;
       if (!body?.success || !body?.data) {
@@ -762,20 +820,12 @@ export default function ImportExport() {
       }
 
       const downloadPath = String(body.data);
-      const downloadTasks = window.electronAPI?.downloadTasks;
-      if (downloadTasks && window.electronAPI?.selectDir) {
-        const tasks = await downloadTasks.list().catch(() => [] as ExportTaskInfo[]);
-        if (tasks.some((task) => task.status === "pending" || task.status === "running")) {
-          message.warning("已有导出任务进行中");
-          return;
-        }
-
-        const destDir = await window.electronAPI.selectDir(destTitle);
-        if (!destDir) return;
+      const requestBackendIp = getResponseBackendOrigin(res) || getBackendIp();
+      if (downloadTasks && destDir) {
         const result = await downloadTasks.create({
           type: "remote-download",
           name: label,
-          backendIp,
+          backendIp: requestBackendIp,
           downloadPath,
           destDir,
         });
@@ -787,7 +837,7 @@ export default function ImportExport() {
         return;
       }
 
-      await downloadFileToSelectedDir(downloadPath, label);
+      await downloadFileToSelectedDir(downloadPath, label, destDir, requestBackendIp);
     } catch (e: any) {
       message.error("下载失败: " + (e?.message || e));
     } finally {
