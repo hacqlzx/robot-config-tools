@@ -12,9 +12,71 @@
 
 ---
 
-## 2026-09-24 — 增加提交变更日志，并补齐后台连接状态与网络保存确认
+## 2026-10-08 — 屏柜统一柜排协议，空间编辑补性能监控与点云卸载，导出只带当前地图屏柜
 
 - 提交：待提交
+- 类型：feat / fix
+
+### 修改
+
+- 屏柜协议改为「只要有屏柜就必须有柜排根记录」：绘制、保存、二次编辑都写 `type=1` 柜排 + `type=2` 子屏柜，单个屏柜不再降级成独立 `type=2`。
+- 绘制面板在已有屏柜时始终显示并提交柜排名称/编码，不再等拆成多个屏柜才出现柜排。
+- 读取历史独立屏柜时补出柜排元数据，下次保存升级为柜排结构；命名序号把没有父记录的旧单屏柜也算作一个柜排，避免新旧数据重名。
+- 已保存屏柜/设备区编辑弹窗增加删除：标题栏垃圾桶二次确认后走原有绘制删除，保存或删除进行中会锁住输入和关闭。
+- 空间模型导出的 `cabinet.json` 只扫描当前地图目录里的 `description_file.json`，按该地图 `type=2` 屏柜生成清单；不再递归整个地图根目录，也不再把点表里其他地图或未绘制的屏柜写进当前包。
+- 空间场景增加 F1 性能监控浮层：FPS、帧耗时、更新/渲染、长帧、点云总点数/可见点数、可见节点、LRU 驻留、GPU 节点、绘制调用、辅助三角形与几何纹理、画布尺寸、JS 堆内存。快捷键帮助同步写入 F1。
+- Potree 查看器记录帧统计，并支持暂停渲染循环；旧运行时没有该接口时，适配器用更新函数包装和渲染事件做同等统计，页面不可见或没有点云时停掉动画循环。
+- 点云加载支持 `AbortSignal`：切换/清空模型、加载超时会中止请求并终止仍在跑的节点 Worker；卸载时释放根节点几何，Electron 上缺少 `deleteVertexArray` 时改走 VAO 扩展，避免清理中断导致显存残留。
+- `pnpm-workspace.yaml` 从 `ignoredBuiltDependencies` 改为 pnpm 10 的 `allowBuilds`，显式允许 `@parcel/watcher`、`electron-winstaller`、`esbuild`、`protobufjs` 执行安装脚本。
+- 回填上一条提交哈希 `b847149`。`views/config/network/index.tsx` 内容与 HEAD 一致，仅换行状态误报，未纳入本次提交。
+
+### 优化
+
+- 单屏柜和多屏柜走同一套柜排层级，机器人侧不用再区分「独立屏柜」和「柜排子柜」。
+- 导出包里的屏柜清单与当前地图绘制一致，避免把别的地图屏柜带进 `cabinet.json`。
+- 大点云切换或关闭页面时能停渲染、取消未完成加载，减少后台继续解压和空转。
+- F1 可直接看当前帧率和点云驻留，不用再开外部性能工具。
+- 已保存区域可在编辑弹窗里直接删除，不用先关掉再去找删除入口。
+
+### 影响范围
+
+- `packages/app/src/views/space-edit/components/CabinetPanel.tsx`
+- `packages/app/src/views/space-edit/components/SavedAreaEditModal.tsx`
+- `packages/app/src/views/space-edit/hooks/drawing/area-codec.ts`
+- `packages/app/src/views/space-edit/hooks/drawing/drawing-schema.ts`
+- `packages/app/src/views/space-edit/hooks/drawing/drawing-storage.ts`
+- `packages/app/src/views/space-edit/workspace/index.tsx`
+- `packages/app/src/views/space-edit/workspace/components/SpacePerformanceMonitor.tsx`（新增）
+- `packages/app/src/views/space-edit/workspace/components/SpaceSceneHost.tsx`
+- `packages/app/src/views/space-edit/workspace/components/SpaceShortcutHelp.tsx`
+- `packages/app/src/views/space-edit/workspace/engine/PotreeSpaceSceneAdapter.ts`
+- `packages/app/src/views/space-edit/workspace/engine/types.ts`
+- `packages/app/src/views/space-edit/workspace/engine/useSpaceSceneHost.ts`
+- `packages/app/src/potree-core/build/potree/potree.js`
+- `packages/app/src/potree-core/potree-runtime.ts`
+- `packages/app/electron/export-points.ts`
+- `pnpm-workspace.yaml`
+- `CHANGELOG.md`
+
+### 用户可见变化
+
+- 画一个屏柜也会要求填写柜排，保存后描述文件里有柜排根记录。
+- 编辑已保存屏柜或设备区时，标题栏可删除，需确认。
+- 空间编辑页按 F1 打开/关闭性能监控；快捷键帮助里能看到这项。
+- 导出空间模型时，`cabinet.json` 只含当前这张地图上画过的屏柜。
+
+### 验证
+
+- 新建单个屏柜：面板出现柜排字段，保存后的 `description_file.json` 含 `type=1` 根记录和对应 `type=2` 子记录。
+- 打开只有独立 `type=2` 的旧地图：能回显柜排名，再保存后升级为柜排结构，后续默认名不与旧柜排重号。
+- 编辑弹窗点删除并确认：屏柜或设备区从场景和侧栏消失；取消确认则保留。
+- 项目下有多张地图时导出其中一张：`cabinet.json` 不含其他地图屏柜，也不含点表里未绘制的屏柜。
+- 加载点云后按 F1：浮层有 FPS、点数和画布尺寸；切走页面或清空模型后渲染循环暂停。
+- 加载过程中切换模型或等待超时：进行中的节点请求被中止，不继续往已卸载的点云写数据。
+
+## 2026-09-24 — 增加提交变更日志，并补齐后台连接状态与网络保存确认
+
+- 提交：`b847149`
 - 类型：feat / chore
 
 ### 修改

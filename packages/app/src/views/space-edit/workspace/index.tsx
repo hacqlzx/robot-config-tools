@@ -1816,7 +1816,8 @@ export default function SpaceEditWorkspace() {
     if (!geometry) return "请先完成屏柜区域绘制";
     if (!data) return "请先选择区域和间隔";
     const rows = data.rows.map((row) => ({ ...row, code: row.code.trim(), name: row.name.trim() }));
-    const requiresCabinetRow = geometry.splits.length > 0 || rows.length > 1;
+    // 统一协议层级：只要存在屏柜，就必须有柜排根记录，即使当前只有一个屏柜。
+    const requiresCabinetRow = geometry.splits.length > 0 || rows.length > 0;
     const cabinetRow = requiresCabinetRow && data.cabinetRow
       ? { ...data.cabinetRow, code: data.cabinetRow.code.trim(), name: data.cabinetRow.name.trim() }
       : null;
@@ -1859,7 +1860,8 @@ export default function SpaceEditWorkspace() {
     const geometry = adapter.getCabinetGeometry();
     if (!geometry) return false;
     const rows = data.rows.map((row) => ({ ...row, code: row.code.trim(), name: row.name.trim() }));
-    const requiresCabinetRow = geometry.splits.length > 0 || rows.length > 1;
+    // 统一协议层级：只要存在屏柜，就必须有柜排根记录，即使当前只有一个屏柜。
+    const requiresCabinetRow = geometry.splits.length > 0 || rows.length > 0;
     const cabinetRow = requiresCabinetRow && data.cabinetRow
       ? { ...data.cabinetRow, code: data.cabinetRow.code.trim(), name: data.cabinetRow.name.trim() }
       : null;
@@ -2043,6 +2045,13 @@ export default function SpaceEditWorkspace() {
           .find((cabinet) => names.includes(cabinet.name));
         if (duplicate) throw new Error(`当前地图已存在同名屏柜：${duplicate.name}`);
 
+        // 兼容历史单屏柜记录：即使旧数据没有柜排字段，编辑后也统一补写柜排根记录。
+        const originalCabinetRow = original.cabinetRow ?? {
+          code: original.cabinets[0]?.code || "",
+          name: original.cabinets[0]?.name || `柜排${original.id}`,
+          bay: original.bay,
+        };
+
         const mains = await api.db.mainDevice.list(selectedProject);
         const rows = edited.cabinets.filter((cabinet) => mains.some((main) =>
           main.mainDeviceCode === cabinet.code && Number(main.mainDeviceType) === 29))
@@ -2062,7 +2071,10 @@ export default function SpaceEditWorkspace() {
             modelPath,
             item: {
               ...original,
-              cabinetRow: original.cabinetRow ? { ...original.cabinetRow, name: edited.cabinetRow?.name.trim() || original.cabinetRow.name } : null,
+              cabinetRow: {
+                ...originalCabinetRow,
+                name: edited.cabinetRow?.name.trim() || originalCabinetRow.name,
+              },
               cabinets: original.cabinets.map((cabinet, index) => ({ ...cabinet, name: names[index] })),
               updatedAt: new Date().toISOString(),
             },
@@ -3490,6 +3502,7 @@ export default function SpaceEditWorkspace() {
                     saving={savedAreaSaving}
                     onClose={() => setSavedAreaSelection(null)}
                     onSave={(item) => runSaveOperation(() => handleSaveSavedArea(item))}
+                    onDelete={() => handleDrawingDelete(savedAreaSelection)}
                   />
                 )}
                 {chargingMode && (

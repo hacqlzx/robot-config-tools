@@ -46,6 +46,7 @@ import {
   type SpaceInspectionPointCallbacks,
   type SpaceSceneAdapter,
   type SpaceSceneModel,
+  type SpaceScenePerformanceStats,
   type SpaceViewLock,
 } from "./types";
 
@@ -146,7 +147,13 @@ function disposeGeometryTree(root?: PotreeGeometryNode, cache?: PotreeNodeCache)
     // Potree's LRU is module-global. Removing nodes during model teardown is
     // required so it cannot retain GPU buffers from an unloaded map.
     cache?.remove(node);
-    node.dispose?.();
+    if (node === root && node.geometry) {
+      node.geometry.dispose();
+      node.geometry = null;
+      node.loaded = false;
+    } else {
+      node.dispose?.();
+    }
   }
 }
 
@@ -174,6 +181,14 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   private fitTimer: number | null = null;
   private mountVersion = 0;
   private loadVersion = 0;
+  private pendingLoadAbortController: AbortController | null = null;
+  private activeLoadAbortController: AbortController | null = null;
+  private legacyPerformanceStats = { frameCount: 0, longFrames: 0, workMs: 0, updateMs: 0, renderMs: 0 };
+  private legacyUpdateOriginal: PotreeViewerInstance["update"] | null = null;
+  private legacyRenderStart = 0;
+  private legacyPreviousFrame = 0;
+  private legacyRenderLoop: ((timestamp: number) => void) | null = null;
+  private legacyRenderingPaused = false;
   private active = true;
   private loadedPointCount: number | null = null;
   private modelClipBounds: SpaceClipBounds | null = null;
@@ -235,6 +250,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.potree = potree;
     this.three = three;
     this.viewer = viewer;
+    this.installLegacyPerformanceProbe(viewer);
     this.createHoverCoordinateOverlay(renderArea);
     this.createCoordinateCorrectionMarker(renderArea);
     this.applyRenderSettings();
@@ -346,6 +362,82 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
   setRenderSettings(settings: SpaceRenderSettings): void {
     this.renderSettings = normalizeSpaceRenderSettings(settings);
     this.applyRenderSettings();
+  }
+
+  private installLegacyPerformanceProbe(viewer: PotreeViewerInstance): void {
+    if (viewer.performanceStats || !viewer.update) return;
+    const originalUpdate = viewer.update;
+    this.legacyUpdateOriginal = originalUpdate;
+    viewer.update = (delta, timestamp) => {
+      const start = performance.now();
+      try {
+        originalUpdate.call(viewer, delta, timestamp);
+      } finally {
+        const elapsed = performance.now() - start;
+        this.legacyPerformanceStats.updateMs += elapsed;
+        this.legacyPerformanceStats.workMs += elapsed;
+      }
+    };
+    viewer.addEventListener("render.pass.begin", this.handleLegacyRenderBegin);
+    viewer.addEventListener("render.pass.end", this.handleLegacyRenderEnd);
+  }
+
+  private readonly handleLegacyRenderBegin = (): void => {
+    this.legacyRenderStart = performance.now();
+  };
+
+  private readonly handleLegacyRenderEnd = (): void => {
+    const now = performance.now();
+    const stats = this.legacyPerformanceStats;
+    const renderMs = Math.max(0, now - this.legacyRenderStart);
+    stats.renderMs += renderMs;
+    stats.workMs += renderMs;
+    stats.frameCount += 1;
+    if (this.legacyPreviousFrame && now - this.legacyPreviousFrame >= 50) stats.longFrames += 1;
+    this.legacyPreviousFrame = now;
+  };
+
+  getPerformanceStats(): SpaceScenePerformanceStats {
+    const viewer = this.viewer;
+    const pointclouds = viewer?.scene.pointclouds ?? [];
+    const visiblePointclouds = pointclouds.filter((pointcloud) => pointcloud.visible !== false);
+    const hasVisiblePointCounts = visiblePointclouds.length > 0
+      && visiblePointclouds.every((pointcloud) => (
+        typeof pointcloud.numVisiblePoints === "number"
+        && Number.isFinite(pointcloud.numVisiblePoints)
+      ));
+    const visiblePointCount = hasVisiblePointCounts
+      ? visiblePointclouds.reduce((total, pointcloud) => total + (pointcloud.numVisiblePoints || 0), 0)
+      : null;
+    const visibleNodeCount = visiblePointclouds.reduce(
+      (total, pointcloud) => total + (pointcloud.visibleNodes?.length ?? 0),
+      0,
+    );
+    const renderInfo = viewer?.renderer.info;
+    const canvas = viewer?.renderer.domElement;
+    const rect = canvas?.getBoundingClientRect();
+    const frameStats = viewer?.performanceStats ?? this.legacyPerformanceStats;
+    const drawCallsEstimated = !viewer?.performanceStats;
+
+    return {
+      frameCount: frameStats.frameCount,
+      longFrames: frameStats.longFrames,
+      workMs: frameStats.workMs,
+      updateMs: frameStats.updateMs,
+      renderMs: frameStats.renderMs,
+      totalPointCount: this.loadedPointCount,
+      visiblePointCount,
+      visibleNodeCount,
+      residentPointCount: typeof this.potree?.lru?.numPoints === "number" ? this.potree.lru.numPoints : null,
+      gpuNodeCount: viewer?.pRenderer?.buffers.size ?? null,
+      drawCalls: viewer?.performanceStats?.drawCalls ?? (this.pointcloud ? visibleNodeCount : 0),
+      drawCallsEstimated,
+      triangles: typeof renderInfo?.render?.triangles === "number" ? renderInfo.render.triangles : null,
+      geometries: typeof renderInfo?.memory?.geometries === "number" ? renderInfo.memory.geometries : null,
+      textures: typeof renderInfo?.memory?.textures === "number" ? renderInfo.memory.textures : null,
+      canvasWidth: Math.round(canvas?.clientWidth || rect?.width || 0),
+      canvasHeight: Math.round(canvas?.clientHeight || rect?.height || 0),
+    };
   }
 
   setDrawingLayer(layerId: string, data: SpaceDrawingLayer): void {
@@ -737,6 +829,17 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
 
   private syncActiveState(): void {
     const active = this.active;
+    const viewer = this.viewer;
+    const paused = !active || !this.pointcloud;
+    if (viewer?.setRenderingPaused) {
+      viewer.setRenderingPaused(paused);
+    } else if (viewer?.loop && this.legacyRenderingPaused !== paused) {
+      this.legacyRenderLoop ??= viewer.loop.bind(viewer);
+      this.legacyRenderingPaused = paused;
+      this.legacyPreviousFrame = 0;
+      viewer.renderer.setAnimationLoop(paused ? null : this.legacyRenderLoop);
+      viewer.clock?.getDelta();
+    }
     this.keyboardController?.setActive(active);
     this.depthZoomController?.setActive(active);
     this.rotationPivotIndicator?.setActive(active && !!this.pointcloud);
@@ -1659,21 +1762,29 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     if (!viewer || !potree) throw new Error("三维场景尚未初始化");
 
     const version = ++this.loadVersion;
+    this.pendingLoadAbortController?.abort();
+    const abortController = new AbortController();
+    this.pendingLoadAbortController = abortController;
+    let attached = false;
     let timeoutId = 0;
     const timeout = new Promise<never>((_resolve, reject) => {
-      timeoutId = window.setTimeout(() => reject(new Error("Potree 模型加载超时")), MODEL_LOAD_TIMEOUT_MS);
+      timeoutId = window.setTimeout(() => {
+        abortController.abort();
+        reject(new Error("Potree 模型加载超时"));
+      }, MODEL_LOAD_TIMEOUT_MS);
     });
 
     try {
       const loaded = await Promise.race([
-        potree.loadPointCloud(model.metadataUrl, model.name),
+        potree.loadPointCloud(model.metadataUrl, model.name, undefined, { signal: abortController.signal }),
         timeout,
       ]);
-      if (version !== this.loadVersion || !this.viewer) {
+      if (abortController.signal.aborted || version !== this.loadVersion || !this.viewer) {
         this.disposePointCloud(loaded.pointcloud);
         return;
       }
 
+      this.pendingLoadAbortController = null;
       this.clearModel();
       const pointcloud = loaded.pointcloud;
       pointcloud.material.size = 1.5;
@@ -1684,6 +1795,8 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
       if (pointcloud.getAttribute?.("rgba")) pointcloud.material.activeAttributeName = "rgba";
       viewer.scene.addPointCloud(pointcloud);
       this.pointcloud = pointcloud;
+      this.activeLoadAbortController = abortController;
+      attached = true;
       this.modelClipBounds = model.clipBounds ? { ...model.clipBounds } : null;
       this.loadedPointCount = getPointCloudPointCount(pointcloud);
       this.applyRenderSettings();
@@ -1697,11 +1810,17 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
       }, 250);
     } finally {
       window.clearTimeout(timeoutId);
+      if (this.pendingLoadAbortController === abortController) this.pendingLoadAbortController = null;
+      if (!attached) abortController.abort();
     }
   }
 
   clearModel(): void {
     this.loadVersion += 1;
+    this.pendingLoadAbortController?.abort();
+    this.pendingLoadAbortController = null;
+    this.activeLoadAbortController?.abort();
+    this.activeLoadAbortController = null;
     this.clearHoverCoordinate();
     this.setCoordinateCorrectionMarker(null);
     this.stopClipping();
@@ -1722,7 +1841,10 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
       window.clearTimeout(this.fitTimer);
       this.fitTimer = null;
     }
-    if (!this.pointcloud) return;
+    if (!this.pointcloud) {
+      this.syncActiveState();
+      return;
+    }
     this.disposePointCloud(this.pointcloud);
     this.pointcloud = null;
     this.syncActiveState();
@@ -1730,6 +1852,7 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
 
   private disposePointCloud(pointcloud: PotreePointCloud): void {
     pointcloud.visible = false;
+    pointcloud.pcoGeometry?.loader?.abort?.();
     const scene = this.viewer?.scene;
     if (scene) {
       const index = scene.pointclouds.indexOf(pointcloud);
@@ -1782,6 +1905,11 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.disposeHoverCoordinateOverlay();
     this.clearModel();
     if (this.viewer) {
+      if (this.legacyUpdateOriginal) {
+        this.viewer.update = this.legacyUpdateOriginal;
+        this.viewer.removeEventListener("render.pass.begin", this.handleLegacyRenderBegin);
+        this.viewer.removeEventListener("render.pass.end", this.handleLegacyRenderEnd);
+      }
       this.viewer.renderer.setAnimationLoop(null);
       this.viewer.renderer.dispose();
       this.viewer.renderer.forceContextLoss?.();
@@ -1790,6 +1918,9 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
     this.potree = null;
     this.three = null;
     this.mountPromise = null;
+    this.legacyUpdateOriginal = null;
+    this.legacyRenderLoop = null;
+    this.legacyRenderingPaused = false;
     this.controlsUpdateWrapped = false;
     host?.replaceChildren();
   }

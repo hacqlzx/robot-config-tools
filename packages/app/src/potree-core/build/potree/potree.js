@@ -62897,6 +62897,17 @@ void main() {
 				for (let attributeName in geometry.attributes) {
 					gl.deleteBuffer(webglBuffer.vbos.get(attributeName).handle);
 				}
+				// Electron may expose VAO creation through an extension or a partial
+				// WebGL context without the core delete method. Never let teardown
+				// abort the rest of the point-cloud buffer cleanup.
+				if (typeof gl.deleteVertexArray === "function") {
+					gl.deleteVertexArray(webglBuffer.vao);
+				} else {
+					const vaoExtension = typeof gl.getExtension === "function"
+						? gl.getExtension("OES_vertex_array_object")
+						: null;
+					vaoExtension?.deleteVertexArrayOES?.(webglBuffer.vao);
+				}
 				this.buffers.delete(geometry);
 			}
 		}
@@ -63360,6 +63371,7 @@ void main() {
 
 				let numPoints = webglBuffer.numElements;
 				gl.drawArrays(gl.POINTS, 0, numPoints);
+				this.drawCalls = (this.drawCalls || 0) + 1;
 
 				i++;
 			}
@@ -66309,18 +66321,39 @@ void main() {
 
 	class NodeLoader{
 
-		constructor(url){
+		constructor(url, signal){
 			this.url = url;
+			this.abortController = new AbortController();
+			this.activeWorkers = new Set();
+			this.disposed = false;
+			if (signal?.aborted) {
+				this.abort();
+			} else {
+				signal?.addEventListener('abort', () => this.abort(), {once: true});
+			}
+		}
+
+		abort(){
+			if (this.disposed) return;
+			this.disposed = true;
+			this.abortController.abort();
+			for (const task of this.activeWorkers) {
+				task.worker.terminate();
+				task.node.loading = false;
+				Potree.numNodesLoading--;
+			}
+			this.activeWorkers.clear();
 		}
 
 		async load(node){
 
-			if(node.loaded || node.loading){
+			if(this.disposed || node.loaded || node.loading){
 				return;
 			}
 
 			node.loading = true;
 			Potree.numNodesLoading++;
+			let task = null;
 
 			// console.log(node.name, node.numPoints);
 
@@ -66349,6 +66382,7 @@ void main() {
 					console.warn(`loaded node with 0 bytes: ${node.name}`);
 				}else {
 					let response = await fetch(urlOctree, {
+						signal: this.abortController.signal,
 						headers: {
 							'content-type': 'multipart/byteranges',
 							'Range': `bytes=${first}-${last}`,
@@ -66357,6 +66391,7 @@ void main() {
 
 					buffer = await response.arrayBuffer();
 				}
+				if (this.disposed) throw new DOMException('Aborted', 'AbortError');
 
 				let workerPath;
 				if(this.metadata.encoding === "BROTLI"){
@@ -66366,13 +66401,21 @@ void main() {
 				}
 
 				let worker = Potree.workerPool.getWorker(workerPath);
+				task = {worker, node};
+				this.activeWorkers.add(task);
 
-				worker.onmessage = function (e) {
+				worker.onmessage = (e) => {
 
 					let data = e.data;
 					let buffers = data.attributeBuffers;
 
+					this.activeWorkers.delete(task);
 					Potree.workerPool.returnWorker(workerPath, worker);
+					if (this.disposed) {
+						node.loading = false;
+						Potree.numNodesLoading--;
+						return;
+					}
 
 					let geometry = new BufferGeometry();
 					
@@ -66440,10 +66483,12 @@ void main() {
 
 				worker.postMessage(message, [message.buffer]);
 			}catch(e){
+				if (task && this.activeWorkers.delete(task)) task.worker.terminate();
 				node.loaded = false;
 				node.loading = false;
 				Potree.numNodesLoading--;
 
+				if(this.disposed || e.name === 'AbortError') return;
 				console.log(`failed to load ${node.name}`);
 				console.log(e);
 				console.log(`trying again!`);
@@ -66553,6 +66598,7 @@ void main() {
 			let last = first + hierarchyByteSize - 1n;
 
 			let response = await fetch(hierarchyPath, {
+				signal: this.abortController.signal,
 				headers: {
 					'content-type': 'multipart/byteranges',
 					'Range': `bytes=${first}-${last}`,
@@ -66562,6 +66608,7 @@ void main() {
 
 
 			let buffer = await response.arrayBuffer();
+			if (this.disposed) return;
 
 			this.parseHierarchy(node, buffer);
 
@@ -66686,14 +66733,15 @@ void main() {
 			return attributes;
 		}
 
-		static async load(url){
+		static async load(url, signal){
 
-			let response = await fetch(url);
+			let response = await fetch(url, {signal});
 			let metadata = await response.json();
+			if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
 			let attributes = OctreeLoader.parseAttributes(metadata.attributes);
 
-			let loader = new NodeLoader(url);
+			let loader = new NodeLoader(url, signal);
 			loader.metadata = metadata;
 			loader.attributes = attributes;
 			loader.scale = metadata.scale;
@@ -88289,7 +88337,13 @@ ENDSEC
 				//requestAnimationFrame(this.loop.bind(this));
 			//}
 
-			this.renderer.setAnimationLoop(this.loop.bind(this));
+			this.performanceStats = {
+				frameCount: 0, longFrames: 0, workMs: 0,
+				updateMs: 0, renderMs: 0, drawCalls: 0, lastTimestamp: null,
+			};
+			this.renderLoop = this.loop.bind(this);
+			this.renderingPaused = false;
+			this.renderer.setAnimationLoop(this.renderLoop);
 
 			this.loadGUI = this.loadGUI.bind(this);
 
@@ -90207,7 +90261,20 @@ ENDSEC
 			}
 		}
 
+		setRenderingPaused(paused){
+			if (this.renderingPaused === paused) return;
+			this.renderingPaused = paused;
+			this.renderer.setAnimationLoop(paused ? null : this.renderLoop);
+			this.performanceStats.lastTimestamp = null;
+			if (paused) this.performanceStats.drawCalls = 0;
+			this.clock.getDelta();
+		}
+
 		loop(timestamp){
+			const frameStart = performance.now();
+			const stats = this.performanceStats;
+			if (stats.lastTimestamp !== null && timestamp - stats.lastTimestamp >= 50) stats.longFrames++;
+			stats.lastTimestamp = timestamp;
 
 			if(this.stats){
 				this.stats.begin();
@@ -90218,7 +90285,15 @@ ENDSEC
 			}
 
 			this.update(this.clock.getDelta(), timestamp);
+			const updateEnd = performance.now();
+			this.pRenderer.drawCalls = 0;
 			this.render();
+			const renderEnd = performance.now();
+			stats.frameCount++;
+			stats.updateMs += updateEnd - frameStart;
+			stats.renderMs += renderEnd - updateEnd;
+			stats.workMs += renderEnd - frameStart;
+			stats.drawCalls = this.pRenderer.drawCalls;
 
 			// let vrActive = viewer.renderer.xr.isPresenting;
 			// if(vrActive){
@@ -90398,13 +90473,13 @@ ENDSEC
 	let resourcePath = exports.scriptPath + '/resources';
 
 
-	function loadPointCloud$1(path, name, callback){
+	function loadPointCloud$1(path, name, callback, options = {}){
 		let loaded = function(e){
 			e.pointcloud.name = name;
 			callback(e);
 		};
 
-		let promise = new Promise( resolve => {
+		let promise = new Promise( (resolve, reject) => {
 
 			// load pointcloud
 			if (!path){
@@ -90441,13 +90516,14 @@ ENDSEC
 					}
 				});
 			} else if (path.indexOf('metadata.json') > 0) {
-				Potree.OctreeLoader.load(path).then(e => {
+				Potree.OctreeLoader.load(path, options.signal).then(e => {
 					let geometry = e.geometry;
 
 					if(!geometry){
-						console.error(new Error(`failed to load point cloud from URL: ${path}`));
+						reject(new Error(`failed to load point cloud from URL: ${path}`));
 					}else {
 						let pointcloud = new PointCloudOctree(geometry);
+						pointcloud.name = name;
 
 						let aPosition = pointcloud.getAttribute("position");
 
@@ -90460,18 +90536,7 @@ ENDSEC
 						// loaded(pointcloud);
 						resolve({type: 'pointcloud_loaded', pointcloud: pointcloud});
 					}
-				});
-
-				OctreeLoader.load(path, function (geometry) {
-					if (!geometry) {
-						//callback({type: 'loading_failed'});
-						console.error(new Error(`failed to load point cloud from URL: ${path}`));
-					} else {
-						let pointcloud = new PointCloudOctree(geometry);
-						// loaded(pointcloud);
-						resolve({type: 'pointcloud_loaded', pointcloud: pointcloud});
-					}
-				});
+				}).catch(reject);
 			} else if (path.indexOf('.vpc') > 0) {
 				PointCloudArena4DGeometry.load(path, function (geometry) {
 					if (!geometry) {

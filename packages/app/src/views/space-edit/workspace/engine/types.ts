@@ -179,6 +179,27 @@ export interface SpaceRenderSettings {
   contrast: number;
 }
 
+/** Read-only scene counters used by the optional F1 performance overlay. */
+export interface SpaceScenePerformanceStats {
+  frameCount: number;
+  longFrames: number;
+  workMs: number;
+  updateMs: number;
+  renderMs: number;
+  totalPointCount: number | null;
+  visiblePointCount: number | null;
+  visibleNodeCount: number;
+  residentPointCount: number | null;
+  gpuNodeCount: number | null;
+  drawCalls: number | null;
+  drawCallsEstimated: boolean;
+  triangles: number | null;
+  geometries: number | null;
+  textures: number | null;
+  canvasWidth: number;
+  canvasHeight: number;
+}
+
 export const DEFAULT_SPACE_RENDER_SETTINGS: SpaceRenderSettings = {
   detailLevel: 4,
   pointBudget: SPACE_POINT_BUDGET_ALL,
@@ -260,6 +281,7 @@ export interface SpaceSceneAdapter {
   setViewLock(lock: SpaceViewLock): void;
   getRenderSettings(): SpaceRenderSettings;
   setRenderSettings(settings: SpaceRenderSettings): void;
+  getPerformanceStats(): SpaceScenePerformanceStats;
   setDrawingLayer(layerId: string, data: SpaceDrawingLayer): void;
   removeDrawingLayer(layerId: string): void;
   clearDrawingLayers(): void;

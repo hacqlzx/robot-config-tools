@@ -2,7 +2,8 @@ packages:
   - packages/app
   - packages/database
 
-ignoredBuiltDependencies:
-  - '@parcel/watcher'
-  - esbuild
-  - better-sqlite3
+allowBuilds:
+  '@parcel/watcher': true
+  electron-winstaller: true
+  esbuild: true
+  protobufjs: true

@@ -8,6 +8,7 @@ import {
 export interface PotreePointCloud {
   name: string;
   visible: boolean;
+  numVisiblePoints?: number;
   position?: PotreeVector3;
   material: {
     size: number;
@@ -33,6 +34,7 @@ export interface PotreePointCloud {
     root?: PotreeGeometryNode;
     numPoints?: number;
     loader?: {
+      abort?: () => void;
       metadata?: {
         points?: number;
       };
@@ -91,6 +93,8 @@ export interface PotreeRay {
 export interface PotreeGeometryNode {
   id?: string | number;
   children?: Record<string, PotreeGeometryNode> | PotreeGeometryNode[];
+  geometry?: { dispose: () => void } | null;
+  loaded?: boolean;
   dispose?: () => void;
 }
 
@@ -280,6 +284,21 @@ export interface PotreeThreeNamespace {
 }
 
 export interface PotreeViewerInstance {
+  performanceStats?: {
+    frameCount: number;
+    longFrames: number;
+    workMs: number;
+    updateMs: number;
+    renderMs: number;
+    drawCalls: number;
+  };
+  pRenderer?: {
+    buffers: Map<unknown, unknown>;
+  };
+  setRenderingPaused?: (paused: boolean) => void;
+  loop?: (timestamp: number) => void;
+  update?: (delta: number, timestamp: number) => void;
+  clock?: { getDelta: () => number };
   scene: {
     pointclouds: PotreePointCloud[];
     volumes: PotreeBoxVolume[];
@@ -292,9 +311,19 @@ export interface PotreeViewerInstance {
   };
   renderer: {
     domElement: HTMLElement;
+    info?: {
+      render?: {
+        calls?: number;
+        triangles?: number;
+      };
+      memory?: {
+        geometries?: number;
+        textures?: number;
+      };
+    };
     setSize: (width: number, height: number) => void;
     render: (scene: unknown, camera: PotreeCamera) => void;
-    setAnimationLoop: (callback: null) => void;
+    setAnimationLoop: (callback: ((timestamp: number) => void) | null) => void;
     dispose: () => void;
     forceContextLoss?: () => void;
   };
@@ -363,6 +392,8 @@ export interface PotreeNamespace {
   loadPointCloud: (
     metadataUrl: string,
     name: string,
+    callback?: undefined,
+    options?: { signal?: AbortSignal },
   ) => Promise<{ type: string; pointcloud: PotreePointCloud }>;
   lru?: PotreeNodeCache;
   scriptPath?: string;

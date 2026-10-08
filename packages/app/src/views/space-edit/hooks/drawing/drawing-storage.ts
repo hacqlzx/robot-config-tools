@@ -396,7 +396,11 @@ export async function loadCabinetNameSequence(api: ElectronAPI, modelPath: strin
   let cabinetCount = 0;
   for (const record of records) {
     const type = areaType(record);
-    if (type === AREA_TYPE_CABINET_ROW) cabinetRowCount += 1;
+    if (type === AREA_TYPE_CABINET_ROW
+      || (type === AREA_TYPE_CABINET && !valueText(record.parent_id))) {
+      // 历史单屏柜没有 type=1 根记录，按一个柜排参与后续命名序号，避免新旧数据重名。
+      cabinetRowCount += 1;
+    }
     if (type === AREA_TYPE_CABINET) cabinetCount += 1;
   }
   return {

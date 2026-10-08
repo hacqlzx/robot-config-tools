@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { useElementActive } from "@/components/useElementActive";
 import type { SpaceSceneAdapterFactory, SpaceSceneLifecycleState } from "../engine/types";
 import { useSpaceSceneHost } from "../engine/useSpaceSceneHost";
+import SpacePerformanceMonitor from "./SpacePerformanceMonitor";
 
 interface SpaceSceneHostProps {
   adapterFactory: SpaceSceneAdapterFactory | null;
@@ -23,7 +24,7 @@ export default function SpaceSceneHost({ adapterFactory, overlay, onSceneClick, 
   const sectionRef = useRef<HTMLElement | null>(null);
   const pointerDownRef = useRef<{ x: number; y: number } | null>(null);
   const active = useElementActive(sectionRef);
-  const { hostRef, state, error } = useSpaceSceneHost(adapterFactory, active);
+  const { hostRef, adapterRef, state, error } = useSpaceSceneHost(adapterFactory, active);
   const renderedOverlay = typeof overlay === "function" ? overlay(state) : overlay;
 
   return (
@@ -50,6 +51,7 @@ export default function SpaceSceneHost({ adapterFactory, overlay, onSceneClick, 
       style={{ flex: 1, minWidth: 0, position: "relative", overflow: "hidden", background: "#181a1f", cursor: picking ? "crosshair" : undefined }}
     >
       <div ref={hostRef} data-scene-state={state} style={{ position: "absolute", inset: 0 }} />
+      <SpacePerformanceMonitor active={active} adapterRef={adapterRef} />
       {state !== "ready" && (
         <div
           role={state === "failed" ? "alert" : "status"}

@@ -621,13 +621,15 @@ interface CabinetExportRecord {
   region_id: string;
 }
 
-function collectCabinetRegions(mapRoot: string, mains: DeviceMain[]): CabinetRegionRef[] {
+function collectCabinetRegions(mapDir: string, mains: DeviceMain[]): CabinetRegionRef[] {
   const result: CabinetRegionRef[] = [];
   const seen = new Set<string>();
   const mainLookup = buildMainLookup(mains);
-  if (!fs.existsSync(mapRoot)) return result;
+  if (!fs.existsSync(mapDir)) return result;
 
-  const descriptionFiles = listFilesRecursive(mapRoot)
+  // 只扫描当前地图目录。项目地图根目录下可能有多张地图，不能把它们的
+  // description_file.json 合并到当前导出的 cabinet.json。
+  const descriptionFiles = listFilesRecursive(mapDir)
     .filter((filePath) => path.basename(filePath).toLowerCase() === DESCRIPTION_FILE_NAME)
     .sort((a, b) => a.localeCompare(b));
 
@@ -657,39 +659,25 @@ function collectCabinetRegions(mapRoot: string, mains: DeviceMain[]): CabinetReg
   return result;
 }
 
-function buildCabinetRecords(
-  mains: DeviceMain[],
-  cabinetRegions: CabinetRegionRef[],
-): CabinetExportRecord[] {
-  const regionByMainCode = new Map<string, CabinetRegionRef>();
-  for (const region of cabinetRegions) {
-    if (region.mainDeviceCode && !regionByMainCode.has(region.mainDeviceCode)) {
-      regionByMainCode.set(region.mainDeviceCode, region);
-    }
-  }
-
+function buildCabinetRecords(cabinetRegions: CabinetRegionRef[]): CabinetExportRecord[] {
   const records: CabinetExportRecord[] = [];
   const addedMainDeviceCodes = new Set<string>();
-  for (const main of mains) {
-    if (main.mainDeviceType !== MAIN_DEVICE_TYPE_CABINET) continue;
-    const mainDeviceCode = textValue(main.mainDeviceCode);
-    if (!mainDeviceCode || addedMainDeviceCodes.has(mainDeviceCode)) continue;
-    addedMainDeviceCodes.add(mainDeviceCode);
+  const addedRegionIds = new Set<string>();
 
-    const region = regionByMainCode.get(mainDeviceCode);
+  // cabinet.json 是当前地图的屏柜清单，不是项目点表中的屏柜全集。
+  // 以当前地图 description_file.json 的 type=2 记录为准，避免把其他地图
+  // 或尚未在地图中绘制的屏柜带入导出包。
+  for (const region of cabinetRegions) {
+    const mainDeviceCode = textValue(region.mainDeviceCode);
+    const regionId = textValue(region.regionId);
+    if (mainDeviceCode && addedMainDeviceCodes.has(mainDeviceCode)) continue;
+    if (!mainDeviceCode && regionId && addedRegionIds.has(regionId)) continue;
     records.push({
       main_device_code: mainDeviceCode,
-      region_id: region?.regionId || "",
+      region_id: regionId,
     });
-  }
-
-  for (const region of cabinetRegions) {
-    if (region.mainDeviceCode && addedMainDeviceCodes.has(region.mainDeviceCode)) continue;
-    records.push({
-      main_device_code: region.mainDeviceCode,
-      region_id: region.regionId,
-    });
-    if (region.mainDeviceCode) addedMainDeviceCodes.add(region.mainDeviceCode);
+    if (mainDeviceCode) addedMainDeviceCodes.add(mainDeviceCode);
+    if (regionId) addedRegionIds.add(regionId);
   }
 
   return records;
@@ -778,8 +766,8 @@ export async function exportSpaceZip(
   const componentPointExcel = generateMapComponentPointExcel(src, pointTableData);
   const regionExcelName = `${mapName}区域.xlsx`;
   const componentPointExcelName = `${mapName}部件点.xlsx`;
-  const cabinetRegions = collectCabinetRegions(mapRoot, pointTableData.mains);
-  const cabinetRecords = buildCabinetRecords(pointTableData.mains, cabinetRegions);
+  const cabinetRegions = collectCabinetRegions(src, pointTableData.mains);
+  const cabinetRecords = buildCabinetRecords(cabinetRegions);
   const cabinetText = `${JSON.stringify(cabinetRecords, null, 2)}\n`;
 
   onProgress?.("准备导出文件...", 1);

@@ -86,7 +86,8 @@ export default function CabinetPanel({ cornerCount, cabinetCount, nameSequence, 
   // 屏柜表格：行数跟随屏柜数量增减，保留已编辑的值
   const [rows, setRows] = useState<CabinetRow[]>([]);
   const [cabinetRow, setCabinetRow] = useState<CabinetRow>(() => ({ key: gen18(), code: gen18(), name: `柜排${cabinetRowNameStart}` }));
-  const isSplit = cabinetCount > 1;
+  // 单个屏柜也必须生成柜排(type=1)根记录，因此只要已有屏柜就显示并提交柜排信息。
+  const hasCabinetRow = cabinetCount > 0;
 
   useEffect(() => {
     editedRowNameKeysRef.current.clear();
@@ -148,11 +149,11 @@ export default function CabinetPanel({ cornerCount, cabinetCount, nameSequence, 
     const area = { id: areaId, name: v?.voltName || "", code: v?.voltCode || "" };
     const bay = { id: bayId, name: b?.bayName || "", code: b?.bayCode || "" };
     const nextRows = rows.map((r) => ({ ...r, code: r.code.trim(), name: r.name.trim() }));
-    const nextCabinetRow = isSplit
+    const nextCabinetRow = hasCabinetRow
       ? { ...cabinetRow, code: cabinetRow.code.trim(), name: cabinetRow.name.trim() }
       : null;
     onDraftChange?.({ area, bay, cabinetRow: nextCabinetRow, rows: nextRows });
-  }, [areaId, bayId, voltList, bayList, rows, cabinetRow, isSplit, onDraftChange]);
+  }, [areaId, bayId, voltList, bayList, rows, cabinetRow, hasCabinetRow, onDraftChange]);
 
   const columns = [
     {
@@ -195,7 +196,7 @@ export default function CabinetPanel({ cornerCount, cabinetCount, nameSequence, 
       return;
     }
     const nextRows = rows.map((r) => ({ ...r, code: r.code.trim(), name: r.name.trim() }));
-    const nextCabinetRow = isSplit
+    const nextCabinetRow = hasCabinetRow
       ? { ...cabinetRow, code: cabinetRow.code.trim(), name: cabinetRow.name.trim() }
       : null;
     if (nextRows.length === 0) {
@@ -240,7 +241,7 @@ export default function CabinetPanel({ cornerCount, cabinetCount, nameSequence, 
     const area = { id: areaId, name: v?.voltName || "", code: v?.voltCode || "" };
     const bay = { id: bayId, name: b?.bayName || "", code: b?.bayCode || "" };
     onSave?.({ area, bay, cabinetRow: nextCabinetRow, rows: nextRows });
-  }, [areaId, bayId, voltList, bayList, rows, cabinetRow, isSplit, existingCabinetNames, onSave]);
+  }, [areaId, bayId, voltList, bayList, rows, cabinetRow, hasCabinetRow, existingCabinetNames, onSave]);
 
   const tip = cornerCount < 4
     ? `点击屏柜【${STEP_LABELS[cornerCount]}】（${cornerCount + 1}/4）`
@@ -317,7 +318,7 @@ export default function CabinetPanel({ cornerCount, cabinetCount, nameSequence, 
           />
         </div>
 
-        {isSplit && (
+        {hasCabinetRow && (
           <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "36px 1fr", gap: "8px", alignItems: "center" }}>
             <span style={{ fontSize: 12, color: "#666" }}>柜排</span>
             <Input

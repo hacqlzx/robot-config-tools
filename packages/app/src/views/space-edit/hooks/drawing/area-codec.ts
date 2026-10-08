@@ -303,9 +303,9 @@ export function isCabinetRecord(record: RobotAreaRecord): boolean {
 }
 
 function hasCabinetRow(item: CabinetItem): boolean {
-  // 只要存在柜排元数据、多个屏柜或有效分割线，就必须写成“根柜排 + 子屏柜”，不能降级为独立屏柜。
+  // 协议统一使用“根柜排 + 子屏柜”：只要存在一个屏柜也必须写 type=1 根记录，不能再降级为独立 type=2。
   const validSplits = (item.geometry.splits || []).filter((value) => Number.isFinite(value) && value > 0 && value < 1);
-  return validSplits.length > 0 || item.cabinets.length > 1 || !!item.cabinetRow;
+  return item.cabinets.length > 0 || validSplits.length > 0 || !!item.cabinetRow;
 }
 
 export function findCabinetRootForItem(records: RobotAreaRecord[], item: CabinetItem): RobotAreaRecord | null {
@@ -340,7 +340,7 @@ export function makeCabinetRobotAreas(item: CabinetItem, rootId: number, usedIds
   usedIds.add(rootId);
 
   if (!hasCabinetRow(item)) {
-    // 单个且没有柜排语义的对象直接保存为 type=2，不创建无意义的 type=1 父记录。
+    // 仅保留给没有任何屏柜数据的异常/兼容对象；正常保存路径至少会生成一个柜排根记录。
     const cabinet = item.cabinets[0];
     return [{
       id: rootIdText,
@@ -497,7 +497,9 @@ function buildCabinetItem(row: RobotAreaRecord, children: RobotAreaRecord[]): Ca
     type: "cabinet",
     area: { id: 0, name: "", code: "" },
     bay,
-    cabinetRow: childInfos.length > 0 ? { code: cabinetMainDeviceCode(row), name: rowName, bay } : null,
+    // type=1 本身就是柜排根记录，即使历史文件缺少子屏柜，也保留柜排元数据，
+    // 以便下一次保存补齐一个 type=2 子屏柜。
+    cabinetRow: { code: cabinetMainDeviceCode(row), name: rowName, bay },
     geometry: { verts: rowVerts, splits },
     cabinets,
     updatedAt: valueText(row.time),
@@ -505,19 +507,20 @@ function buildCabinetItem(row: RobotAreaRecord, children: RobotAreaRecord[]): Ca
 }
 
 function buildStandaloneCabinetItem(record: RobotAreaRecord): CabinetItem | null {
-  // 没有 parent_id 的 type=2 是独立屏柜，在编辑器中不生成 cabinetRow 和 splits。
+  // 兼容历史上没有柜排根记录的单屏柜：回显时补出柜排元数据，下一次保存会升级为 type=1 + type=2。
   const pose = parseAreaPose(record);
   if (!pose) return null;
   const recordId = valueText(record.id);
   const name = valueText(record.name) || `屏柜${recordId || "1"}`;
+  const bay = bayFromRecord(record);
   return {
     id: recordId || String(positiveInt(record.id) ?? 0),
     type: "cabinet",
     area: { id: 0, name: "", code: "" },
-    bay: bayFromRecord(record),
-    cabinetRow: null,
+    bay,
+    cabinetRow: { code: cabinetMainDeviceCode(record), name, bay },
     geometry: { verts: cabinetPoseToVerts(pose), splits: [] },
-    cabinets: [{ code: cabinetMainDeviceCode(record), name, bay: bayFromRecord(record) }],
+    cabinets: [{ code: cabinetMainDeviceCode(record), name, bay }],
     updatedAt: valueText(record.time),
   };
 }

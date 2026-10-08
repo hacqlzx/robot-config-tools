@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import type {
   SpaceSceneAdapter,
   SpaceSceneAdapterFactory,
@@ -7,6 +7,7 @@ import type {
 
 interface UseSpaceSceneHostResult {
   hostRef: React.RefObject<HTMLDivElement>;
+  adapterRef: RefObject<SpaceSceneAdapter | null>;
   state: SpaceSceneLifecycleState;
   error: Error | null;
 }
@@ -17,6 +18,8 @@ export function useSpaceSceneHost(
 ): UseSpaceSceneHostResult {
   const hostRef = useRef<HTMLDivElement>(null);
   const adapterRef = useRef<SpaceSceneAdapter | null>(null);
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const [state, setState] = useState<SpaceSceneLifecycleState>("detached");
   const [error, setError] = useState<Error | null>(null);
 
@@ -35,7 +38,7 @@ export function useSpaceSceneHost(
     let disposed = false;
     const adapter = adapterFactory();
     adapterRef.current = adapter;
-    adapter.setActive(active);
+    adapter.setActive(activeRef.current);
     setState("mounting");
     setError(null);
 
@@ -45,7 +48,7 @@ export function useSpaceSceneHost(
     void Promise.resolve(adapter.mount(host))
       .then(() => {
         if (!disposed) {
-          adapter.setActive(active);
+          adapter.setActive(activeRef.current);
           adapter.resize();
           setState("ready");
         }
@@ -66,5 +69,5 @@ export function useSpaceSceneHost(
     };
   }, [adapterFactory]);
 
-  return { hostRef, state, error };
+  return { hostRef, adapterRef, state, error };
 }

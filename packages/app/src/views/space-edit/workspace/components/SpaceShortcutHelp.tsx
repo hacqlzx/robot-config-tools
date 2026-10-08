@@ -32,6 +32,7 @@ const sections = [
       ["Ctrl + Z", "撤销"],
       ["Ctrl + Y", "恢复"],
       ["Ctrl + Shift + Z", "恢复"],
+      ["F1", "打开 / 关闭性能监控"],
       ["方向键", "微调选中的充电区域或设备区域"],
       ["Delete / Backspace", "删除选中元素"],
     ],

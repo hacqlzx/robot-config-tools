@@ -14,7 +14,7 @@ export interface CabinetItem {
   /** 所属区域和间隔信息来自本地设备台账，不属于机器人区域 pose 的几何字段。 */
   area: { id: number; name: string; code: string };
   bay: { id: number; name: string; code: string };
-  /** 有值时表示整组几何是一排屏柜；独立屏柜保持 null 或省略。 */
+  /** 屏柜协议统一使用柜排根记录；历史独立屏柜读取时会补出该字段。 */
   cabinetRow?: { code: string; name: string; bay?: CabinetBayRef | null } | null;
   /** verts 为场景中的 8 个包围盒顶点；splits 为沿柜排宽度方向、取值在 (0, 1) 的分割比例。 */
   geometry: { verts: number[][]; splits: number[] };

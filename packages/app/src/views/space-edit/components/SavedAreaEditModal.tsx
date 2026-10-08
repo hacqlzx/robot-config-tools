@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { Button, Input, Table, message } from "antd";
-import { CloseOutlined, SaveOutlined } from "@ant-design/icons";
+import { Button, Input, Popconfirm, Table, message } from "antd";
+import { CloseOutlined, DeleteOutlined, SaveOutlined } from "@ant-design/icons";
 import type { CabinetItem, DeviceAreaItem } from "../hooks/drawing/drawing-schema";
 
 type EditableArea = CabinetItem | DeviceAreaItem;
@@ -10,9 +10,11 @@ interface Props {
   saving: boolean;
   onClose: () => void;
   onSave: (item: EditableArea) => Promise<boolean>;
+  onDelete: () => Promise<void>;
 }
 
-export default function SavedAreaEditModal({ item, saving, onClose, onSave }: Props) {
+export default function SavedAreaEditModal({ item, saving, onClose, onSave, onDelete }: Props) {
+  const [deleting, setDeleting] = useState(false);
   const [name, setName] = useState(item.type === "cabinet" ? item.cabinetRow?.name || "" : item.name || "");
   const [cabinets, setCabinets] = useState(() => item.type === "cabinet"
     ? item.cabinets.map((cabinet) => ({ ...cabinet }))
@@ -20,6 +22,18 @@ export default function SavedAreaEditModal({ item, saving, onClose, onSave }: Pr
 
   const updateCabinet = (index: number, value: string) => {
     setCabinets((current) => current.map((cabinet, row) => row === index ? { ...cabinet, name: value } : cabinet));
+  };
+
+  const areaLabel = item.type === "cabinet" ? "屏柜" : "设备区";
+  const busy = saving || deleting;
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      await onDelete();
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const handleSave = async () => {
@@ -73,16 +87,38 @@ export default function SavedAreaEditModal({ item, saving, onClose, onSave }: Pr
         fontWeight: 600,
       }}>
         <span>{item.type === "cabinet" ? "编辑屏柜" : "编辑设备区域"}</span>
-        <Button
-          type="text"
-          size="small"
-          aria-label="关闭"
-          title="关闭"
-          icon={<CloseOutlined />}
-          disabled={saving}
-          onClick={onClose}
-          style={{ color: "#fff" }}
-        />
+        <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+          <Popconfirm
+            title={`删除${areaLabel}？`}
+            description={`确认删除当前${areaLabel}吗？此操作不可撤销。`}
+            okText="删除"
+            okButtonProps={{ danger: true }}
+            cancelText="取消"
+            placement="bottomRight"
+            onConfirm={handleDelete}
+          >
+            <Button
+              type="text"
+              size="small"
+              aria-label={`删除${areaLabel}`}
+              title={`删除${areaLabel}`}
+              icon={<DeleteOutlined />}
+              disabled={busy}
+              loading={deleting}
+              style={{ color: "#fff" }}
+            />
+          </Popconfirm>
+          <Button
+            type="text"
+            size="small"
+            aria-label="关闭"
+            title="关闭"
+            icon={<CloseOutlined />}
+            disabled={busy}
+            onClick={onClose}
+            style={{ color: "#fff" }}
+          />
+        </div>
       </div>
       <div style={{ padding: 12, overflow: "auto" }}>
         {item.type === "cabinet" ? (
@@ -90,7 +126,7 @@ export default function SavedAreaEditModal({ item, saving, onClose, onSave }: Pr
             {item.cabinetRow && (
               <div style={{ marginBottom: 12 }}>
                 <div style={{ marginBottom: 6, fontSize: 12, color: "#666" }}>柜排名称</div>
-                <Input size="small" value={name} maxLength={100} onChange={(event) => setName(event.target.value)} disabled={saving} />
+                <Input size="small" value={name} maxLength={100} onChange={(event) => setName(event.target.value)} disabled={busy} />
               </div>
             )}
             <Table
@@ -101,7 +137,7 @@ export default function SavedAreaEditModal({ item, saving, onClose, onSave }: Pr
               scroll={{ y: 220 }}
               columns={[
                 { title: "屏柜名称", dataIndex: "name", width: 170, render: (_value, _record, index) => (
-                  <Input size="small" value={cabinets[index].name} maxLength={100} disabled={saving}
+                  <Input size="small" value={cabinets[index].name} maxLength={100} disabled={busy}
                     onChange={(event) => updateCabinet(index, event.target.value)} />
                 ) },
                 { title: "屏柜编码", dataIndex: "code", render: (_value, _record, index) => (
@@ -113,12 +149,12 @@ export default function SavedAreaEditModal({ item, saving, onClose, onSave }: Pr
         ) : (
           <div>
             <div style={{ marginBottom: 6, fontSize: 12, color: "#666" }}>设备区域名称</div>
-            <Input size="small" value={name} maxLength={100} onChange={(event) => setName(event.target.value)} disabled={saving} />
+            <Input size="small" value={name} maxLength={100} onChange={(event) => setName(event.target.value)} disabled={busy} />
           </div>
         )}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
-          <Button size="small" disabled={saving} onClick={onClose}>取消</Button>
-          <Button type="primary" size="small" icon={<SaveOutlined />} loading={saving} onClick={() => void handleSave()}>
+          <Button size="small" disabled={busy} onClick={onClose}>取消</Button>
+          <Button type="primary" size="small" icon={<SaveOutlined />} loading={saving} disabled={deleting} onClick={() => void handleSave()}>
             保存
           </Button>
         </div>
