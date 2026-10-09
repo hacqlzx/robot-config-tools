@@ -54,7 +54,10 @@ function getBackendOrigin(ip: string): string {
 
 function getRequestLabel(config: any): string {
   const method = String(config?.method || "get").toUpperCase();
-  const url = `${config?.baseURL || ""}${config?.url || ""}`;
+  const requestUrl = String(config?.url || "");
+  const url = /^https?:\/\//i.test(requestUrl)
+    ? requestUrl
+    : `${config?.baseURL || ""}${requestUrl}`;
   return `${method} ${url}`;
 }
 
@@ -102,7 +105,7 @@ instance.interceptors.request.use((config) => {
   const meta = config as any;
   meta.__backendIp = ip;
   meta.__backendRequestStartedAt = Date.now();
-  console.debug("[后台请求] 开始", { requestId, request: getRequestLabel(config) });
+  console.log("[后台请求] 开始", { requestId, request: getRequestLabel(config) });
   return config;
 });
 
@@ -118,7 +121,7 @@ instance.interceptors.response.use(
     if (!meta?.__backendIp || meta.__backendIp === getBackendIp()) {
       setConnectionStatus("connected");
     }
-    console.debug("[后台请求] 完成", {
+    console.log("[后台请求] 完成", {
       requestId,
       request: getRequestLabel(res.config),
       status: res.status,
@@ -183,5 +186,40 @@ const http = {
   request: <T = any>(config: any) =>
     instance.request<any, AxiosResponse<T>>(config),
 };
+
+/**
+ * 用渲染层 Axios 下载小型文件。Electron 主流程使用主进程流式落盘，
+ * 这里仅作为浏览器模式兜底，避免通过裸链接绕过 Axios 请求日志。
+ */
+export async function downloadByAxios(url: string, fileName: string): Promise<void> {
+  const response = await instance.get<Blob, AxiosResponse<Blob>>(url, { responseType: "blob" });
+  const blob = response.data;
+  if (!(blob instanceof Blob) || blob.size === 0) {
+    throw new BackendRequestError("下载内容为空");
+  }
+
+  const contentType = String(response.headers?.["content-type"] || "").toLowerCase();
+  if (contentType.includes("json") || contentType.startsWith("text/")) {
+    const text = await blob.text();
+    let detail = text.trim();
+    try {
+      const body = JSON.parse(text);
+      detail = String(body?.message || body?.msg || body?.error || detail).trim();
+    } catch {
+      // 非 JSON 错误响应继续使用短文本。
+    }
+    throw new BackendRequestError(detail || "下载失败");
+  }
+
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.style.display = "none";
+  link.href = objectUrl;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+}
 
 export default http;

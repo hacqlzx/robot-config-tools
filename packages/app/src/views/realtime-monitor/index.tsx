@@ -45,7 +45,7 @@ import {
   stopPointCollect,
   terminateRealtimeTask,
 } from "@/api/config.js";
-import http, { getRequestErrorMessage } from "@/services/http";
+import http, { downloadByAxios, getRequestErrorMessage } from "@/services/http";
 import { refreshRobotRecords } from "@/services/robot-options";
 import { useDocumentActive } from "@/components/useElementActive";
 import {
@@ -298,16 +298,6 @@ function getRobotLogFileName(fileUrl: string): string {
   } catch {
     return rawName.replace(/[<>:"/\\|?*]/g, "-") || "机器人日志小包.zip";
   }
-}
-
-function startBrowserDownload(fileUrl: string, fileName: string): void {
-  const link = document.createElement("a");
-  link.style.display = "none";
-  link.href = fileUrl;
-  link.download = fileName;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
 }
 
 function getRobotId(robot: ResolvedRobot | null): number | undefined {
@@ -1556,6 +1546,38 @@ export default function RealtimeMonitor() {
     const endDate = formatLogDateTime(new Date(now.getTime() + 60 * 1000));
     setRobotLogLoading(true);
     try {
+      const downloadTasks = window.electronAPI?.downloadTasks;
+      if (downloadTasks) {
+        const tasks = await downloadTasks.list().catch(() => [] as ExportTaskInfo[]);
+        if (tasks.some((task) => task.status === "pending" || task.status === "running")) {
+          message.warning("已有下载任务进行中，请稍后再试");
+          return;
+        }
+
+        const selectDir = window.electronAPI?.selectDir;
+        if (!selectDir) {
+          message.error("当前版本不支持选择下载目录");
+          return;
+        }
+        const destDir = await selectDir("选择录制小包保存目录");
+        if (!destDir) return;
+
+        const result = await downloadTasks.create({
+          type: "remote-export",
+          name: "机器人日志小包",
+          backendIp: getBackendIp(),
+          exportPath: "/robot/tool/file/getRobotLog",
+          query: { robotId: currentRobotId, startDate, endDate },
+          destDir,
+        });
+        if (!result.success) {
+          message.error(result.error || "创建下载任务失败");
+          return;
+        }
+        if (triggerElement) startDownloadTaskFlyAnimation(triggerElement);
+        return;
+      }
+
       const res = await getRobotLog({ robotId: currentRobotId, startDate, endDate });
       const body = (res.data || {}) as ApiResponse<unknown>;
       if (!isOk(body)) {
@@ -1568,34 +1590,7 @@ export default function RealtimeMonitor() {
         return;
       }
 
-      const fileName = getRobotLogFileName(fileUrl);
-      const downloadTasks = window.electronAPI?.downloadTasks;
-      if (downloadTasks && window.electronAPI?.selectDir) {
-        const tasks = await downloadTasks.list().catch(() => []);
-        if (tasks.some((task) => task.status === "pending" || task.status === "running")) {
-          message.warning("已有下载任务进行中，请稍后再试");
-          return;
-        }
-
-        const destDir = await window.electronAPI.selectDir("选择录制小包保存目录");
-        if (!destDir) return;
-        const result = await downloadTasks.create({
-          type: "remote-download",
-          name: "机器人日志小包",
-          backendIp,
-          downloadPath: fileUrl,
-          destDir,
-          preferredFileName: fileName,
-        });
-        if (!result.success) {
-          message.error(result.error || "创建下载任务失败");
-          return;
-        }
-        if (triggerElement) startDownloadTaskFlyAnimation(triggerElement);
-        return;
-      }
-
-      startBrowserDownload(buildBackendFileUrl(fileUrl, backendIp), getRobotLogFileName(fileUrl));
+      await downloadByAxios(buildBackendFileUrl(fileUrl, backendIp), getRobotLogFileName(fileUrl));
     } catch (error) {
       message.error(`录制小包失败: ${getRequestErrorMessage(error, "请求失败")}`);
     } finally {

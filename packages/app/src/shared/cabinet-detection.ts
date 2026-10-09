@@ -108,6 +108,28 @@ export const CABINET_DETECTION_DEFINITIONS: CabinetDetectionDefinition[] = [
 
 const DETECTION_BY_LABEL = new Map(CABINET_DETECTION_DEFINITIONS.map((item) => [item.label, item]));
 const DETECTION_BY_DESC = new Map(CABINET_DETECTION_DEFINITIONS.map((item) => [item.chDesc, item]));
+
+/** 屏柜点表导出时使用的业务字段映射。识别定义和导出字典分开维护。 */
+const CABINET_EXPORT_METER_TYPES: Record<string, string> = {
+  meter_sf6: "SF6压力表",
+  zzb: "SF6压力表",
+  // 后台 meter_type=3 的标准名称；识别页面显示为“数字表”。
+  num_led: "泄漏电流表",
+};
+
+const CABINET_EXPORT_POSITION_STATE_TYPES: Record<string, string> = {
+  zldlq_left: "断路器状态",
+  zldlq_off: "断路器状态",
+  zldlq_on: "断路器状态",
+  zldlq_right: "断路器状态",
+  fd_off: "接地刀闸状态",
+};
+
+const CABINET_EXPORT_APPEARANCE_TYPES: Record<string, string> = {
+  facade: "设备外观查看",
+  ybzz: "设备外观查看",
+};
+
 const POINT_NAME_TYPE_SUFFIXES = [
   ...Object.values(CABINET_POSITION_STATE_TYPES),
   "指针表",
@@ -220,15 +242,25 @@ export function resolveCabinetPointExcelColumns(label?: unknown, labelDesc?: unk
     return { ...columns, "*识别类型1": "红外测温", "采集类型": "红外图谱" };
   }
   if (detection.kind === "meter") {
-    return { ...columns, "*识别类型1": "表计读取", "表计类型": detection.meterTypeDesc || "" };
+    return {
+      ...columns,
+      "*识别类型1": "表计读取",
+      "表计类型": CABINET_EXPORT_METER_TYPES[detection.label] || detection.meterTypeDesc || "",
+    };
   }
   if (detection.kind === "appearance") {
-    return { ...columns, "*识别类型1": "设备外观查看" };
+    return {
+      ...columns,
+      "*识别类型1": CABINET_EXPORT_APPEARANCE_TYPES[detection.label] || "设备外观查看",
+    };
   }
+  const positionStateType = CABINET_EXPORT_POSITION_STATE_TYPES[detection.label]
+    || (detection.positionStateType ? CABINET_POSITION_STATE_TYPES[detection.positionStateType] : "")
+    || "";
   return {
     ...columns,
     "*识别类型1": "位置状态识别",
-    "位置状态类型": detection.positionStateType ? CABINET_POSITION_STATE_TYPES[detection.positionStateType] || "" : "",
+    "位置状态类型": positionStateType,
   };
 }
 

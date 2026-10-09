@@ -12,9 +12,60 @@
 
 ---
 
-## 2026-10-08 — 后台下载增加重试与地址校验，导出前先选择保存目录
+## 2026-10-09 — 主进程后台下载改走 Axios，导出任务在主进程取地址
 
 - 提交：待提交
+- 类型：fix
+
+### 修改
+
+- 新增 `packages/app/electron/backend-http.ts`，主进程后台 GET 统一走 Axios，不再各处用 `net.fetch`。自签 HTTPS 使用 `rejectUnauthorized: false` 的长连接 Agent；超时 100 分钟，适合大文件。请求会带上 Electron 会话 Cookie，并继续最多重试 3 次（408、425、429、500、502、503、504，间隔 300ms、600ms）。
+- 导出任务和远程文件下载都改用这套请求。导出接口除 `success === true` 外，也接受 `code === 200`；下载路径可以是字符串，或对象上的 `fileUrl` / `downloadUrl` / `url` / `filePath` / `path`。文件名从路径或完整 URL 里取，并做 URI 解码。
+- 请求日志去掉查询参数，经 `backend-request:log` 推到渲染进程。下载任务按钮挂上监听，开发者工具里能看到主进程请求。渲染层 Axios 日志从 `console.debug` 改为 `console.log`，绝对地址不再和 `baseURL` 拼重。
+- Electron 下导入导出、模板下载、机器人日志小包改为创建 `remote-export` 任务：主进程自己请求导出接口再落盘。浏览器没有任务中心时，仍由页面请求地址，但文件下载改走 `downloadByAxios`，不再用裸 `<a>` 链接触发，JSON/文本错误能读出后台文案。
+- 下载任务刚进入等待或进行中时也会打开任务面板，不只在成功或失败时弹出。
+- 屏柜点表导出的表计、位置状态、外观字段改用独立导出字典，不再直接套识别定义。`fd_off` 的导出位置状态类型改为「接地刀闸状态」；表计仍导出 SF6压力表 / 泄漏电流表，外观仍是设备外观查看。
+- 空间编辑扫描区域文件时去掉控制台调试日志。
+- 回填上一条提交哈希 `18cd553`。
+
+### 优化
+
+- 主进程和渲染层下载走同一套 Axios 行为，自签证书、Cookie、重试和错误文案不再因 `net.fetch` 和页面请求不一致而分叉。
+- 导出取地址和文件下载都留在主进程任务里，渲染层不用先打一遍接口再把路径交回去，开发者工具也能看到这次请求。
+- 浏览器兜底下载失败时能提示后台原因，而不是静默打开一个错误响应。
+- 屏柜点表业务名称可以和识别页显示名分开维护。
+
+### 影响范围
+
+- `packages/app/electron/backend-http.ts`
+- `packages/app/electron/ipc/export-task-ipc.ts`
+- `packages/app/electron/ipc/file-ipc.ts`
+- `packages/app/electron/preload.cjs`
+- `packages/app/src/vite-env.d.ts`
+- `packages/app/src/services/http.ts`
+- `packages/app/src/components/download-task/index.tsx`
+- `packages/app/src/views/import-export/index.tsx`
+- `packages/app/src/views/realtime-monitor/index.tsx`
+- `packages/app/src/shared/cabinet-detection.ts`
+- `packages/app/src/views/space-edit/workspace/index.tsx`
+- `CHANGELOG.md`
+
+### 用户可见变化
+
+- Electron 里导出、模板下载、录制小包开始后，下载面板会立刻出现；请求日志在开发者工具中可见。
+- 后台返回带 `code: 200` 或对象形式下载地址时，也能继续保存文件。
+- 屏柜点表里放电开关 `fd_off` 的位置状态类型导出为「接地刀闸状态」。
+
+### 验证
+
+- Electron 导入导出：选目录后任务面板出现，主进程完成取地址和下载；开发者工具能看到 `[后台请求][主进程]`。
+- 浏览器模式同一导出：不走任务中心，由 Axios 下载；接口返回 JSON 错误时提示后台文案。
+- 实时监控录制小包：Electron 创建 `remote-export`（`/robot/tool/file/getRobotLog`）；已有进行中任务时提示稍后再试。
+- 导出屏柜点表：`fd_off` 位置状态类型为接地刀闸状态，数字表表计类型仍为泄漏电流表。
+
+## 2026-10-08 — 后台下载增加重试与地址校验，导出前先选择保存目录
+
+- 提交：`18cd553`
 - 类型：fix
 
 ### 修改

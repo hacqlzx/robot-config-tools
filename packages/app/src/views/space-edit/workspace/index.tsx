@@ -896,11 +896,9 @@ export default function SpaceEditWorkspace() {
       if (items.some(item => item.type === "device-area")) availableTypes.add("device");
       
       setDrawingAvailableTypes(prev => new Map(prev).set(actualFilePath, availableTypes));
-      console.log(`[区域扫描] ${actualFilePath} 包含类型:`, Array.from(availableTypes));
     } catch (error) {
       if (lifecycleVersion !== drawingLifecycleVersion.current
         || drawingTypeScanVersions.current.get(scanKey) !== scanVersion) return;
-      console.warn(`[区域扫描] 无法读取文件 ${actualFilePath}`, error);
       // 扫描失败时设置为空集合
       setDrawingAvailableTypes(prev => new Map(prev).set(actualFilePath, new Set()));
     }
@@ -922,7 +920,6 @@ export default function SpaceEditWorkspace() {
     };
     
     const drawingFiles = findDrawingFiles(nodes);
-    console.log(`[地图树加载] 发现 ${drawingFiles.length} 个区域文件，开始扫描`);
     
     // 并发扫描所有区域文件
     drawingFiles.forEach(filePath => {

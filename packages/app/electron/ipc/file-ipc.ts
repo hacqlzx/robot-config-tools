@@ -1,11 +1,8 @@
-import { ipcMain, net } from "electron";
+import { ipcMain } from "electron";
 import fs from "fs";
 import path from "path";
-import { Readable } from "stream";
 import { pipeline } from "stream/promises";
-
-const MAX_DOWNLOAD_ATTEMPTS = 3;
-const RETRYABLE_DOWNLOAD_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+import { buildBackendResponseError, requestBackendResource } from "../backend-http";
 
 export function registerFileIpc(): void {
   ipcMain.handle("read-file-chunk", async (_event, filePath: string, offset: number, length: number) => {
@@ -67,14 +64,16 @@ export function registerFileIpc(): void {
       const filePath = path.join(outputDir, fileName);
       tempPath = `${filePath}.download-${process.pid}-${Date.now()}`;
 
-      const response = await fetchRemoteFile(url.toString());
-      if (!response.ok) {
-        throw new Error(await getResponseErrorMessage(response) || `下载失败（${response.status}）`);
+      const response = await requestBackendResource(url.toString(), {
+        responseType: "stream",
+      }, "远程文件下载");
+      if (response.status < 200 || response.status >= 300) {
+        throw new Error(await buildBackendResponseError(response, "下载失败"));
       }
-      if (!response.body) throw new Error("下载内容为空");
+      if (!response.data) throw new Error("下载内容为空");
 
       await pipeline(
-        Readable.fromWeb(response.body as any),
+        response.data,
         fs.createWriteStream(tempPath),
       );
       await fs.promises.rename(tempPath, filePath);
@@ -89,87 +88,6 @@ export function registerFileIpc(): void {
       return { success: false, error: error?.message || "下载失败" };
     }
   });
-}
-
-async function fetchRemoteFile(url: string): Promise<Response> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < MAX_DOWNLOAD_ATTEMPTS; attempt += 1) {
-    const requestId = Date.now().toString() + Math.random().toString(36).slice(2, 8);
-    const startedAt = Date.now();
-    console.info("[后台请求][主进程] 开始", {
-      label: "远程文件下载",
-      requestId,
-      url: redactRequestUrl(url),
-      attempt: attempt + 1,
-    });
-    try {
-      const response = await net.fetch(url, {
-        credentials: "include",
-        headers: { "req-id": requestId, Accept: "*/*" },
-      });
-      console.info("[后台请求][主进程] 完成", {
-        label: "远程文件下载",
-        requestId,
-        status: response.status,
-        elapsedMs: Date.now() - startedAt,
-      });
-
-      if (RETRYABLE_DOWNLOAD_STATUSES.has(response.status) && attempt < MAX_DOWNLOAD_ATTEMPTS - 1) {
-        console.warn("[后台请求][主进程] 服务暂不可用，准备重试", {
-          label: "远程文件下载",
-          requestId,
-          status: response.status,
-          attempt: attempt + 1,
-        });
-        await response.body?.cancel().catch((): undefined => undefined);
-        await delay(300 * (attempt + 1));
-        continue;
-      }
-      return response;
-    } catch (error) {
-      lastError = error;
-      console.warn("[后台请求][主进程] 失败", {
-        label: "远程文件下载",
-        requestId,
-        url: redactRequestUrl(url),
-        elapsedMs: Date.now() - startedAt,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      if (attempt >= MAX_DOWNLOAD_ATTEMPTS - 1) throw error;
-      await delay(300 * (attempt + 1));
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error("下载失败");
-}
-
-async function getResponseErrorMessage(response: Response): Promise<string> {
-  try {
-    const text = await response.text();
-    if (!text) return "";
-    try {
-      const body = JSON.parse(text);
-      const message = body?.message || body?.msg || body?.error;
-      if (typeof message === "string" && message.trim()) return message.trim();
-    } catch {
-      // Non-JSON error responses are surfaced as short text.
-    }
-    return text.length > 120 ? text.slice(0, 120) : text;
-  } catch {
-    return "";
-  }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function redactRequestUrl(value: string): string {
-  try {
-    const url = new URL(value);
-    return `${url.origin}${url.pathname}`;
-  } catch {
-    return "<invalid-url>";
-  }
 }
 
 function normalizeDownloadFileName(value: string): string {

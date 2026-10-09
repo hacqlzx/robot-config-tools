@@ -52,6 +52,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
       return () => ipcRenderer.removeListener("export-task:changed", handler);
     },
   },
+  onBackendRequestLog: (callback) => {
+    const handler = (_event, log) => callback(log);
+    ipcRenderer.on("backend-request:log", handler);
+    return () => ipcRenderer.removeListener("backend-request:log", handler);
+  },
   // GPU 信息诊断：帮助排查核显/独显导致颜色渲染异常的问题
   getGPUInfo: () => ipcRenderer.invoke("gpu:info"),
   project: {

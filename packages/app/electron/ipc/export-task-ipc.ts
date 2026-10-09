@@ -1,8 +1,8 @@
-import { BrowserWindow, ipcMain, net, shell } from "electron";
+import { BrowserWindow, ipcMain, shell } from "electron";
 import fs from "fs";
 import path from "path";
-import { Readable } from "stream";
 import { pipeline } from "stream/promises";
+import { buildBackendResponseError, requestBackendResource } from "../backend-http";
 import { exportProjectZip, prepareProjectZipExport, type ExportZipItem } from "../project-core/project-service";
 import {
   exportCabinetAnnotationParams,
@@ -99,9 +99,6 @@ interface ExportTaskRecord {
 
 const MAX_TASK_HISTORY = 20;
 const EXPORT_TASK_CHANGED_CHANNEL = "export-task:changed";
-const MAX_BACKEND_FETCH_ATTEMPTS = 3;
-const RETRYABLE_BACKEND_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
-
 class ExportTaskManager {
   private tasks: ExportTaskRecord[] = [];
   private runningTaskId = "";
@@ -285,7 +282,7 @@ class ExportTaskManager {
     let tempPath = "";
 
     try {
-      this.updateTask(task, { status: "running", message: "请求导出文件" });
+      this.updateTask(task, { status: "running", message: "正在获取下载地址" });
       const exportUrl = buildBackendUrl(task.request.backendIp, task.request.exportPath, task.request.query);
       const filePath = await requestRemoteExportFile(exportUrl, abortController.signal);
       if (!this.isCurrentRun(task.id, runToken)) return;
@@ -294,22 +291,22 @@ class ExportTaskManager {
       const downloadUrl = buildBackendUrl(task.request.backendIp, filePath);
       const fileName = uniqueDownloadFileName(
         task.outputDir,
-        normalizeDownloadFileName(task.request.preferredFileName || filePath.split("/").pop() || `${task.name}.zip`),
+        normalizeDownloadFileName(task.request.preferredFileName || getDownloadFileName(filePath, `${task.name}.zip`)),
       );
       const outputPath = path.join(task.outputDir, fileName);
       tempPath = `${outputPath}.download-${process.pid}-${Date.now()}`;
 
-      const response = await fetchBackendResource(downloadUrl, {
-        credentials: "include",
+      const response = await requestBackendResource(downloadUrl, {
         signal: abortController.signal,
+        responseType: "stream",
       }, "导出文件下载");
-      if (!response.ok) {
+      if (response.status < 200 || response.status >= 300) {
         throw new Error(await buildBackendResponseError(response, "导出文件下载失败"));
       }
-      if (!response.body) throw new Error("下载内容为空");
+      if (!response.data) throw new Error("下载内容为空");
 
       await pipeline(
-        Readable.fromWeb(response.body as any),
+        response.data,
         fs.createWriteStream(tempPath),
         { signal: abortController.signal } as any,
       );
@@ -360,17 +357,17 @@ class ExportTaskManager {
       const outputPath = path.join(task.outputDir, fileName);
       tempPath = `${outputPath}.download-${process.pid}-${Date.now()}`;
 
-      const response = await fetchBackendResource(downloadUrl, {
-        credentials: "include",
+      const response = await requestBackendResource(downloadUrl, {
         signal: abortController.signal,
+        responseType: "stream",
       }, "后台文件下载");
-      if (!response.ok) {
+      if (response.status < 200 || response.status >= 300) {
         throw new Error(await buildBackendResponseError(response, "后台文件下载失败"));
       }
-      if (!response.body) throw new Error("下载内容为空");
+      if (!response.data) throw new Error("下载内容为空");
 
       await pipeline(
-        Readable.fromWeb(response.body as any),
+        response.data,
         fs.createWriteStream(tempPath),
         { signal: abortController.signal } as any,
       );
@@ -535,19 +532,32 @@ export function registerExportTaskIpc(): void {
 }
 
 async function requestRemoteExportFile(url: string, signal: AbortSignal): Promise<string> {
-  const response = await fetchBackendResource(url, {
-    credentials: "include",
+  const response = await requestBackendResource(url, {
     signal,
     headers: createBackendJsonHeaders(),
+    responseType: "json",
   }, "后台导出接口");
-  if (!response.ok) {
+  if (response.status < 200 || response.status >= 300) {
     throw new Error(await buildBackendResponseError(response, "导出接口失败"));
   }
-  const body = await response.json() as any;
-  if (!body?.success || !body?.data) {
+  const body = response.data as any;
+  if (body?.success !== true && Number(body?.code) !== 200) {
     throw new Error(body?.message || "获取下载路径失败");
   }
-  return String(body.data);
+  const downloadPath = extractDownloadPath(body?.data);
+  if (!downloadPath) throw new Error(body?.message || "获取下载路径失败");
+  return downloadPath;
+}
+
+function extractDownloadPath(data: unknown): string {
+  if (typeof data === "string") return data.trim();
+  if (!data || typeof data !== "object" || Array.isArray(data)) return "";
+  const record = data as Record<string, unknown>;
+  for (const key of ["fileUrl", "downloadUrl", "url", "filePath", "path"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
 }
 
 function createBackendJsonHeaders(): Record<string, string> {
@@ -556,101 +566,6 @@ function createBackendJsonHeaders(): Record<string, string> {
     "Content-Type": "application/json",
     "Accept": "application/json, text/plain, */*",
   };
-}
-
-async function fetchBackendResource(
-  url: string,
-  options: Record<string, unknown>,
-  label: string,
-): Promise<Response> {
-  let lastError: unknown;
-  const signal = options.signal as AbortSignal | undefined;
-  for (let attempt = 0; attempt < MAX_BACKEND_FETCH_ATTEMPTS; attempt += 1) {
-    const requestId = Date.now().toString() + Math.random().toString(36).slice(2, 8);
-    const startedAt = Date.now();
-    const headers = {
-      "req-id": requestId,
-      "Accept": "*/*",
-      ...(options.headers as Record<string, string> | undefined),
-    };
-    console.info("[后台请求][主进程] 开始", {
-      label,
-      requestId,
-      url: redactRequestUrl(url),
-      attempt: attempt + 1,
-    });
-    try {
-      const response = await net.fetch(url, { ...options, headers } as any);
-      console.info("[后台请求][主进程] 完成", {
-        label,
-        requestId,
-        status: response.status,
-        elapsedMs: Date.now() - startedAt,
-      });
-
-      if (RETRYABLE_BACKEND_STATUSES.has(response.status) && attempt < MAX_BACKEND_FETCH_ATTEMPTS - 1) {
-        console.warn("[后台请求][主进程] 服务暂不可用，准备重试", {
-          label,
-          requestId,
-          status: response.status,
-          attempt: attempt + 1,
-        });
-        await response.body?.cancel().catch((): undefined => undefined);
-        await delay(300 * (attempt + 1));
-        if (signal?.aborted) throw new Error("请求已取消");
-        continue;
-      }
-      return response;
-    } catch (error) {
-      lastError = error;
-      const aborted = Boolean(signal?.aborted);
-      console.warn("[后台请求][主进程] 失败", {
-        label,
-        requestId,
-        url: redactRequestUrl(url),
-        elapsedMs: Date.now() - startedAt,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      if (aborted || attempt >= MAX_BACKEND_FETCH_ATTEMPTS - 1) throw error;
-      await delay(300 * (attempt + 1));
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error("后台请求失败");
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function redactRequestUrl(value: string): string {
-  try {
-    const url = new URL(value);
-    return `${url.origin}${url.pathname}`;
-  } catch {
-    return "<invalid-url>";
-  }
-}
-
-async function buildBackendResponseError(response: Response, fallback: string): Promise<string> {
-  const detail = await readBackendErrorMessage(response);
-  return detail || `${fallback}（${response.status}）`;
-}
-
-async function readBackendErrorMessage(response: Response): Promise<string> {
-  try {
-    const text = await response.text();
-    if (!text) return "";
-    try {
-      const body = JSON.parse(text);
-      const message = body?.message || body?.msg || body?.error;
-      if (typeof message === "string" && message.trim()) return message.trim();
-    } catch {
-      // Non-JSON backend errors fall through to the raw short text below.
-    }
-    return text.length > 120 ? text.slice(0, 120) : text;
-  } catch {
-    return "";
-  }
 }
 
 function validateRemoteExportRequest(request: RemoteExportTaskRequest) {
@@ -849,6 +764,21 @@ function normalizeDownloadFileName(value: string): string {
     .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-")
     .replace(/[. ]+$/g, "");
   return baseName || "download.bin";
+}
+
+function getDownloadFileName(downloadPath: string, fallback: string): string {
+  let filePath = String(downloadPath || "").trim();
+  try {
+    filePath = new URL(filePath).pathname;
+  } catch {
+    filePath = filePath.split(/[?#]/, 1)[0];
+  }
+  const encodedName = filePath.split(/[\\/]/).pop() || fallback;
+  try {
+    return decodeURIComponent(encodedName);
+  } catch {
+    return encodedName;
+  }
 }
 
 function uniqueDownloadFileName(dir: string, preferredName: string): string {

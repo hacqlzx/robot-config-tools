@@ -27,6 +27,7 @@ import {
   downloadCommunicateExcel,
 } from "@/api/config.js";
 import { startDownloadTaskFlyAnimation } from "@/components/download-task";
+import { downloadByAxios } from "@/services/http";
 import { getBackendIp, useAppContext, useRobotOptions } from "@/stores/appContextStore";
 import "./index.scss";
 
@@ -299,20 +300,12 @@ export default function ImportExport() {
         setUploadingLabel(null);
       }
     } else {
-      const a = document.createElement("a");
-      a.href = downloadUrl;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      await downloadByAxios(downloadUrl, fileName);
       message.success("已开始下载");
     }
   }, [backendIp, message]);
 
-  /**
-   * 创建后台导出任务：导出接口本身统一走渲染层 http，任务中心只负责文件流下载。
-   * 这样接口请求能复用 req-id、连接状态、自动重试和控制台日志；主进程不再悄悄发起一次同名 API 请求。
-   */
+  /** Electron 中由导出任务中心串行完成取地址和文件下载；浏览器兜底也通过 Axios 请求文件。 */
   const createRemoteExportTask = useCallback(async ({
     label,
     exportPath,
@@ -348,22 +341,13 @@ export default function ImportExport() {
         if (!destDir) return;
       }
 
-      console.info("[后台导出] 请求导出接口", { path: exportPath, query: query || {} });
-      const res = await fallbackExport();
-      const body = res?.data;
-      if (!body?.success || !body?.data) {
-        message.error(body?.message || "获取下载路径失败");
-        return;
-      }
-
-      const downloadPath = String(body.data);
-      const requestBackendIp = getResponseBackendOrigin(res) || getBackendIp();
       if (downloadTasks && destDir) {
         const result = await downloadTasks.create({
-          type: "remote-download",
+          type: "remote-export",
           name: label,
-          backendIp: requestBackendIp,
-          downloadPath,
+          backendIp: getBackendIp(),
+          exportPath,
+          query,
           destDir,
         });
         if (!result.success) {
@@ -374,6 +358,16 @@ export default function ImportExport() {
         return;
       }
 
+      console.info("[后台导出] 请求导出接口", { path: exportPath, query: query || {} });
+      const res = await fallbackExport();
+      const body = res?.data;
+      if (!body?.success || !body?.data) {
+        message.error(body?.message || "获取下载路径失败");
+        return;
+      }
+
+      const downloadPath = String(body.data);
+      const requestBackendIp = getResponseBackendOrigin(res) || getBackendIp();
       await downloadFileToSelectedDir(downloadPath, label, destDir, requestBackendIp);
     } finally {
       setUploadingLabel(null);
@@ -773,16 +767,18 @@ export default function ImportExport() {
     }
   }, [createRemoteExportTask, resolveSelectedRobot, message]);
 
-  /** 先调用模板接口获取文件地址，再交给下载任务中心下载。 */
+  /** 模板下载同样由 Electron 任务中心处理取地址和文件下载。 */
   const downloadTemplate = useCallback(async ({
     label,
     destTitle,
     triggerElement,
+    exportPath,
     request,
   }: {
     label: string;
     destTitle: string;
     triggerElement?: HTMLElement;
+    exportPath: string;
     request: () => Promise<any>;
   }) => {
     if (!backendIp) {
@@ -812,21 +808,12 @@ export default function ImportExport() {
         if (!destDir) return;
       }
 
-      const res = await request();
-      const body = res?.data;
-      if (!body?.success || !body?.data) {
-        message.error(body?.message || "获取模板下载地址失败");
-        return;
-      }
-
-      const downloadPath = String(body.data);
-      const requestBackendIp = getResponseBackendOrigin(res) || getBackendIp();
       if (downloadTasks && destDir) {
         const result = await downloadTasks.create({
-          type: "remote-download",
+          type: "remote-export",
           name: label,
-          backendIp: requestBackendIp,
-          downloadPath,
+          backendIp: getBackendIp(),
+          exportPath,
           destDir,
         });
         if (!result.success) {
@@ -837,6 +824,15 @@ export default function ImportExport() {
         return;
       }
 
+      const res = await request();
+      const body = res?.data;
+      if (!body?.success || !body?.data) {
+        message.error(body?.message || "获取模板下载地址失败");
+        return;
+      }
+
+      const downloadPath = String(body.data);
+      const requestBackendIp = getResponseBackendOrigin(res) || getBackendIp();
       await downloadFileToSelectedDir(downloadPath, label, destDir, requestBackendIp);
     } catch (e: any) {
       message.error("下载失败: " + (e?.message || e));
@@ -851,6 +847,7 @@ export default function ImportExport() {
       label: "通信模板下载",
       destTitle: "选择通信模板保存目录",
       triggerElement,
+      exportPath: "/robot/tool/file/downloadCommunicateExcel",
       request: downloadCommunicateExcel,
     });
   }, [downloadTemplate]);
@@ -861,6 +858,7 @@ export default function ImportExport() {
       label: "点表模板下载",
       destTitle: "选择点表模板保存目录",
       triggerElement,
+      exportPath: "/robot/tool/file/downLoadExcelTemplate",
       request: downLoadExcelTemplate,
     });
   }, [downloadTemplate]);

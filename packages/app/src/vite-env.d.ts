@@ -314,6 +314,17 @@ declare global {
     updatedAt: number;
   }
 
+  interface BackendRequestLog {
+    level: "info" | "warn";
+    label: string;
+    requestId: string;
+    url: string;
+    attempt: number;
+    status?: number;
+    elapsedMs?: number;
+    message?: string;
+  }
+
   type LocalExportOperation =
     | "project-export-zip"
     | "survey-data"
@@ -416,6 +427,7 @@ declare global {
         remove: (taskId: string) => Promise<ExportTaskActionResult>;
         onChanged: (callback: (tasks: ExportTaskInfo[]) => void) => () => void;
       };
+      onBackendRequestLog: (callback: (log: BackendRequestLog) => void) => () => void;
       project: {
         list: () => Promise<string[]>;
         create: (name: string) => Promise<string>;

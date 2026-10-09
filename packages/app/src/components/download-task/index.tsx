@@ -42,7 +42,7 @@ export default function DownloadTaskButton() {
     let disposed = false;
     api.list().then((list) => {
       if (!disposed) setTasks(list || []);
-    }).catch(() => undefined);
+    }).catch((): undefined => undefined);
     const unsubscribe = api.onChanged((list) => setTasks(list || []));
     return () => {
       disposed = true;
@@ -51,12 +51,26 @@ export default function DownloadTaskButton() {
   }, []);
 
   useEffect(() => {
+    const onBackendRequestLog = window.electronAPI?.onBackendRequestLog;
+    if (!onBackendRequestLog) return;
+
+    console.log("[后台请求] 已连接 Electron 主进程请求日志");
+    const unsubscribe = onBackendRequestLog((log) => {
+      const logger = log.level === "warn" ? console.warn : console.log;
+      logger("[后台请求][主进程]", log);
+    });
+    return () => unsubscribe?.();
+  }, []);
+
+  useEffect(() => {
     const previous = previousTaskStatusRef.current;
     const shouldOpen = tasks.some((task) => {
       const lastStatus = previous[task.id];
-      return (task.status === "success" || task.status === "failed")
+      const newlyStarted = !lastStatus && (task.status === "pending" || task.status === "running");
+      const completed = (task.status === "success" || task.status === "failed")
         && lastStatus
         && lastStatus !== task.status;
+      return newlyStarted || completed;
     });
 
     previousTaskStatusRef.current = tasks.reduce<Record<string, ExportTaskStatus>>((result, task) => {
