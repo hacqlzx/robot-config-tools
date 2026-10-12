@@ -91,7 +91,7 @@
         "nodeGypRebuild": false,
         "asar": false
     },
-    "version": "1.0.0",
+    "version": "1.0.3",
     "description": "七宝智图",
     "author": "robot",
     "packageManager": "pnpm@9"

@@ -296,6 +296,7 @@ export interface PotreeViewerInstance {
     buffers: Map<unknown, unknown>;
   };
   setRenderingPaused?: (paused: boolean) => void;
+  render: () => void;
   loop?: (timestamp: number) => void;
   update?: (delta: number, timestamp: number) => void;
   clock?: { getDelta: () => number };

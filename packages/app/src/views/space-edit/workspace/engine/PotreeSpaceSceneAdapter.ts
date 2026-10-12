@@ -855,6 +855,9 @@ export class PotreeSpaceSceneAdapter implements SpaceSceneAdapter {
       this.resetInteractionLod();
       this.clearHoverCoordinate();
     }
+    // Pausing the loop leaves its last frame on the canvas. Draw the empty
+    // scene once after unloading, including when returning to a cached page.
+    if (active && !this.pointcloud) viewer?.render();
   }
 
   private createHoverCoordinateOverlay(target: HTMLElement): void {
