@@ -7,6 +7,7 @@
     "dev:electron": "pnpm --filter app dev:electron",
     "build:electron": "pnpm --filter app build:electron",
     "preview": "pnpm --filter app preview",
-    "package": "pnpm --filter app package"
+    "package": "pnpm --filter app package",
+    "package:check": "pnpm --filter app package:check"
   }
 }

@@ -13,6 +13,8 @@
 
 常用命令：`pnpm dev`、`pnpm dev:electron`、`pnpm build`、`pnpm build:electron`、`pnpm package`。
 
+`pnpm package` 会交互选择版本号（默认末位加 1），无交互打包用 `--auto` 或 `--version 1.1.0`。代理日常校验使用 `pnpm build`、`pnpm build:electron` 或 `pnpm package:check`，这些入口不修改版本号；仅用户明确要求生成正式安装包时执行 `pnpm package`。完整说明见 `PACKAGING.md`。
+
 很多文件、项目、数据库能力依赖 `window.electronAPI`，只在 Electron 模式完整可用。浏览器模式更适合看纯 UI 和前端逻辑。
 
 ## 目录速查

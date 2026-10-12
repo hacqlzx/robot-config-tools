@@ -10,7 +10,8 @@
         "build:electron": "cross-env ELECTRON=true vite build",
         "preview": "vite preview",
         "package:prepare": "node scripts/prepare-package.mjs",
-        "package": "pnpm package:prepare && pnpm build:electron && electron-builder --win"
+        "package": "node scripts/package.mjs",
+        "package:check": "pnpm build:electron"
     },
     "dependencies": {
         "@ant-design/icons": "^6.2.5",
@@ -91,7 +92,7 @@
         "nodeGypRebuild": false,
         "asar": false
     },
-    "version": "1.0.3",
+    "version": "1.0.4",
     "description": "七宝智图",
     "author": "robot",
     "packageManager": "pnpm@9"
