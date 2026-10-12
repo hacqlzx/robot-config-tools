@@ -1,0 +1,21 @@
+.app-footer {
+  height: 32px;
+  min-height: 32px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 16px;
+  background: #fff;
+  border-top: 1px solid #e8e8e8;
+  color: #687180;
+  font-size: 12px;
+  box-sizing: border-box;
+}
+
+.app-footer-version { white-space: nowrap; }
+.app-footer .ant-btn { font-size: 12px; padding-inline: 4px; }
+.app-footer .ant-tag { margin-inline-end: 0; font-size: 11px; line-height: 20px; }
+.app-footer-status { color: #6b7280; }
+.app-footer-error { color: #c2410c; }

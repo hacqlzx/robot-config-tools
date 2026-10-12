@@ -34,7 +34,7 @@ async function main() {
   try {
     runNode(fileURLToPath(new URL("./prepare-package.mjs", import.meta.url)));
     runNode(vite, ["build"], { ...process.env, ELECTRON: "true" });
-    runNode(builder, ["--win"]);
+    runNode(builder, ["--win", "--publish", "never"]);
   } catch (error) {
     // Do not overwrite a concurrent manual edit.
     if (fs.readFileSync(packagePath, "utf8") === updated) {

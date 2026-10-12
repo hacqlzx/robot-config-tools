@@ -2,6 +2,7 @@ import { app } from "electron";
 import { initDbIpc, closeDbIpc } from "./db-ipc";
 import { configureAppCommandLine, configureCertificateHandling, disableApplicationMenu, logGPUInfo } from "./app/app-lifecycle";
 import { createWindow } from "./app/create-window";
+import { registerAppUpdater } from "./app/app-updater";
 import { loadInitialProjectRoot } from "./project-core/project-root";
 import { registerArchiveIpc } from "./ipc/archive-ipc";
 import { registerCalibrationGrpcIpc } from "./ipc/calibration-grpc-ipc";
@@ -33,7 +34,9 @@ app.whenReady().then(async () => {
   registerExportTaskIpc();
 
   await initDbIpc();
-  createWindow();
+  const startUpdateCheck = registerAppUpdater();
+  const window = createWindow();
+  window.once("ready-to-show", startUpdateCheck);
 });
 
 app.on("before-quit", () => {

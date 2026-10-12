@@ -12,9 +12,50 @@
 
 ---
 
-## 2026-10-12 — 打包前选择版本号，构建校验与版本递增分离
+## 2026-10-12 — 接入 GitHub 自动更新，增加底部版本栏并准备 1.0.5 发布包
 
 - 提交：待提交
+- 类型：feat
+
+### 修改
+
+- 添加 `electron-updater 6.8.9` 运行时依赖及锁文件更新，主进程注册更新状态、检查、下载、安装 IPC，通过 preload 和共享类型向渲染侧暴露受限接口。
+- 更新源使用 `hacqlzx/robot-config-tools` 的 GitHub 正式 Releases，通过 electron-builder 的 `build.publish` 生成 `resources/app-update.yml`。用户明确选择将该仓库公开，客户端因此能够匿名检查与下载；安装包不包含 GitHub 发布凭据。
+- 新增可单独测试的 `UpdateController`：安装版窗口显示后延迟 3 秒检查一次；开发模式不发更新请求；默认不自动下载、不在退出时自动安装，不接收预发布版或降级。检查/下载请求避免并发重复，失败保留可重试状态，只有下载完成后才能安装。
+- 新增底部 32px 单行版本栏，当前版本右侧提供检查更新/更新按钮。发现新版本显示蓝色版本标记；下载时显示百分比，完成后显示「更新已就绪」和「重启安装」，确认保存项目后才退出并启动安装程序。无新版本、网络失败、浏览器模式分别提供对应提示。
+- 全局内容区改为可收缩的 flex 布局，底部版本栏独立占位；通过 Vite 从应用清单注入构建版本，安装版以 Electron `app.getVersion()` 为准，避免界面硬编码版本。
+- Windows NSIS 产物采用 `RobotConfigTools-Setup-${version}-${arch}.exe` 文件名，正式打包显式加 `--publish never`，将构建与上传分离；此次按用户要求使用版本 `1.0.5` 打包。
+- 补充 `pnpm-workspace.yaml` 中 Electron 安装脚本许可，解决新增依赖后运行文件缺失导致 `electronDist` 无效的问题；保留原有官方镜像配置。
+- 更新 `PACKAGING.md`，说明启动检查、更新流程、发布所需 exe/blockmap/latest.yml、当前 Windows x64 支持范围和旧客户端首次需要手动安装的限制；回填上一条提交 `d85e6be`。
+
+### 优化
+
+- 用户可以在当前页面直接看到应用版本和新版本，无需访问仓库手动比较版本。
+- 启动检查不会打断编辑；下载和安装都由用户主动触发，重启前明确提醒保存项目。
+- 主进程集中处理更新、下载和安装，渲染侧只订阅状态并调用固定动作，不接触发布令牌或文件路径。
+- 正式打包生成更新元数据，普通构建校验不修改版本，也不会意外发布 Release。
+- 对更新生命周期建立回归测试，覆盖禁止提前安装、禁止自动下载、错误重试、并发检查和开发模式禁用。
+
+### 影响范围与用户可见变化
+
+- `packages/app/electron/app/app-updater.ts`、`update-controller.ts`、`electron/main.ts`、`electron/preload.cjs`：启动检查及更新 IPC。
+- `packages/app/src/pages/app-footer/*`、`src/App.tsx`、`src/shared/app-update.ts`、`src/vite-env.d.ts`：底部版本/更新 UI、状态类型和布局。
+- `packages/app/vite.config.ts`、`package.json`、`scripts/package.mjs`、`scripts/app-update.test.mjs`：版本注入、依赖、发布配置、打包和测试。
+- `pnpm-lock.yaml`、`pnpm-workspace.yaml`、`PACKAGING.md`、`CHANGELOG.md`：依赖解析、运行文件安装、使用说明和日志。
+- 应用版本更新至 `1.0.5`；该版本是首次内置更新器的版本，此前客户端需手动安装一次，后续版本可使用底部更新入口。
+
+### 验证
+
+- Context7 官方 MCP 查询 electron-builder/electron-updater 文档，核对 GitHub provider、Windows NSIS 更新元数据、手动下载/安装事件与私有仓库限制；实现使用本地 6.8.9 API，避免误用文档中 v7 的破坏性接口。
+- `node --test packages/app/scripts/app-update.test.mjs packages/app/scripts/package-version.test.mjs`：11 项通过。
+- `pnpm package:check` 通过渲染进程、主进程和 preload 构建；新增更新主进程、控制器、底部 UI 和共享类型的定向 TypeScript 检查零错误。界面截图确认底部版本/按钮处于独立单行，内容区未被覆盖。
+- 首次打包因缺失 Electron dist 失败，版本按预期恢复 `1.0.4`；执行官方 Electron 安装脚本后重新打包 `1.0.5` 成功，生成 exe、blockmap 和 latest.yml。
+- 打包应用使用隔离的临时 userData 启动，数据库/IPC/preload 初始化成功、应用保持响应，启动后实际访问 GitHub 更新源；首个 Release 发布前的无版本错误被更新控制器接收，未使应用退出。
+- 包内 `app-update.yml` 指向 hacqlzx/robot-config-tools；生成的 `latest.yml` 版本为 1.0.5，包含安装包文件名、大小和 SHA-512。发布流程将在同一个正式 Release 上传三类产物并验证匿名更新检查；未执行会修改当前安装应用的重启安装操作。
+
+## 2026-10-12 — 打包前选择版本号，构建校验与版本递增分离
+
+- 提交：`d85e6be`
 - 类型：feat
 
 ### 修改

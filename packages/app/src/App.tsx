@@ -2,6 +2,7 @@
 import { Layout, ConfigProvider, App, message as antdMessage } from "antd";
 import { Outlet, useLocation } from "react-router-dom";
 import AppHeader from "./pages/app-header";
+import AppFooter from "./pages/app-footer";
 import { useSelectedProject } from "./stores/appContextStore";
 import SpaceEdit from "./views/space-edit/workspace";
 import "./styles/global.css";
@@ -114,7 +115,7 @@ export default function AppLayout() {
       <App message={{ top: MESSAGE_TOP_OFFSET }}>
         <Layout style={{ height: "100vh", overflow: "hidden" }}>
           <AppHeader />
-          <Content style={{ height: `calc(100vh - ${APP_HEADER_HEIGHT}px)`, padding: 0, background: "#f5f5f5", overflow: "hidden" }}>
+          <Content style={{ flex: "1 1 0", minHeight: 0, padding: 0, background: "#f5f5f5", overflow: "hidden" }}>
             <div style={{ height: "100%", boxSizing: "border-box" }}>
               {/*
                 空间编辑页：通过 display 切换显隐而非卸载，保留模型、绘制、历史栈和自动保存状态。
@@ -173,6 +174,7 @@ export default function AppLayout() {
               {!isSpaceEdit && !isImageEdit && !isScreenVerify && !isDeviceVerify && <Outlet key={projectPageKey} />}
             </div>
           </Content>
+          <AppFooter />
         </Layout>
       </App>
     </ConfigProvider>

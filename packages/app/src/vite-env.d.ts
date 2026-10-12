@@ -2,6 +2,7 @@
 
 declare global {
   const __ELECTRON__: boolean;
+  const __APP_VERSION__: string;
 
   interface TreeNode {
     name: string;
@@ -396,6 +397,13 @@ declare global {
     };
     electronAPI?: {
       platform: string;
+      appUpdate: {
+        state: () => Promise<import("./shared/app-update").AppUpdateState>;
+        check: () => Promise<import("./shared/app-update").AppUpdateActionResult>;
+        download: () => Promise<import("./shared/app-update").AppUpdateActionResult>;
+        install: () => Promise<import("./shared/app-update").AppUpdateActionResult>;
+        onChanged: (callback: (state: import("./shared/app-update").AppUpdateState) => void) => () => void;
+      };
       minimize: () => void;
       maximize: () => void;
       getWindowState: () => Promise<AppWindowState>;

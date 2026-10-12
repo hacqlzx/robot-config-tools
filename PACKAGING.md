@@ -32,3 +32,11 @@ node --test packages/app/scripts/package-version.test.mjs
 ```
 
 这些入口不调用版本选择逻辑，也不修改版本号。`package:check` 不执行进程/产物清理或生成 NSIS 安装包。代理日常构建校验使用这些入口；只有明确要求生成正式安装包时才执行 `pnpm package`。
+
+## GitHub Releases 与应用更新
+
+应用使用 `electron-updater`，更新源为公开仓库 `hacqlzx/robot-config-tools` 的正式 Releases。Windows 安装版每次启动后检查一次；底部版本号右侧可以手动检查，发现新版本时显示标记，点击「更新」下载，下载后点击「重启安装」并确认。开发/浏览器模式不检查更新。退出应用不会自动安装已下载更新。
+
+`pnpm package` 只生成产物，显式禁止 electron-builder 自动上传，以免本地构建意外发布。正式发布时将 `release/` 下对应版本的 `RobotConfigTools-Setup-版本-x64.exe`、同名 `.exe.blockmap` 和 `latest.yml` 上传至同一个 `v版本` Release。安装包内的 `resources/app-update.yml` 由 `build.publish` 配置生成，包含更新源信息，不含发布令牌。
+
+首次安装这一版本前的旧客户端尚未内置更新器，需要手动安装新包；以后可通过底部更新入口升级。当前发布仅提供 Windows x64 NSIS 安装包。

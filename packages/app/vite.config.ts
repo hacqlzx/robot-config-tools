@@ -7,6 +7,7 @@ import electron from 'vite-plugin-electron';
 import { potreeAssetsPlugin } from './src/potree-core/vite-potree-assets';
 
 const appRoot = fileURLToPath(new URL('.', import.meta.url));
+const appVersion = JSON.parse(fs.readFileSync(path.join(appRoot, 'package.json'), 'utf8')).version;
 const devProcessStateDir = path.join(appRoot, 'node_modules', '.cache', 'robot-config-tools', 'dev-processes');
 
 function devProcessTrackerPlugin() {
@@ -73,6 +74,7 @@ export default defineConfig(() => {
 
     define: {
       __ELECTRON__: JSON.stringify(isElectron),
+      __APP_VERSION__: JSON.stringify(appVersion),
     },
 
     server: {
@@ -106,6 +108,7 @@ export default defineConfig(() => {
         {
           entry: 'electron/main.ts',
           vite: {
+            define: { __APP_VERSION__: JSON.stringify(appVersion) },
             build: {
               outDir: 'dist-electron',
               rollupOptions: {

@@ -11,6 +11,17 @@ function dbInvoke(repo, method) {
 
 contextBridge.exposeInMainWorld("electronAPI", {
   platform: process.platform,
+  appUpdate: {
+    state: () => ipcRenderer.invoke("app-update:state"),
+    check: () => ipcRenderer.invoke("app-update:check"),
+    download: () => ipcRenderer.invoke("app-update:download"),
+    install: () => ipcRenderer.invoke("app-update:install"),
+    onChanged: (callback) => {
+      const handler = (_event, state) => callback(state);
+      ipcRenderer.on("app-update:changed", handler);
+      return () => ipcRenderer.removeListener("app-update:changed", handler);
+    },
+  },
   minimize: () => ipcRenderer.send("win:minimize"),
   maximize: () => ipcRenderer.send("win:maximize"),
   getWindowState: () => ipcRenderer.invoke("win:get-state"),
