@@ -1,12 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chooseVersion, nextPatchVersion, parseVersionArguments, replacePackageVersion, validateVersion } from "./package-version.mjs";
-
-test("默认递增末位；预发布版本递增后回到正式版", () => {
-  assert.equal(nextPatchVersion("1.0.3"), "1.0.4");
-  assert.equal(nextPatchVersion("1.9.99"), "1.9.100");
-  assert.equal(nextPatchVersion("2.0.3-beta.1+build.5"), "2.0.4");
-});
+import { chooseVersion, nextPackageVersion, parseVersionArguments, replacePackageVersion, validateVersion } from "./package-version.mjs";
 
 test("手动版本接受合法预发布和构建标记，拒绝格式错误", () => {
   for (const version of ["0.0.0", "1.1.0", "1.1.0-beta.1", "1.1.0+build.7"]) {
@@ -17,7 +11,7 @@ test("手动版本接受合法预发布和构建标记，拒绝格式错误", ()
   }
 });
 
-test("打包参数可显式指定版本或递增，错误参数在任何写入前拒绝", () => {
+test("打包参数可指定版本或自动递增版本，错误参数在任何写入前拒绝", () => {
   assert.deepEqual(parseVersionArguments(["--version", "1.1.0"]), { version: "1.1.0", automatic: false });
   assert.deepEqual(parseVersionArguments(["--", "--version=1.1.0"]), { version: "1.1.0", automatic: false });
   assert.deepEqual(parseVersionArguments(["--auto"]), { version: undefined, automatic: true });
@@ -26,11 +20,15 @@ test("打包参数可显式指定版本或递增，错误参数在任何写入�
   }
 });
 
-test("非交互选择必须显式配置，不能因校验无终端而静默递增", async () => {
-  assert.equal(await chooseVersion("1.0.3", { automatic: true }), "1.0.4");
-  assert.equal(await chooseVersion("1.0.3", { version: "1.1.0" }), "1.1.0");
+test("默认打包按补丁号序列递增，自动和手动模式可明确选择版本", async () => {
+  assert.equal(nextPackageVersion("1.0.7"), "1.0.71");
+  assert.equal(nextPackageVersion("1.0.71"), "1.0.72");
+  assert.equal(nextPackageVersion("1.0.0"), "1.0.1");
+  assert.equal(await chooseVersion("1.0.7", { automatic: true }), "1.0.71");
+  assert.equal(await chooseVersion("1.0.7", { version: "1.0.8" }), "1.0.8");
+  assert.equal(await chooseVersion("1.0.8", { automatic: true }), "1.0.81");
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    await assert.rejects(chooseVersion("1.0.3", {}), /无法交互/);
+    await assert.rejects(chooseVersion("1.0.7", {}), /无法交互/);
   }
 });
 

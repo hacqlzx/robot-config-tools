@@ -13,10 +13,13 @@ export function validateVersion(version) {
   return version;
 }
 
-export function nextPatchVersion(version) {
+export function nextPackageVersion(version) {
   validateVersion(version);
   const [, major, minor, patch] = versionPattern.exec(version);
-  return `${major}.${minor}.${BigInt(patch) + 1n}`;
+  const nextPatch = patch.length === 1 && patch !== "0"
+    ? `${patch}1`
+    : `${BigInt(patch) + 1n}`;
+  return `${major}.${minor}.${nextPatch}`;
 }
 
 export function parseVersionArguments(args) {
@@ -42,7 +45,7 @@ export function parseVersionArguments(args) {
 
 export async function chooseVersion(currentVersion, options) {
   if (options.version !== undefined) return options.version;
-  const defaultVersion = nextPatchVersion(currentVersion);
+  const defaultVersion = nextPackageVersion(currentVersion);
   if (options.automatic) return defaultVersion;
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new Error("当前终端无法交互，请使用 pnpm package --auto 或 pnpm package --version 1.1.0");
