@@ -49,7 +49,7 @@ export default function SettingsModal({ open, onClose, onStorageMigrationComplet
       className="settings-modal"
       open={open}
       centered
-      width={compact ? "calc(100vw - 24px)" : 780}
+      width={compact ? "calc(100vw - 24px)" : 860}
       mask={{ closable: false }}
       footer={null}
       destroyOnHidden
@@ -65,7 +65,7 @@ export default function SettingsModal({ open, onClose, onStorageMigrationComplet
             selectedKeys={[selectedKey]}
             items={menuItems}
             onSelect={({ key }) => { if (!storageBusy) setSelectedKey(key); }}
-            style={{ borderInlineEnd: 0, background: "transparent" }}
+            className="settings-modal__menu"
           />
         </div>
         <div className="settings-modal__content">

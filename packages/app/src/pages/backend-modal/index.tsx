@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect, useCallback } from "react";
 import { Form, Button, App, Tag, Tooltip } from "antd";
-import { CheckCircleFilled, CloseCircleFilled, DeleteOutlined, LinkOutlined, MinusCircleOutlined } from "@ant-design/icons";
+import { ApiOutlined, CheckCircleFilled, CloseCircleFilled, DeleteOutlined, LinkOutlined, MinusCircleOutlined, ReloadOutlined } from "@ant-design/icons";
 import {
   setBackendConnection,
   setConnectionStatus,
@@ -264,40 +264,65 @@ export default function BackendSettingsPanel({ onConnected }: Props) {
   return (
     <div className="backend-settings">
       <div className="backend-settings__connection">
-        <h3 className="backend-settings__title">当前连接</h3>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <strong>{backendIp || "暂无后台 IP"}</strong>
+        <div className="backend-settings__connection-heading">
+          <h3 className="backend-settings__title">当前连接</h3>
           <ConnectionStatusTag {...currentHealth} />
         </div>
+        <div className="backend-settings__connection-address">
+          <ApiOutlined aria-hidden="true" />
+          <strong>{backendIp || "暂无后台 IP"}</strong>
+        </div>
       </div>
-      <h3 className="backend-settings__title">添加 IP</h3>
-      <Form form={form} layout="horizontal" labelAlign="left" onFinish={handleAdd}>
-        <Form.Item label="后台 IP" name="ip" rules={[{ required: true, message: "请输入 IP" }, { pattern: ipRegex, message: "请输入完整 IP" }]}>
-          <IpInput />
-        </Form.Item>
-        <Form.Item style={{ marginBottom: 12, textAlign: "right" }}>
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-            <Button onClick={() => form.resetFields()}>重置</Button>
-            <Button type="primary" htmlType="submit" loading={connecting}>连接</Button>
-          </div>
-        </Form.Item>
-      </Form>
-      <div className="backend-settings__saved">
-        <h3 className="backend-settings__title">IP 地址列表</h3>
-        {ipList.length > 0 ? (
-          <div>
-          {ipList.map((item, index) => (
-            <div key={index} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f0f0f0" }}>
-              <IpInput value={item.ip} onChange={(val) => { if (val) { const u = [...ipList]; u[index] = { ip: val }; setIpList(u); } }} />
-              <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                <Button type="link" size="small" aria-label={`连接 ${item.ip}`} icon={<LinkOutlined />} loading={connectingIndex === index} onClick={() => handleListConnect(index)} />
-                <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => deleteIp(index)} />
-              </div>
+
+      <section className="backend-settings__section">
+        <h3 className="backend-settings__title">添加 IP</h3>
+        <Form form={form} layout="vertical" onFinish={handleAdd} className="backend-settings__form">
+          <div className="backend-settings__form-row">
+            <Form.Item
+              label="后台 IP"
+              name="ip"
+              rules={[{ required: true, message: "请输入 IP" }, { pattern: ipRegex, message: "请输入完整 IP" }]}
+            >
+              <IpInput className="backend-settings__ip-control" />
+            </Form.Item>
+            <div className="backend-settings__form-actions">
+              <Button icon={<ReloadOutlined />} onClick={() => form.resetFields()}>重置</Button>
+              <Button type="primary" htmlType="submit" icon={<ApiOutlined />} loading={connecting}>连接</Button>
             </div>
-          ))}
+          </div>
+        </Form>
+      </section>
+
+      <div className="backend-settings__saved">
+        <div className="backend-settings__saved-heading">
+          <h3 className="backend-settings__title">IP 地址列表</h3>
+          <span className="backend-settings__saved-count">{ipList.length} 个地址</span>
+        </div>
+        {ipList.length > 0 ? (
+          <div className="backend-settings__saved-list">
+            {ipList.map((item, index) => (
+              <div className="backend-settings__saved-row" key={`${item.ip}-${index}`}>
+                <div className="backend-settings__saved-ip">
+                  <IpInput
+                    className="backend-settings__ip-control backend-settings__ip-control--saved"
+                    value={item.ip}
+                    onChange={(val) => { if (val) { const u = [...ipList]; u[index] = { ip: val }; setIpList(u); } }}
+                  />
+                  {item.ip === backendIp && <span className="backend-settings__current-label">当前</span>}
+                </div>
+                <div className="backend-settings__saved-actions">
+                  <Tooltip title={`连接 ${item.ip}`}>
+                    <Button type="text" size="small" aria-label={`连接 ${item.ip}`} icon={<LinkOutlined />} loading={connectingIndex === index} onClick={() => handleListConnect(index)} />
+                  </Tooltip>
+                  <Tooltip title={`删除 ${item.ip}`}>
+                    <Button type="text" size="small" danger aria-label={`删除 ${item.ip}`} icon={<DeleteOutlined />} onClick={() => deleteIp(index)} />
+                  </Tooltip>
+                </div>
+              </div>
+            ))}
           </div>
         ) : (
-          <div style={{ padding: "20px 0", color: "#bfbfbf", textAlign: "center" }}>暂无已保存的 IP 地址</div>
+          <div className="backend-settings__empty">暂无已保存的 IP 地址</div>
         )}
       </div>
     </div>

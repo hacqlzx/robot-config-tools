@@ -1,20 +1,74 @@
+.settings-modal {
+  .ant-modal-content {
+    overflow: hidden;
+    border-radius: 10px;
+  }
+
+  .ant-modal-header {
+    margin-bottom: 0;
+    padding: 18px 24px 14px;
+  }
+
+  .ant-modal-title {
+    color: #202733;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 24px;
+  }
+
+  .ant-modal-close {
+    inset-block-start: 13px;
+    inset-inline-end: 14px;
+    color: #7b8491;
+  }
+}
+
 .settings-modal__layout {
   display: flex;
-  height: min(520px, calc(100dvh - 140px));
+  height: min(560px, calc(100dvh - 140px));
   min-height: 0;
   overflow: hidden;
   box-sizing: border-box;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid #edf0f3;
 }
 
 .settings-modal__navigation {
-  width: 180px;
+  width: 196px;
   flex-shrink: 0;
   overflow-y: auto;
   box-sizing: border-box;
-  padding: 12px 8px;
+  padding: 16px 12px;
   background: #f7f8fa;
-  border-right: 1px solid #f0f0f0;
+  border-right: 1px solid #edf0f3;
+}
+
+.settings-modal__menu {
+  border-inline-end: 0 !important;
+  background: transparent !important;
+
+  .ant-menu-item {
+    height: 42px;
+    margin: 3px 0;
+    padding-inline: 12px;
+    border-radius: 6px;
+    color: #525c69;
+    font-size: 14px;
+  }
+
+  .ant-menu-item .ant-menu-item-icon {
+    color: #778292;
+    font-size: 16px;
+  }
+
+  .ant-menu-item-selected {
+    color: #1769d2;
+    background: #e8f2ff;
+    font-weight: 600;
+  }
+
+  .ant-menu-item-selected .ant-menu-item-icon {
+    color: #1769d2;
+  }
 }
 
 .settings-modal__content {
@@ -23,18 +77,18 @@
   min-width: 0;
   min-height: 0;
   flex: 1;
-  padding: 24px;
+  padding: 26px 30px;
   overflow: hidden;
   box-sizing: border-box;
 }
 
 .settings-modal__title {
   flex-shrink: 0;
-  margin: 0 0 20px;
-  color: #262626;
-  font-size: 18px;
+  margin: 0 0 22px;
+  color: #202733;
+  font-size: 19px;
   font-weight: 600;
-  line-height: 26px;
+  line-height: 28px;
 }
 
 .settings-modal__panel {
@@ -42,6 +96,15 @@
   min-height: 0;
   overflow-y: auto;
   scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #c8ced6 transparent;
+
+  &::-webkit-scrollbar { width: 6px; }
+  &::-webkit-scrollbar-track { background: transparent; }
+  &::-webkit-scrollbar-thumb {
+    border-radius: 6px;
+    background: #c8ced6;
+  }
 }
 
 @media (max-width: 619px) {
@@ -52,17 +115,37 @@
 
   .settings-modal__layout--compact .settings-modal__navigation {
     width: 100%;
-    padding: 4px 8px;
+    flex-shrink: 0;
+    padding: 5px 8px;
     border-right: 0;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid #edf0f3;
   }
 
   .settings-modal__layout--compact .settings-modal__navigation .ant-menu {
     display: flex;
-    justify-content: space-around;
+    width: max-content;
+    min-width: 100%;
+    justify-content: space-between;
+  }
+
+  .settings-modal__layout--compact .settings-modal__menu .ant-menu-item {
+    flex: 1 0 auto;
+    justify-content: center;
+    margin: 0 2px;
+    padding-inline: 9px;
+    font-size: 13px;
+  }
+
+  .settings-modal__layout--compact .settings-modal__menu .ant-menu-item .ant-menu-title-content {
+    margin-inline-start: 6px;
   }
 
   .settings-modal__content {
-    padding: var(--app-module-padding);
+    padding: 18px 16px;
+  }
+
+  .settings-modal__title {
+    margin-bottom: 16px;
+    font-size: 17px;
   }
 }

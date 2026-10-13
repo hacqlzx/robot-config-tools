@@ -4,9 +4,10 @@ import { Input } from "antd";
 interface Props {
   value?: string;
   onChange?: (val: string) => void;
+  className?: string;
 }
 
-export default function IpInput({ value, onChange }: Props) {
+export default function IpInput({ value, onChange, className }: Props) {
   const parts = (value || "").split(".");
   const refs = useRef<any[]>([]);
   const [vals, setVals] = useState([parts[0] || "", parts[1] || "", parts[2] || "", parts[3] || ""]);
@@ -51,7 +52,7 @@ export default function IpInput({ value, onChange }: Props) {
   const inputStyle: React.CSSProperties = { width: 52, textAlign: "center", padding: "4px 0", border: "none", outline: "none", background: "transparent", boxShadow: "none" };
 
   return (
-    <div style={{ display: "inline-flex", alignItems: "center", border: "1px solid #d9d9d9", borderRadius: 6, padding: "0 8px", background: "#fff" }}>
+    <div className={className} style={{ display: "inline-flex", alignItems: "center", border: "1px solid #d9d9d9", borderRadius: 6, padding: "0 8px", background: "#fff" }}>
       {vals.map((v, i) => (
         <span key={i} style={{ display: "inline-flex", alignItems: "center" }}>
           <Input ref={(el: any) => (refs.current[i] = el)} value={v} onChange={(e) => handleChange(i, e.target.value)} onKeyDown={(e) => handleKeyDown(i, e)} style={inputStyle} maxLength={4} placeholder="0" />
