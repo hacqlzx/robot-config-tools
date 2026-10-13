@@ -73,20 +73,24 @@ function reconcileMovedDirectoryOnStartup(): void {
   const sourceExists = fs.existsSync(journal.source);
   const targetExists = fs.existsSync(journal.target);
   const identity = (value: string) => {
-    const stat = fs.statSync(value, { bigint: true });
+    const stat = fs.lstatSync(value, { bigint: true });
     return { dev: stat.dev.toString(), ino: stat.ino.toString(), birthtimeMs: Number(stat.birthtimeMs) };
   };
   const sameIdentity = (value: string) => {
-    const actual = identity(value);
-    return actual.dev === journal.sourceIdentity.dev
-      && actual.ino === journal.sourceIdentity.ino
-      && Math.abs(actual.birthtimeMs - journal.sourceIdentity.birthtimeMs) < 2;
+    try {
+      const stat = fs.lstatSync(value);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+      const actual = identity(value);
+      return actual.dev === journal.sourceIdentity.dev
+        && actual.ino === journal.sourceIdentity.ino
+        && Math.abs(actual.birthtimeMs - journal.sourceIdentity.birthtimeMs) < 2;
+    } catch {
+      return false;
+    }
   };
-  if (sourceExists && targetExists) {
-    throw new Error("迁移目录状态不明确：新旧目录同时存在，请保留现场检查");
-  }
-  if (targetExists) {
-    if (!sameIdentity(journal.target)) throw new Error("目标目录不是本次迁移的项目目录，请保留现场检查");
+  const sourceIsMigratedRoot = sourceExists && sameIdentity(journal.source);
+  const targetIsMigratedRoot = targetExists && sameIdentity(journal.target);
+  if (targetIsMigratedRoot) {
     // 根目录已移动，配置仍指向旧目录：先恢复配置，避免后续 ensureProjectRoot 创建空源目录。
     writeMigrationJson(projectRootConfigPath(), { projectRoot: journal.target });
     PROJECT_ROOT = journal.target;
@@ -94,10 +98,10 @@ function reconcileMovedDirectoryOnStartup(): void {
     writeMigrationJson(migrationJournalPath(), journal);
     return;
   }
-  if (!sourceExists || !sameIdentity(journal.source)) {
+  if (!sourceIsMigratedRoot) {
     throw new Error("未找到可恢复的项目目录，请保留现场检查");
   }
-  // 移动尚未发生或已回滚，保留源目录供设置页继续迁移。
+  // 旧版目录移动未完成时继续使用已确认的源目录，由设置页按复制流程恢复。
   PROJECT_ROOT = journal.source;
 }
 

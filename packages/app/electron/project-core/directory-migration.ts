@@ -49,6 +49,8 @@ export interface DirectoryMigrationResult {
 
 // 暂时关闭 SHA-256 内容校验以缩短迁移时间；原校验实现保留，恢复时设为 true。
 const VERIFY_MIGRATED_CONTENT = false;
+const CLEANUP_MAX_RETRIES = 20;
+const CLEANUP_RETRY_DELAY_MS = 250;
 
 function inside(parent: string, target: string): boolean {
   const relative = path.relative(parent, target);
@@ -201,86 +203,49 @@ function assertJournalOutsideRoots(journalPath: string, source: string, target: 
   }
 }
 
-async function migrateByRename(options: {
+async function resumeMovedDirectoryJournal(options: {
   source: string; target: string; journalPath: string; commitRoot: (target: string) => void;
   onProgress?: (progress: DirectoryMigrationProgress) => void;
-}, currentRoot: string, initialJournal?: MoveDirectoryMigrationJournal): Promise<DirectoryMigrationResult | null> {
-  const source = initialJournal?.source ?? currentRoot;
-  const target = initialJournal?.target ?? options.target;
+}, currentRoot: string, journal: MoveDirectoryMigrationJournal): Promise<DirectoryMigrationResult> {
+  const { source, target } = journal;
   assertJournalOutsideRoots(options.journalPath, source, target);
-  const reportProgress = (phase: DirectoryMigrationProgress["phase"], message: string) => {
-    try { options.onProgress?.({ phase, message, mode: "move", totalFiles: 0, completedFiles: 0, totalBytes: 0, completedBytes: 0 }); } catch { /* window closed */ }
-  };
   if (inside(source, target) || inside(target, source)) throw new Error("新旧保存目录不能互相包含，请选择独立目录");
-  if (!fs.existsSync(source)) {
-    if (!initialJournal || !fs.existsSync(target)) throw new Error("原保存目录不存在，无法迁移");
-  } else if (!(await fs.promises.stat(source)).isDirectory()) throw new Error("原保存目录不存在，无法迁移");
-  const identity = initialJournal?.sourceIdentity ?? await rootIdentity(source);
+  const sourceExists = fs.existsSync(source);
+  const targetExists = fs.existsSync(target);
+  const sourceIsMigratedRoot = sourceExists && sameRootIdentity(journal.sourceIdentity, await rootIdentity(source));
+  const targetIsMigratedRoot = targetExists && sameRootIdentity(journal.sourceIdentity, await rootIdentity(target));
 
-  if (!initialJournal) {
-    // 一次目录遍历只做安全检查，绝不读取文件内容；目标空目录可被根 rename 替换。
-    await scan(source);
-    if (fs.existsSync(target) && !await isEmptyDirectory(target)) throw new Error("目标保存目录必须为空，不能覆盖或合并已有项目");
-    if (fs.existsSync(target)) await fs.promises.rmdir(target);
-    const journal: MoveDirectoryMigrationJournal = {
-      version: 3, copyMode: "move", source, target, sourceIdentity: identity, phase: "moving",
-    };
-    writeMigrationJson(options.journalPath, journal);
-    reportProgress("moving", "正在移动项目目录");
-    try {
-      await fs.promises.rename(source, target);
-    } catch (error: any) {
-      if (error?.code === "EXDEV") {
-        try { await fs.promises.unlink(options.journalPath); } catch { /* fallback writes its own journal */ }
-        return null;
-      }
-      throw new Error(`移动项目目录失败：${error instanceof Error ? error.message : String(error)}`);
-    }
-    initialJournal = journal;
-  } else {
-    const sourceExists = fs.existsSync(source);
-    const targetExists = fs.existsSync(target);
-    if (sourceExists && targetExists) throw new Error("迁移目录状态不明确：新旧目录同时存在，请保留现场");
-    if (!sourceExists && !targetExists) throw new Error("迁移目录已丢失，请保留现场检查");
-    if (sourceExists) {
-      if (!sameRootIdentity(identity, await rootIdentity(source))) throw new Error("原保存目录已变化，请保留现场检查");
-      if (targetExists) throw new Error("目标保存目录已存在，无法继续移动");
-      reportProgress("moving", "正在移动项目目录");
-      try { await fs.promises.rename(source, target); }
-      catch (error: any) {
-        if (error?.code === "EXDEV") return null;
-        throw new Error(`移动项目目录失败：${error instanceof Error ? error.message : String(error)}`);
-      }
-    } else if (!sameRootIdentity(identity, await rootIdentity(target))) {
-      throw new Error("目标目录不是本次迁移的项目目录，请保留现场检查");
-    }
-  }
-
-  const journal = initialJournal;
-  if (!journal) throw new Error("移动迁移记录丢失");
-  journal.phase = "published";
-  writeMigrationJson(options.journalPath, journal);
-  reportProgress("switching", "正在更新保存目录配置");
-  try {
-    if (!sameRootIdentity(identity, await rootIdentity(target))) throw new Error("新保存目录已变化，请检查后重试");
+  // 兼容旧版同卷移动已完成、但应用尚未更新配置的中断状态。
+  if (targetIsMigratedRoot) {
     if (currentRoot !== target) options.commitRoot(target);
-  } catch (error) {
-    // 配置失败时恢复原目录；若恢复失败，保留 published 台账供启动恢复。
-    try {
-      if (!fs.existsSync(source) && fs.existsSync(target) && sameRootIdentity(identity, await rootIdentity(target))) {
-        await fs.promises.rename(target, source);
-        journal.phase = "moving";
-        writeMigrationJson(options.journalPath, journal);
-      }
-    } catch { /* keep the published journal for explicit recovery */ }
-    throw error;
+    journal.phase = "switched";
+    writeMigrationJson(options.journalPath, journal);
+    journal.phase = "complete";
+    writeMigrationJson(options.journalPath, journal);
+    return { projectRoot: target, changed: true };
   }
-  journal.phase = "switched";
-  writeMigrationJson(options.journalPath, journal);
-  journal.phase = "complete";
-  writeMigrationJson(options.journalPath, journal);
-  reportProgress("complete", "保存目录迁移完成");
-  return { projectRoot: target, changed: true };
+
+  if (!sourceIsMigratedRoot) {
+    if (!sourceExists && !targetExists) throw new Error("迁移目录已丢失，请保留现场检查");
+    throw new Error("未找到可恢复的项目目录，请保留现场检查");
+  }
+
+  if (targetExists && !await isEmptyDirectory(target)) {
+    throw new Error("旧迁移目标目录已包含其他内容，未覆盖任何文件；请检查并清理目标目录后继续");
+  }
+
+  // 将旧版移动台账转为可续传的复制迁移。
+  const copyJournal: DirectDirectoryMigrationJournal = {
+    version: 2,
+    copyMode: "direct",
+    verifyContent: VERIFY_MIGRATED_CONTENT,
+    source,
+    target,
+    phase: "copying",
+    entries: await scan(source),
+  };
+  writeMigrationJson(options.journalPath, copyJournal);
+  return migrateDirectDirectory(options, currentRoot, target, copyJournal);
 }
 
 export async function recoverMovedProjectDirectory(options: {
@@ -288,20 +253,19 @@ export async function recoverMovedProjectDirectory(options: {
 }): Promise<string | null> {
   const journal = readDirectoryMigrationJournal(options.journalPath);
   if (!journal || journal.version !== 3 || journal.phase === "complete") return null;
-  if (fs.existsSync(journal.source) && fs.existsSync(journal.target)) {
-    throw new Error("迁移目录状态不明确：新旧目录同时存在，请保留现场");
+  const sourceExists = fs.existsSync(journal.source);
+  const targetExists = fs.existsSync(journal.target);
+  if (targetExists && sameRootIdentity(journal.sourceIdentity, await rootIdentity(journal.target))) {
+    if (options.currentRoot !== journal.target) options.commitRoot(journal.target);
+    journal.phase = "switched";
+    writeMigrationJson(options.journalPath, journal);
+    journal.phase = "complete";
+    writeMigrationJson(options.journalPath, journal);
+    return journal.target;
   }
-  if (!fs.existsSync(journal.target) || !sameRootIdentity(journal.sourceIdentity, await rootIdentity(journal.target))) {
-    if (fs.existsSync(journal.source) && sameRootIdentity(journal.sourceIdentity, await rootIdentity(journal.source))) return journal.source;
-    throw new Error("未找到可恢复的项目目录，请保留现场检查");
-  }
-  if (fs.existsSync(journal.source)) throw new Error("迁移目录状态不明确：新旧目录同时存在，请保留现场");
-  options.commitRoot(journal.target);
-  journal.phase = "switched";
-  writeMigrationJson(options.journalPath, journal);
-  journal.phase = "complete";
-  writeMigrationJson(options.journalPath, journal);
-  return journal.target;
+  if (sourceExists && sameRootIdentity(journal.sourceIdentity, await rootIdentity(journal.source))) return journal.source;
+  if (!sourceExists && !targetExists) throw new Error("迁移目录已丢失，请保留现场检查");
+  throw new Error("未找到可恢复的项目目录，请保留现场检查");
 }
 
 async function migrateDirectDirectory(options: {
@@ -437,7 +401,10 @@ async function migrateDirectDirectory(options: {
         const entryPath = path.resolve(source, entry.relativePath);
         const resolved = await fs.promises.realpath(entryPath);
         if (entryPath === source || !inside(source, resolved) || resolved !== entryPath) throw new Error("原目录清理路径已变化");
-        await fs.promises.rm(entryPath, { recursive: entry.directory, force: true, maxRetries: 3, retryDelay: 200 });
+        await fs.promises.rm(entryPath, {
+          recursive: entry.directory, force: true,
+          maxRetries: CLEANUP_MAX_RETRIES, retryDelay: CLEANUP_RETRY_DELAY_MS,
+        });
       }
     }
   } catch (error) {
@@ -490,14 +457,8 @@ export async function migrateProjectDirectory(options: {
   if (await physicalPath(source) !== source || (journal?.version === 1 && await physicalPath(journal.staging) !== journal.staging)) {
     throw new Error("迁移目录的实际路径已变化，请检查后重试");
   }
-  if (journal?.version === 3) {
-    return (await migrateByRename(options, currentRoot, journal)) || migrateDirectDirectory(options, currentRoot, target);
-  }
+  if (journal?.version === 3) return resumeMovedDirectoryJournal(options, currentRoot, journal);
   if (!journal || journal.version === 2) {
-    if (!journal) {
-      const moved = await migrateByRename(options, currentRoot);
-      if (moved) return moved;
-    }
     return migrateDirectDirectory(options, currentRoot, target, journal?.version === 2 ? journal : undefined);
   }
   const progress: DirectoryMigrationProgress = {
@@ -653,7 +614,10 @@ export async function migrateProjectDirectory(options: {
         const resolved = await fs.promises.realpath(entryPath);
         if (entryPath === source || !inside(source, resolved) || resolved !== entryPath) throw new Error("原目录清理路径已变化");
         try {
-          await fs.promises.rm(entryPath, { recursive: entry.directory, force: true, maxRetries: 3, retryDelay: 200 });
+          await fs.promises.rm(entryPath, {
+            recursive: entry.directory, force: true,
+            maxRetries: CLEANUP_MAX_RETRIES, retryDelay: CLEANUP_RETRY_DELAY_MS,
+          });
         } catch (error) {
           // 清理失败后的部分源目录保留，后续由用户检查，不重复搬迁。
           throw new Error(`清理失败：${entry.relativePath}；${error instanceof Error ? error.message : String(error)}`);

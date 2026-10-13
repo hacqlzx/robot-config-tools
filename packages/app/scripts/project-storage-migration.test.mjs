@@ -25,15 +25,30 @@ async function loadMigrator(fileSystemOverrides = {}, transform = (source) => so
       transform(source.replace('import fs from "node:fs";', `const fs = globalThis.${key};`)));
   } finally { delete globalThis[key]; }
 }
+let projectRootModuleId = 0;
+async function loadProjectRoot(userDataPath, migration) {
+  const key = `__projectRootTestDependencies${++projectRootModuleId}`;
+  globalThis[key] = {
+    app: {
+      isPackaged: false,
+      getPath: (name) => name === "userData" ? userDataPath : path.dirname(userDataPath),
+    },
+    migration,
+    activity: { beginProjectDirectoryMigration: () => () => {}, notifyProjectRootChanged: () => {} },
+  };
+  try {
+    return await loadTs("../electron/project-core/project-root.ts", (source) => source
+      .replace(/import \{ app \} from "electron";/, `const { app } = globalThis.${key};`)
+      .replace(/import \{\s*migrateProjectDirectory,\s*readDirectoryMigrationJournal,\s*writeMigrationJson,\s*type DirectoryMigrationProgress,\s*type DirectoryMigrationResult,\s*\} from "\.\/directory-migration";/,
+        `const { migrateProjectDirectory, readDirectoryMigrationJournal, writeMigrationJson } = globalThis.${key}.migration;`)
+      .replace(/import \{ beginProjectDirectoryMigration, notifyProjectRootChanged \} from "\.\/project-activity";/,
+        `const { beginProjectDirectoryMigration, notifyProjectRootChanged } = globalThis.${key}.activity;`)
+      .replace(/const __dirname = path\.dirname\(fileURLToPath\(import\.meta\.url\)\);/, "const __dirname = \"\";"));
+  } finally { delete globalThis[key]; }
+}
 
-// 原有用例继续覆盖跨卷复制；只拦截项目根 rename，旧版 staging 发布不受影响。
 const { migrateProjectDirectory, recoverMovedProjectDirectory, readDirectoryMigrationJournal, writeMigrationJson } =
-  await loadMigrator({ promises: { rename: async (source, target) => {
-    if (path.basename(source) === "中文 原目录" && path.basename(target) === "新目录 带空格") {
-      throw Object.assign(new Error("cross-device link"), { code: "EXDEV" });
-    }
-    return fs.promises.rename(source, target);
-  } } });
+  await loadMigrator();
 
 function setup(t, migrator = migrateProjectDirectory) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "robotconfig-storage-test-"));
@@ -290,14 +305,8 @@ test("缺失源目录和越界/伪造台账拒绝操作", async (t) => {
   assert.throws(() => readDirectoryMigrationJournal(s.journalPath), /无效/);
 });
 
-test("同卷整体移动不读取文件内容，保留目录及文件 identity 和时间", async (t) => {
-  const forbidCopy = () => assert.fail("同卷整体移动不应读取或复制文件内容");
-  const { migrateProjectDirectory: move } = await loadMigrator({
-    createReadStream: forbidCopy,
-    createWriteStream: forbidCopy,
-    promises: { copyFile: forbidCopy },
-  });
-  const s = setup(t, move);
+test("同卷迁移也通过可恢复复制完成，保留目录、二进制和文件时间", async (t) => {
+  const s = setup(t);
   const project = path.join(s.source, "厂站甲");
   fs.mkdirSync(path.join(project, "地图", "中文 地图"), { recursive: true });
   fs.mkdirSync(path.join(project, "空目录"));
@@ -306,7 +315,6 @@ test("同卷整体移动不读取文件内容，保留目录及文件 identity �
   const bytes = Buffer.alloc(160000, 37);
   fs.writeFileSync(sourceFile, bytes);
   fs.utimesSync(sourceFile, new Date("2024-01-02T03:04:05Z"), new Date("2024-01-02T03:04:05Z"));
-  const rootStat = fs.statSync(s.source);
   const fileStat = fs.statSync(sourceFile);
   const phases = [];
 
@@ -315,29 +323,27 @@ test("同卷整体移动不读取文件内容，保留目录及文件 identity �
   assert.equal(result.changed, true);
   assert.equal(result.warning, undefined);
   assert.equal(s.root(), s.target);
-  assert.equal(fs.existsSync(s.source), false);
-  assert.equal(fs.statSync(s.target).ino, rootStat.ino);
-  const movedFile = path.join(s.target, "厂站甲", "地图", "中文 地图", "map.las");
-  assert.equal(fs.statSync(movedFile).ino, fileStat.ino);
-  assert.equal(fs.statSync(movedFile).mtimeMs, fileStat.mtimeMs);
-  assert.deepEqual(fs.readFileSync(movedFile), bytes);
+  assert.deepEqual(fs.readdirSync(s.source), []);
+  const copiedFile = path.join(s.target, "厂站甲", "地图", "中文 地图", "map.las");
+  assert.equal(fs.statSync(copiedFile).mtimeMs, fileStat.mtimeMs);
+  assert.deepEqual(fs.readFileSync(copiedFile), bytes);
   assert.ok(fs.statSync(path.join(s.target, "厂站甲", "空目录")).isDirectory());
   assert.ok(fs.statSync(path.join(s.target, ".隐藏缓存")).isDirectory());
+  assert.equal(readDirectoryMigrationJournal(s.journalPath).version, 2);
+  assert.equal(readDirectoryMigrationJournal(s.journalPath).copyMode, "direct");
   assert.equal(readDirectoryMigrationJournal(s.journalPath).phase, "complete");
-  assert.ok(!phases.includes("copying"));
-  assert.ok(!phases.includes("verifying"));
+  assert.ok(phases.includes("copying") && phases.includes("verifying"));
 });
 
-test("同卷移动替换已有空目标，禁止覆盖非空目标及源目录链接", async (t) => {
-  const { migrateProjectDirectory: move } = await loadMigrator();
-  const s = setup(t, move);
+test("直接复制允许空目标，拒绝覆盖非空目标及源目录链接", async (t) => {
+  const s = setup(t);
   fs.writeFileSync(path.join(s.source, "文件"), "data");
   fs.mkdirSync(s.target);
   await s.run();
   assert.equal(fs.readFileSync(path.join(s.target, "文件"), "utf8"), "data");
-  assert.equal(fs.existsSync(s.source), false);
+  assert.deepEqual(fs.readdirSync(s.source), []);
 
-  const nonempty = setup(t, move);
+  const nonempty = setup(t);
   fs.writeFileSync(path.join(nonempty.source, "文件"), "source");
   fs.mkdirSync(nonempty.target);
   fs.writeFileSync(path.join(nonempty.target, "文件"), "destination");
@@ -345,7 +351,7 @@ test("同卷移动替换已有空目标，禁止覆盖非空目标及源目录�
   assert.equal(fs.readFileSync(path.join(nonempty.source, "文件"), "utf8"), "source");
   assert.equal(fs.readFileSync(path.join(nonempty.target, "文件"), "utf8"), "destination");
 
-  const linked = setup(t, move);
+  const linked = setup(t);
   const external = path.join(linked.base, "外部");
   fs.mkdirSync(external);
   fs.symlinkSync(external, path.join(linked.source, "链接"), "junction");
@@ -354,48 +360,81 @@ test("同卷移动替换已有空目标，禁止覆盖非空目标及源目录�
   assert.equal(fs.existsSync(path.join(linked.source, "链接")), true);
 });
 
-test("根目录 rename 报 EXDEV 自动转复制，普通权限错误不转复制", async (t) => {
-  const s = setup(t);
-  fs.writeFileSync(path.join(s.source, "文件"), "cross-volume data");
-  await s.run();
-  assert.equal(readDirectoryMigrationJournal(s.journalPath).version, 2);
-  assert.equal(readDirectoryMigrationJournal(s.journalPath).copyMode, "direct");
-  assert.equal(fs.readFileSync(path.join(s.target, "文件"), "utf8"), "cross-volume data");
-  assert.deepEqual(fs.readdirSync(s.source), []);
-
-  const { migrateProjectDirectory: denyMove } = await loadMigrator({
-    createReadStream: () => assert.fail("普通权限错误不应自动启动复制"),
-    createWriteStream: () => assert.fail("普通权限错误不应自动启动复制"),
+test("迁移不调用目录 rename，Windows rename 权限限制不影响复制", async (t) => {
+  let renameCalls = 0;
+  const { migrateProjectDirectory: copyOnly } = await loadMigrator({
     promises: { rename: async () => {
-      throw Object.assign(new Error("目录被占用"), { code: "EACCES" });
+      renameCalls += 1;
+      throw Object.assign(new Error("目录被占用"), { code: "EPERM" });
     } },
   });
-  const denied = setup(t, denyMove);
-  fs.writeFileSync(path.join(denied.source, "文件"), "original");
-  await assert.rejects(denied.run(), /目录被占用|移动失败/);
-  assert.equal(denied.root(), denied.source);
-  assert.equal(fs.readFileSync(path.join(denied.source, "文件"), "utf8"), "original");
-  assert.equal(fs.existsSync(path.join(denied.target, "文件")), false);
+  const s = setup(t, copyOnly);
+  fs.writeFileSync(path.join(s.source, "文件"), "copy data");
+
+  await s.run();
+
+  assert.equal(renameCalls, 0);
+  assert.equal(readDirectoryMigrationJournal(s.journalPath).version, 2);
+  assert.equal(fs.readFileSync(path.join(s.target, "文件"), "utf8"), "copy data");
+  assert.deepEqual(fs.readdirSync(s.source), []);
 });
 
-test("同卷移动的配置保存失败回滚到旧目录，同一迁移可重试", async (t) => {
-  const { migrateProjectDirectory: move } = await loadMigrator();
-  const s = setup(t, move);
-  fs.writeFileSync(path.join(s.source, "标定.json"), "original");
-  const fileIdentity = fs.statSync(path.join(s.source, "标定.json")).ino;
+test("旧版 rename 台账源目录未移动时从空目标恢复为复制", async (t) => {
+  const s = setup(t);
+  fs.writeFileSync(path.join(s.source, "文件"), "保留原始数据");
+  const stat = fs.statSync(s.source, { bigint: true });
+  fs.mkdirSync(s.target);
+  writeMigrationJson(s.journalPath, {
+    version: 3, copyMode: "move", source: s.source, target: s.target, phase: "moving",
+    sourceIdentity: { dev: stat.dev.toString(), ino: stat.ino.toString(), birthtimeMs: Number(stat.birthtimeMs) },
+  });
 
-  await assert.rejects(s.run({ commitRoot: () => { throw new Error("配置保存失败"); } }), /配置保存失败/);
-
-  assert.equal(s.root(), s.source);
-  assert.equal(fs.readFileSync(path.join(s.source, "标定.json"), "utf8"), "original");
-  assert.equal(fs.statSync(path.join(s.source, "标定.json")).ino, fileIdentity);
-  assert.equal(fs.existsSync(path.join(s.target, "标定.json")), false);
-  assert.notEqual(readDirectoryMigrationJournal(s.journalPath).phase, "complete");
-  fs.writeFileSync(path.join(s.source, "标定.json"), "edited after failure");
   await s.run();
-  assert.equal(fs.readFileSync(path.join(s.target, "标定.json"), "utf8"), "edited after failure");
-  assert.equal(s.root(), s.target);
-  assert.equal(fs.existsSync(s.source), false);
+
+  assert.equal(readDirectoryMigrationJournal(s.journalPath).version, 2);
+  assert.equal(readDirectoryMigrationJournal(s.journalPath).phase, "complete");
+  assert.equal(fs.readFileSync(path.join(s.target, "文件"), "utf8"), "保留原始数据");
+  assert.deepEqual(fs.readdirSync(s.source), []);
+});
+
+test("启动时旧版 rename 台账遇到源目录和空目标并存仍从源目录启动", async (t) => {
+  const s = setup(t);
+  fs.writeFileSync(path.join(s.source, "文件"), "source data");
+  const stat = fs.statSync(s.source, { bigint: true });
+  fs.mkdirSync(s.target);
+  const userDataPath = path.join(s.base, "user-data");
+  fs.mkdirSync(userDataPath);
+  fs.writeFileSync(path.join(userDataPath, "data-path.json"), JSON.stringify({ projectRoot: s.source }));
+  writeMigrationJson(path.join(userDataPath, "data-path-migration.json"), {
+    version: 3, copyMode: "move", source: s.source, target: s.target, phase: "moving",
+    sourceIdentity: { dev: stat.dev.toString(), ino: stat.ino.toString(), birthtimeMs: Number(stat.birthtimeMs) },
+  });
+
+  const projectRoot = await loadProjectRoot(userDataPath, {
+    migrateProjectDirectory, readDirectoryMigrationJournal, writeMigrationJson,
+  });
+
+  assert.equal(projectRoot.loadInitialProjectRoot(), s.source);
+  assert.deepEqual(projectRoot.getDataPathMigrationStatus(), { pending: true, target: s.target, phase: "moving" });
+  assert.equal(fs.readFileSync(path.join(s.source, "文件"), "utf8"), "source data");
+});
+
+test("旧版 rename 台账遇到非空目标时保留源和目标并拒绝覆盖", async (t) => {
+  const s = setup(t);
+  fs.writeFileSync(path.join(s.source, "源文件"), "source");
+  const stat = fs.statSync(s.source, { bigint: true });
+  fs.mkdirSync(s.target);
+  fs.writeFileSync(path.join(s.target, "目标文件"), "target");
+  writeMigrationJson(s.journalPath, {
+    version: 3, copyMode: "move", source: s.source, target: s.target, phase: "moving",
+    sourceIdentity: { dev: stat.dev.toString(), ino: stat.ino.toString(), birthtimeMs: Number(stat.birthtimeMs) },
+  });
+
+  await assert.rejects(s.run(), /未覆盖任何文件/);
+
+  assert.equal(fs.readFileSync(path.join(s.source, "源文件"), "utf8"), "source");
+  assert.equal(fs.readFileSync(path.join(s.target, "目标文件"), "utf8"), "target");
+  assert.equal(readDirectoryMigrationJournal(s.journalPath).version, 3);
 });
 
 test("启动恢复：移动已完成但台账仍为 moving 时补提交目标，不创建空源目录", async (t) => {
@@ -418,7 +457,7 @@ test("启动恢复：移动已完成但台账仍为 moving 时补提交目标，
   assert.equal(readDirectoryMigrationJournal(s.journalPath).phase, "complete");
 });
 
-test("启动恢复：未移动或已回滚时保留源目录；目录状态歧义或 identity 不匹配拒绝", async (t) => {
+test("启动恢复：未移动时保留源目录；源目标并存可继续，identity 不匹配拒绝", async (t) => {
   const s = setup(t);
   fs.writeFileSync(path.join(s.source, "文件"), "source");
   const identity = fs.statSync(s.source, { bigint: true });
@@ -434,7 +473,9 @@ test("启动恢复：未移动或已回滚时保留源目录；目录状态歧�
   assert.equal(fs.readFileSync(path.join(s.source, "文件"), "utf8"), "source");
 
   fs.mkdirSync(s.target);
-  await assert.rejects(recoverMovedProjectDirectory({ currentRoot: s.source, journalPath: s.journalPath, commitRoot: () => {} }), /同时存在/);
+  const bothPresent = await recoverMovedProjectDirectory({ currentRoot: s.source, journalPath: s.journalPath, commitRoot: () => {} });
+  assert.equal(bothPresent, s.source);
+  assert.equal(readDirectoryMigrationJournal(s.journalPath).phase, "moving");
   fs.rmSync(s.target, { recursive: true, force: true });
   journal.sourceIdentity = { ...journal.sourceIdentity, ino: "-1" };
   writeMigrationJson(s.journalPath, journal);
