@@ -1,3 +1,10 @@
+:root {
+  --app-page-padding: 16px;
+  --app-module-padding: 16px;
+  --app-panel-padding: 12px;
+  --app-workspace-padding: 8px;
+}
+
 body {
   margin: 0;
 }

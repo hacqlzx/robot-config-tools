@@ -3,7 +3,7 @@ import { Layout, ConfigProvider, App, message as antdMessage } from "antd";
 import { Outlet, useLocation } from "react-router-dom";
 import AppHeader from "./pages/app-header";
 import AppFooter from "./pages/app-footer";
-import { useSelectedProject } from "./stores/appContextStore";
+import { useAppContext } from "./stores/appContextStore";
 import SpaceEdit from "./views/space-edit/workspace";
 import "./styles/global.css";
 import "./styles/title-bar.scss";
@@ -30,7 +30,7 @@ const ImageEdit = lazy(() => import("./views/image-edit"));
  * 4. 空间编辑、勘察图片、屏柜/设备验证图页面保持缓存，切换回来时不重新初始化。
  */
 export default function AppLayout() {
-  const selectedProject = useSelectedProject();
+  const { selectedProject, storageVersion, storageMigrating } = useAppContext();
   const location = useLocation();
   const isSpaceEdit = location.pathname === "/space-edit";
   const isImageEdit = location.pathname === "/image-edit";
@@ -38,7 +38,7 @@ export default function AppLayout() {
   const isDeviceVerify = location.pathname === "/device-verify";
 
   // 以项目名作为页面 key，切换项目时强制重建 Outlet，清理旧状态
-  const projectPageKey = selectedProject || "no-project";
+  const projectPageKey = `${selectedProject || "no-project"}:${storageVersion}`;
 
   // 空间编辑、勘察图片和验证图都需要缓存 key，离开页面后再切回来时复用同一实例
   const [spaceEditCacheKey, setSpaceEditCacheKey] = useState(isSpaceEdit ? projectPageKey : "");
@@ -116,7 +116,7 @@ export default function AppLayout() {
         <Layout style={{ height: "100vh", overflow: "hidden" }}>
           <AppHeader />
           <Content style={{ flex: "1 1 0", minHeight: 0, padding: 0, background: "#f5f5f5", overflow: "hidden" }}>
-            <div style={{ height: "100%", boxSizing: "border-box" }}>
+            {storageMigrating ? <div style={{ padding: 24, textAlign: "center" }}>正在迁移项目文件…</div> : <div style={{ height: "100%", boxSizing: "border-box" }}>
               {/*
                 空间编辑页：通过 display 切换显隐而非卸载，保留模型、绘制、历史栈和自动保存状态。
               */}
@@ -172,7 +172,7 @@ export default function AppLayout() {
                 确保地图树、设备树、绘制状态等随项目刷新。
               */}
               {!isSpaceEdit && !isImageEdit && !isScreenVerify && !isDeviceVerify && <Outlet key={projectPageKey} />}
-            </div>
+            </div>}
           </Content>
           <AppFooter />
         </Layout>

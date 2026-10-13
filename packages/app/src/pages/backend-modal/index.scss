@@ -1,0 +1,23 @@
+.backend-settings__title {
+  margin: 0 0 12px;
+  color: #262626;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.backend-settings__connection {
+  margin-bottom: 24px;
+  padding: var(--app-module-padding);
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  background: #fafafa;
+
+  .backend-settings__title {
+    margin-bottom: 8px;
+  }
+}
+
+.backend-settings__saved {
+  margin-top: 24px;
+}

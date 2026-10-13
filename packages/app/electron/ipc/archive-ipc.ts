@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { onProjectRootChanged, registerProjectActivityHandler } from "../project-core/project-activity";
 import AdmZip from "adm-zip";
 import fs from "fs";
 import path from "path";
@@ -203,7 +203,8 @@ const cabinetImageSources = new Map<string, CabinetImageSourceRef>();
 let cabinetImageSourceSeq = 0;
 
 export function registerArchiveIpc(): void {
-  ipcMain.handle("extract-zip", async (_event, zipPath: string, destDir: string) => {
+  onProjectRootChanged(() => cabinetImageSources.clear());
+  registerProjectActivityHandler("extract-zip", async (_event, zipPath: string, destDir: string) => {
     console.log("[extract-zip] 开始解压:", zipPath, "→", destDir);
     try {
       const zip = new AdmZip(zipPath);
@@ -240,7 +241,7 @@ export function registerArchiveIpc(): void {
     }
   });
 
-  ipcMain.handle("import-survey-data", async (_event, projectName: string, mapName: string, zipPath: string) => {
+  registerProjectActivityHandler("import-survey-data", async (_event, projectName: string, mapName: string, zipPath: string) => {
     console.log("[import-survey-data] 开始导入:", zipPath, "project:", projectName, "map:", mapName);
     try {
       const safeProjectName = assertSafePathSegment(projectName, "项目名称");
@@ -279,7 +280,7 @@ export function registerArchiveIpc(): void {
     }
   });
 
-  ipcMain.handle("export-survey-data", async (_event, projectName: string, mapName: string, destDir: string) => {
+  registerProjectActivityHandler("export-survey-data", async (_event, projectName: string, mapName: string, destDir: string) => {
     console.log("[export-survey-data] 开始导出:", "project:", projectName, "map:", mapName, "dest:", destDir);
     try {
       const result = await exportSurveyDataArchive(projectName, mapName, destDir);
@@ -291,7 +292,7 @@ export function registerArchiveIpc(): void {
     }
   });
 
-  ipcMain.handle("export-image-labels", async (_event, projectName: string, mapName: string, destDir: string) => {
+  registerProjectActivityHandler("export-image-labels", async (_event, projectName: string, mapName: string, destDir: string) => {
     console.log("[export-image-labels] 开始导出:", "project:", projectName, "map:", mapName, "dest:", destDir);
     try {
       const result = await exportImageLabelsArchive(projectName, mapName, destDir);
@@ -303,7 +304,7 @@ export function registerArchiveIpc(): void {
     }
   });
 
-  ipcMain.handle("import-image-labels", async (_event, projectName: string, mapName: string, zipPath: string) => {
+  registerProjectActivityHandler("import-image-labels", async (_event, projectName: string, mapName: string, zipPath: string) => {
     console.log("[import-image-labels] 开始导入:", zipPath, "project:", projectName, "map:", mapName);
     try {
       const safeProjectName = assertSafePathSegment(projectName, "项目名称");
@@ -350,7 +351,7 @@ export function registerArchiveIpc(): void {
     }
   });
 
-  ipcMain.handle("import-cabinet-image-package", async (_event, projectName: string, packagePath: string) => {
+  registerProjectActivityHandler("import-cabinet-image-package", async (_event, projectName: string, packagePath: string) => {
     try {
       const sourcePath = String(packagePath || "").trim();
       if (!sourcePath || !path.isAbsolute(sourcePath)) throw new Error("压缩包路径无效");
@@ -375,7 +376,7 @@ export function registerArchiveIpc(): void {
     }
   });
 
-  ipcMain.handle("load-local-cabinet-image-package", async (_event, projectName: string) => {
+  registerProjectActivityHandler("load-local-cabinet-image-package", async (_event, projectName: string) => {
     try {
       cabinetImageSources.clear();
       const result = readCabinetImageWorkspace(projectName);
@@ -386,7 +387,7 @@ export function registerArchiveIpc(): void {
     }
   });
 
-  ipcMain.handle("load-cabinet-image", async (_event, sourceId: string) => {
+  registerProjectActivityHandler("load-cabinet-image", async (_event, sourceId: string) => {
     try {
       const source = cabinetImageSources.get(String(sourceId || ""));
       if (!source) throw new Error("图片来源已失效，请重新导入屏柜图像压缩包");
@@ -398,7 +399,7 @@ export function registerArchiveIpc(): void {
     }
   });
 
-  ipcMain.handle("save-cabinet-image-annotations", async (_event, projectName: string, payload: any) => {
+  registerProjectActivityHandler("save-cabinet-image-annotations", async (_event, projectName: string, payload: any) => {
     try {
       const result = saveCabinetImageAnnotations(projectName, payload);
       return { success: true, ...result };
@@ -408,7 +409,7 @@ export function registerArchiveIpc(): void {
     }
   });
 
-  ipcMain.handle("save-cabinet-main-device-name-override", async (_event, projectName: string, payload: any) => {
+  registerProjectActivityHandler("save-cabinet-main-device-name-override", async (_event, projectName: string, payload: any) => {
     try {
       const result = saveCabinetMainDeviceNameOverride(projectName, payload);
       return { success: true, ...result };
@@ -418,7 +419,7 @@ export function registerArchiveIpc(): void {
     }
   });
 
-  ipcMain.handle("export-cabinet-annotation-params", async (_event, projectName: string, destDir: string, data: any) => {
+  registerProjectActivityHandler("export-cabinet-annotation-params", async (_event, projectName: string, destDir: string, data: any) => {
     try {
       const result = exportCabinetAnnotationParams(projectName, destDir, data);
       return { success: true, ...result };
@@ -428,7 +429,7 @@ export function registerArchiveIpc(): void {
     }
   });
 
-  ipcMain.handle("export-cabinet-point-table", async (_event, projectName: string, destDir: string) => {
+  registerProjectActivityHandler("export-cabinet-point-table", async (_event, projectName: string, destDir: string) => {
     try {
       const result = await exportCabinetPointTable(projectName, destDir);
       return { success: true, ...result };

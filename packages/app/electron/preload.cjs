@@ -205,6 +205,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("export-cabinet-point-table", projectName, destDir),
   getProjectRoot: () => ipcRenderer.invoke("get-project-root"),
   setDataPath: (newPath) => ipcRenderer.invoke("set-data-path", newPath),
+  getDataPathMigrationStatus: () => ipcRenderer.invoke("storage:migration-status"),
+  onDataPathMigrationProgress: (callback) => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on("storage:migration-progress", listener);
+    return () => ipcRenderer.removeListener("storage:migration-progress", listener);
+  },
   db: {
     voltage: {
       list: dbInvoke("voltage", "list"),

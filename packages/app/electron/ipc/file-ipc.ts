@@ -1,11 +1,11 @@
-import { ipcMain } from "electron";
+import { registerProjectActivityHandler } from "../project-core/project-activity";
 import fs from "fs";
 import path from "path";
 import { pipeline } from "stream/promises";
 import { buildBackendResponseError, requestBackendResource } from "../backend-http";
 
 export function registerFileIpc(): void {
-  ipcMain.handle("read-file-chunk", async (_event, filePath: string, offset: number, length: number) => {
+  registerProjectActivityHandler("read-file-chunk", async (_event, filePath: string, offset: number, length: number) => {
     const fd = await fs.promises.open(filePath, "r");
     try {
       const buf = Buffer.alloc(length);
@@ -16,7 +16,7 @@ export function registerFileIpc(): void {
     }
   });
 
-  ipcMain.handle("read-large-file", async (_event, filePath: string) => {
+  registerProjectActivityHandler("read-large-file", async (_event, filePath: string) => {
     const { size } = await fs.promises.stat(filePath);
     if (size < 2 * 1024 * 1024 * 1024) {
       const buffer = await fs.promises.readFile(filePath);
@@ -43,7 +43,7 @@ export function registerFileIpc(): void {
    * 将后台文件直接流式写入已选择的目标目录。
    * 下载不再借用项目目录作为临时中转，避免未选择项目时流程被提前中断。
    */
-  ipcMain.handle("download-remote-file", async (
+  registerProjectActivityHandler("download-remote-file", async (
     _event,
     remoteUrl: string,
     preferredFileName: string,

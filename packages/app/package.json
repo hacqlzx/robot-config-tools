@@ -56,6 +56,7 @@
         },
         "appId": "com.robot.config-tools",
         "productName": "七宝智图",
+        "executableName": "RobotConfigTools",
         "directories": {
             "output": "release"
         },
@@ -98,9 +99,9 @@
         "electronDist": "node_modules/electron/dist",
         "npmRebuild": false,
         "nodeGypRebuild": false,
-        "asar": false
+        "asar": true
     },
-    "version": "1.0.5",
+    "version": "1.0.6",
     "description": "七宝智图",
     "author": "robot",
     "packageManager": "pnpm@9"

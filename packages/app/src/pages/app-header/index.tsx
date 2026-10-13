@@ -222,22 +222,9 @@ export default function AppHeader() {
     }
   };
 
-  const handleChooseProjectRoot = async () => {
-    if (!window.electronAPI?.selectDir || !window.electronAPI?.setDataPath) {
-      messageApi.warning("仅 Electron 环境支持选择保存目录");
-      return;
-    }
-    try {
-      const dir = await window.electronAPI.selectDir();
-      if (!dir) return;
-      if (!(await confirmWorkspaceTransition("切换保存目录"))) return;
-      await window.electronAPI.setDataPath(dir);
-      messageApi.success("保存目录已更新");
-      await loadProjects();
-      await loadProjectRoot();
-    } catch (e: any) {
-      messageApi.error(e?.message || "保存目录更新失败");
-    }
+  const handleStorageMigrationComplete = async (): Promise<void> => {
+    await loadProjects();
+    await loadProjectRoot();
   };
 
   return (
@@ -306,7 +293,6 @@ export default function AppHeader() {
         getProjectPath={getProjectPath}
         onClose={() => setProjectManagerOpen(false)}
         onReloadProjects={loadProjects}
-        onChooseProjectRoot={handleChooseProjectRoot}
         onSwitchProject={handleSwitchProject}
         onConfirmProjectChange={confirmWorkspaceTransition}
         onOpenProjectDir={handleOpenProjectDir}
@@ -371,7 +357,11 @@ export default function AppHeader() {
         </div>
       </Modal>
 
-      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onStorageMigrationComplete={handleStorageMigrationComplete}
+      />
     </div>
   );
 }

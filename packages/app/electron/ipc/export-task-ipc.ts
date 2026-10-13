@@ -1,3 +1,4 @@
+import { beginProjectOperation, registerProjectActivityHandler } from "../project-core/project-activity";
 import { BrowserWindow, ipcMain, shell } from "electron";
 import fs from "fs";
 import path from "path";
@@ -281,7 +282,9 @@ class ExportTaskManager {
     this.runningAbort = abortController;
     let tempPath = "";
 
+    let releaseOperation: (() => void) | undefined;
     try {
+      releaseOperation = beginProjectOperation("后台导出或下载");
       this.updateTask(task, { status: "running", message: "正在获取下载地址" });
       const exportUrl = buildBackendUrl(task.request.backendIp, task.request.exportPath, task.request.query);
       const filePath = await requestRemoteExportFile(exportUrl, abortController.signal);
@@ -331,6 +334,7 @@ class ExportTaskManager {
         message: aborted ? "已取消" : (error?.message || "导出失败"),
       });
     } finally {
+      releaseOperation?.();
       if (this.isCurrentRun(task.id, runToken)) {
         if (this.runningTaskId === task.id) this.runningTaskId = "";
         if (this.runningAbort === abortController) this.runningAbort = null;
@@ -347,7 +351,9 @@ class ExportTaskManager {
     this.runningAbort = abortController;
     let tempPath = "";
 
+    let releaseOperation: (() => void) | undefined;
     try {
+      releaseOperation = beginProjectOperation("后台导出或下载");
       this.updateTask(task, { status: "running", message: "正在下载文件" });
       const downloadUrl = buildBackendUrl(task.request.backendIp, task.request.downloadPath);
       const fileName = uniqueDownloadFileName(
@@ -392,6 +398,7 @@ class ExportTaskManager {
         message: aborted ? "已取消" : (error?.message || "导出失败"),
       });
     } finally {
+      releaseOperation?.();
       if (this.isCurrentRun(task.id, runToken)) {
         if (this.runningTaskId === task.id) this.runningTaskId = "";
         if (this.runningAbort === abortController) this.runningAbort = null;
@@ -405,7 +412,9 @@ class ExportTaskManager {
     const runToken = this.nextRunToken(task.id);
     this.runningTaskId = task.id;
 
+    let releaseOperation: (() => void) | undefined;
     try {
+      releaseOperation = beginProjectOperation("后台导出或下载");
       this.updateTask(task, { status: "running", message: "正在导出文件", progress: null });
       const result = await executeLocalExport(task.request, (step, pct) => {
         if (!this.isCurrentRun(task.id, runToken)) return;
@@ -434,6 +443,7 @@ class ExportTaskManager {
         progress: null,
       });
     } finally {
+      releaseOperation?.();
       if (this.isCurrentRun(task.id, runToken)) {
         if (this.runningTaskId === task.id) this.runningTaskId = "";
       }
@@ -477,7 +487,7 @@ const manager = new ExportTaskManager();
 
 export function registerExportTaskIpc(): void {
   ipcMain.handle("export-task:list", () => manager.list());
-  ipcMain.handle("export-task:prepare-local", async (_event, request: LocalExportPrepareRequest) => {
+  registerProjectActivityHandler("export-task:prepare-local", async (_event, request: LocalExportPrepareRequest) => {
     try {
       await prepareLocalExport(request);
       return { success: true };
@@ -485,7 +495,7 @@ export function registerExportTaskIpc(): void {
       return { success: false, error: error?.message || "导出校验失败" };
     }
   });
-  ipcMain.handle("export-task:create", async (_event, request: ExportTaskRequest) => {
+  registerProjectActivityHandler("export-task:create", async (_event, request: ExportTaskRequest) => {
     try {
       const task = request?.type === "local-export"
         ? await manager.createLocalExport(request)
@@ -505,7 +515,7 @@ export function registerExportTaskIpc(): void {
       return { success: false, error: error?.message || "取消导出任务失败" };
     }
   });
-  ipcMain.handle("export-task:retry", async (_event, taskId: string) => {
+  registerProjectActivityHandler("export-task:retry", async (_event, taskId: string) => {
     try {
       const task = await manager.retry(taskId);
       return { success: true, task };

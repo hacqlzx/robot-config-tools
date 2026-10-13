@@ -32,7 +32,9 @@ export default function SpaceEditLayout({
         {viewControls}
         {sidePanel}
         <ResizeHandle onMouseDown={onResizeStart} />
-        {scene}
+        <div className="space-edit-scene-frame" style={{ flex: 1, display: "flex", minWidth: 0, minHeight: 0, padding: "var(--app-workspace-padding) var(--app-workspace-padding) var(--app-workspace-padding) 0", boxSizing: "border-box" }}>
+          {scene}
+        </div>
       </div>
       {importing && <LoadingOverlay text="正在导入点表..." zIndex={200} />}
       {exportModal}

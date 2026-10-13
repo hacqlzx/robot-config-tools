@@ -1,138 +1,135 @@
-import { app, dialog } from "electron";
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
+import { app } from "electron";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  migrateProjectDirectory, readDirectoryMigrationJournal, writeMigrationJson,
+  type DirectoryMigrationProgress, type DirectoryMigrationResult,
+} from "./directory-migration";
+import { beginProjectDirectoryMigration, notifyProjectRootChanged } from "./project-activity";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
 let PROJECT_ROOT = "";
+const DEFAULT_PROJECT_FOLDER = "RobotConfigTools";
+const DEFAULT_PROJECT_SUBFOLDER = "project";
+const projectRootConfigPath = () => path.join(app.getPath("userData"), "data-path.json");
+const migrationJournalPath = () => path.join(app.getPath("userData"), "data-path-migration.json");
 
-/**
- * 数据根目录配置文件路径。
- * 打包后保存在 Electron userData 下，避免随应用升级丢失。
- */
-function projectRootConfigPath(): string {
-  return path.join(app.getPath("userData"), "data-path.json");
+function getPackagedProjectRoot(): string {
+  // 业务数据不能放在安装目录：升级、卸载和 Program Files 权限都会影响它。
+  // 使用 ASCII 目录名也能继续兼容 PotreeConverter 的路径限制。
+  return path.join(app.getPath("documents"), DEFAULT_PROJECT_FOLDER, DEFAULT_PROJECT_SUBFOLDER);
 }
 
-export function getProjectRoot(): string {
-  return PROJECT_ROOT;
+function getLegacyPackagedProjectRoots(): string[] {
+  const executableDir = path.dirname(app.getPath("exe"));
+  // 兼容旧安装布局：新版可能安装到旧 app 目录的上一级。
+  return [
+    path.join(executableDir, DEFAULT_PROJECT_SUBFOLDER),
+    path.join(executableDir, "app", DEFAULT_PROJECT_SUBFOLDER),
+  ];
 }
 
-export function hasProjectRootConfig(): boolean {
-  return fs.existsSync(projectRootConfigPath());
-}
-
-/**
- * 确保当前进程已经有可用的项目数据根目录。
- */
-export function ensureProjectRoot(): void {
-  if (!PROJECT_ROOT) {
-    loadInitialProjectRoot();
-  }
-  if (!fs.existsSync(PROJECT_ROOT)) {
-    fs.mkdirSync(PROJECT_ROOT, { recursive: true });
-  }
-}
-
-/**
- * 加载启动阶段的默认数据根目录。
- * 开发环境固定使用仓库 project 目录，打包环境优先读取用户配置。
- */
-export function loadInitialProjectRoot(): string {
-  const configPath = projectRootConfigPath();
+function hasProjectData(value: string): boolean {
   try {
-    if (fs.existsSync(configPath)) {
-      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      if (config.projectRoot && fs.existsSync(config.projectRoot)) {
+    return fs.statSync(value).isDirectory() && fs.readdirSync(value).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+export function getProjectRoot(): string { return PROJECT_ROOT; }
+
+/** 仅使用默认路径或已保存配置；修改目录统一由设置中的迁移入口处理。 */
+export function loadInitialProjectRoot(): string {
+  try {
+    if (fs.existsSync(projectRootConfigPath())) {
+      const config = JSON.parse(fs.readFileSync(projectRootConfigPath(), "utf8"));
+      if (typeof config.projectRoot === "string" && path.isAbsolute(config.projectRoot)) {
         PROJECT_ROOT = config.projectRoot;
       }
     }
   } catch {
-    // ignore malformed config and fall back below
+    // 旧配置格式损坏时使用默认目录。
   }
-
-  if (!PROJECT_ROOT && app.isPackaged) {
-    PROJECT_ROOT = path.join(path.dirname(app.getPath("exe")), "project");
-  } else if (!PROJECT_ROOT) {
-    PROJECT_ROOT = path.resolve(__dirname, "..", "..", "..", "project");
-  }
-
-  return PROJECT_ROOT;
-}
-
-/**
- * 打包应用首次启动时初始化数据根目录。
- * 如果配置目录不存在，会弹窗要求用户重新选择；用户跳过时回退到 exe 同级 project。
- */
-export async function initProjectRoot(): Promise<string> {
-  const configPath = projectRootConfigPath();
-  let configuredPath = "";
-  try {
-    if (fs.existsSync(configPath)) {
-      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      configuredPath = config.projectRoot || "";
+  if (!PROJECT_ROOT) {
+    if (app.isPackaged) {
+      const preferred = getPackagedProjectRoot();
+      const legacy = getLegacyPackagedProjectRoots().find(hasProjectData);
+      // 已有旧安装目录数据时先继续使用它，避免升级后显示空项目；用户可在设置中迁移。
+      // 安装程序留下的空 project 目录不算旧数据，应直接使用新的用户数据目录。
+      PROJECT_ROOT = legacy || preferred;
+    } else {
+      PROJECT_ROOT = path.resolve(__dirname, "..", "..", "..", "project");
     }
-  } catch {
-    // ignore
   }
-
-  if (!app.isPackaged) {
-    PROJECT_ROOT = path.resolve(__dirname, "..", "..", "..", "project");
-    return PROJECT_ROOT;
-  }
-
-  if (configuredPath && fs.existsSync(configuredPath)) {
-    PROJECT_ROOT = configuredPath;
-    return PROJECT_ROOT;
-  }
-
-  const { response } = await dialog.showMessageBox({
-    type: "question",
-    title: "选择数据存储目录",
-    message: configuredPath
-      ? `原数据目录已不存在：${configuredPath}\n请重新选择。`
-      : "请选择项目数据存储目录（建议选空间充足的盘符）",
-    buttons: ["选择目录", "暂时跳过"],
-    defaultId: 0,
-  });
-
-  if (response !== 0) {
-    PROJECT_ROOT = path.join(path.dirname(app.getPath("exe")), "project");
-    ensureProjectRoot();
-    return PROJECT_ROOT;
-  }
-
-  const result = await dialog.showOpenDialog({
-    title: "选择数据存储目录",
-    properties: ["openDirectory", "createDirectory"],
-  });
-
-  if (!result.canceled && result.filePaths[0]) {
-    const chosen = result.filePaths[0];
-    const projPath = fs.existsSync(path.join(chosen, "project")) ? path.join(chosen, "project") : chosen;
-    PROJECT_ROOT = projPath;
-    ensureProjectRoot();
-    fs.writeFileSync(configPath, JSON.stringify({ projectRoot: projPath }, null, 2));
-    return projPath;
-  }
-
-  PROJECT_ROOT = path.join(path.dirname(app.getPath("exe")), "project");
-  ensureProjectRoot();
+  reconcileMovedDirectoryOnStartup();
   return PROJECT_ROOT;
 }
 
-/**
- * 手动设置项目数据根目录。
- * newPath 必须是可创建/可写的绝对目录，保存后立即影响当前进程。
- */
-export function setDataPath(newPath: string): boolean {
-  const rawPath = String(newPath ?? "").trim();
-  if (!rawPath) throw new Error("数据目录不能为空");
+function reconcileMovedDirectoryOnStartup(): void {
+  const journal = readDirectoryMigrationJournal(migrationJournalPath());
+  if (!journal || journal.version !== 3 || journal.phase === "complete") return;
+  const sourceExists = fs.existsSync(journal.source);
+  const targetExists = fs.existsSync(journal.target);
+  const identity = (value: string) => {
+    const stat = fs.statSync(value, { bigint: true });
+    return { dev: stat.dev.toString(), ino: stat.ino.toString(), birthtimeMs: Number(stat.birthtimeMs) };
+  };
+  const sameIdentity = (value: string) => {
+    const actual = identity(value);
+    return actual.dev === journal.sourceIdentity.dev
+      && actual.ino === journal.sourceIdentity.ino
+      && Math.abs(actual.birthtimeMs - journal.sourceIdentity.birthtimeMs) < 2;
+  };
+  if (sourceExists && targetExists) {
+    throw new Error("迁移目录状态不明确：新旧目录同时存在，请保留现场检查");
+  }
+  if (targetExists) {
+    if (!sameIdentity(journal.target)) throw new Error("目标目录不是本次迁移的项目目录，请保留现场检查");
+    // 根目录已移动，配置仍指向旧目录：先恢复配置，避免后续 ensureProjectRoot 创建空源目录。
+    writeMigrationJson(projectRootConfigPath(), { projectRoot: journal.target });
+    PROJECT_ROOT = journal.target;
+    journal.phase = "complete";
+    writeMigrationJson(migrationJournalPath(), journal);
+    return;
+  }
+  if (!sourceExists || !sameIdentity(journal.source)) {
+    throw new Error("未找到可恢复的项目目录，请保留现场检查");
+  }
+  // 移动尚未发生或已回滚，保留源目录供设置页继续迁移。
+  PROJECT_ROOT = journal.source;
+}
 
-  const projPath = path.resolve(rawPath);
-  if (!fs.existsSync(projPath)) fs.mkdirSync(projPath, { recursive: true });
-  fs.writeFileSync(projectRootConfigPath(), JSON.stringify({ projectRoot: projPath }, null, 2));
-  PROJECT_ROOT = projPath;
-  return true;
+export function ensureProjectRoot(): void {
+  if (!PROJECT_ROOT) loadInitialProjectRoot();
+  if (!fs.existsSync(PROJECT_ROOT)) {
+    // 已配置目录消失时不能静默切换或建立空项目目录。
+    if (fs.existsSync(projectRootConfigPath())) throw new Error(`项目保存目录不存在：${PROJECT_ROOT}，请恢复目录后重试`);
+    fs.mkdirSync(PROJECT_ROOT, { recursive: true });
+  }
+}
+
+export function getDataPathMigrationStatus(): { pending: boolean; target?: string; phase?: string } {
+  const journal = readDirectoryMigrationJournal(migrationJournalPath());
+  if (!journal || journal.phase === "complete") return { pending: false };
+  return { pending: true, target: journal.target, phase: journal.phase };
+}
+
+export async function migrateDataPath(
+  newPath: string, onProgress?: (progress: DirectoryMigrationProgress) => void,
+): Promise<DirectoryMigrationResult> {
+  const release = beginProjectDirectoryMigration();
+  try {
+    if (!fs.existsSync(projectRootConfigPath())) ensureProjectRoot();
+    return await migrateProjectDirectory({
+      source: PROJECT_ROOT || loadInitialProjectRoot(), target: newPath,
+      journalPath: migrationJournalPath(), onProgress,
+      commitRoot: (target) => {
+        writeMigrationJson(projectRootConfigPath(), { projectRoot: target });
+        PROJECT_ROOT = target;
+        notifyProjectRootChanged();
+      },
+    });
+  } finally { release(); }
 }

@@ -18,10 +18,12 @@
 
 .image-edit-toolbar {
   flex-shrink: 0;
-  height: 48px;
+  min-height: 48px;
   display: flex;
   align-items: center;
-  padding: 0 16px;
+  padding: 6px var(--app-page-padding);
+  box-sizing: border-box;
+  flex-wrap: wrap;
   background: #fff;
   border-bottom: 1px solid #f0f0f0;
   gap: 8px;
@@ -75,9 +77,10 @@
 
 .image-edit-body {
   flex: 1;
+  min-height: 0;
   display: flex;
   overflow: hidden;
-  padding: 6px;
+  padding: var(--app-workspace-padding);
   gap: 2px;
 }
 
@@ -252,7 +255,7 @@
   flex-shrink: 0;
   height: 36px;
   line-height: 36px;
-  padding: 0 12px;
+  padding: 0 var(--app-panel-padding);
   font-size: 14px;
   font-weight: 600;
   color: #333;

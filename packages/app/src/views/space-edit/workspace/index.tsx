@@ -612,6 +612,10 @@ export default function SpaceEditWorkspace() {
   }, []);
 
   const confirmUnsavedChanges = useCallback((actionText: string): Promise<boolean> => {
+    if (saveOperationInFlightRef.current) {
+      message.warning("正在保存空间编辑数据，请完成后重试");
+      return Promise.resolve(false);
+    }
     if (dirtyScopesRef.current.size === 0) return Promise.resolve(true);
     return new Promise((resolve) => {
       let settled = false;
@@ -655,7 +659,7 @@ export default function SpaceEditWorkspace() {
         onCancel: () => settle(false),
       });
     });
-  }, [dirtyScopeText, runSaveOperation]);
+  }, [dirtyScopeText, message, runSaveOperation]);
 
   useEffect(() => registerWorkspaceTransitionGuard(confirmUnsavedChanges), [confirmUnsavedChanges]);
 

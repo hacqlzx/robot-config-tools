@@ -1,3 +1,40 @@
+.config-page {
+  min-height: 0;
+  min-width: 0;
+}
+
+.config-page__frame {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--app-workspace-padding);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.config-page__content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 24px;
+  overflow: auto;
+  background: #fff;
+  border-radius: 8px;
+  box-sizing: border-box;
+
+  .ant-card-small > .ant-card-head {
+    padding-inline: var(--app-module-padding);
+  }
+
+  .ant-card-small > .ant-card-body {
+    padding: var(--app-module-padding);
+  }
+
+  .ant-card .ant-form-item {
+    margin-bottom: 16px;
+  }
+}
+
 .config-side-menu {
   display: flex;
   flex-direction: column;

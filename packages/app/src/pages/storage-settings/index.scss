@@ -1,0 +1,76 @@
+.storage-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  padding-right: 4px;
+}
+
+.storage-settings__paths {
+  padding: 0 16px;
+  background: #fafafa;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+}
+
+.storage-settings__path-row {
+  padding: 12px 0;
+
+  & + & { border-top: 1px solid #ebebeb; }
+}
+
+.storage-settings__path-heading,
+.storage-settings__progress-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.storage-settings__path-heading {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.storage-settings .storage-settings__path {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.storage-settings__progress {
+  padding: 14px 16px;
+  background: #f6faff;
+  border: 1px solid #d6e7ff;
+  border-radius: 8px;
+}
+
+.storage-settings__progress-heading {
+  margin-bottom: 8px;
+  color: #1677ff;
+
+  > span:nth-child(2) { flex: 1; min-width: 0; }
+}
+
+.storage-settings__percent {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.storage-settings__stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #8c8c8c;
+
+  .is-active { color: #1677ff; font-weight: 500; }
+  .is-complete { color: #595959; }
+}
+
+.storage-settings__file-count {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.storage-settings__actions { text-align: right; }

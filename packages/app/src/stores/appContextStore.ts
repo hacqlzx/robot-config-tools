@@ -26,6 +26,8 @@ export interface AppContextState {
   backendIp: string;
   connectionStatus: ConnectionStatus;
   backendIpVersion: number;
+  storageMigrating: boolean;
+  storageVersion: number;
 }
 
 type Listener = () => void;
@@ -101,6 +103,8 @@ let state: AppContextState = {
   backendIp: readStorage(BACKEND_IP_KEY) || "",
   connectionStatus: "disconnected",
   backendIpVersion: 0,
+  storageMigrating: false,
+  storageVersion: 0,
 };
 
 const listeners = new Set<Listener>();
@@ -246,6 +250,11 @@ export function subscribeBackendContext(listener: Listener): () => void {
 
 export function getSelectedProject(): string | null {
   return state.selectedProject;
+}
+
+/** 目录迁移期间卸载业务工作区，结束后按版本重建所有文件缓存。 */
+export function setStorageMigrating(storageMigrating: boolean): void {
+  updateState({ storageMigrating, ...(!storageMigrating ? { storageVersion: state.storageVersion + 1 } : {}) });
 }
 
 export function setSelectedProject(projectName: string | null): void {

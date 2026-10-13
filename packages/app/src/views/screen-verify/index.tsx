@@ -7,6 +7,7 @@ import type { MenuProps } from "antd";
 import { createLocalExportTask } from "@/components/download-task/task-actions";
 import { useResizable } from "@/components/useResizable";
 import { buildCabinetGeneratedPointName } from "@/shared/cabinet-detection";
+import { registerWorkspaceTransitionGuard } from "@/services/workspace-transition-guard";
 import { useSelectedProject } from "@/stores/appContextStore";
 import { BatchRecognitionModal } from "./components/BatchRecognitionModal";
 import type { BatchRecognitionMode, BatchRecognitionProgress } from "./components/BatchRecognitionModal";
@@ -296,6 +297,7 @@ export default function ScreenVerify() {
   const pointVerifiedByComponentRef = useRef<Record<string, boolean>>({});
   const annotationHistoryRef = useRef<AnnotationHistoryEntry[]>([]);
   const persistedAnnotationKeysRef = useRef(new Set<string>());
+  const annotationSavesRef = useRef(0);
   const treeFilterActiveRef = useRef(false);
   const skipNameEditSubmitRef = useRef(false);
   const singleRecognitionAbortRef = useRef<AbortController | null>(null);
@@ -1027,44 +1029,47 @@ export default function ScreenVerify() {
     }));
     const savedPoints = singlePoints.map((point) => ({ ...point, saved: true }));
 
-    const result = await window.electronAPI.saveCabinetImageAnnotations(selectedProject, {
-      recordKey: componentCode,
-      robotCode: record.robotCode,
-      componentCode: record.componentCode,
-      annotations: savedAnnotations,
-      ocrRows,
-      singlePoints: savedPoints,
-      pointVerified: Boolean(pointVerifiedByComponentRef.current[componentCode]),
-    });
-    if (!result.success) throw new Error(result.error || "保存屏柜标注失败");
-    console.info("[screen-verify] cabinet image save", {
-      recordKey: componentCode,
-      componentCode: record.componentCode,
-      robotCode: record.robotCode,
-      annotations: savedAnnotations,
-      points: savedPoints,
-      silent: options.silent,
-    });
+    annotationSavesRef.current += 1;
+    try {
+      const result = await window.electronAPI.saveCabinetImageAnnotations(selectedProject, {
+        recordKey: componentCode,
+        robotCode: record.robotCode,
+        componentCode: record.componentCode,
+        annotations: savedAnnotations,
+        ocrRows,
+        singlePoints: savedPoints,
+        pointVerified: Boolean(pointVerifiedByComponentRef.current[componentCode]),
+      });
+      if (!result.success) throw new Error(result.error || "保存屏柜标注失败");
+      console.info("[screen-verify] cabinet image save", {
+        recordKey: componentCode,
+        componentCode: record.componentCode,
+        robotCode: record.robotCode,
+        annotations: savedAnnotations,
+        points: savedPoints,
+        silent: options.silent,
+      });
 
-    if (options.trackHistory) pushAnnotationHistory(componentCode);
-    updateComponentAnnotations(componentCode, () => savedAnnotations, { preservePointVerification: true });
-    setComponentOcrRows(componentCode, ocrRows, { preservePointVerification: true });
-    setComponentSinglePoints(componentCode, savedPoints, { preservePointVerification: true });
-    if (!hasCurrentData) {
-      persistedAnnotationKeysRef.current.delete(componentCode);
-      setComponentPointVerified(componentCode, false);
-      if (!options.silent) message.success("已保存");
-      return { saved: true, emptyNameSelection: null };
-    }
+      if (options.trackHistory) pushAnnotationHistory(componentCode);
+      updateComponentAnnotations(componentCode, () => savedAnnotations, { preservePointVerification: true });
+      setComponentOcrRows(componentCode, ocrRows, { preservePointVerification: true });
+      setComponentSinglePoints(componentCode, savedPoints, { preservePointVerification: true });
+      if (!hasCurrentData) {
+        persistedAnnotationKeysRef.current.delete(componentCode);
+        setComponentPointVerified(componentCode, false);
+        if (!options.silent) message.success("已保存");
+        return { saved: true, emptyNameSelection: null };
+      }
 
-    persistedAnnotationKeysRef.current.add(componentCode);
-    if (emptyNameSelection) {
-      if (options.selectEmptyName) setSelectedAnnotation(emptyNameSelection);
-      if (!options.silent) message.warning("已保存，存在点位名称未填写");
-    } else {
-      if (!options.silent) message.success("已保存");
-    }
-    return { saved: true, emptyNameSelection };
+      persistedAnnotationKeysRef.current.add(componentCode);
+      if (emptyNameSelection) {
+        if (options.selectEmptyName) setSelectedAnnotation(emptyNameSelection);
+        if (!options.silent) message.warning("已保存，存在点位名称未填写");
+      } else {
+        if (!options.silent) message.success("已保存");
+      }
+      return { saved: true, emptyNameSelection };
+    } finally { annotationSavesRef.current -= 1; }
   }, [
     message,
     pushAnnotationHistory,
@@ -1074,6 +1079,40 @@ export default function ScreenVerify() {
     setComponentPointVerified,
     updateComponentAnnotations,
   ]);
+
+  useEffect(() => registerWorkspaceTransitionGuard(async (actionText) => {
+    if (!actionText.includes("保存目录")) return true;
+    if (loadingPackage || loadingImage || ocrLoading || batchProgress || exportingPointTable
+      || exportingAnnotationParams || annotationSavesRef.current > 0) {
+      message.warning("屏柜图像正在加载、识别或保存，请完成后再迁移目录");
+      return false;
+    }
+    if (singlePointModalOpen || cabinetNameModalOpen || targetTypeModalOpen || editingNameRow
+      || renameMainKey || singlePointDrawing || cabinetNameDrawing || activeAnnotationTool) {
+      message.warning("请先完成或取消屏柜图像编辑，再迁移目录");
+      return false;
+    }
+    try {
+      // 目录迁移会重建缓存页面，先保存每张图像的内存修改，包括清空标注。
+      for (const record of components) {
+        const code = getCabinetRecordKey(record);
+        const annotations = annotationsByComponentRef.current[code] || createEmptyAnnotations();
+        const rows = ocrRowsByComponentRef.current[code] || [];
+        const points = singlePointsByComponentRef.current[code] || [];
+        if (!getAnnotationCount(annotations) && !rows.length && !points.length
+          && !persistedAnnotationKeysRef.current.has(code)) continue;
+        const result = await saveComponentAnnotations(record, code, annotations, rows, points, { silent: true });
+        if (!result.saved) throw new Error("屏柜标注未能保存");
+      }
+      return true;
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "屏柜标注保存失败，请重试后再迁移目录");
+      return false;
+    }
+  }), [activeAnnotationTool, batchProgress, cabinetNameDrawing, cabinetNameModalOpen, components,
+    editingNameRow, exportingAnnotationParams, exportingPointTable, loadingImage, loadingPackage,
+    message, ocrLoading, renameMainKey, saveComponentAnnotations, singlePointDrawing,
+    singlePointModalOpen, targetTypeModalOpen]);
 
   /**
    * 保存当前图片标注中间态。

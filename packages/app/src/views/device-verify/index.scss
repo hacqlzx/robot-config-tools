@@ -11,16 +11,18 @@
   min-height: 48px;
   display: flex;
   align-items: center;
-  padding: 6px 16px;
+  padding: 6px var(--app-page-padding);
+  box-sizing: border-box;
   background: #fff;
   border-bottom: 1px solid #f0f0f0;
 }
 
 .device-verify-body {
   flex: 1;
+  min-height: 0;
   display: flex;
   overflow: hidden;
-  padding: 6px;
+  padding: var(--app-workspace-padding);
   gap: 2px;
 }
 
@@ -41,7 +43,7 @@
 .device-verify-left-title {
   flex-shrink: 0;
   height: 36px;
-  padding: 0 12px;
+  padding: 0 var(--app-panel-padding);
   color: #333;
   background: #fafafa;
   border-bottom: 1px solid #f0f0f0;
@@ -83,7 +85,7 @@
 .device-verify-tree-filter {
   flex-shrink: 0;
   min-height: 34px;
-  padding: 5px 10px;
+  padding: 6px var(--app-panel-padding);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -104,7 +106,7 @@
 .device-verify-tree {
   flex: 1;
   overflow: auto;
-  padding: 4px 6px;
+  padding: var(--app-workspace-padding);
 
   .ant-tree-treenode {
     min-height: 24px;
@@ -241,7 +243,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 14px;
+  padding: 8px var(--app-panel-padding);
   border-bottom: 1px solid #f0f0f0;
 }
 

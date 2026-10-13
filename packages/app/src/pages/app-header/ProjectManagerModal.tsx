@@ -6,7 +6,7 @@ import { CheckOutlined, DeleteOutlined, FolderOpenOutlined, PlusOutlined, Reload
 const INVALID_PROJECT_NAME_PATTERN = /[<>:"/\\|?*\x00-\x1F]/;
 
 type ProjectFormMode = "detail" | "create" | "rename";
-type ProjectAction = "create" | "rename" | "switch" | "openDir" | "chooseRoot" | null;
+type ProjectAction = "create" | "rename" | "switch" | "openDir" | "reload" | null;
 
 interface ProjectManagerModalProps {
   open: boolean;
@@ -17,7 +17,6 @@ interface ProjectManagerModalProps {
   getProjectPath: (name: string) => string;
   onClose: () => void;
   onReloadProjects: () => Promise<void>;
-  onChooseProjectRoot: () => Promise<void>;
   onSwitchProject: (name: string, skipConfirmation?: boolean) => Promise<boolean>;
   onConfirmProjectChange: (actionText: string) => Promise<boolean>;
   onOpenProjectDir: (name: string) => Promise<void>;
@@ -48,7 +47,6 @@ export default function ProjectManagerModal({
   getProjectPath,
   onClose,
   onReloadProjects,
-  onChooseProjectRoot,
   onSwitchProject,
   onConfirmProjectChange,
   onOpenProjectDir,
@@ -108,18 +106,9 @@ export default function ProjectManagerModal({
   };
 
   const handleReload = async () => {
-    setAction("chooseRoot");
+    setAction("reload");
     try {
       await onReloadProjects();
-    } finally {
-      setAction(null);
-    }
-  };
-
-  const handleChooseRoot = async () => {
-    setAction("chooseRoot");
-    try {
-      await onChooseProjectRoot();
     } finally {
       setAction(null);
     }
@@ -239,8 +228,7 @@ export default function ProjectManagerModal({
             {projectRoot || "未获取到保存目录"}
           </span>
         </Tooltip>
-        <Button size="small" onClick={handleChooseRoot} loading={action === "chooseRoot"}>选择目录</Button>
-        <Button size="small" icon={<ReloadOutlined />} onClick={handleReload} disabled={isBusy}>刷新</Button>
+        <Button size="small" icon={<ReloadOutlined />} onClick={handleReload} loading={action === "reload"}>刷新</Button>
       </div>
 
       {mode === "detail" ? (
@@ -303,7 +291,7 @@ export default function ProjectManagerModal({
             </Checkbox>
           ) : null}
           {!projectRoot ? (
-            <Alert type="warning" showIcon message="未获取到保存目录，请先选择目录" style={{ marginTop: 14 }} />
+            <Alert type="warning" showIcon message="未获取到保存目录，请到设置中的项目存储配置" style={{ marginTop: 14 }} />
           ) : null}
           <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>
             <Button onClick={cancelEdit} disabled={isBusy}>取消</Button>

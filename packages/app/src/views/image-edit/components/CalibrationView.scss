@@ -12,10 +12,12 @@
 
 .calibration-toolbar {
   flex-shrink: 0;
-  height: 48px;
+  min-height: 48px;
   display: flex;
   align-items: center;
-  padding: 0 16px;
+  padding: 6px var(--app-page-padding);
+  box-sizing: border-box;
+  flex-wrap: wrap;
   background: #fff;
   border-bottom: 1px solid #f0f0f0;
   gap: 12px;
@@ -52,9 +54,10 @@
 
 .calibration-body {
   flex: 1;
+  min-height: 0;
   display: flex;
   overflow: hidden;
-  padding: 6px;
+  padding: var(--app-workspace-padding);
   gap: 2px;
 }
 

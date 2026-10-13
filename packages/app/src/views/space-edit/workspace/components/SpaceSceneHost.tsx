@@ -48,7 +48,7 @@ export default function SpaceSceneHost({ adapterFactory, overlay, onSceneClick, 
         if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
         onSceneClick?.(event.clientX, event.clientY);
       }}
-      style={{ flex: 1, minWidth: 0, position: "relative", overflow: "hidden", background: "#181a1f", cursor: picking ? "crosshair" : undefined }}
+      style={{ flex: 1, minWidth: 0, position: "relative", overflow: "hidden", borderRadius: 8, background: "#181a1f", cursor: picking ? "crosshair" : undefined }}
     >
       <div ref={hostRef} data-scene-state={state} style={{ position: "absolute", inset: 0 }} />
       <SpacePerformanceMonitor active={active} adapterRef={adapterRef} />

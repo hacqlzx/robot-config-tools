@@ -12,6 +12,7 @@ import {
 } from "@ant-design/icons";
 import { useResizable } from "@/components/useResizable";
 import { useSelectedProject } from "@/stores/appContextStore";
+import { registerWorkspaceTransitionGuard } from "@/services/workspace-transition-guard";
 import type { ImageItem } from "@/components/image-canvas/ImageCanvas";
 import "./CalibrationView.scss";
 
@@ -174,6 +175,8 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
   const allDataRef = useRef<CalibrationFileData["data"]>([]);
   const saveTimerRef = useRef<number>(0);
   const saveInFlightRef = useRef(false);
+  const savePromiseRef = useRef<Promise<boolean> | null>(null);
+  const bindingOperationsRef = useRef(0);
   const saveQueuedRef = useRef(false);
   const savedStatusTimerRef = useRef<number>(0);
 
@@ -314,30 +317,53 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
     console.log("[Calibration] 保存成功:", subPath);
   }, [buildSaveData, selectedProject]);
 
-  const flushSave = useCallback(async () => {
+  const flushSave = useCallback((): Promise<boolean> => {
     if (saveInFlightRef.current) {
       saveQueuedRef.current = true;
-      return;
+      return savePromiseRef.current!;
     }
 
     saveInFlightRef.current = true;
     setSaveStatus("saving");
-    try {
-      do {
-        saveQueuedRef.current = false;
-        await saveSnapshot([...rectsRef.current]);
-      } while (saveQueuedRef.current);
+    const saving = (async () => {
+      try {
+        do {
+          saveQueuedRef.current = false;
+          await saveSnapshot([...rectsRef.current]);
+        } while (saveQueuedRef.current);
 
-      setSaveStatus("saved");
-      clearTimeout(savedStatusTimerRef.current);
-      savedStatusTimerRef.current = window.setTimeout(() => setSaveStatus("idle"), 1200);
-    } catch (e) {
-      console.error("[Calibration] 保存失败:", e);
-      setSaveStatus("error");
-    } finally {
-      saveInFlightRef.current = false;
-    }
+        setSaveStatus("saved");
+        clearTimeout(savedStatusTimerRef.current);
+        savedStatusTimerRef.current = window.setTimeout(() => setSaveStatus("idle"), 1200);
+        return true;
+      } catch (e) {
+        console.error("[Calibration] 保存失败:", e);
+        setSaveStatus("error");
+        return false;
+      } finally {
+        saveInFlightRef.current = false;
+        savePromiseRef.current = null;
+      }
+    })();
+    savePromiseRef.current = saving;
+    return saving;
   }, [saveSnapshot]);
+
+  useEffect(() => registerWorkspaceTransitionGuard(async () => {
+    if (bindingOperationsRef.current > 0) {
+      message.warning("标定绑定正在处理，请完成后重试");
+      return false;
+    }
+    const pendingSave = Boolean(saveTimerRef.current) || saveInFlightRef.current;
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = 0;
+    }
+    if (!pendingSave && (saveStatus === "idle" || saveStatus === "saved")) return true;
+    const ok = await flushSave();
+    if (!ok) message.error("标定数据保存失败，请重试后再切换项目或迁移目录");
+    return ok;
+  }), [flushSave, message, saveStatus]);
 
   const scheduleSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -821,6 +847,7 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
       const target = rectsRef.current.find((rect) => rect.id === rid) || (pendingRef.current?.id === rid ? pendingRef.current : null);
       const pointCodes = [...new Set((target?.bindings || []).map((binding) => binding.pointCode).filter(Boolean))];
       void (async () => {
+        bindingOperationsRef.current += 1;
         try {
           if (pointCodes.length > 0) {
             if (!selectedProject || !window.electronAPI?.db?.point?.clearCalibrationIds) {
@@ -834,7 +861,7 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
           scheduleSave();
         } catch (error) {
           message.error("删除标定框失败: " + (error instanceof Error ? error.message : String(error)));
-        }
+        } finally { bindingOperationsRef.current -= 1; }
       })();
     };
     window.addEventListener("keydown", onKey);
@@ -865,12 +892,13 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
       message.error("当前环境无法生成标定 ID");
       return;
     }
+    bindingOperationsRef.current += 1;
     try {
       await window.electronAPI.db.point.bindCalibrationId(pointCode, selectedProject);
     } catch (error) {
       message.error("绑定失败: " + (error instanceof Error ? error.message : String(error)));
       return;
-    }
+    } finally { bindingOperationsRef.current -= 1; }
     const binding: PointBinding = { pointCode, pointName };
     const updated = { ...bindTo, bindings: [binding] };
     if (pend && pend.id === bindTo.id) {
@@ -899,12 +927,13 @@ export default function CalibrationView({ image, taskDir, mapName, selBayId, onS
       message.error("当前环境无法清除标定 ID");
       return;
     }
+    bindingOperationsRef.current += 1;
     try {
       await window.electronAPI.db.point.clearCalibrationId(pointCode, selectedProject);
     } catch (error) {
       message.error("解绑失败: " + (error instanceof Error ? error.message : String(error)));
       return;
-    }
+    } finally { bindingOperationsRef.current -= 1; }
     const newBindings = bindTo.bindings.filter((b) => b.pointCode !== pointCode);
     if (newBindings.length === 0) {
       setRects((prev) => prev.filter((r) => r.id !== bindTo.id));

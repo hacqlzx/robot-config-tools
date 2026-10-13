@@ -39,7 +39,7 @@ export default function ConfigPage() {
   };
 
   return (
-    <Layout style={{ height: "100%", background: "#f5f5f5" }}>
+    <Layout className="config-page" style={{ height: "100%", background: "#f5f5f5" }}>
       <Sider width={80} theme="light" style={{ borderRight: "1px solid #f0f0f0" }}>
         <div className="config-side-menu">
           {menuItems.map((item) => (
@@ -56,15 +56,17 @@ export default function ConfigPage() {
           ))}
         </div>
       </Sider>
-      <Content style={{ padding: 16, overflow: "auto", background: "#fff" }}>
-        {selectedKey !== "platform" && (
-          <h3 style={{ margin: 0, padding: "0 0 12px 0", fontSize: 16, display: "flex", alignItems: "center", gap: 10, lineHeight: "24px" }}>
-            <span style={{ display: "inline-block", width: 3, height: 18, background: "#546BF7", borderRadius: 2 }} />
-            {menuItems.find((m) => m.key === selectedKey)?.label}配置
-          </h3>
-        )}
-        <div style={{ height: selectedKey === "platform" ? "100%" : "calc(100% - 36px)" }}>
-          {renderContent()}
+      <Content className="config-page__frame">
+        <div className="config-page__content">
+          {selectedKey !== "platform" && (
+            <h3 style={{ margin: 0, padding: "0 0 12px 0", fontSize: 16, display: "flex", alignItems: "center", gap: 10, lineHeight: "24px" }}>
+              <span style={{ display: "inline-block", width: 3, height: 18, background: "#546BF7", borderRadius: 2 }} />
+              {menuItems.find((m) => m.key === selectedKey)?.label}配置
+            </h3>
+          )}
+          <div style={{ height: selectedKey === "platform" ? "100%" : "calc(100% - 36px)" }}>
+            {renderContent()}
+          </div>
         </div>
       </Content>
     </Layout>

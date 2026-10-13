@@ -7,6 +7,7 @@ import {
   useAppContext,
 } from "@/stores/appContextStore";
 import IpInput from "@/components/ip-input";
+import "./index.scss";
 
 /** localStorage 中保存 IP 列表的 key */
 const STORAGE_KEY = "backend_ip_list";
@@ -261,15 +262,15 @@ export default function BackendSettingsPanel({ onConnected }: Props) {
   };
 
   return (
-    <div>
-      <div style={{ marginBottom: 16, padding: "12px 14px", border: "1px solid #d9d9d9", borderRadius: 6, background: "#fafafa" }}>
-        <div style={{ marginBottom: 8, color: "#262626", fontSize: 16, fontWeight: 500 }}>当前连接</div>
+    <div className="backend-settings">
+      <div className="backend-settings__connection">
+        <h3 className="backend-settings__title">当前连接</h3>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <strong>{backendIp || "暂无后台 IP"}</strong>
           <ConnectionStatusTag {...currentHealth} />
         </div>
       </div>
-      <div style={{ marginBottom: 16, color: "#262626", fontSize: 16, fontWeight: 500 }}>添加IP</div>
+      <h3 className="backend-settings__title">添加 IP</h3>
       <Form form={form} layout="horizontal" labelAlign="left" onFinish={handleAdd}>
         <Form.Item label="后台 IP" name="ip" rules={[{ required: true, message: "请输入 IP" }, { pattern: ipRegex, message: "请输入完整 IP" }]}>
           <IpInput />
@@ -281,8 +282,8 @@ export default function BackendSettingsPanel({ onConnected }: Props) {
           </div>
         </Form.Item>
       </Form>
-      <div style={{ marginTop: 28 }}>
-        <div style={{ marginBottom: 8, color: "#262626", fontSize: 16, fontWeight: 500 }}>IP地址列表</div>
+      <div className="backend-settings__saved">
+        <h3 className="backend-settings__title">IP 地址列表</h3>
         {ipList.length > 0 ? (
           <div>
           {ipList.map((item, index) => (

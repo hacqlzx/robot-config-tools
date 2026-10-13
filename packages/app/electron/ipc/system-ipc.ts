@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import * as net from "net";
-import { getProjectRoot, setDataPath } from "../project-core/project-root";
+import { getDataPathMigrationStatus, getProjectRoot, migrateDataPath } from "../project-core/project-root";
 
 /**
  * 合法 IPv4 格式正则（主进程侧独立校验）。
@@ -76,8 +76,12 @@ export function registerSystemIpc(): void {
     return result.canceled ? null : result.filePaths[0];
   });
 
-  /** 设置运行时数据根路径（打包后用户可自定义） */
-  ipcMain.handle("set-data-path", async (_event, newPath: string) => setDataPath(newPath));
+  /** 设置运行时数据根路径；文件搬迁完成后才提交配置。 */
+  ipcMain.handle("set-data-path", async (event, newPath: string) => migrateDataPath(newPath, (progress) => {
+    if (!event.sender.isDestroyed()) event.sender.send("storage:migration-progress", progress);
+  }));
+
+  ipcMain.handle("storage:migration-status", async () => getDataPathMigrationStatus());
 
   /** 获取当前项目根路径 */
   ipcMain.handle("get-project-root", async () => getProjectRoot());

@@ -4,6 +4,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { assertInside } from "../project-core/project-paths";
 import { ensureProjectRoot, getProjectRoot } from "../project-core/project-root";
+import { beginProjectOperation, isProjectDirectoryMigrating } from "../project-core/project-activity";
 
 const PROJECT_ASSET_SCHEME = "robot-project";
 const PROJECT_ASSET_HOST = "asset";
@@ -74,6 +75,15 @@ export function createProjectAssetUrl(filePath: string): string {
 
 export function registerProjectAssetProtocol(): void {
   protocol.handle(PROJECT_ASSET_SCHEME, async (request) => {
+    if (isProjectDirectoryMigrating()) return new Response("Migrating", { status: 503 });
+    const release = beginProjectOperation("项目资源流");
+    let streaming = false;
+    const bodyFor = (filePath: string, range?: { start: number; end: number }) => {
+      const stream = fs.createReadStream(filePath, range);
+      stream.once("close", release);
+      streaming = true;
+      return Readable.toWeb(stream);
+    };
     try {
       const filePath = resolveRequestPath(request.url);
       const stat = await fs.promises.stat(filePath);
@@ -87,15 +97,17 @@ export function registerProjectAssetProtocol(): void {
         const length = range.end - range.start + 1;
         headers.set("Content-Length", String(length));
         headers.set("Content-Range", `bytes ${range.start}-${range.end}/${stat.size}`);
-        const body = Readable.toWeb(fs.createReadStream(filePath, range));
+        const body = bodyFor(filePath, range);
         return new Response(body as BodyInit, { status: 206, headers });
       }
 
-      const body = Readable.toWeb(fs.createReadStream(filePath));
+      const body = bodyFor(filePath);
       return new Response(body as BodyInit, { status: 200, headers });
     } catch (error) {
       console.error("[project-asset] request failed", error);
       return new Response("Not Found", { status: 404 });
+    } finally {
+      if (!streaming) release();
     }
   });
 }

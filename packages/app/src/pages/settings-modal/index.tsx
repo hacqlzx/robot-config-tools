@@ -1,12 +1,15 @@
-import { ApiOutlined, PictureOutlined } from "@ant-design/icons";
+import { ApiOutlined, PictureOutlined, FolderOutlined } from "@ant-design/icons";
 import { Menu, Modal } from "antd";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import BackendSettingsPanel from "@/pages/backend-modal";
 import ImageAnnotationSettings from "@/pages/image-annotation-settings";
+import StorageSettings from "@/pages/storage-settings";
+import "./index.scss";
 
 interface Props {
   open: boolean;
   onClose: () => void;
+  onStorageMigrationComplete?: () => Promise<void> | void;
 }
 
 const menuItems = [
@@ -20,44 +23,60 @@ const menuItems = [
     icon: <PictureOutlined />,
     label: "图像标注",
   },
+  { key: "storage", icon: <FolderOutlined />, label: "项目存储" },
 ];
 
 const menuTitles: Record<string, string> = {
   backend: "连接后台",
   "image-annotation": "图像标注配置",
+  storage: "项目存储",
 };
 
-export default function SettingsModal({ open, onClose }: Props) {
+export default function SettingsModal({ open, onClose, onStorageMigrationComplete }: Props) {
   const [selectedKey, setSelectedKey] = useState("backend");
+  const [storageBusy, setStorageBusy] = useState(false);
+  const [compact, setCompact] = useState(window.innerWidth < 620);
+
+  useEffect(() => {
+    const updateCompact = () => setCompact(window.innerWidth < 620);
+    window.addEventListener("resize", updateCompact);
+    return () => window.removeEventListener("resize", updateCompact);
+  }, []);
 
   return (
     <Modal
       title="设置"
+      className="settings-modal"
       open={open}
       centered
-      width={780}
+      width={compact ? "calc(100vw - 24px)" : 780}
       mask={{ closable: false }}
       footer={null}
       destroyOnHidden
-      onCancel={onClose}
-      styles={{ body: { padding: 0 } }}
+      closable={!storageBusy}
+      keyboard={!storageBusy}
+      onCancel={() => { if (!storageBusy) onClose(); }}
+      styles={{ body: { padding: 0, maxHeight: "none", overflow: "hidden" } }}
     >
-      <div style={{ display: "flex", minHeight: 420, borderTop: "1px solid #f0f0f0" }}>
-        <div style={{ width: 180, flexShrink: 0, padding: "12px 8px", background: "#f7f8fa", borderRight: "1px solid #f0f0f0" }}>
+      <div className={`settings-modal__layout${compact ? " settings-modal__layout--compact" : ""}`}>
+        <div className="settings-modal__navigation">
           <Menu
-            mode="inline"
+            mode={compact ? "horizontal" : "inline"}
             selectedKeys={[selectedKey]}
             items={menuItems}
-            onSelect={({ key }) => setSelectedKey(key)}
+            onSelect={({ key }) => { if (!storageBusy) setSelectedKey(key); }}
             style={{ borderInlineEnd: 0, background: "transparent" }}
           />
         </div>
-        <div style={{ minWidth: 0, flex: 1, padding: "24px 28px" }}>
-          <div style={{ marginBottom: 24, color: "#262626", fontSize: 18, fontWeight: 600 }}>
+        <div className="settings-modal__content">
+          <h2 className="settings-modal__title">
             {menuTitles[selectedKey] || "设置"}
+          </h2>
+          <div className="settings-modal__panel" key={selectedKey}>
+            {selectedKey === "backend" && <BackendSettingsPanel onConnected={onClose} />}
+            {selectedKey === "image-annotation" && <ImageAnnotationSettings />}
+            {selectedKey === "storage" && <StorageSettings onBusyChange={setStorageBusy} onMigrationComplete={onStorageMigrationComplete} />}
           </div>
-          {selectedKey === "backend" && <BackendSettingsPanel onConnected={onClose} />}
-          {selectedKey === "image-annotation" && <ImageAnnotationSettings />}
         </div>
       </div>
     </Modal>

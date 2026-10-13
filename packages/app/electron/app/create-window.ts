@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain } from "electron";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { isProjectDirectoryMigrating } from "../project-core/project-activity";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WINDOW_ICON_RESOURCE_NAME = "icon.png";
@@ -65,6 +66,10 @@ export function createWindow(): BrowserWindow {
     }
   };
 
+  win.on("close", (event) => {
+    if (isProjectDirectoryMigrating()) event.preventDefault();
+  });
+
   // 监听最大化/全屏变化，实时同步到渲染侧
   win.on("maximize", emitWindowState);
   win.on("unmaximize", emitWindowState);
@@ -90,6 +95,7 @@ export function createWindow(): BrowserWindow {
   });
   ipcMain.handle("win:get-state", () => getWindowState());
   ipcMain.on("win:close", () => {
+    if (isProjectDirectoryMigrating()) return;
     // 标题栏关闭属于明确退出操作，不允许渲染进程的 beforeunload
     // 或编辑/保存状态把窗口留在无法退出的状态。
     if (!win.isDestroyed()) win.destroy();

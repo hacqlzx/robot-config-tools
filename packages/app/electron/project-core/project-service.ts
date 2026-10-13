@@ -17,7 +17,7 @@ import {
   type ProjectDataCounts,
 } from "@robot/database";
 import { exportSpaceZip, type PointTableExportData } from "../export-points";
-import { getProjectRoot, ensureProjectRoot, hasProjectRootConfig, initProjectRoot } from "./project-root";
+import { getProjectRoot, ensureProjectRoot } from "./project-root";
 import {
   assertInside,
   assertSafePathSegment,
@@ -941,7 +941,6 @@ export async function listProjects(): Promise<string[]> {
  * 创建项目目录和默认 manifest。
  */
 export async function createProject(name: string): Promise<string> {
-  if (!hasProjectRootConfig()) await initProjectRoot();
   ensureProjectRoot();
 
   const safeName = assertProjectName(name);

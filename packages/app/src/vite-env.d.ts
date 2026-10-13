@@ -529,7 +529,17 @@ declare global {
       setDevicePointMark: (projectName: string, record: DevicePointMarkRecord) => Promise<DevicePointMarkResult>;
       exportMarkedDevicePoints: (projectName: string, destDir: string) => Promise<DeviceMarkedPointExportResult>;
       getProjectRoot: () => Promise<string>;
-      setDataPath: (newPath: string) => Promise<boolean>;
+      setDataPath: (newPath: string) => Promise<{ projectRoot: string; changed: boolean; warning?: string }>;
+      getDataPathMigrationStatus: () => Promise<{ pending: boolean; target?: string; phase?: string }>;
+      onDataPathMigrationProgress: (callback: (progress: {
+        phase: string;
+        message: string;
+        mode?: "move" | "copy";
+        totalFiles: number;
+        completedFiles: number;
+        totalBytes: number;
+        completedBytes: number;
+      }) => void) => () => void;
       db: {
         voltage: {
           list: (projectName?: string) => Promise<import('@robot/database').DeviceVoltage[]>;

@@ -18,19 +18,21 @@
 
 .screen-verify-toolbar {
   flex-shrink: 0;
-  height: 48px;
+  min-height: 48px;
   display: flex;
   align-items: center;
-  padding: 0 16px;
+  padding: 6px var(--app-page-padding);
+  box-sizing: border-box;
   background: #fff;
   border-bottom: 1px solid #f0f0f0;
 }
 
 .screen-verify-body {
   flex: 1;
+  min-height: 0;
   display: flex;
   overflow: hidden;
-  padding: 6px;
+  padding: var(--app-workspace-padding);
   gap: 2px;
 }
 
@@ -56,8 +58,8 @@
 .screen-verify-left-filters {
   flex-shrink: 0;
   display: flex;
-  gap: 2px;
-  padding: 4px;
+  gap: 8px;
+  padding: 6px var(--app-panel-padding);
   border-bottom: 1px solid #f0f0f0;
 }
 

@@ -12,9 +12,66 @@
 
 ---
 
-## 2026-10-12 — 接入 GitHub 自动更新，增加底部版本栏并准备 1.0.5 发布包
+## 2026-10-13 — 项目保存目录改为设置里迁移，并统一界面留白
 
 - 提交：待提交
+- 类型：feat
+
+### 修改
+
+- 保存目录只在「设置 → 项目存储」修改。项目管理去掉「选择目录」，路径只读；未配置时提示去项目存储。新建项目不再弹出选目录框。
+- 修改目录会迁移该目录下全部项目文件，成功后才写入 `userData/data-path.json`。同卷优先整目录移动并记版本 3 台账（源目录卷、文件索引、创建时间）；只有明确跨卷 `EXDEV` 才复制。目标必须是空目录，且不能和源目录互相包含；junction 用真实路径校验。链接和特殊文件直接拒绝。
+- 复制中断可对同一目标「继续迁移」。配置已切到新目录后，旧目录清理失败只给警告，不回退。启动若发现目录已移动但配置未落盘，按身份补写配置，不创建空的旧源目录。已配置目录丢失时提示恢复，不静默换成空目录。
+- SHA-256 内容校验暂时关闭以缩短迁移时间，代码保留；复制模式仍核对文件清单、大小和修改时间。
+- 打包后默认目录改为用户文档下的 `RobotConfigTools/project`，不再把业务数据放进安装目录。安装目录或旧 `app/project` 里已有数据时继续读取，空目录不算旧数据。开发环境仍用仓库 `project`。
+- 正式包启动前把旧 `%APPDATA%/app` 里尚未存在的持久化文件补到 `%APPDATA%/RobotConfigTools`，不覆盖、不删除旧目录，跳过缓存和符号链接。失败则弹窗退出，下次可重试。开发模式不搬。应用名固定 `RobotConfigTools`，可执行文件名同步，`asar` 打开，版本号改为 `1.0.6`。
+- 迁移前排空标定保存队列，并保存屏柜图像里尚未落盘的标注。标定绑定、识别、编辑弹窗或空间保存进行中会拦住迁移。迁移期间卸载业务页、禁止新的项目文件操作和关闭窗口；结束后按存储版本重建页面，并清掉屏柜图像源、设备验证会话里的旧路径缓存。
+- 设置弹窗改为固定 520px 内容高度，窄窗口收缩；标题和导航固定，分页内容单独滚动。全局统一页面/卡片 16px、侧栏 12px、工作区 8px 留白。空间场景上右下留 8px、左侧贴齐，视口圆角 8px。运维内容区外圈 8px 留白加圆角，内部 24px。
+- 数据库仍是原来的总库，本轮不拆库、不搬库。方案记在 `PROJECT_STORAGE_MIGRATION.md`。
+- 回填上一条提交哈希 `1b4dba7`，并补记 1.0.5 正式发布与更新检查结果。
+
+### 优化
+
+- 换保存目录不会只改配置、把旧项目留在原地，也不会在复制完成前切到空目录。
+- 同卷移动不再整份复制点云；跨卷才复制，进度按复制、更新路径、清理三段显示。
+- 升级后用户数据目录和应用可执行文件名不再跟着 npm 包名 `app` 走，已有安装目录数据也不会升级后变成空项目。
+- 设置分页切换时弹窗高度不再跳动；各业务页留白对齐。
+
+### 影响范围
+
+- `packages/app/electron/project-core/directory-migration.ts`
+- `packages/app/electron/project-core/project-root.ts`
+- `packages/app/electron/project-core/project-activity.ts`
+- `packages/app/electron/app/legacy-user-data-migration.ts`
+- `packages/app/electron/main.ts`
+- `packages/app/electron/ipc/*`
+- `packages/app/src/pages/storage-settings/`
+- `packages/app/src/pages/settings-modal/`
+- `packages/app/src/pages/app-header/`
+- `packages/app/package.json`
+- `packages/app/scripts/project-storage-migration.test.mjs`
+- `packages/app/scripts/legacy-user-data-migration.test.mjs`
+- `PROJECT_STORAGE_MIGRATION.md`
+- 设置、空间编辑、勘察、屏柜/设备验证、导入导出、运维配置的样式文件
+
+### 用户可见变化
+
+- 设置里多了「项目存储」：选空目录后点「迁移并保存」，可看进度；未完成时显示「继续迁移」。
+- 项目管理不能再改保存目录。迁移过程中主界面显示「正在迁移项目文件…」，此时不能关窗口。
+- 打包版新安装的默认项目目录在「文档/RobotConfigTools/project」。版本号显示为 1.0.6。
+- 设置弹窗和各业务页留白、圆角更一致。
+
+### 验证
+
+- 目录迁移与旧用户数据迁移脚本：`node --test packages/app/scripts/project-storage-migration.test.mjs`、`node --test packages/app/scripts/legacy-user-data-migration.test.mjs`。
+- 界面：`pnpm build` 已通过（空 mqtt chunk 与大 chunk 提示仍在）。设置三个分页高度一致；560×620 下导航、滚动和按钮可达。空间编辑、勘察、屏柜、设备验证、导入导出、运维页面无横向溢出。浏览器空数据未覆盖桌面迁移。
+- 桌面：同卷迁移后项目列表和当前项目仍在；取消或占用失败时原目录配置不变。有未完成台账时设置显示继续迁移。
+
+---
+
+## 2026-10-12 — 接入 GitHub 自动更新，增加底部版本栏并准备 1.0.5 发布包
+
+- 提交：`1b4dba7`
 - 类型：feat
 
 ### 修改
@@ -52,6 +109,9 @@
 - 首次打包因缺失 Electron dist 失败，版本按预期恢复 `1.0.4`；执行官方 Electron 安装脚本后重新打包 `1.0.5` 成功，生成 exe、blockmap 和 latest.yml。
 - 打包应用使用隔离的临时 userData 启动，数据库/IPC/preload 初始化成功、应用保持响应，启动后实际访问 GitHub 更新源；首个 Release 发布前的无版本错误被更新控制器接收，未使应用退出。
 - 包内 `app-update.yml` 指向 hacqlzx/robot-config-tools；生成的 `latest.yml` 版本为 1.0.5，包含安装包文件名、大小和 SHA-512。发布流程将在同一个正式 Release 上传三类产物并验证匿名更新检查；未执行会修改当前安装应用的重启安装操作。
+- 正式发布完成：源码提交 `1b4dba7` 已推送 GitHub，`v1.0.5` Release 含安装包（169,711,461 字节）、blockmap 和 latest.yml；上传后的 GitHub SHA-256/文件大小与本地一致，匿名下载 latest.yml 与本地逐字节一致。通过临时系统代理完成 Git 推送，未修改全局 Git 配置；失败上传留下的空草稿已清理。
+- 真实 electron-updater GitHub provider 检查：临时 1.0.4 测试客户端识别 1.0.5 并进入 available，实际 1.0.5 打包应用启动检查得到当前已为最新版本；没有自动下载或安装。
+- 临时旧版本客户端显式下载验证通过：不存在旧版本 blockmap 时正确回退完整下载，进度达到 100%，electron-updater 校验下载产物并进入 downloaded。未执行安装，所有本次创建的应用冒烟测试进程均已关闭。
 
 ## 2026-10-12 — 打包前选择版本号，构建校验与版本递增分离
 

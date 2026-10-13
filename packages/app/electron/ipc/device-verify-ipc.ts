@@ -1,7 +1,7 @@
+import { onProjectRootChanged, registerProjectActivityHandler } from "../project-core/project-activity";
 import { randomUUID } from "crypto";
 import fs from "fs";
 import path from "path";
-import { ipcMain } from "electron";
 import AdmZip from "adm-zip";
 import * as XLSX from "xlsx-js-style";
 import { isPathInside, resolveProjectDir, resolveProjectPath } from "../project-core/project-paths";
@@ -118,7 +118,8 @@ const hierarchyColumns: Array<{
 let activeSession: DeviceVerificationSession | null = null;
 
 export function registerDeviceVerifyIpc(): void {
-  ipcMain.handle("device-verify:import-package", async (_event, projectName: string, sourcePath: string) => {
+  onProjectRootChanged(() => { activeSession = null; });
+  registerProjectActivityHandler("device-verify:import-package", async (_event, projectName: string, sourcePath: string) => {
     try {
       const source = validatePackageSource(sourcePath);
       const importDir = importDeviceVerificationSource(projectName, source);
@@ -132,7 +133,7 @@ export function registerDeviceVerifyIpc(): void {
     }
   });
 
-  ipcMain.handle("device-verify:load-local", async (_event, projectName: string) => {
+  registerProjectActivityHandler("device-verify:load-local", async (_event, projectName: string) => {
     try {
       const localDir = getDeviceVerificationDir(projectName);
       if (!fs.existsSync(localDir) || !fs.statSync(localDir).isDirectory()) {
@@ -152,7 +153,7 @@ export function registerDeviceVerifyIpc(): void {
     }
   });
 
-  ipcMain.handle("device-verify:list-children", async (_event, sessionId: string, parentId: string) => {
+  registerProjectActivityHandler("device-verify:list-children", async (_event, sessionId: string, parentId: string) => {
     try {
       const session = getActiveSession(sessionId);
       const parent = session.nodes.get(String(parentId || ""));
@@ -166,7 +167,7 @@ export function registerDeviceVerifyIpc(): void {
     }
   });
 
-  ipcMain.handle("device-verify:load-image", async (_event, sessionId: string, pointNodeId: string) => {
+  registerProjectActivityHandler("device-verify:load-image", async (_event, sessionId: string, pointNodeId: string) => {
     try {
       const session = getActiveSession(sessionId);
       const point = session.nodes.get(String(pointNodeId || ""));
@@ -188,7 +189,7 @@ export function registerDeviceVerifyIpc(): void {
     }
   });
 
-  ipcMain.handle("device-verify:load-correction", async (_event, projectName: string, pointCode: string) => {
+  registerProjectActivityHandler("device-verify:load-correction", async (_event, projectName: string, pointCode: string) => {
     try {
       const code = valueText(pointCode);
       if (!code) return { success: true, rect: null };
@@ -204,7 +205,7 @@ export function registerDeviceVerifyIpc(): void {
     }
   });
 
-  ipcMain.handle("device-verify:save-correction", async (_event, projectName: string, record: Partial<DeviceCorrectionRecord>) => {
+  registerProjectActivityHandler("device-verify:save-correction", async (_event, projectName: string, record: Partial<DeviceCorrectionRecord>) => {
     try {
       const pointCode = valueText(record?.pointCode);
       if (!pointCode) throw new Error("点位编码不能为空");
@@ -227,7 +228,7 @@ export function registerDeviceVerifyIpc(): void {
     }
   });
 
-  ipcMain.handle("device-verify:delete-correction", async (_event, projectName: string, pointCode: string) => {
+  registerProjectActivityHandler("device-verify:delete-correction", async (_event, projectName: string, pointCode: string) => {
     try {
       const code = valueText(pointCode);
       if (!code) return { success: true };
@@ -245,7 +246,7 @@ export function registerDeviceVerifyIpc(): void {
     }
   });
 
-  ipcMain.handle("device-verify:export-correction-data", async (_event, projectName: string, destDir: string) => {
+  registerProjectActivityHandler("device-verify:export-correction-data", async (_event, projectName: string, destDir: string) => {
     try {
       return exportDeviceVerificationCorrectionData(projectName, destDir);
     } catch (error: any) {
@@ -254,7 +255,7 @@ export function registerDeviceVerifyIpc(): void {
     }
   });
 
-  ipcMain.handle("device-verify:set-point-mark", async (_event, projectName: string, record: { pointCode?: string; pointName?: string; marked?: boolean }) => {
+  registerProjectActivityHandler("device-verify:set-point-mark", async (_event, projectName: string, record: { pointCode?: string; pointName?: string; marked?: boolean }) => {
     try {
       const pointCode = valueText(record?.pointCode);
       if (!pointCode) throw new Error("点位编码不能为空");
@@ -281,7 +282,7 @@ export function registerDeviceVerifyIpc(): void {
     }
   });
 
-  ipcMain.handle("device-verify:export-marked-points", async (_event, projectName: string, destDir: string) => {
+  registerProjectActivityHandler("device-verify:export-marked-points", async (_event, projectName: string, destDir: string) => {
     try {
       return exportMarkedDeviceVerificationPoints(projectName, destDir);
     } catch (error: any) {
