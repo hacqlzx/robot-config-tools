@@ -1,50 +1,47 @@
-﻿import { ipcMain } from "electron";
+﻿import { registerProjectActivityHandler } from "./project-core/project-activity";
 import {
-  initDatabase,
-  closeDatabase,
-  runMigrations,
   getDatabase,
   DeviceVoltageRepo,
   DeviceBayRepo,
   DeviceMainRepo,
   DeviceComponentRepo,
   DevicePointRepo,
-  migration001Version,
-  migration001Name,
-  migration001Up,
-  migration001Down,
-  migration002Version,
-  migration002Name,
-  migration002Up,
-  migration002Down,
-  migration003Version,
-  migration003Name,
-  migration003Up,
-  migration003Down,
-  migration004Version,
-  migration004Name,
-  migration004Up,
-  migration004Down,
-  migration005Version,
-  migration005Name,
-  migration005Up,
-  migration005Down,
-  migration006Version,
-  migration006Name,
-  migration006Up,
-  migration006Down,
-  diagnosePointUniqueness,
 } from "@robot/database";
 import type { PointExcelRow, ImportResult } from "@robot/database";
+import {
+  closeAllProjectDatabases,
+  withProjectDatabaseSession,
+  type ProjectDatabaseSession,
+} from "./project-core/project-database";
+import { migrateLegacyProjectDatabases, type ProjectDatabaseMigrationOptions } from "./project-core/project-database-migration";
 
 // ---- repo IPC helpers ----
 
-function registerRepoHandlers(def: { name: string; repo: any; methods: string[] }): void {
+function assertProjectArguments(method: string, args: any[], projectName: string, indices: number[]): void {
+  for (const index of indices) {
+    const value = args[index];
+    if (typeof value === "string" && value && value !== projectName) {
+      throw new Error(`数据库请求项目不匹配：${value} / ${projectName}`);
+    }
+  }
+  for (const value of args) {
+    if (value && typeof value === "object" && typeof value.projectName === "string" && value.projectName !== projectName) {
+      throw new Error(`数据库请求项目不匹配：${value.projectName} / ${projectName}`);
+    }
+  }
+  void method;
+}
+
+function registerRepoHandlers(def: { name: string; Repo: new (db: any) => any; methods: string[]; projectNameArgs?: Record<string, number[]> }): void {
   for (const method of def.methods) {
     const channel = `db:${def.name}:${method}`;
-    ipcMain.handle(channel, (_event, ...args: any[]) => {
+    registerProjectActivityHandler(channel, async (_event, session: ProjectDatabaseSession, ...args: any[]) => {
       try {
-        const result = (def.repo as any)[method](...args);
+        const result = await withProjectDatabaseSession(session?.projectName, Number(session?.sessionVersion), () => {
+          assertProjectArguments(method, args, session.projectName, def.projectNameArgs?.[method] || []);
+          const repo = new def.Repo(getDatabase());
+          return repo[method](...args);
+        });
         return { ok: true, data: result ?? null };
       } catch (e: any) {
         return { ok: false, error: e.message };
@@ -56,15 +53,15 @@ function registerRepoHandlers(def: { name: string; repo: any; methods: string[] 
 // ---- import helpers ----
 
 function registerImportHandler(): void {
-  ipcMain.handle(
+  registerProjectActivityHandler(
     "db:importPoints",
-    async (_event, rows: PointExcelRow[], stationName: string, stationCode: string, projectName: string) => {
+    async (_event, session: ProjectDatabaseSession, rows: PointExcelRow[], stationName: string, stationCode: string, projectName: string) => {
       try {
+        if (!session || session.projectName !== projectName) throw new Error("项目数据库会话已切换，请重试导入");
         const { importPointExcel } = await import("@robot/database");
-        const db = getDatabase();
-        const result: ImportResult = db.batchMode(() => (
+        const result: ImportResult = await withProjectDatabaseSession(session.projectName, session.sessionVersion, (db) => db.batchMode(() => (
           importPointExcel(db, rows, stationName, stationCode, projectName)
-        ), "point-import");
+        ), "point-import"));
         return { ok: true, data: result };
       } catch (e: any) {
         return { ok: false, error: e.message };
@@ -97,45 +94,46 @@ interface CabinetDeviceRenameRow {
 const MAIN_DEVICE_TYPE_CABINET = 29;
 
 function registerCabinetDeviceHandler(): void {
-  ipcMain.handle("db:saveCabinetMainDevices", async (_event, projectName: string, payload: CabinetDeviceSavePayload) => {
+  registerProjectActivityHandler("db:saveCabinetMainDevices", async (_event, session: ProjectDatabaseSession, projectName: string, payload: CabinetDeviceSavePayload) => {
     try {
-      const db = getDatabase();
-      const bayRepo = new DeviceBayRepo(db);
-      const mainRepo = new DeviceMainRepo(db);
+      if (!session || session.projectName !== projectName) throw new Error("项目数据库会话已切换，请重试保存");
+      return await withProjectDatabaseSession(session.projectName, session.sessionVersion, async (db) => {
+        const bayRepo = new DeviceBayRepo(db);
+        const mainRepo = new DeviceMainRepo(db);
 
-      const rows = (payload?.rows || []).map((row) => ({
-        ...row,
-        code: String(row.code ?? "").trim(),
-        name: String(row.name ?? "").trim(),
-      }));
-      if (!projectName) throw new Error("项目名称为空，无法保存屏柜设备");
-      if (rows.length === 0) throw new Error("请先完成屏柜绘制");
-      if (rows.some((row) => !row.name)) throw new Error("屏柜名称不能为空");
-      if (rows.some((row) => !row.code)) throw new Error("屏柜编码不能为空");
+        const rows = (payload?.rows || []).map((row) => ({
+          ...row,
+          code: String(row.code ?? "").trim(),
+          name: String(row.name ?? "").trim(),
+        }));
+        if (!projectName) throw new Error("项目名称为空，无法保存屏柜设备");
+        if (rows.length === 0) throw new Error("请先完成屏柜绘制");
+        if (rows.some((row) => !row.name)) throw new Error("屏柜名称不能为空");
+        if (rows.some((row) => !row.code)) throw new Error("屏柜编码不能为空");
 
-      const duplicateName = rows.find((row, index) => rows.findIndex((item) => item.name === row.name) !== index);
-      if (duplicateName) throw new Error(`屏柜名称重复：${duplicateName.name}`);
-      const duplicateCode = rows.find((row, index) => rows.findIndex((item) => item.code === row.code) !== index);
-      if (duplicateCode) throw new Error(`屏柜编码重复：${duplicateCode.code}`);
+        const duplicateName = rows.find((row, index) => rows.findIndex((item) => item.name === row.name) !== index);
+        if (duplicateName) throw new Error(`屏柜名称重复：${duplicateName.name}`);
+        const duplicateCode = rows.find((row, index) => rows.findIndex((item) => item.code === row.code) !== index);
+        if (duplicateCode) throw new Error(`屏柜编码重复：${duplicateCode.code}`);
 
-      const bayRecord = bayRepo.getById(Number(payload?.bay?.id));
-      if (!bayRecord) throw new Error("所选间隔不存在，无法保存屏柜设备");
+        const bayRecord = bayRepo.getById(Number(payload?.bay?.id));
+        if (!bayRecord) throw new Error("所选间隔不存在，无法保存屏柜设备");
 
-      const existingMains = mainRepo.list(projectName);
-      const beforeProjectCount = existingMains.length;
-      const existingByBay = existingMains.filter((item: any) => item.bayId === bayRecord.id);
-      const beforeBayCount = existingByBay.length;
-      const existingByCode = existingMains.filter((item: any) =>
-        rows.some((row) => row.code === item.mainDeviceCode),
-      );
+        const existingMains = mainRepo.list(projectName);
+        const beforeProjectCount = existingMains.length;
+        const existingByBay = existingMains.filter((item: any) => item.bayId === bayRecord.id);
+        const beforeBayCount = existingByBay.length;
+        const existingByCode = existingMains.filter((item: any) =>
+          rows.some((row) => row.code === item.mainDeviceCode),
+        );
 
-      console.log("[DB][屏柜保存] 保存前主设备数量", {
-        projectName,
-        bayId: bayRecord.id,
-        bayName: bayRecord.bayName,
-        devices: rows.map((row) => ({ code: row.code, name: row.name })),
-        projectMainDeviceCount: beforeProjectCount,
-        bayMainDeviceCount: beforeBayCount,
+        console.log("[DB][屏柜保存] 保存前主设备数量", {
+          projectName,
+          bayId: bayRecord.id,
+          bayName: bayRecord.bayName,
+          devices: rows.map((row) => ({ code: row.code, name: row.name })),
+          projectMainDeviceCount: beforeProjectCount,
+          bayMainDeviceCount: beforeBayCount,
       });
 
       let inserted = 0;
@@ -221,6 +219,7 @@ function registerCabinetDeviceHandler(): void {
         ids: savedIds,
       });
       return { ok: true, data: { inserted, updated, total: rows.length, ids: savedIds } };
+      });
     } catch (e: any) {
       console.error("[DB][屏柜保存] 保存失败", {
         projectName,
@@ -231,64 +230,67 @@ function registerCabinetDeviceHandler(): void {
     }
   });
 
-  ipcMain.handle("db:renameCabinetMainDevices", async (_event, projectName: string, rows: CabinetDeviceRenameRow[]) => {
+  registerProjectActivityHandler("db:renameCabinetMainDevices", async (_event, session: ProjectDatabaseSession, projectName: string, rows: CabinetDeviceRenameRow[]) => {
     try {
-      if (!projectName || !Array.isArray(rows) || rows.length === 0) throw new Error("屏柜改名参数无效");
-      const normalized = rows.map((row) => ({ code: String(row.code ?? "").trim(), name: String(row.name ?? "").trim() }));
-      if (normalized.some((row) => !row.code || !row.name)) throw new Error("屏柜名称和编码不能为空");
-      if (new Set(normalized.map((row) => row.code)).size !== normalized.length) throw new Error("屏柜编码不能重复");
-      const db = getDatabase();
-      const mainRepo = new DeviceMainRepo(db);
-      db.transaction(() => {
-        const mains = mainRepo.list(projectName);
-        const codes = new Set(normalized.map((row) => row.code));
-        const now = new Date().toISOString();
-        for (const row of normalized) {
-          const main = mains.find((record) => record.mainDeviceCode === row.code && Number(record.mainDeviceType) === MAIN_DEVICE_TYPE_CABINET);
-          if (!main) throw new Error(`本地点表中未找到屏柜编码 ${row.code}`);
-          if (mains.some((record) => record.bayId === main.bayId && record.mainDeviceName === row.name && !codes.has(record.mainDeviceCode))) {
-            throw new Error(`当前间隔已存在同名主设备：${row.name}`);
+      if (!session || session.projectName !== projectName) throw new Error("项目数据库会话已切换，请重试重命名");
+      return await withProjectDatabaseSession(session.projectName, session.sessionVersion, async (db) => {
+        if (!projectName || !Array.isArray(rows) || rows.length === 0) throw new Error("屏柜改名参数无效");
+        const normalized = rows.map((row) => ({ code: String(row.code ?? "").trim(), name: String(row.name ?? "").trim() }));
+        if (normalized.some((row) => !row.code || !row.name)) throw new Error("屏柜名称和编码不能为空");
+        if (new Set(normalized.map((row) => row.code)).size !== normalized.length) throw new Error("屏柜编码不能重复");
+        const mainRepo = new DeviceMainRepo(db);
+        db.transaction(() => {
+          const mains = mainRepo.list(projectName);
+          const codes = new Set(normalized.map((row) => row.code));
+          const now = new Date().toISOString();
+          for (const row of normalized) {
+            const main = mains.find((record) => record.mainDeviceCode === row.code && Number(record.mainDeviceType) === MAIN_DEVICE_TYPE_CABINET);
+            if (!main) throw new Error(`本地点表中未找到屏柜编码 ${row.code}`);
+            if (mains.some((record) => record.bayId === main.bayId && record.mainDeviceName === row.name && !codes.has(record.mainDeviceCode))) {
+              throw new Error(`当前间隔已存在同名主设备：${row.name}`);
+            }
+            mainRepo.update(main.id, { mainDeviceName: row.name, updateBy: "space-edit" });
+            db.prepare("UPDATE device_component SET main_device_name = ?, update_time = ? WHERE main_device_id = ? AND project_name = ?")
+              .run(row.name, now, main.id, projectName);
+            db.prepare("UPDATE device_point SET main_device_name = ?, update_time = ? WHERE main_device_id = ? AND project_name = ?")
+              .run(row.name, now, main.id, projectName);
           }
-          mainRepo.update(main.id, { mainDeviceName: row.name, updateBy: "space-edit" });
-          db.prepare("UPDATE device_component SET main_device_name = ?, update_time = ? WHERE main_device_id = ? AND project_name = ?")
-            .run(row.name, now, main.id, projectName);
-          db.prepare("UPDATE device_point SET main_device_name = ?, update_time = ? WHERE main_device_id = ? AND project_name = ?")
-            .run(row.name, now, main.id, projectName);
-        }
-      })();
-      db.saveToDisk("cabinet-main-rename");
-      return { ok: true, data: { updated: normalized.length } };
+        })();
+        db.saveToDisk("cabinet-main-rename");
+        return { ok: true, data: { updated: normalized.length } };
+      });
     } catch (e: any) {
       return { ok: false, error: e?.message || String(e) };
     }
   });
 
-  ipcMain.handle("db:deleteCabinetMainDevices", async (_event, projectName: string, payload: CabinetDeviceDeletePayload) => {
+  registerProjectActivityHandler("db:deleteCabinetMainDevices", async (_event, session: ProjectDatabaseSession, projectName: string, payload: CabinetDeviceDeletePayload) => {
     try {
-      const db = getDatabase();
-      const mainRepo = new DeviceMainRepo(db);
-      const devices = (payload?.devices || [])
-        .map((device) => ({
-          code: String(device.code ?? "").trim(),
-          name: String(device.name ?? "").trim(),
-        }))
-        .filter((device) => device.code || device.name);
+      if (!session || session.projectName !== projectName) throw new Error("项目数据库会话已切换，请重试删除");
+      return await withProjectDatabaseSession(session.projectName, session.sessionVersion, async (db) => {
+        const mainRepo = new DeviceMainRepo(db);
+        const devices = (payload?.devices || [])
+          .map((device) => ({
+            code: String(device.code ?? "").trim(),
+            name: String(device.name ?? "").trim(),
+          }))
+          .filter((device) => device.code || device.name);
 
-      if (!projectName) throw new Error("项目名称为空，无法删除屏柜设备");
-      if (devices.length === 0) {
-        console.warn("[DB][屏柜删除] 没有收到待删除屏柜/柜排设备", { projectName, payload });
-        return { ok: true, data: { deleted: 0, ids: [], unmatched: [], beforeProjectCount: 0, afterProjectCount: 0 } };
-      }
+        if (!projectName) throw new Error("项目名称为空，无法删除屏柜设备");
+        if (devices.length === 0) {
+          console.warn("[DB][屏柜删除] 没有收到待删除屏柜/柜排设备", { projectName, payload });
+          return { ok: true, data: { deleted: 0, ids: [], unmatched: [], beforeProjectCount: 0, afterProjectCount: 0 } };
+        }
 
-      const beforeMains = mainRepo.list(projectName);
-      const beforeProjectCount = beforeMains.length;
-      const matched = new Map<number, any>();
-      const unmatched: { code: string; name: string; reason: string }[] = [];
+        const beforeMains = mainRepo.list(projectName);
+        const beforeProjectCount = beforeMains.length;
+        const matched = new Map<number, any>();
+        const unmatched: { code: string; name: string; reason: string }[] = [];
 
-      console.log("[DB][屏柜删除] 删除前主设备数量", {
-        projectName,
-        devices,
-        projectMainDeviceCount: beforeProjectCount,
+        console.log("[DB][屏柜删除] 删除前主设备数量", {
+          projectName,
+          devices,
+          projectMainDeviceCount: beforeProjectCount,
       });
 
       for (const device of devices) {
@@ -345,6 +347,7 @@ function registerCabinetDeviceHandler(): void {
       });
 
       return { ok: true, data: { deleted: ids.length, ids, unmatched, beforeProjectCount, afterProjectCount } };
+      });
     } catch (e: any) {
       console.error("[DB][屏柜删除] 删除失败", {
         projectName,
@@ -358,31 +361,14 @@ function registerCabinetDeviceHandler(): void {
 
 // ---- init / close ----
 
-export async function initDbIpc(): Promise<void> {
-  const db = await initDatabase();
-
-  runMigrations(db, [
-    { version: migration001Version, name: migration001Name, up: migration001Up, down: migration001Down },
-    { version: migration002Version, name: migration002Name, up: migration002Up, down: migration002Down },
-    { version: migration003Version, name: migration003Name, up: migration003Up, down: migration003Down },
-    { version: migration004Version, name: migration004Name, up: migration004Up, down: migration004Down },
-    { version: migration005Version, name: migration005Name, up: migration005Up, down: migration005Down },
-    { version: migration006Version, name: migration006Name, up: migration006Up, down: migration006Down },
-  ]);
-
-  const uniquenessDiagnostics = diagnosePointUniqueness(db);
-  if (uniquenessDiagnostics.hasConflicts) {
-    console.error("[DB] 点位唯一性诊断发现冲突，增加唯一索引前必须人工确认并清理", uniquenessDiagnostics);
-  } else {
-    console.log("[DB] 点位唯一性诊断通过");
-  }
-
+export async function initDbIpc(migrationOptions: ProjectDatabaseMigrationOptions): Promise<void> {
+  await migrateLegacyProjectDatabases(migrationOptions);
   const repos = [
-    { name: "voltage", repo: new DeviceVoltageRepo(db), methods: ["list", "getById", "findByStationId", "create", "update", "delete"] },
-    { name: "bay", repo: new DeviceBayRepo(db), methods: ["list", "getById", "findByVoltId", "findByStationId", "create", "update", "delete"] },
-    { name: "mainDevice", repo: new DeviceMainRepo(db), methods: ["list", "getById", "findByBayId", "findByStationId", "findByMainDeviceNameAndBayId", "findByMainDeviceCode", "create", "update", "delete", "deleteCascade"] },
-    { name: "component", repo: new DeviceComponentRepo(db), methods: ["list", "getById", "findByMainDeviceId", "findByStationId", "create", "update", "delete"] },
-    { name: "point", repo: new DevicePointRepo(db), methods: ["list", "getById", "findByPointCode", "findByCalibrationId", "bindCalibrationId", "bindCalibrationIds", "clearCalibrationId", "clearCalibrationIds", "findByStationId", "findByComponentId", "paginate", "create", "update", "delete"] },
+    { name: "voltage", Repo: DeviceVoltageRepo, methods: ["list", "getById", "findByStationId", "create", "update", "delete"], projectNameArgs: { list: [0], findByStationId: [1] } },
+    { name: "bay", Repo: DeviceBayRepo, methods: ["list", "getById", "findByVoltId", "findByStationId", "create", "update", "delete"], projectNameArgs: { list: [0], findByVoltId: [1], findByStationId: [1] } },
+    { name: "mainDevice", Repo: DeviceMainRepo, methods: ["list", "getById", "findByBayId", "findByStationId", "findByMainDeviceNameAndBayId", "findByMainDeviceCode", "create", "update", "delete", "deleteCascade"], projectNameArgs: { list: [0], findByBayId: [1], findByStationId: [1], findByMainDeviceNameAndBayId: [2], findByMainDeviceCode: [1], deleteCascade: [1] } },
+    { name: "component", Repo: DeviceComponentRepo, methods: ["list", "getById", "findByMainDeviceId", "findByStationId", "create", "update", "delete"], projectNameArgs: { list: [0], findByMainDeviceId: [1], findByStationId: [1] } },
+    { name: "point", Repo: DevicePointRepo, methods: ["list", "getById", "findByPointCode", "findByCalibrationId", "bindCalibrationId", "bindCalibrationIds", "clearCalibrationId", "clearCalibrationIds", "findByStationId", "findByComponentId", "paginate", "create", "update", "delete"], projectNameArgs: { list: [0], findByPointCode: [1], findByCalibrationId: [1], bindCalibrationId: [1], bindCalibrationIds: [1], clearCalibrationId: [1], clearCalibrationIds: [1], findByStationId: [1], findByComponentId: [1], paginate: [3] } },
   ];
 
   for (const def of repos) {
@@ -394,6 +380,6 @@ export async function initDbIpc(): Promise<void> {
   console.log("[DB] IPC handlers registered");
 }
 
-export function closeDbIpc(): void {
-  closeDatabase();
+export function closeDbIpc(): Promise<void> {
+  return closeAllProjectDatabases();
 }

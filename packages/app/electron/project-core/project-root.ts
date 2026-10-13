@@ -121,6 +121,8 @@ export async function migrateDataPath(
 ): Promise<DirectoryMigrationResult> {
   const release = beginProjectDirectoryMigration();
   try {
+    const { closeAllProjectDatabases } = await import("./project-database");
+    await closeAllProjectDatabases();
     if (!fs.existsSync(projectRootConfigPath())) ensureProjectRoot();
     return await migrateProjectDirectory({
       source: PROJECT_ROOT || loadInitialProjectRoot(), target: newPath,

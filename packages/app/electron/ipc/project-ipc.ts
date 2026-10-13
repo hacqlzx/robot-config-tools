@@ -1,4 +1,5 @@
 import { registerProjectActivityHandler } from "../project-core/project-activity";
+import { closeActiveProjectDatabase, openProjectDatabase } from "../project-core/project-database";
 import {
   createProject,
   deleteProject,
@@ -21,6 +22,8 @@ import {
 
 export function registerProjectIpc(): void {
   registerProjectActivityHandler("project:list", async () => listProjects());
+  registerProjectActivityHandler("project:open-database", async (_event, projectName: string) => openProjectDatabase(projectName));
+  registerProjectActivityHandler("project:close-database", async () => closeActiveProjectDatabase());
   registerProjectActivityHandler("project:create", async (_event, name: string) => createProject(name));
   registerProjectActivityHandler("project:rename", async (_event, oldName: string, newName: string) => renameProject(oldName, newName));
   registerProjectActivityHandler("project:delete", async (_event, name: string) => deleteProject(name));

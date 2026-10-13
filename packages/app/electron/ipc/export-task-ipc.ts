@@ -636,12 +636,12 @@ async function prepareLocalExport(request: LocalExportPrepareRequest): Promise<v
     case "image-labels": {
       const projectName = asString(request.payload?.projectName);
       const mapName = asString(request.payload?.mapName);
-      prepareImageLabelsArchive(projectName, mapName);
+      await prepareImageLabelsArchive(projectName, mapName);
       return;
     }
     case "cabinet-point-table": {
       const projectName = asString(request.payload?.projectName);
-      prepareCabinetPointTableExport(projectName);
+      await prepareCabinetPointTableExport(projectName);
       return;
     }
     case "cabinet-annotation-params": {
@@ -661,12 +661,12 @@ async function prepareLocalExport(request: LocalExportPrepareRequest): Promise<v
     }
     case "normal-annotations": {
       const projectName = asString(request.payload?.projectName);
-      prepareNormalAnnotationExport(projectName, request.payload?.items);
+      await prepareNormalAnnotationExport(projectName, request.payload?.items);
       return;
     }
     case "inspection-points": {
       const projectName = asString(request.payload?.projectName);
-      prepareInspectionPointExport(projectName, request.payload?.items);
+      await prepareInspectionPointExport(projectName, request.payload?.items);
       return;
     }
     default:
@@ -722,12 +722,12 @@ async function executeLocalExport(
     case "normal-annotations": {
       const projectName = asString(request.payload?.projectName);
       onProgress?.("准备导出法线标注", 20);
-      return { success: true, ...exportNormalAnnotationExcel(projectName, request.destDir, request.payload?.items) };
+      return { success: true, ...(await exportNormalAnnotationExcel(projectName, request.destDir, request.payload?.items)) };
     }
     case "inspection-points": {
       const projectName = asString(request.payload?.projectName);
       onProgress?.("准备导出巡检点标注", 20);
-      return { success: true, ...exportInspectionPointExcel(projectName, request.destDir, request.payload?.items) };
+      return { success: true, ...(await exportInspectionPointExcel(projectName, request.destDir, request.payload?.items)) };
     }
     default:
       throw new Error("不支持的本地导出类型");

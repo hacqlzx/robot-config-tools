@@ -6,7 +6,7 @@ import { assertInside, resolveProjectDir, toProjectRelativePath } from "./projec
 export const SUPPORTED_MAP_EXTS = new Set([".las", ".laz"]);
 export const POINT_TABLE_EXTS = new Set([".xls", ".xlsx"]);
 export const PROJECT_MANIFEST_FILE = "project.manifest.json";
-const PROJECT_MANIFEST_SCHEMA_VERSION = 1;
+const PROJECT_MANIFEST_SCHEMA_VERSION = 2;
 const PROJECT_LAYOUT_VERSION = 1;
 /** 项目内约定目录名称，业务代码不直接写死字符串时优先从 manifest 读取。 */
 const DEFAULT_PROJECT_DIRS = {
@@ -59,6 +59,12 @@ export interface ProjectManifest {
     name: string;
     createdAt: string;
     updatedAt: string;
+  };
+  database?: {
+    path: string;
+    formatVersion: number;
+    migrationBatchId?: string | null;
+    sourceFingerprint?: string | null;
   };
   layout: {
     /** 项目目录布局版本 */
@@ -152,6 +158,7 @@ function normalizeManifest(projectName: string, raw: any): ProjectManifest {
   const dirs = layout.dirs && typeof layout.dirs === "object" ? layout.dirs : {};
   const assets = raw?.assets && typeof raw.assets === "object" ? raw.assets : {};
 
+  const database = raw?.database && typeof raw.database === "object" ? raw.database : null;
   return {
     schemaVersion: PROJECT_MANIFEST_SCHEMA_VERSION,
     project: {
@@ -160,6 +167,16 @@ function normalizeManifest(projectName: string, raw: any): ProjectManifest {
       createdAt: typeof project.createdAt === "string" ? project.createdAt : defaults.project.createdAt,
       updatedAt: typeof project.updatedAt === "string" ? project.updatedAt : defaults.project.updatedAt,
     },
+    ...(typeof database?.path === "string" && path.isAbsolute(database.path) === false
+      ? {
+          database: {
+            path: database.path.replace(/\\/g, "/"),
+            formatVersion: Number(database.formatVersion) || 1,
+            migrationBatchId: typeof database.migrationBatchId === "string" ? database.migrationBatchId : null,
+            sourceFingerprint: typeof database.sourceFingerprint === "string" ? database.sourceFingerprint : null,
+          },
+        }
+      : {}),
     layout: {
       version: typeof layout.version === "number" ? layout.version : PROJECT_LAYOUT_VERSION,
       dirs: {
@@ -190,9 +207,36 @@ function readProjectManifestByDir(projectDir: string, projectName: string): Proj
   }
 }
 
+/** Strict manifest read for database migration, where malformed identity must not be silently replaced. */
+export function readProjectManifestForMigration(projectDir: string, projectName: string): ProjectManifest {
+  const filePath = manifestPath(projectDir);
+  if (!fs.existsSync(filePath)) return createDefaultManifest(projectName);
+  try {
+    const raw = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("项目清单根节点无效");
+    if (raw.database) {
+      if (typeof raw.project?.id !== "string" || !raw.project.id.trim()) throw new Error("项目数据库清单缺少稳定项目 ID");
+      if (typeof raw.database.path !== "string" || !raw.database.path.trim() || path.isAbsolute(raw.database.path)) {
+        throw new Error("项目数据库路径必须是非空相对路径");
+      }
+      if (Number(raw.database.formatVersion) !== 1) throw new Error("项目数据库存储版本不受支持");
+    }
+    return normalizeManifest(projectName, raw);
+  } catch (error) {
+    throw new Error(`项目清单无法用于数据库迁移：${filePath}；${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 export function writeProjectManifestByDir(projectDir: string, manifest: ProjectManifest): ProjectManifest {
   const filePath = manifestPath(projectDir);
-  fs.writeFileSync(filePath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+  const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(tempPath, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf-8", flag: "wx" });
+    fs.renameSync(tempPath, filePath);
+  } catch (error) {
+    try { fs.rmSync(tempPath, { force: true }); } catch { /* preserve the original write error */ }
+    throw error;
+  }
   return manifest;
 }
 
@@ -215,6 +259,13 @@ function updateProjectManifest(projectName: string, mutate: (manifest: ProjectMa
   manifest.project.name = projectName;
   manifest.project.updatedAt = nowIso();
   return writeProjectManifestByDir(projectDir, manifest);
+}
+
+export function updateProjectDatabaseMetadata(
+  projectName: string,
+  database: NonNullable<ProjectManifest["database"]>,
+): ProjectManifest {
+  return updateProjectManifest(projectName, (manifest) => { manifest.database = database; });
 }
 
 /**
@@ -426,5 +477,21 @@ export function assertWritableProjectFile(projectName: string, filePath: string)
   const resolved = assertInside(projectDir, filePath, "写入项目文件");
   if (path.basename(resolved) === PROJECT_MANIFEST_FILE && path.dirname(resolved) === projectDir) {
     throw new Error("项目清单由主进程维护，禁止直接写入");
+  }
+  assertProjectDatabasePathUnchanged(projectName, resolved);
+}
+
+/** 项目库及所在目录只能由数据库/项目生命周期入口维护。 */
+export function assertProjectDatabasePathUnchanged(projectName: string, targetPath: string): void {
+  const projectDir = resolveProjectDir(projectName);
+  const manifest = readProjectManifestForMigration(projectDir, projectName);
+  const databasePath = path.resolve(projectDir, manifest.database?.path || "database/robot-config.db");
+  const target = path.resolve(targetPath);
+  const relative = path.relative(target, databasePath);
+  const databaseDirectory = path.dirname(databasePath);
+  const insideDirectory = path.relative(databaseDirectory, target);
+  if (!relative || (!relative.startsWith("..") && !path.isAbsolute(relative))
+    || !insideDirectory || (!insideDirectory.startsWith("..") && !path.isAbsolute(insideDirectory))) {
+    throw new Error("项目数据库由主进程维护，禁止直接修改数据库文件或目录");
   }
 }

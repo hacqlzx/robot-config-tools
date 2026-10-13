@@ -44,7 +44,16 @@ export class DbWrapper {
     private db: SqlJsDatabase,
     private SQL: SqlJsStatic,
     private filePath: string,
+    private persistChanges = true,
   ) {}
+
+  /** Update the backing path after the containing project directory is renamed. */
+  setFilePath(filePath: string): void {
+    this.filePath = path.resolve(filePath);
+    if (db === this || scopedDatabase === this) dbPath = this.filePath;
+  }
+
+  getFilePath(): string { return this.filePath; }
 
   /**
    * 准备 SQL 语句。
@@ -123,6 +132,22 @@ export class DbWrapper {
     this.scheduleSave();
   }
 
+  /** Visit query rows without materializing the full result set in memory. */
+  forEach(sql: string, params: any[], callback: (row: Record<string, any>) => void): number {
+    const statement = this.db.prepare(sql);
+    let count = 0;
+    try {
+      if (params.length > 0) statement.bind(params);
+      while (statement.step()) {
+        callback(statement.getAsObject() as Record<string, any>);
+        count += 1;
+      }
+      return count;
+    } finally {
+      statement.free();
+    }
+  }
+
   /**
    * 批量写入模式。
    * fn 内部的多次写操作不会频繁触发保存，最外层结束后统一写盘。
@@ -147,6 +172,7 @@ export class DbWrapper {
    * reason 用于日志追踪本次写盘来源。
    */
   saveToDisk(reason = "explicit"): void {
+    if (!this.persistChanges) throw new Error("旧总库仅允许内存检查，禁止写回源文件");
     if (!this.dirty) return;
     if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
     const totalStartedAt = performance.now();
@@ -167,7 +193,14 @@ export class DbWrapper {
 
       stage = "write";
       const writeStartedAt = performance.now();
-      fs.writeFileSync(this.filePath, Buffer.from(data));
+      const temporaryPath = `${this.filePath}.${process.pid}.tmp`;
+      try {
+        fs.writeFileSync(temporaryPath, Buffer.from(data));
+        fs.renameSync(temporaryPath, this.filePath);
+      } catch (error) {
+        try { fs.rmSync(temporaryPath, { force: true }); } catch { /* retain write error */ }
+        throw error;
+      }
       writeDurationMs = performance.now() - writeStartedAt;
       this.dirty = false;
 
@@ -200,6 +233,7 @@ export class DbWrapper {
   }
 
   private scheduleSave(): void {
+    if (!this.persistChanges) return;
     if (this.batchDepth > 0) return;
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => this.saveToDisk("scheduled"), 5000);
@@ -223,10 +257,20 @@ export class DbWrapper {
     this.saveToDisk("close");
     this.db.close();
   }
+
+  /** Close a read-only source after in-memory schema inspection without persisting changes. */
+  discardAndClose(): void {
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    this.dirty = false;
+    this.db.close();
+  }
 }
 
 let db: DbWrapper | null = null;
+let scopedDatabase: DbWrapper | null = null;
 let dbPath = "";
+let sqlPromise: Promise<SqlJsStatic> | null = null;
 
 function getDataDir(): string {
   if (app.isPackaged) {
@@ -238,23 +282,43 @@ function getDataDir(): string {
   return path.resolve(__dirname, "..", "..", "..", "data");
 }
 
+export function getDefaultDatabasePath(): string {
+  return path.join(getDataDir(), "robot-config.db");
+}
+
+/** Open a database at an exact file path without changing the process-wide active handle. */
+export async function openDatabaseAtPath(filePath: string, createIfMissing = true, persistChanges = true): Promise<DbWrapper> {
+  const resolvedPath = path.resolve(filePath);
+  if (!createIfMissing && !fs.existsSync(resolvedPath)) {
+    throw new Error(`数据库文件不存在：${resolvedPath}`);
+  }
+  const dir = path.dirname(resolvedPath);
+  if (createIfMissing && !fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  if (!sqlPromise) sqlPromise = initSqlJs();
+  const SQL = await sqlPromise;
+  let sqlDb: SqlJsDatabase;
+  if (fs.existsSync(resolvedPath)) {
+    sqlDb = new SQL.Database(fs.readFileSync(resolvedPath));
+  } else {
+    if (!createIfMissing) throw new Error(`数据库文件不存在：${resolvedPath}`);
+    sqlDb = new SQL.Database();
+  }
+  return new DbWrapper(sqlDb, SQL, resolvedPath, persistChanges);
+}
+
 /**
  * 初始化本地数据库。
  * dbDir 可用于测试或自定义目录；默认开发环境落到仓库 data，打包后落到 userData/database。
  */
-export async function initDatabase(dbDir?: string): Promise<DbWrapper> {
-  if (db) return db;
+export async function initDatabase(dbDir?: string, fileName = "robot-config.db"): Promise<DbWrapper> {
   const dir = dbDir ?? getDataDir();
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  dbPath = path.join(dir, "robot-config.db");
-  const SQL = await initSqlJs();
-  let sqlDb: SqlJsDatabase;
-  if (fs.existsSync(dbPath)) {
-    sqlDb = new SQL.Database(fs.readFileSync(dbPath));
-  } else {
-    sqlDb = new SQL.Database();
+  const targetPath = path.resolve(dir, fileName);
+  if (db) {
+    if (dbPath === targetPath) return db;
+    throw new Error(`另一个项目数据库仍处于打开状态：${dbPath}`);
   }
-  db = new DbWrapper(sqlDb, SQL, dbPath);
+  db = await openDatabaseAtPath(targetPath);
+  dbPath = targetPath;
   console.log("[DB] Database opened:", dbPath);
   return db;
 }
@@ -263,12 +327,19 @@ export async function initDatabase(dbDir?: string): Promise<DbWrapper> {
  * 获取已初始化数据库实例。
  */
 export function getDatabase(): DbWrapper {
-  if (!db) throw new Error("Database not initialized. Call initDatabase() first.");
-  return db;
+  const current = scopedDatabase ?? db;
+  if (!current) throw new Error("Database not initialized. Open a project database first.");
+  return current;
 }
 
-export function getDatabasePath(): string { return dbPath; }
+export function getDatabasePath(): string { return scopedDatabase?.getFilePath() ?? dbPath; }
+
+/** Set the database visible to synchronous repository code inside a serialized project operation. */
+export function setDatabaseScope(database: DbWrapper | null): void {
+  scopedDatabase = database;
+  dbPath = database?.getFilePath() ?? db?.getFilePath() ?? "";
+}
 
 export function closeDatabase(): void {
-  if (db) { db.close(); db = null; }
+  if (db) { const current = db; db = null; dbPath = ""; current.close(); }
 }

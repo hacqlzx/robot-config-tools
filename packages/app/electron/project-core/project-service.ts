@@ -6,7 +6,6 @@ import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 import { createInflateRaw } from "zlib";
 import {
-  deleteProjectData,
   getDatabase,
   getProjectDataCounts,
   DeviceBayRepo,
@@ -28,6 +27,7 @@ import {
 } from "./project-paths";
 import {
   assertWritableProjectFile,
+  assertProjectDatabasePathUnchanged,
   createDefaultManifest,
   ensureProjectManifest,
   manifestPath,
@@ -40,6 +40,7 @@ import {
   writeProjectManifestByDir,
 } from "./project-manifest";
 import { readDirTree, type TreeNode } from "./project-tree";
+import { closeProjectDatabase, initializeNewProjectDatabase, withProjectDatabase } from "./project-database";
 
 const MAP_MODEL_FILE_NAME = "map.las";
 const MAP_INFO_FILE_NAME = "map_info.json";
@@ -125,7 +126,7 @@ function makeProjectTreeWritable(targetPath: string): void {
 }
 
 function removeProjectDirectory(dirPath: string): void {
-  const removeOptions: fs.RmDirOptions = {
+  const removeOptions: fs.RmOptions = {
     recursive: true,
     force: true,
     maxRetries: 5,
@@ -363,7 +364,7 @@ async function getZipEntryDataStart(zipPath: string, entry: ZipEntryMeta): Promi
   }
 }
 
-async function openZipEntryStream(zipPath: string, entry: ZipEntryMeta): Promise<NodeJS.ReadableStream> {
+async function openZipEntryStream(zipPath: string, entry: ZipEntryMeta): Promise<Readable> {
   assertZipEntryCanRead(entry);
   if (entry.compressedSize === 0) return Readable.from(Buffer.alloc(0));
 
@@ -950,7 +951,13 @@ export async function createProject(name: string): Promise<string> {
   }
 
   fs.mkdirSync(dirPath);
-  writeProjectManifestByDir(dirPath, createDefaultManifest(safeName));
+  try {
+    writeProjectManifestByDir(dirPath, createDefaultManifest(safeName));
+    await initializeNewProjectDatabase(safeName);
+  } catch (error) {
+    removeProjectDirectory(dirPath);
+    throw error;
+  }
   return safeName;
 }
 
@@ -973,46 +980,52 @@ export async function renameProject(oldName: string, newName: string): Promise<s
     throw new Error(`项目 "${safeNewName}" 已存在`);
   }
 
-  const db = getDatabase();
-  const targetCounts = getProjectDataCounts(db, safeNewName);
-  if (targetCounts.total > 0) {
-    throw new Error(`数据库中已存在项目 "${safeNewName}" 的关联数据，无法重命名`);
-  }
+  await withProjectDatabase(safeOldName, (db) => {
+    const targetCounts = getProjectDataCounts(db, safeNewName);
+    if (targetCounts.total > 0) {
+      throw new Error(`数据库中已存在项目 "${safeNewName}" 的关联数据，无法重命名`);
+    }
 
-  fs.renameSync(oldPath, newPath);
-  let databaseRenamed = false;
-  try {
-    updateManifestForProjectRename(safeNewName);
-    renameProjectData(db, safeOldName, safeNewName);
-    databaseRenamed = true;
-  } catch (error) {
-    const rollbackErrors: string[] = [];
-    let databaseNeedsRollback = databaseRenamed;
-    if (!databaseNeedsRollback) {
-      try {
-        databaseNeedsRollback = getProjectDataCounts(db, safeNewName).total > 0;
-      } catch (rollbackError: any) {
-        rollbackErrors.push(`数据库状态检查失败：${rollbackError?.message || rollbackError}`);
-      }
-    }
-    if (databaseNeedsRollback) {
-      try {
-        renameProjectData(db, safeNewName, safeOldName);
-      } catch (rollbackError: any) {
-        rollbackErrors.push(`数据库回滚失败：${rollbackError?.message || rollbackError}`);
-      }
-    }
+    db.saveToDisk("before-project-rename");
+    const oldDatabasePath = db.getFilePath();
+    fs.renameSync(oldPath, newPath);
+    db.setFilePath(path.join(newPath, path.relative(oldPath, oldDatabasePath)));
+    let databaseRenamed = false;
     try {
-      fs.renameSync(newPath, oldPath);
-      updateManifestForProjectRename(safeOldName);
-    } catch (rollbackError: any) {
-      rollbackErrors.push(`项目目录回滚失败：${rollbackError?.message || rollbackError}`);
+      updateManifestForProjectRename(safeNewName);
+      renameProjectData(db, safeOldName, safeNewName);
+      databaseRenamed = true;
+    } catch (error) {
+      const rollbackErrors: string[] = [];
+      let databaseNeedsRollback = databaseRenamed;
+      if (!databaseNeedsRollback) {
+        try {
+          databaseNeedsRollback = getProjectDataCounts(db, safeNewName).total > 0;
+        } catch (rollbackError: any) {
+          rollbackErrors.push(`数据库状态检查失败：${rollbackError?.message || rollbackError}`);
+        }
+      }
+      if (databaseNeedsRollback) {
+        try {
+          renameProjectData(db, safeNewName, safeOldName);
+        } catch (rollbackError: any) {
+          rollbackErrors.push(`数据库回滚失败：${rollbackError?.message || rollbackError}`);
+        }
+      }
+      try {
+        fs.renameSync(newPath, oldPath);
+        db.setFilePath(oldDatabasePath);
+        updateManifestForProjectRename(safeOldName);
+      } catch (rollbackError: any) {
+        rollbackErrors.push(`项目目录回滚失败：${rollbackError?.message || rollbackError}`);
+      }
+      if (rollbackErrors.length > 0) {
+        throw new Error(`${(error as any)?.message || error}；${rollbackErrors.join("；")}`);
+      }
+      throw error;
     }
-    if (rollbackErrors.length > 0) {
-      throw new Error(`${(error as any)?.message || error}；${rollbackErrors.join("；")}`);
-    }
-    throw error;
-  }
+  });
+  await closeProjectDatabase(safeNewName);
   return safeNewName;
 }
 
@@ -1027,18 +1040,18 @@ export async function deleteProject(name: string): Promise<string> {
     throw new Error(`项目 "${safeName}" 不存在`);
   }
 
-  deleteProjectData(getDatabase(), safeName);
+  await closeProjectDatabase(safeName);
   try {
     removeProjectDirectory(dirPath);
   } catch (error: any) {
-    throw new Error(`项目数据库数据已删除，但目录清理失败：${error?.message || error}`);
+    throw new Error(`项目目录清理失败：${error?.message || error}`);
   }
   return safeName;
 }
 
-export function getProjectDatabaseSummary(name: string): ProjectDataCounts {
+export function getProjectDatabaseSummary(name: string): Promise<ProjectDataCounts> {
   const safeName = assertSafePathSegment(name, "项目名称");
-  return getProjectDataCounts(getDatabase(), safeName);
+  return withProjectDatabase(safeName, (db) => getProjectDataCounts(db, safeName));
 }
 
 /**
@@ -1144,7 +1157,7 @@ export async function importProjectModelZip(projectName: string, sourcePath: str
     await writeNormalizedMapInfo(targetDir, mapName, plan.mapCode);
     updateManifestForWrittenFile(projectName, mapInfoPath, fs.statSync(mapInfoPath).size);
 
-    syncCabinetMainDevicesFromImportedMap(projectName, targetDir);
+    await withProjectDatabase(projectName, () => syncCabinetMainDevicesFromImportedMap(projectName, targetDir));
 
     return { mapName, mapDir: targetDir, modelPath };
   } finally {
@@ -1320,6 +1333,7 @@ export async function deleteProjectPath(targetPath: string): Promise<boolean> {
   if (resolved === manifestPath(projectDir)) {
     throw new Error("项目清单由主进程维护，禁止删除");
   }
+  assertProjectDatabasePathUnchanged(projectName, resolved);
   if (!fs.existsSync(resolved)) {
     throw new Error("文件不存在");
   }
@@ -1354,12 +1368,14 @@ export async function renameProjectPath(targetPath: string, newName: string): Pr
   if (resolved === manifestPath(projectDir)) {
     throw new Error("项目清单由主进程维护，禁止重命名");
   }
+  assertProjectDatabasePathUnchanged(projectName, resolved);
   if (!fs.existsSync(resolved)) {
     throw new Error("文件不存在");
   }
 
   const safeName = assertSafePathSegment(newName, "名称");
   const newPath = assertInside(getProjectRoot(), path.resolve(path.dirname(resolved), safeName), "重命名");
+  assertWritableProjectFile(projectName, newPath);
   if (fs.existsSync(newPath)) {
     throw new Error("同名文件已存在");
   }
@@ -1439,14 +1455,13 @@ export async function exportProjectZip(
   if (!rawDestDir) throw new Error("目标目录不能为空");
 
   const destRoot = path.resolve(rawDestDir);
-  const db = getDatabase();
-  const pointTableData: PointTableExportData = {
+  const pointTableData = await withProjectDatabase(safeProjectName, (db): PointTableExportData => ({
     voltages: db.prepare("SELECT * FROM device_voltage WHERE project_name = ? ORDER BY sort_num, id").all(safeProjectName) as any[],
     bays: db.prepare("SELECT * FROM device_bay WHERE project_name = ? ORDER BY sort_num, id").all(safeProjectName) as any[],
     mains: db.prepare("SELECT * FROM device_main WHERE project_name = ? ORDER BY sort_num, id").all(safeProjectName) as any[],
     components: db.prepare("SELECT * FROM device_component WHERE project_name = ? ORDER BY sort_num, id").all(safeProjectName) as any[],
     points: db.prepare("SELECT * FROM device_point WHERE project_name = ? ORDER BY sort_num, id").all(safeProjectName) as any[],
-  };
+  }));
 
   return exportSpaceZip(safeProjectName, getProjectRoot(), pointTableData, mapDirs, destRoot, onProgress);
 }

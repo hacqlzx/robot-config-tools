@@ -1,10 +1,12 @@
-import { app } from "electron";
+import { app, dialog } from "electron";
+import path from "node:path";
+import { getDefaultDatabasePath } from "@robot/database";
 import { initDbIpc, closeDbIpc } from "./db-ipc";
 import { configureAppCommandLine, configureCertificateHandling, disableApplicationMenu, logGPUInfo } from "./app/app-lifecycle";
 import { migrateLegacyUserData } from "./app/legacy-user-data-migration";
 import { createWindow } from "./app/create-window";
 import { registerAppUpdater } from "./app/app-updater";
-import { loadInitialProjectRoot } from "./project-core/project-root";
+import { ensureProjectRoot, getProjectRoot, loadInitialProjectRoot } from "./project-core/project-root";
 import { isProjectDirectoryMigrating } from "./project-core/project-activity";
 import { registerArchiveIpc } from "./ipc/archive-ipc";
 import { registerCalibrationGrpcIpc } from "./ipc/calibration-grpc-ipc";
@@ -29,15 +31,28 @@ app.whenReady().then(async () => {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error("[userData] Legacy data migration failed", error);
-    app.showErrorBox("旧版数据迁移失败", `无法将旧版数据复制到新目录，应用尚未启动：\n${message}\n\n旧数据仍保留在原目录，请检查磁盘空间和文件权限后重试。`);
+    dialog.showErrorBox("旧版数据迁移失败", `无法将旧版数据复制到新目录，应用尚未启动：\n${message}\n\n旧数据仍保留在原目录，请检查磁盘空间和文件权限后重试。`);
     app.quit();
     return;
   }
 
   await logGPUInfo();
-  loadInitialProjectRoot();
+  try {
+    loadInitialProjectRoot();
+    ensureProjectRoot();
+    await initDbIpc({
+      projectRoot: getProjectRoot(),
+      legacyDatabasePath: getDefaultDatabasePath(),
+      journalPath: path.join(app.getPath("userData"), "project-database-migration.json"),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[DB migration] Startup blocked", error);
+    dialog.showErrorBox("项目数据库迁移失败", `应用未打开业务页面，旧总库仍保留在原位置：\n${message}`);
+    app.quit();
+    return;
+  }
   registerProjectAssetProtocol();
-
   registerSystemIpc();
   registerFileIpc();
   registerProjectIpc();
@@ -46,19 +61,31 @@ app.whenReady().then(async () => {
   registerCalibrationGrpcIpc();
   registerDeviceVerifyIpc();
   registerExportTaskIpc();
-
-  await initDbIpc();
   const startUpdateCheck = registerAppUpdater();
   const window = createWindow();
   window.once("ready-to-show", startUpdateCheck);
 });
 
+let databaseCloseStarted = false;
+let databaseClosed = false;
+
 app.on("before-quit", (event) => {
   if (isProjectDirectoryMigrating()) { event.preventDefault(); return; }
-  closeDbIpc();
+  if (!databaseClosed) {
+    event.preventDefault();
+    if (databaseCloseStarted) return;
+    databaseCloseStarted = true;
+    void closeDbIpc().then(() => {
+      databaseClosed = true;
+      app.quit();
+    }).catch((error) => {
+      databaseCloseStarted = false;
+      console.error("[DB] Database close failed", error);
+      dialog.showErrorBox("数据库保存失败", `应用暂未退出，请检查磁盘空间和文件权限后重试：\n${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
 });
 
 app.on("window-all-closed", () => {
-  closeDbIpc();
   if (process.platform !== "darwin") app.quit();
 });

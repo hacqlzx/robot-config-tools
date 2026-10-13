@@ -1,6 +1,7 @@
 ﻿// 核心
-export { initDatabase, getDatabase, getDatabasePath, closeDatabase, DbWrapper } from "./core/connection";
+export { initDatabase, openDatabaseAtPath, getDefaultDatabasePath, getDatabase, getDatabasePath, closeDatabase, setDatabaseScope, DbWrapper } from "./core/connection";
 export { runMigrations } from "./core/migration";
+export { CURRENT_DATABASE_SCHEMA_VERSION, runCurrentDatabaseMigrations } from "./current-migrations";
 
 // 类型
 export type {
@@ -19,6 +20,7 @@ export { version as migration003Version, name as migration003Name, up as migrati
 export { version as migration004Version, name as migration004Name, up as migration004Up, down as migration004Down } from "./migrations/004_point_code_index";
 export { version as migration005Version, name as migration005Name, up as migration005Up, down as migration005Down } from "./migrations/005_calibration_sequence";
 export { version as migration006Version, name as migration006Name, up as migration006Up, down as migration006Down } from "./migrations/006_point_unique_constraints";
+export { version as migration007Version, name as migration007Name, up as migration007Up, down as migration007Down } from "./migrations/007_project_database_meta";
 
 // Repository
 export { DeviceVoltageRepo } from "./repositories/device-voltage.repo";

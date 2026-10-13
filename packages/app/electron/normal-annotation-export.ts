@@ -1,3 +1,4 @@
+import { withProjectDatabase } from "./project-core/project-database";
 import fs from "fs";
 import path from "path";
 import * as XLSX from "xlsx-js-style";
@@ -55,7 +56,7 @@ const RECOGNITION_LABELS: Record<string, string> = {
   可见光查看: "可见光",
 };
 
-export function prepareNormalAnnotationExport(
+function prepareNormalAnnotationExportInternal(
   projectName: string,
   data: unknown,
 ): PreparedNormalAnnotationExport {
@@ -67,7 +68,7 @@ export function prepareNormalAnnotationExport(
   });
 }
 
-export function prepareInspectionPointExport(
+function prepareInspectionPointExportInternal(
   projectName: string,
   data: unknown,
 ): PreparedNormalAnnotationExport {
@@ -146,21 +147,21 @@ function prepareAnnotationExport(
   return { rows };
 }
 
-export function exportNormalAnnotationExcel(
+function exportNormalAnnotationExcelInternal(
   projectName: string,
   destDir: string,
   data: unknown,
 ) {
-  const prepared = prepareNormalAnnotationExport(projectName, data);
+  const prepared = prepareNormalAnnotationExportInternal(projectName, data);
   return exportAnnotationExcel(destDir, prepared, "法线标注");
 }
 
-export function exportInspectionPointExcel(
+function exportInspectionPointExcelInternal(
   projectName: string,
   destDir: string,
   data: unknown,
 ) {
-  const prepared = prepareInspectionPointExport(projectName, data);
+  const prepared = prepareInspectionPointExportInternal(projectName, data);
   return exportAnnotationExcel(destDir, prepared, "巡检点标注");
 }
 
@@ -254,4 +255,20 @@ function uniqueFileName(dir: string, preferredName: string): string {
 
 function formatExportTime(date: Date): string {
   return `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")}_${String(date.getHours()).padStart(2, "0")}${String(date.getMinutes()).padStart(2, "0")}${String(date.getSeconds()).padStart(2, "0")}`;
+}
+
+export function prepareNormalAnnotationExport(projectName: string, data: unknown) {
+  return withProjectDatabase(projectName, () => prepareNormalAnnotationExportInternal(projectName, data));
+}
+
+export function prepareInspectionPointExport(projectName: string, data: unknown) {
+  return withProjectDatabase(projectName, () => prepareInspectionPointExportInternal(projectName, data));
+}
+
+export function exportNormalAnnotationExcel(projectName: string, destDir: string, data: unknown) {
+  return withProjectDatabase(projectName, () => exportNormalAnnotationExcelInternal(projectName, destDir, data));
+}
+
+export function exportInspectionPointExcel(projectName: string, destDir: string, data: unknown) {
+  return withProjectDatabase(projectName, () => exportInspectionPointExcelInternal(projectName, destDir, data));
 }

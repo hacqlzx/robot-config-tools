@@ -69,6 +69,10 @@ export function renameProjectData(db: DbWrapper, oldName: string, newName: strin
     for (const [, table] of PROJECT_DATA_TABLES) {
       db.prepare(`UPDATE ${table} SET project_name = ? WHERE project_name = ?`).run(newName, oldName);
     }
+    if (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'project_database_meta'").get()) {
+      db.prepare("UPDATE project_database_meta SET project_name = ?, updated_at = ? WHERE id = 1 AND project_name = ?")
+        .run(newName, new Date().toISOString(), oldName);
+    }
   })();
   db.saveToDisk("project-rename");
   return sourceCounts;

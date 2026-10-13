@@ -438,6 +438,8 @@ declare global {
       onBackendRequestLog: (callback: (log: BackendRequestLog) => void) => () => void;
       project: {
         list: () => Promise<string[]>;
+        openDatabase: (projectName: string) => Promise<{ projectName: string; projectId: string; sessionVersion: number }>;
+        closeDatabase: () => Promise<void>;
         create: (name: string) => Promise<string>;
         rename: (oldName: string, newName: string) => Promise<string>;
         delete: (name: string) => Promise<string>;

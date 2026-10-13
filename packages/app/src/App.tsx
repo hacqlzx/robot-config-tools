@@ -1,5 +1,5 @@
 ﻿import { lazy, Suspense, useEffect, useState } from "react";
-import { Layout, ConfigProvider, App, message as antdMessage } from "antd";
+import { Layout, ConfigProvider, App, Button, message as antdMessage } from "antd";
 import { Outlet, useLocation } from "react-router-dom";
 import AppHeader from "./pages/app-header";
 import AppFooter from "./pages/app-footer";
@@ -31,6 +31,9 @@ const ImageEdit = lazy(() => import("./views/image-edit"));
  */
 export default function AppLayout() {
   const { selectedProject, storageVersion, storageMigrating } = useAppContext();
+  const [databaseSessionKey, setDatabaseSessionKey] = useState("");
+  const [databaseError, setDatabaseError] = useState("");
+  const [databaseRetry, setDatabaseRetry] = useState(0);
   const location = useLocation();
   const isSpaceEdit = location.pathname === "/space-edit";
   const isImageEdit = location.pathname === "/image-edit";
@@ -39,6 +42,29 @@ export default function AppLayout() {
 
   // 以项目名作为页面 key，切换项目时强制重建 Outlet，清理旧状态
   const projectPageKey = `${selectedProject || "no-project"}:${storageVersion}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    setDatabaseError("");
+    if (storageMigrating) {
+      setDatabaseSessionKey("");
+      return () => { cancelled = true; };
+    }
+    if (!selectedProject || !window.electronAPI?.project?.openDatabase) {
+      setDatabaseSessionKey("");
+      void window.electronAPI?.project?.closeDatabase?.().catch(() => {});
+      return () => { cancelled = true; };
+    }
+
+    const requestedKey = `${selectedProject}:${storageVersion}`;
+    setDatabaseSessionKey("");
+    window.electronAPI.project.openDatabase(selectedProject).then(() => {
+      if (!cancelled) setDatabaseSessionKey(requestedKey);
+    }).catch((error: any) => {
+      if (!cancelled) setDatabaseError(error?.message || "项目数据库打开失败");
+    });
+    return () => { cancelled = true; };
+  }, [selectedProject, storageVersion, storageMigrating, databaseRetry]);
 
   // 空间编辑、勘察图片和验证图都需要缓存 key，离开页面后再切回来时复用同一实例
   const [spaceEditCacheKey, setSpaceEditCacheKey] = useState(isSpaceEdit ? projectPageKey : "");
@@ -116,7 +142,15 @@ export default function AppLayout() {
         <Layout style={{ height: "100vh", overflow: "hidden" }}>
           <AppHeader />
           <Content style={{ flex: "1 1 0", minHeight: 0, padding: 0, background: "#f5f5f5", overflow: "hidden" }}>
-            {storageMigrating ? <div style={{ padding: 24, textAlign: "center" }}>正在迁移项目文件…</div> : <div style={{ height: "100%", boxSizing: "border-box" }}>
+            {storageMigrating ? <div style={{ padding: 24, textAlign: "center" }}>正在迁移项目文件…</div>
+              : selectedProject && window.electronAPI?.project?.openDatabase && databaseSessionKey !== projectPageKey ? (
+                <div style={{ height: "100%", display: "grid", placeContent: "center", justifyItems: "center", gap: 12, padding: 24 }}>
+                  {databaseError ? <>
+                    <div role="alert">项目数据库打开失败：{databaseError}</div>
+                    <Button size="small" onClick={() => setDatabaseRetry((value) => value + 1)}>重试</Button>
+                  </> : <div>正在打开项目数据库…</div>}
+                </div>
+              ) : <div style={{ height: "100%", boxSizing: "border-box" }}>
               {/*
                 空间编辑页：通过 display 切换显隐而非卸载，保留模型、绘制、历史栈和自动保存状态。
               */}

@@ -15,6 +15,7 @@ interface Migration {
  * 确保迁移版本表存在。
  */
 function ensureVersionTable(db: DbWrapper): void {
+  if (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_version'").get()) return;
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
       version   INTEGER PRIMARY KEY,

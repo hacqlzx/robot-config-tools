@@ -1,9 +1,16 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
+let activeDatabaseSession = null;
+let databaseSessionRequest = 0;
+
+function invokeWithDatabaseSession(channel, ...args) {
+  if (!activeDatabaseSession) return Promise.reject(new Error("请先打开项目数据库"));
+  return ipcRenderer.invoke(channel, activeDatabaseSession, ...args);
+}
 
 // Helper: invoke a db channel and unwrap {ok, data/error}
 function dbInvoke(repo, method) {
   return (...args) =>
-    ipcRenderer.invoke(`db:${repo}:${method}`, ...args).then((res) => {
+    invokeWithDatabaseSession(`db:${repo}:${method}`, ...args).then((res) => {
       if (!res.ok) throw new Error(res.error);
       return res.data;
     });
@@ -72,6 +79,18 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getGPUInfo: () => ipcRenderer.invoke("gpu:info"),
   project: {
     list: () => ipcRenderer.invoke("project:list"),
+    openDatabase: async (projectName) => {
+      const request = ++databaseSessionRequest;
+      activeDatabaseSession = null;
+      const session = await ipcRenderer.invoke("project:open-database", projectName);
+      if (request === databaseSessionRequest) activeDatabaseSession = session;
+      return session;
+    },
+    closeDatabase: async () => {
+      databaseSessionRequest += 1;
+      activeDatabaseSession = null;
+      await ipcRenderer.invoke("project:close-database");
+    },
     create: (name) => ipcRenderer.invoke("project:create", name),
     rename: (oldName, newName) =>
       ipcRenderer.invoke("project:rename", oldName, newName),
@@ -130,29 +149,25 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
   // ---- 数据库 API ----
   importPoints: (rows, stationName, stationCode, projectName) =>
-    ipcRenderer
-      .invoke("db:importPoints", rows, stationName, stationCode, projectName)
+    invokeWithDatabaseSession("db:importPoints", rows, stationName, stationCode, projectName)
       .then((r) => {
         if (!r.ok) throw new Error(r.error);
         return r.data;
       }),
   saveCabinetMainDevices: (projectName, payload) =>
-    ipcRenderer
-      .invoke("db:saveCabinetMainDevices", projectName, payload)
+    invokeWithDatabaseSession("db:saveCabinetMainDevices", projectName, payload)
       .then((r) => {
         if (!r.ok) throw new Error(r.error);
         return r.data;
       }),
   renameCabinetMainDevices: (projectName, rows) =>
-    ipcRenderer
-      .invoke("db:renameCabinetMainDevices", projectName, rows)
+    invokeWithDatabaseSession("db:renameCabinetMainDevices", projectName, rows)
       .then((r) => {
         if (!r.ok) throw new Error(r.error);
         return r.data;
       }),
   deleteCabinetMainDevices: (projectName, payload) =>
-    ipcRenderer
-      .invoke("db:deleteCabinetMainDevices", projectName, payload)
+    invokeWithDatabaseSession("db:deleteCabinetMainDevices", projectName, payload)
       .then((r) => {
         if (!r.ok) throw new Error(r.error);
         return r.data;
