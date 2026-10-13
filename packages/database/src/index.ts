@@ -1,5 +1,5 @@
 ﻿// 核心
-export { initDatabase, openDatabaseAtPath, getDefaultDatabasePath, getDatabase, getDatabasePath, closeDatabase, setDatabaseScope, DbWrapper } from "./core/connection";
+export { initDatabase, openDatabaseAtPath, getDefaultDatabasePath, getDatabase, getDatabasePath, closeDatabase, closeAllDatabaseConnections, setDatabaseScope, DbWrapper } from "./core/connection";
 export { runMigrations } from "./core/migration";
 export { CURRENT_DATABASE_SCHEMA_VERSION, runCurrentDatabaseMigrations } from "./current-migrations";
 

@@ -39,6 +39,7 @@ export class DbWrapper {
   private batchDepth = 0;
   private batchSaveReason: string | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private closed = false;
 
   constructor(
     private db: SqlJsDatabase,
@@ -54,6 +55,7 @@ export class DbWrapper {
   }
 
   getFilePath(): string { return this.filePath; }
+  isClosed(): boolean { return this.closed; }
 
   /**
    * 准备 SQL 语句。
@@ -253,17 +255,29 @@ export class DbWrapper {
   pragma(_sql: string): void {}
 
   close(): void {
+    if (this.closed) return;
     if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = null;
     this.saveToDisk("close");
     this.db.close();
+    this.closed = true;
+    unregisterDatabaseHandle(this);
+  }
+
+  closeBeforeMigration(): void {
+    if (this.persistChanges) this.close();
+    else this.discardAndClose();
   }
 
   /** Close a read-only source after in-memory schema inspection without persisting changes. */
   discardAndClose(): void {
+    if (this.closed) return;
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = null;
     this.dirty = false;
     this.db.close();
+    this.closed = true;
+    unregisterDatabaseHandle(this);
   }
 }
 
@@ -271,6 +285,27 @@ let db: DbWrapper | null = null;
 let scopedDatabase: DbWrapper | null = null;
 let dbPath = "";
 let sqlPromise: Promise<SqlJsStatic> | null = null;
+const openDatabaseHandles = new Set<DbWrapper>();
+
+function unregisterDatabaseHandle(database: DbWrapper): void {
+  openDatabaseHandles.delete(database);
+  if (db === database) db = null;
+  if (scopedDatabase === database) scopedDatabase = null;
+  dbPath = scopedDatabase?.getFilePath() ?? db?.getFilePath() ?? "";
+}
+
+/** Close every database wrapper opened by this process, including unscoped handles. */
+export function closeAllDatabaseConnections(): void {
+  const failures: string[] = [];
+  for (const database of [...openDatabaseHandles]) {
+    try {
+      database.closeBeforeMigration();
+    } catch (error) {
+      failures.push(`${database.getFilePath()}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (failures.length) throw new Error(`无法关闭全部数据库连接：${failures.join("；")}`);
+}
 
 function getDataDir(): string {
   if (app.isPackaged) {
@@ -303,7 +338,9 @@ export async function openDatabaseAtPath(filePath: string, createIfMissing = tru
     if (!createIfMissing) throw new Error(`数据库文件不存在：${resolvedPath}`);
     sqlDb = new SQL.Database();
   }
-  return new DbWrapper(sqlDb, SQL, resolvedPath, persistChanges);
+  const database = new DbWrapper(sqlDb, SQL, resolvedPath, persistChanges);
+  openDatabaseHandles.add(database);
+  return database;
 }
 
 /**
@@ -341,5 +378,5 @@ export function setDatabaseScope(database: DbWrapper | null): void {
 }
 
 export function closeDatabase(): void {
-  if (db) { const current = db; db = null; dbPath = ""; current.close(); }
+  db?.close();
 }

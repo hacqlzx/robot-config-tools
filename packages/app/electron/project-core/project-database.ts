@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  closeDatabase,
+  closeAllDatabaseConnections,
   openDatabaseAtPath,
   runCurrentDatabaseMigrations,
   setDatabaseScope,
@@ -215,13 +215,14 @@ export function invalidateProjectDatabaseSession(projectName: string): Promise<v
 export function closeAllProjectDatabases(): Promise<void> {
   return serialize(() => {
     setDatabaseScope(null);
+    let closeError: unknown;
+    try { closeAllDatabaseConnections(); } catch (error) { closeError = error; }
     for (const [projectId, opened] of openDatabases) {
-      opened.database.close();
-      openDatabases.delete(projectId);
+      if (opened.database.isClosed()) openDatabases.delete(projectId);
     }
     activeSession = null;
     sessionVersion += 1;
-    closeDatabase();
+    if (closeError) throw closeError;
   });
 }
 

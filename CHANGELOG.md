@@ -12,16 +12,49 @@
 
 ---
 
-## 2026-10-13 — 核验 1.0.7 安装包并准备 GitHub 发布
+## 2026-10-13 — 迁移保存目录前关闭全部数据库连接
 
-- 提交：`待提交`
+- 提交：待提交
+- 类型：fix
+
+### 修改
+
+- 数据库包装器记录是否已关闭，并登记本进程打开的全部连接。目录迁移调用 `closeAllDatabaseConnections`，把项目库、全局库和未纳入会话的库都关掉；只读库直接丢弃，可写库先落盘再关。
+- 重复关闭不再写盘。关闭失败会汇总路径和原因，不会悄悄留下仍占用文件的连接。
+- 项目库会话在全部连接处理完后再清空；某个库已关闭才从打开列表移除，关闭失败的句柄仍留在列表里。
+- 回填上一条提交哈希 `bd50b96`。
+
+### 优化
+
+- 迁移或退出时不再只关当前项目库，避免其它已打开的库占着文件，导致 Windows 上删不掉或搬不走数据库。
+- 关闭后重新打开会换新的会话版本，旧页面请求不会写进新库。
+
+### 影响范围
+
+- `packages/database/src/core/connection.ts`
+- `packages/database/src/index.ts`
+- `packages/app/electron/project-core/project-database.ts`
+- `packages/app/scripts/project-database-migration.test.mjs`
+- `CHANGELOG.md`
+
+### 用户可见变化
+
+- 迁移保存目录时，已打开的项目库和总库会先保存并关闭。关闭失败会提示具体库路径，而不是迁移做到一半才报文件被占用。
+
+### 验证
+
+- `node --test packages/app/scripts/project-database-migration.test.mjs` 中「目录迁移关闭所有项目、全局和未托管数据库连接」通过。
+
+## 2026-10-13 — 核验 1.0.7 安装包并完善 GitHub 发布说明
+
+- 提交：`bd50b96`
 - 类型：docs
 
 ### 修改
 
 - 回填打包提交 `43dccf1`，补充本次 GitHub 发布核验记录。按项目拆库、保存目录迁移、后台连接布局、提交约定和版本号已经分别提交，本次只补充发布文档。
 - 复用已成功生成的 Windows x64 1.0.7 安装包，发布附件为 `RobotConfigTools-Setup-1.0.7-x64.exe`、同名 `.exe.blockmap` 和 `latest.yml`；安装包不纳入 Git。
-- 将当前 `feat/las-adaptation` 分支的最新提交推送至 GitHub 同名分支，再创建 `v1.0.7` Release。附件上传和核验完成前保持草稿，全部成功后公开为正式版本。
+- 将当前 `feat/las-adaptation` 分支的最新提交推送至 GitHub 同名分支，创建 `v1.0.7` Release，并完善项目拆库、目录迁移、界面改进、安装升级和验证说明。按用户后续安排，安装包附件由用户上传；说明更新保持用户已完成的附件和公开发布状态。
 
 ### 优化
 

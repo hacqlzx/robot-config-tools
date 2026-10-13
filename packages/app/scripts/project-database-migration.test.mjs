@@ -241,6 +241,41 @@ test("项目目录迁移前关闭延迟保存；切根后新会话重开，不�
   assert.equal(fs.existsSync(s.dbPath(s.names[0])), false);
 });
 
+test("目录迁移关闭所有项目、全局和未托管数据库连接", async (t) => {
+  const s = setup(t, ["中文 项目甲"]);
+  await seed(s);
+  await s.run();
+  const session = await api.openProjectDatabase(s.names[0]);
+  const loosePath = path.join(s.base, "未托管数据库.db");
+  const looseDatabase = await api.openDatabaseAtPath(loosePath);
+  looseDatabase.exec("CREATE TABLE shutdown_probe (value INTEGER); INSERT INTO shutdown_probe VALUES (42)");
+  const globalPath = path.join(s.base, "全局数据库", "robot-config.db");
+  const globalDatabase = await api.initDatabase(path.dirname(globalPath), path.basename(globalPath));
+  globalDatabase.exec("CREATE TABLE shutdown_probe (value INTEGER); INSERT INTO shutdown_probe VALUES (24)");
+
+  await api.closeAllProjectDatabases();
+
+  assert.equal(looseDatabase.isClosed(), true);
+  assert.equal(globalDatabase.isClosed(), true);
+  assert.equal(api.getActiveProjectDatabaseSession(), null);
+  assert.throws(() => api.getDatabase(), /Open a project database first/);
+  const looseVerification = await api.openDatabaseAtPath(loosePath, false, false);
+  const globalVerification = await api.openDatabaseAtPath(globalPath, false, false);
+  try {
+    assert.equal(looseVerification.prepare("SELECT value FROM shutdown_probe").get().value, 42);
+    assert.equal(globalVerification.prepare("SELECT value FROM shutdown_probe").get().value, 24);
+  } finally {
+    looseVerification.discardAndClose();
+    globalVerification.discardAndClose();
+  }
+
+  const reopened = await api.openProjectDatabase(s.names[0]);
+  assert.notEqual(reopened.sessionVersion, session.sessionVersion);
+  const points = await api.withProjectDatabaseSession(reopened.projectName, reopened.sessionVersion,
+    (db) => db.prepare("SELECT point_name FROM device_point").all());
+  assert.equal(points[0].pointName, "测试点位");
+});
+
 test("未完成批次拒绝变化的源库；残留临时库重建，不依赖半写入文件", async (t) => {
   const s = setup(t);
   await seed(s);
