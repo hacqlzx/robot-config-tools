@@ -3,7 +3,7 @@ import path from "node:path";
 import { getDefaultDatabasePath } from "@robot/database";
 import { initDbIpc, closeDbIpc } from "./db-ipc";
 import { configureAppCommandLine, configureCertificateHandling, disableApplicationMenu, logGPUInfo } from "./app/app-lifecycle";
-import { migrateLegacyUserData } from "./app/legacy-user-data-migration";
+import { migrateLegacyUserDataForStartup } from "./app/legacy-user-data-migration";
 import { createWindow } from "./app/create-window";
 import { registerAppUpdater } from "./app/app-updater";
 import { ensureProjectRoot, getProjectRoot, loadInitialProjectRoot } from "./project-core/project-root";
@@ -26,15 +26,7 @@ app.setName("RobotConfigTools");
 if (process.platform === "win32") app.setAppUserModelId("com.robot.config-tools");
 
 app.whenReady().then(async () => {
-  try {
-    if (app.isPackaged) await migrateLegacyUserData();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error("[userData] Legacy data migration failed", error);
-    dialog.showErrorBox("旧版数据迁移失败", `无法将旧版数据复制到新目录，应用尚未启动：\n${message}\n\n旧数据仍保留在原目录，请检查磁盘空间和文件权限后重试。`);
-    app.quit();
-    return;
-  }
+  if (app.isPackaged) await migrateLegacyUserDataForStartup();
 
   await logGPUInfo();
   try {
@@ -47,8 +39,8 @@ app.whenReady().then(async () => {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error("[DB migration] Startup blocked", error);
-    dialog.showErrorBox("项目数据库迁移失败", `应用未打开业务页面，旧总库仍保留在原位置：\n${message}`);
+    console.error("[startup] Project initialization unavailable", error);
+    dialog.showErrorBox("项目初始化失败", `应用无法初始化项目目录或数据库接口：\n${message}`);
     app.quit();
     return;
   }

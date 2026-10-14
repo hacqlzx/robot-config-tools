@@ -26,12 +26,12 @@ async function loadMigrator(fileSystemOverrides = {}, transform = (source) => so
   } finally { delete globalThis[key]; }
 }
 let projectRootModuleId = 0;
-async function loadProjectRoot(userDataPath, migration) {
+async function loadProjectRoot(userDataPath, migration, appOptions = {}) {
   const key = `__projectRootTestDependencies${++projectRootModuleId}`;
   globalThis[key] = {
     app: {
-      isPackaged: false,
-      getPath: (name) => name === "userData" ? userDataPath : path.dirname(userDataPath),
+      isPackaged: appOptions.isPackaged ?? false,
+      getPath: (name) => appOptions.paths?.[name] ?? (name === "userData" ? userDataPath : path.dirname(userDataPath)),
     },
     migration,
     activity: { beginProjectDirectoryMigration: () => () => {}, notifyProjectRootChanged: () => {} },
@@ -505,4 +505,75 @@ test("后台任务与迁移互斥，异步处理完成/异常后释放锁", asyn
   registerProjectActivityHandler("fail", async () => { throw new Error("fail"); });
   await assert.rejects(handlers.get("fail")({}), /fail/);
   beginProjectDirectoryMigration()();
+});
+
+test("已保存的项目根目录失效时，从已知的文档目录恢复并更新配置", async (t) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "robotconfig-root-recovery-test-"));
+  const userData = path.join(base, "user-data");
+  const missingRoot = path.join(base, "旧安装", "app", "project");
+  const documents = path.join(base, "Documents");
+  const exe = path.join(base, "新安装", "RobotConfigTools.exe");
+  const recoveredRoot = path.join(documents, "RobotConfigTools", "project");
+  fs.mkdirSync(userData, { recursive: true });
+  fs.mkdirSync(path.join(recoveredRoot, "客户项目"), { recursive: true });
+  fs.writeFileSync(path.join(userData, "data-path.json"), JSON.stringify({ projectRoot: missingRoot }));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+
+  const projectRoot = await loadProjectRoot(userData, {
+    migrateProjectDirectory, readDirectoryMigrationJournal, writeMigrationJson,
+  }, { isPackaged: true, paths: { documents, exe } });
+
+  assert.equal(projectRoot.loadInitialProjectRoot(), recoveredRoot);
+  projectRoot.ensureProjectRoot();
+  assert.equal(fs.readFileSync(path.join(userData, "data-path.json"), "utf8"), `${JSON.stringify({ projectRoot: recoveredRoot }, null, 2)}\n`);
+  assert.equal(fs.existsSync(path.join(recoveredRoot, "客户项目")), true);
+  assert.equal(fs.existsSync(missingRoot), false);
+});
+
+test("已保存的项目根目录失效且没有候选数据时切到 userData/project 供项目初始化", async (t) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "robotconfig-root-missing-test-"));
+  const userData = path.join(base, "user-data");
+  const missingRoot = path.join(base, "旧安装", "app", "project");
+  const documents = path.join(base, "Documents");
+  const exe = path.join(base, "新安装", "RobotConfigTools.exe");
+  fs.mkdirSync(userData, { recursive: true });
+  fs.mkdirSync(documents, { recursive: true });
+  const originalConfig = JSON.stringify({ projectRoot: missingRoot });
+  fs.writeFileSync(path.join(userData, "data-path.json"), originalConfig);
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+
+  const projectRoot = await loadProjectRoot(userData, {
+    migrateProjectDirectory, readDirectoryMigrationJournal, writeMigrationJson,
+  }, { isPackaged: true, paths: { documents, exe } });
+
+  const fallbackRoot = path.join(userData, "project");
+  assert.equal(projectRoot.loadInitialProjectRoot(), fallbackRoot);
+  projectRoot.ensureProjectRoot();
+  assert.equal(fs.existsSync(fallbackRoot), true);
+  assert.equal(fs.existsSync(missingRoot), false);
+  assert.notEqual(fs.readFileSync(path.join(userData, "data-path.json"), "utf8"), originalConfig);
+});
+
+test("项目路径失效且目录迁移台账损坏时仍切到 userData/project 启动", async (t) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "robotconfig-root-bad-journal-test-"));
+  const userData = path.join(base, "user-data");
+  const missingRoot = path.join(base, "旧项目目录");
+  const documents = path.join(base, "Documents");
+  const exe = path.join(base, "新安装", "RobotConfigTools.exe");
+  fs.mkdirSync(userData, { recursive: true });
+  fs.mkdirSync(documents, { recursive: true });
+  fs.writeFileSync(path.join(userData, "data-path.json"), JSON.stringify({ projectRoot: missingRoot }));
+  const brokenJournal = "{broken journal";
+  fs.writeFileSync(path.join(userData, "data-path-migration.json"), brokenJournal);
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+
+  const projectRoot = await loadProjectRoot(userData, {
+    migrateProjectDirectory, readDirectoryMigrationJournal, writeMigrationJson,
+  }, { isPackaged: true, paths: { documents, exe } });
+
+  const fallbackRoot = path.join(userData, "project");
+  assert.equal(projectRoot.loadInitialProjectRoot(), fallbackRoot);
+  projectRoot.ensureProjectRoot();
+  assert.equal(fs.existsSync(fallbackRoot), true);
+  assert.equal(fs.readFileSync(path.join(userData, "data-path-migration.json"), "utf8"), brokenJournal);
 });

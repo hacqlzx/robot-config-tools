@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import * as net from "net";
 import { getDataPathMigrationStatus, getProjectRoot, migrateDataPath } from "../project-core/project-root";
+import { getProjectDatabaseMigrationStatus } from "../db-ipc";
 
 /**
  * 合法 IPv4 格式正则（主进程侧独立校验）。
@@ -82,6 +83,8 @@ export function registerSystemIpc(): void {
   }));
 
   ipcMain.handle("storage:migration-status", async () => getDataPathMigrationStatus());
+
+  ipcMain.handle("project:database-migration-status", async () => getProjectDatabaseMigrationStatus());
 
   /** 获取当前项目根路径 */
   ipcMain.handle("get-project-root", async () => getProjectRoot());

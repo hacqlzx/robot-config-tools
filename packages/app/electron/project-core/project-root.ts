@@ -38,12 +38,29 @@ function hasProjectData(value: string): boolean {
   }
 }
 
+function findKnownProjectRootWithData(excludedRoot: string): string | undefined {
+  const candidates = app.isPackaged
+    ? [...getLegacyPackagedProjectRoots(), path.join(app.getPath("userData"), DEFAULT_PROJECT_SUBFOLDER), getPackagedProjectRoot()]
+    : [path.join(app.getPath("userData"), DEFAULT_PROJECT_SUBFOLDER), path.resolve(__dirname, "..", "..", "..", "project")];
+  const excluded = path.resolve(excludedRoot).toLowerCase();
+  return candidates
+    .map((candidate) => path.resolve(candidate))
+    .find((candidate) => candidate.toLowerCase() !== excluded && hasProjectData(candidate));
+}
+
+function getDefaultProjectRoot(): string {
+  return path.join(app.getPath("userData"), DEFAULT_PROJECT_SUBFOLDER);
+}
+
 export function getProjectRoot(): string { return PROJECT_ROOT; }
 
 /** 仅使用默认路径或已保存配置；修改目录统一由设置中的迁移入口处理。 */
 export function loadInitialProjectRoot(): string {
+  let hasSavedRoot = false;
+  let directoryRecoveryFailed = false;
   try {
     if (fs.existsSync(projectRootConfigPath())) {
+      hasSavedRoot = true;
       const config = JSON.parse(fs.readFileSync(projectRootConfigPath(), "utf8"));
       if (typeof config.projectRoot === "string" && path.isAbsolute(config.projectRoot)) {
         PROJECT_ROOT = config.projectRoot;
@@ -63,7 +80,27 @@ export function loadInitialProjectRoot(): string {
       PROJECT_ROOT = path.resolve(__dirname, "..", "..", "..", "project");
     }
   }
-  reconcileMovedDirectoryOnStartup();
+  try {
+    reconcileMovedDirectoryOnStartup();
+  } catch (error) {
+    directoryRecoveryFailed = true;
+    console.error("[project root] 恢复目录迁移状态失败，保留现场并继续初始化项目", error);
+  }
+  if ((hasSavedRoot && !fs.existsSync(PROJECT_ROOT)) || (directoryRecoveryFailed && !hasProjectData(PROJECT_ROOT))) {
+    const configuredRoot = PROJECT_ROOT;
+    const recoveredRoot = findKnownProjectRootWithData(configuredRoot) || getDefaultProjectRoot();
+    try {
+      writeMigrationJson(projectRootConfigPath(), { projectRoot: recoveredRoot });
+    } catch (error) {
+      console.error("[project root] 保存恢复后的项目路径失败，继续使用本次启动路径", error);
+    }
+    PROJECT_ROOT = recoveredRoot;
+    console.warn("[project root] 已恢复失效的项目保存路径", {
+      previousRoot: configuredRoot,
+      recoveredRoot,
+      existingProjectData: hasProjectData(recoveredRoot),
+    });
+  }
   return PROJECT_ROOT;
 }
 
@@ -108,8 +145,7 @@ function reconcileMovedDirectoryOnStartup(): void {
 export function ensureProjectRoot(): void {
   if (!PROJECT_ROOT) loadInitialProjectRoot();
   if (!fs.existsSync(PROJECT_ROOT)) {
-    // 已配置目录消失时不能静默切换或建立空项目目录。
-    if (fs.existsSync(projectRootConfigPath())) throw new Error(`项目保存目录不存在：${PROJECT_ROOT}，请恢复目录后重试`);
+    // 缺失的保存目录允许重建，启动时的数据库拆分会把旧总库记录保留在源库。
     fs.mkdirSync(PROJECT_ROOT, { recursive: true });
   }
 }

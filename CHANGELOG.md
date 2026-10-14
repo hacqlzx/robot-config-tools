@@ -12,6 +12,44 @@
 
 ---
 
+## 2026-10-14 — 启动不再因迁移失败退出，失效保存目录自动换到可用路径
+
+- 类型：fix
+
+### 修改
+
+- 旧 userData 复制失败只记日志，不再弹窗退出。旧目录原样保留。
+- 旧总库拆分失败时仍注册项目数据库接口，并记下失败状态。界面第一次加载项目时提示迁移未完成，清空当前项目并打开项目管理，方便新建或另选项目。旧总库不删除。
+- 已保存的项目目录不存在，或目录迁移台账恢复失败且当前目录没有项目数据时，先找安装目录、文档目录里已有数据的项目根；没有就改用 `userData/project` 并写回配置。缺失目录允许创建，不再因此阻止启动。损坏的迁移台账不改写。
+- 应用版本号从 `1.0.72` 改为 `1.0.73`。本次没有打安装包。
+
+### 优化
+
+- 客户机器上旧数据目录丢失或拆分中断时，应用还能打开，并落到一个可写目录，而不是停在错误框。
+- 拆分失败不会把已删除项目的旧库数据写进新建的同名项目；失败状态会提示用户处理。
+
+### 影响范围
+
+- `packages/app/electron/main.ts`
+- `packages/app/electron/app/legacy-user-data-migration.ts`
+- `packages/app/electron/db-ipc.ts`
+- `packages/app/electron/ipc/system-ipc.ts`
+- `packages/app/electron/preload.cjs`
+- `packages/app/electron/project-core/project-root.ts`
+- `packages/app/src/pages/app-header/index.tsx`
+- `packages/app/src/vite-env.d.ts`
+- `packages/app/package.json`
+- 对应测试脚本
+
+### 用户可见变化
+
+- 旧数据迁移或项目库拆分失败时，应用会继续打开。拆分失败会提示到项目管理里选择或新建项目。
+- 原来的保存目录没了，会自动切到文档里已有项目目录，或用户数据下的 `project`。
+
+### 验证
+
+- `node --test packages/app/scripts/legacy-user-data-migration.test.mjs packages/app/scripts/project-database-migration.test.mjs packages/app/scripts/project-storage-migration.test.mjs`
+
 ## 2026-10-14 — 忽略 output 目录并停止跟踪已有产物
 
 - 类型：chore

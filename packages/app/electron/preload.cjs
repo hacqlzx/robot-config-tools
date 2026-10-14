@@ -79,6 +79,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getGPUInfo: () => ipcRenderer.invoke("gpu:info"),
   project: {
     list: () => ipcRenderer.invoke("project:list"),
+    getDatabaseMigrationStatus: () => ipcRenderer.invoke("project:database-migration-status"),
     openDatabase: async (projectName) => {
       const request = ++databaseSessionRequest;
       activeDatabaseSession = null;

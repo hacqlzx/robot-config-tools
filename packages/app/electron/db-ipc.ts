@@ -361,8 +361,26 @@ function registerCabinetDeviceHandler(): void {
 
 // ---- init / close ----
 
+export interface ProjectDatabaseMigrationStatus {
+  failed: boolean;
+  error?: string;
+}
+
+let projectDatabaseMigrationStatus: ProjectDatabaseMigrationStatus = { failed: false };
+
+export function getProjectDatabaseMigrationStatus(): ProjectDatabaseMigrationStatus {
+  return { ...projectDatabaseMigrationStatus };
+}
+
 export async function initDbIpc(migrationOptions: ProjectDatabaseMigrationOptions): Promise<void> {
-  await migrateLegacyProjectDatabases(migrationOptions);
+  projectDatabaseMigrationStatus = { failed: false };
+  try {
+    await migrateLegacyProjectDatabases(migrationOptions);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    projectDatabaseMigrationStatus = { failed: true, error: message };
+    console.error("[DB migration] 项目数据库拆分失败，继续打开项目初始化", error);
+  }
   const repos = [
     { name: "voltage", Repo: DeviceVoltageRepo, methods: ["list", "getById", "findByStationId", "create", "update", "delete"], projectNameArgs: { list: [0], findByStationId: [1] } },
     { name: "bay", Repo: DeviceBayRepo, methods: ["list", "getById", "findByVoltId", "findByStationId", "create", "update", "delete"], projectNameArgs: { list: [0], findByVoltId: [1], findByStationId: [1] } },

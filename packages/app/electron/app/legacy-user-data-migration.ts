@@ -116,3 +116,11 @@ export async function migrateLegacyUserData(): Promise<void> {
   }
   console.info("[userData] Legacy data copied", { source: legacy, target, ...summary });
 }
+
+export async function migrateLegacyUserDataForStartup(): Promise<void> {
+  try {
+    await migrateLegacyUserData();
+  } catch (error) {
+    console.error("[userData] Legacy data migration failed; continuing startup with current userData", error);
+  }
+}

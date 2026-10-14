@@ -56,6 +56,7 @@ export default function AppHeader() {
   const robotOptions = useRobotOptions();
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const [messageApi, contextHolder] = message.useMessage({ top: MESSAGE_TOP_OFFSET });
+  const startupProjectStateHandledRef = useRef(false);
 
   const loadRobotList = useCallback(async () => {
     try {
@@ -136,6 +137,22 @@ export default function AppHeader() {
       setProjects(list);
       await loadProjectRoot();
       const currentProject = getSelectedProject();
+      let startupMigrationStatus: { failed: boolean; error?: string } | null = null;
+      if (!startupProjectStateHandledRef.current && window.electronAPI.project.getDatabaseMigrationStatus) {
+        try {
+          startupMigrationStatus = await window.electronAPI.project.getDatabaseMigrationStatus();
+        } catch {
+          startupMigrationStatus = null;
+        }
+      }
+      if (!startupProjectStateHandledRef.current) {
+        startupProjectStateHandledRef.current = true;
+        if (startupMigrationStatus?.failed) {
+          setSelectedProject(null);
+          setProjectManagerOpen(true);
+          messageApi.warning("旧项目数据库迁移未完成，旧总库已保留。请在项目管理中选择或新建项目。");
+        }
+      }
       if (list.length === 0) {
         setSelectedProject(null);
       } else if (currentProject && !list.includes(currentProject)) {

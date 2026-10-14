@@ -476,6 +476,24 @@ test("切项目拒绝旧会话与项目不匹配请求；数据库操作与目�
   assert.equal(exportData.rows[0].pointName, "测试点位");
 });
 
+test("旧总库迁移失败时仍注册项目数据库 IPC，并提供初始化状态", async (t) => {
+  const s = setup(t, ["待初始化项目"]);
+
+  await assert.doesNotReject(api.initDbIpc(s.options));
+
+  assert.equal(handlers.has("db:point:list"), true);
+  assert.deepEqual(api.getProjectDatabaseMigrationStatus(), {
+    failed: true,
+    error: `旧总库不存在，且项目数据库迁移未全部完成：${s.options.legacyDatabasePath}。请从备份恢复旧总库`,
+  });
+
+  const createdProject = await api.createProject("迁移失败后新建项目");
+  const session = await api.openProjectDatabase(createdProject);
+  const pointCount = await api.withProjectDatabaseSession(session.projectName, session.sessionVersion, (db) =>
+    db.prepare("SELECT COUNT(*) AS count FROM device_point").get());
+  assert.equal(pointCount.count, 0);
+});
+
 test("项目目录迁移前关闭延迟保存；切根后新会话重开，不重建旧路径", async (t) => {
   const s = setup(t, ["中文 项目甲"]);
   await seed(s);
