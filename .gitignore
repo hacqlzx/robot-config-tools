@@ -41,3 +41,6 @@ data/
 # 联调文档及数据
 doc/
 docs/
+
+# 临时转换脚本产物
+output/

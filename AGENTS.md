@@ -36,7 +36,7 @@
 - `data`：运行时数据库目录，开发时默认保存 `robot-config.db`。
 - `CHANGELOG.md`：每次 Git 提交必须同步更新的优化/修改日志，新记录写在最上方。
 - `docs`、`doc`：联调样例、Java 参考实现和数据协议资料；两者均在 `.gitignore` 中，但已有部分历史文件被 Git 跟踪。
-- `scripts`、`output`：临时数据转换脚本和产物。
+- `scripts`：临时数据转换脚本。`output` 是运行时产物，已在 `.gitignore` 中，不要提交。
 - `demo`：点云 demo 资源。
 
 `data`、`doc`、`docs` 已在 `.gitignore` 中；`project` 当前未忽略。改这些目录前先确认任务确实需要，已跟踪的 `doc` 历史文件仍会显示修改，不要把联调资料误当成运行时产物删除。

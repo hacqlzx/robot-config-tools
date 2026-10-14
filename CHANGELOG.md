@@ -12,6 +12,35 @@
 
 ---
 
+## 2026-10-14 — 忽略 output 目录并停止跟踪已有产物
+
+- 类型：chore
+
+### 修改
+
+- `.gitignore` 增加 `output/`。这个目录放临时转换结果和发布核对文件，不应进仓库。
+- 已跟踪的 `output` 下巡检数据 csv/html 从 Git 索引移除，本地文件保留。
+- `AGENTS.md` 写明 `output` 是已忽略的运行时产物。
+
+### 优化
+
+- 以后在 `output` 里生成报告或核对文件，不会再出现在 `git status` 里。
+
+### 影响范围
+
+- `.gitignore`
+- `AGENTS.md`
+- 已跟踪的 `output` 文件
+
+### 用户可见变化
+
+- 无界面变化。仓库不再包含这两份巡检数据样例。
+
+### 验证
+
+- `git check-ignore -v output/project-migration-scenario-report.md` 能命中 `output/`。
+- `git status` 不再列出 `output` 下未跟踪文件。
+
 ## 2026-10-14 — 准备 1.0.72 发布草稿，替代未发布的 1.0.71
 
 - 类型：chore
