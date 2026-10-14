@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test, { after } from "node:test";
 import vm from "node:vm";
+import { execFileSync } from "node:child_process";
 
 const appDir = fileURLToPath(new URL("../", import.meta.url));
 const require = createRequire(import.meta.url);
@@ -96,6 +97,29 @@ async function seed(s, alter = () => {}) {
   return fs.readFileSync(s.options.legacyDatabasePath);
 }
 
+// 每次使用新的 Node 进程启动真实数据库/IPC 初始化，避免内存缓存掩盖重启问题。
+function runIsolatedStartup(s, projectName) {
+  const script = `
+    import { pathToFileURL } from "node:url";
+    globalThis.__projectDatabaseTestHandlers = new Map();
+    globalThis.__projectDatabaseTestUserData = process.argv[3];
+    const api = await import(pathToFileURL(process.argv[1]));
+    api.loadInitialProjectRoot();
+    await api.initDbIpc(JSON.parse(process.argv[2]));
+    const session = await api.openProjectDatabase(process.argv[4]);
+    const points = await api.withProjectDatabaseSession(session.projectName, session.sessionVersion,
+      (db) => db.prepare("SELECT id, project_name, point_code, point_name, calibration_id FROM device_point ORDER BY id").all());
+    await api.closeAllProjectDatabases();
+    process.stdout.write("SCENARIO_RESULT=" + JSON.stringify({ points,
+      ipcReady: globalThis.__projectDatabaseTestHandlers.has("db:point:list") }) + "\\n");
+  `;
+  const output = execFileSync(process.execPath, ["--input-type=module", "-e", script,
+    runtimeFile, JSON.stringify(s.options), s.userData, projectName], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
+  const report = output.split(/\r?\n/).find((line) => line.startsWith("SCENARIO_RESULT="));
+  assert.ok(report, "独立进程应正常完成初始化、打开项目并输出结果");
+  return JSON.parse(report.slice("SCENARIO_RESULT=".length));
+}
+
 test("自动拆分保留六张表的原始字段、主键、关联、标定 ID 和序列；源库不变", async (t) => {
   const s = setup(t);
   const original = await seed(s);
@@ -126,8 +150,8 @@ test("自动拆分保留六张表的原始字段、主键、关联、标定 ID �
   }
 });
 
-test("空项目名或目录缺失中止整批预检，不发布项目库，不修改源库", async (t) => {
-  for (const invalidName of [null, "不存在的项目"]) {
+test("空项目名中止整批预检，不发布项目库，不修改源库", async (t) => {
+  for (const invalidName of [null, "", "   "]) {
     const s = setup(t);
     const original = await seed(s, (db) => db.prepare("UPDATE device_point SET project_name = ? WHERE id = 10").run(invalidName));
     await assert.rejects(s.run(), /旧总库预检失败/);
@@ -135,6 +159,92 @@ test("空项目名或目录缺失中止整批预检，不发布项目库，不�
     assert.equal(fs.existsSync(s.options.journalPath), false);
     assert.equal(fs.existsSync(s.dbPath(s.names[0])), false);
   }
+});
+
+test("旧项目目录已删除时跳过并记录六张表行数，其他项目正常迁移且重启不重建目录", async (t) => {
+  const s = setup(t);
+  const original = await seed(s);
+  const missingDirectory = path.join(s.root, s.names[0]);
+  fs.rmdirSync(missingDirectory);
+  await s.run();
+  const journal = JSON.parse(fs.readFileSync(s.options.journalPath));
+  assert.equal(journal.phase, "complete");
+  assert.deepEqual(journal.skippedProjects, [{
+    projectName: s.names[0], reason: "missing-project-directory",
+    rowCounts: { project_station: 1, device_voltage: 1, device_bay: 1, device_main: 1, device_component: 1, device_point: 1 },
+  }]);
+  assert.deepEqual(journal.projects.map((record) => [record.projectName, record.status]), [[s.names[1], "complete"]]);
+  const db = await api.openDatabaseAtPath(s.dbPath(s.names[1]), false, false);
+  try {
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM device_point").get().count, 1);
+    assert.equal(db.prepare("SELECT project_name FROM device_point").get().projectName, s.names[1]);
+    assert.equal(db.prepare("SELECT component_id FROM device_point").get().componentId, 110);
+  } finally { db.discardAndClose(); }
+  const migrated = fs.readFileSync(s.dbPath(s.names[1]));
+  await s.run();
+  assert.equal(fs.existsSync(missingDirectory), false);
+  assert.deepEqual(fs.readFileSync(s.dbPath(s.names[1])), migrated);
+  assert.deepEqual(fs.readFileSync(s.options.legacyDatabasePath), original);
+});
+
+test("旧项目目录全部删除也可完成启动，源库及跳过记录保留", async (t) => {
+  const s = setup(t);
+  const original = await seed(s);
+  for (const name of s.names) fs.rmdirSync(path.join(s.root, name));
+  await s.run();
+  const journal = JSON.parse(fs.readFileSync(s.options.journalPath));
+  assert.equal(journal.phase, "complete");
+  assert.deepEqual(journal.projects, []);
+  assert.deepEqual(journal.skippedProjects.map((record) => record.projectName).sort(), [...s.names].sort());
+  await s.run();
+  assert.deepEqual(fs.readdirSync(s.root), []);
+  assert.deepEqual(fs.readFileSync(s.options.legacyDatabasePath), original);
+});
+
+test("未完成旧台账中的项目目录被删除时标记跳过，继续校验剩余项目", async (t) => {
+  const s = setup(t);
+  const original = await seed(s);
+  await s.run();
+  const journal = JSON.parse(fs.readFileSync(s.options.journalPath));
+  journal.phase = "splitting";
+  delete journal.skippedProjects; // 兼容没有跳过字段的旧版 version 1 台账。
+  fs.writeFileSync(s.options.journalPath, JSON.stringify(journal));
+  const missingDirectory = path.join(s.root, s.names[0]);
+  fs.rmSync(missingDirectory, { recursive: true });
+  const migrated = fs.readFileSync(s.dbPath(s.names[1]));
+  await s.run();
+  const resumed = JSON.parse(fs.readFileSync(s.options.journalPath));
+  assert.equal(resumed.phase, "complete");
+  assert.equal(resumed.projects.find((record) => record.projectName === s.names[0]).status, "skipped");
+  assert.equal(resumed.skippedProjects[0].projectName, s.names[0]);
+  assert.equal(fs.existsSync(missingDirectory), false);
+  assert.deepEqual(fs.readFileSync(s.dbPath(s.names[1])), migrated);
+  assert.deepEqual(fs.readFileSync(s.options.legacyDatabasePath), original);
+});
+
+test("未完成批次中跳过的目录恢复后重新校验，身份冲突仍拒绝覆盖", async (t) => {
+  const s = setup(t);
+  const original = await seed(s);
+  await s.run();
+  const journal = JSON.parse(fs.readFileSync(s.options.journalPath));
+  journal.phase = "splitting";
+  journal.projects[0].status = "skipped";
+  fs.writeFileSync(s.options.journalPath, JSON.stringify(journal));
+  const migrated = fs.readFileSync(s.dbPath(s.names[0]));
+  await s.run();
+  const resumed = JSON.parse(fs.readFileSync(s.options.journalPath));
+  assert.equal(resumed.phase, "complete");
+  assert.ok(resumed.projects.every((record) => record.status === "complete"));
+  assert.deepEqual(resumed.skippedProjects, []);
+  assert.deepEqual(fs.readFileSync(s.dbPath(s.names[0])), migrated);
+  const manifestFile = path.join(s.root, s.names[0], "project.manifest.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestFile));
+  manifest.project.id = "different-project-id";
+  fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+  fs.writeFileSync(s.options.journalPath, JSON.stringify(journal));
+  await assert.rejects(s.run(), /与迁移台账不匹配/);
+  assert.deepEqual(fs.readFileSync(s.dbPath(s.names[0])), migrated);
+  assert.deepEqual(fs.readFileSync(s.options.legacyDatabasePath), original);
 });
 
 test("跨项目关联和同项目重复点位拒绝发布；已经完成的项目不重复写入", async (t) => {
@@ -198,6 +308,152 @@ test("完成后重命名、删除、新建、旧库删除/变化均不重新拆�
   await assert.rejects(s.run(), /项目数据库缺失/);
   await assert.rejects(api.openProjectDatabase("全新项目"), /项目数据库缺失/);
   assert.equal(fs.existsSync(newDb), false);
+});
+
+test("已迁移项目删除后新建同名项目，身份独立且后续启动不会重新导入旧数据", async (t) => {
+  const s = setup(t, ["同名 项目"]);
+  const original = await seed(s);
+  await s.run();
+  const oldIdentity = JSON.parse(fs.readFileSync(path.join(s.root, s.names[0], "project.manifest.json"))).project.id;
+  const completedJournal = fs.readFileSync(s.options.journalPath);
+  await api.deleteProject(s.names[0]);
+  await api.createProject(s.names[0]);
+  const newManifest = JSON.parse(fs.readFileSync(path.join(s.root, s.names[0], "project.manifest.json")));
+  assert.notEqual(newManifest.project.id, oldIdentity);
+  assert.equal(newManifest.database.migrationBatchId, null);
+  for (let restart = 0; restart < 2; restart++) {
+    await s.run();
+    assert.equal((await api.getProjectDatabaseSummary(s.names[0])).total, 0);
+  }
+  assert.deepEqual(fs.readFileSync(s.options.journalPath), completedJournal);
+  assert.deepEqual(fs.readFileSync(s.options.legacyDatabasePath), original);
+});
+
+test("旧目录已跳过后新建同名项目不回填旧数据，包括原目录全部被删除的情况", async (t) => {
+  for (const deleteAll of [false, true]) {
+    const s = setup(t);
+    const original = await seed(s);
+    for (const name of deleteAll ? s.names : [s.names[0]]) fs.rmdirSync(path.join(s.root, name));
+    await s.run();
+    const completedJournal = fs.readFileSync(s.options.journalPath);
+    await api.createProject(s.names[0]);
+    await s.run();
+    await s.run();
+    assert.equal((await api.getProjectDatabaseSummary(s.names[0])).total, 0);
+    assert.deepEqual(fs.readFileSync(s.options.journalPath), completedJournal);
+    assert.deepEqual(fs.readFileSync(s.options.legacyDatabasePath), original);
+  }
+});
+
+test("没有台账但所有项目库有效时持久化完成标记，之后缺库不回退旧库拆分", async (t) => {
+  const s = setup(t, ["同名 项目"]);
+  const original = await seed(s);
+  await s.run();
+  fs.rmSync(s.options.journalPath);
+  await s.run();
+  const journal = JSON.parse(fs.readFileSync(s.options.journalPath));
+  assert.equal(journal.phase, "complete");
+  assert.equal(journal.sourceFingerprint, null);
+  const manifestFile = path.join(s.root, s.names[0], "project.manifest.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestFile));
+  delete manifest.database;
+  fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+  await s.run(); // 新初始化批次也兼容从有效项目库补回清单。
+  assert.ok(JSON.parse(fs.readFileSync(manifestFile)).database);
+  fs.rmSync(s.dbPath(s.names[0]));
+  await assert.rejects(s.run(), /项目数据库缺失/);
+  assert.equal(fs.existsSync(s.dbPath(s.names[0])), false);
+  assert.deepEqual(fs.readFileSync(s.options.legacyDatabasePath), original);
+});
+
+test("全新安装没有旧库时同样记录完成，后来出现旧备份不影响新建同名项目", async (t) => {
+  const s = setup(t, []);
+  await s.run();
+  const completedJournal = fs.readFileSync(s.options.journalPath);
+  const journal = JSON.parse(completedJournal);
+  assert.equal(journal.phase, "complete");
+  assert.equal(journal.sourceFingerprint, null);
+  assert.deepEqual(journal.projects, []);
+  s.names.push("后来同名");
+  await api.createProject(s.names[0]);
+  const original = await seed(s);
+  await s.run();
+  assert.equal((await api.getProjectDatabaseSummary(s.names[0])).total, 0);
+  assert.deepEqual(fs.readFileSync(s.options.legacyDatabasePath), original);
+  fs.writeFileSync(s.options.legacyDatabasePath, "此后不再读取的旧备份");
+  await s.run();
+  assert.equal((await api.getProjectDatabaseSummary(s.names[0])).total, 0);
+  assert.deepEqual(fs.readFileSync(s.options.journalPath), completedJournal);
+  assert.equal(fs.readFileSync(s.options.legacyDatabasePath, "utf8"), "此后不再读取的旧备份");
+});
+
+test("客户场景独立进程模拟：test/智洋培训目录缺失，当次启动成功，同名新项目编辑后再次启动不回填", async (t) => {
+  const s = setup(t, ["test", "智洋培训", "正常项目"]);
+  const original = await seed(s);
+  for (const name of s.names.slice(0, 2)) fs.rmdirSync(path.join(s.root, name));
+  const first = runIsolatedStartup(s, "正常项目");
+  assert.equal(first.ipcReady, true);
+  assert.equal(first.points.length, 1);
+  assert.equal(first.points[0].id, 210);
+  assert.equal(first.points[0].calibrationId, "217");
+  const completedJournal = fs.readFileSync(s.options.journalPath);
+  const journal = JSON.parse(completedJournal);
+  assert.equal(journal.phase, "complete");
+  assert.deepEqual(journal.skippedProjects.map((record) => record.projectName).sort(), ["test", "智洋培训"].sort());
+  for (const name of s.names.slice(0, 2)) assert.equal(fs.existsSync(path.join(s.root, name)), false);
+  const normalDatabase = fs.readFileSync(s.dbPath("正常项目"));
+
+  await api.createProject("test");
+  assert.equal((await api.getProjectDatabaseSummary("test")).total, 0);
+  await api.withProjectDatabase("test", (db) => {
+    db.prepare("INSERT INTO device_point (project_name, point_code, point_name, calibration_id, cruise_id) VALUES (?, ?, ?, ?, 0)")
+      .run("test", "共享编码", "新项目自己的点位", "700001");
+  });
+  await api.closeAllProjectDatabases();
+  const second = runIsolatedStartup(s, "test");
+  assert.equal(second.ipcReady, true);
+  assert.deepEqual(second.points, [{ id: 1, projectName: "test", pointCode: "共享编码", pointName: "新项目自己的点位", calibrationId: "700001" }]);
+  assert.deepEqual(fs.readFileSync(s.options.legacyDatabasePath), original);
+  fs.writeFileSync(s.options.legacyDatabasePath, "模拟旧备份此后已损坏");
+  const third = runIsolatedStartup(s, "test");
+  assert.deepEqual(third, second);
+  assert.deepEqual(fs.readFileSync(s.options.journalPath), completedJournal);
+  assert.deepEqual(fs.readFileSync(s.dbPath("正常项目")), normalDatabase);
+  assert.equal(fs.existsSync(path.join(s.root, "智洋培训")), false);
+});
+
+test("真实发布失败模拟：第二个项目写盘后发布中断，独立进程续传且不重写第一个项目", async (t) => {
+  const s = setup(t);
+  const original = await seed(s);
+  const rename = fs.renameSync;
+  let interrupted = false;
+  fs.renameSync = (source, target) => {
+    if (!interrupted && path.resolve(String(target)) === s.dbPath(s.names[1])) {
+      interrupted = true;
+      throw new Error("模拟第二个项目发布时中断");
+    }
+    return rename(source, target);
+  };
+  try { await assert.rejects(s.run(), /模拟第二个项目发布时中断/); }
+  finally { fs.renameSync = rename; }
+  assert.equal(interrupted, true);
+  const journal = JSON.parse(fs.readFileSync(s.options.journalPath));
+  assert.equal(journal.phase, "splitting");
+  assert.equal(journal.projects.find((record) => record.projectName === s.names[0]).status, "complete");
+  assert.equal(journal.projects.find((record) => record.projectName === s.names[1]).status, "copying");
+  assert.equal(fs.existsSync(s.dbPath(s.names[1])), false);
+  const stagePath = s.dbPath(s.names[1]) + "." + journal.batchId + ".tmp";
+  assert.equal(fs.existsSync(stagePath), true);
+  const firstDatabase = fs.readFileSync(s.dbPath(s.names[0]));
+  const resumed = runIsolatedStartup(s, s.names[1]);
+  assert.equal(resumed.ipcReady, true);
+  assert.equal(resumed.points.length, 1);
+  assert.equal(resumed.points[0].id, 110);
+  assert.equal(resumed.points[0].calibrationId, "117");
+  assert.equal(JSON.parse(fs.readFileSync(s.options.journalPath)).phase, "complete");
+  assert.equal(fs.existsSync(stagePath), false);
+  assert.deepEqual(fs.readFileSync(s.dbPath(s.names[0])), firstDatabase);
+  assert.deepEqual(fs.readFileSync(s.options.legacyDatabasePath), original);
 });
 
 test("切项目拒绝旧会话与项目不匹配请求；数据库操作与目录迁移互斥", async (t) => {

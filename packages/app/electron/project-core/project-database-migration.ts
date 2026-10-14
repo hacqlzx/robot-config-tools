@@ -17,7 +17,13 @@ import { PROJECT_DATABASE_FORMAT_VERSION, PROJECT_DATABASE_RELATIVE_PATH } from 
 
 const PROJECT_TABLES = ["project_station", "device_voltage", "device_bay", "device_main", "device_component", "device_point"] as const;
 const AUTOINCREMENT_TABLES = PROJECT_TABLES;
-type MigrationStatus = "pending" | "copying" | "published" | "complete";
+type MigrationStatus = "pending" | "copying" | "published" | "complete" | "skipped";
+
+interface SkippedProjectMigrationRecord {
+  projectName: string;
+  reason: "missing-project-directory";
+  rowCounts: Record<string, number>;
+}
 
 interface ProjectMigrationRecord {
   projectId: string;
@@ -32,8 +38,10 @@ interface ProjectDatabaseMigrationJournal {
   batchId: string;
   phase: "splitting" | "complete";
   sourcePath: string;
-  sourceFingerprint: string;
+  // 没有旧库需要拆分时为 null；只允许用于已完成的初始化台账。
+  sourceFingerprint: string | null;
   projects: ProjectMigrationRecord[];
+  skippedProjects?: SkippedProjectMigrationRecord[];
   updatedAt: string;
 }
 
@@ -72,7 +80,9 @@ function readJournal(filePath: string): ProjectDatabaseMigrationJournal | null {
   catch (error) {
     throw new Error("项目数据库迁移台账损坏：" + filePath + "；" + (error instanceof Error ? error.message : String(error)));
   }
-  if (raw?.version !== 1 || !Array.isArray(raw.projects) || !raw.batchId || !raw.sourceFingerprint) {
+  const validFingerprint = typeof raw?.sourceFingerprint === "string" && !!raw.sourceFingerprint
+    || raw?.phase === "complete" && raw?.sourceFingerprint === null;
+  if (raw?.version !== 1 || !Array.isArray(raw.projects) || !raw.batchId || !validFingerprint) {
     throw new Error("项目数据库迁移台账格式无效：" + filePath);
   }
   return raw as ProjectDatabaseMigrationJournal;
@@ -124,11 +134,14 @@ function readTableCounts(database: DbWrapper, projectName: string): Record<strin
   }));
 }
 
-function preflightProjectOwnership(database: DbWrapper, contexts: ProjectContext[]): Map<string, Record<string, number>> {
+function preflightProjectOwnership(database: DbWrapper, contexts: ProjectContext[]): {
+  countsByName: Map<string, Record<string, number>>;
+  skippedProjects: SkippedProjectMigrationRecord[];
+} {
   const projectsByName = new Set(contexts.map((project) => project.name));
   const countsByName = new Map<string, Record<string, number>>();
   const unassigned: string[] = [];
-  const unknown: string[] = [];
+  const missingCountsByName = new Map<string, Record<string, number>>();
   for (const table of PROJECT_TABLES) {
     const rows = database.prepare("SELECT project_name AS projectName, COUNT(*) AS count FROM " + table + " GROUP BY project_name").all() as Array<{ projectName: string | null; count: number }>;
     for (const row of rows) {
@@ -138,7 +151,9 @@ function preflightProjectOwnership(database: DbWrapper, contexts: ProjectContext
         continue;
       }
       if (!projectsByName.has(name)) {
-        unknown.push(table + ":" + name + " (" + row.count + ")");
+        const counts = missingCountsByName.get(name) || Object.fromEntries(PROJECT_TABLES.map((item) => [item, 0]));
+        counts[table] = Number(row.count);
+        missingCountsByName.set(name, counts);
         continue;
       }
       const counts = countsByName.get(name) || Object.fromEntries(PROJECT_TABLES.map((item) => [item, 0]));
@@ -146,17 +161,16 @@ function preflightProjectOwnership(database: DbWrapper, contexts: ProjectContext
       countsByName.set(name, counts);
     }
   }
-  if (unassigned.length || unknown.length) {
-    const details = [
-      unassigned.length ? "项目名为空：" + unassigned.join("、") : "",
-      unknown.length ? "找不到项目目录：" + unknown.join("、") : "",
-    ].filter(Boolean).join("；");
-    throw new Error("旧总库预检失败，未归属记录不会被丢弃；" + details);
+  if (unassigned.length) {
+    throw new Error("旧总库预检失败，未归属记录不会被丢弃；项目名为空：" + unassigned.join("、"));
   }
   for (const context of contexts) {
     if (!countsByName.has(context.name)) countsByName.set(context.name, Object.fromEntries(PROJECT_TABLES.map((table) => [table, 0])));
   }
-  return countsByName;
+  const skippedProjects = Array.from(missingCountsByName, ([projectName, rowCounts]): SkippedProjectMigrationRecord => ({
+    projectName, reason: "missing-project-directory", rowCounts,
+  }));
+  return { countsByName, skippedProjects };
 }
 
 function getTableColumns(database: DbWrapper, table: string): string[] {
@@ -257,7 +271,7 @@ function copyProjectRows(source: DbWrapper, target: DbWrapper, projectName: stri
   return counts;
 }
 
-function makeJournal(sourcePath: string, sourceFingerprint: string, projects: ProjectContext[]): ProjectDatabaseMigrationJournal {
+function makeJournal(sourcePath: string, sourceFingerprint: string | null, projects: ProjectContext[]): ProjectDatabaseMigrationJournal {
   const batchId = randomUUID();
   return {
     version: 1,
@@ -273,6 +287,13 @@ function makeJournal(sourcePath: string, sourceFingerprint: string, projects: Pr
     })),
     updatedAt: new Date().toISOString(),
   };
+}
+
+function recordCompletedInitialization(sourcePath: string, projects: ProjectContext[], journalPath: string): void {
+  const journal = makeJournal(sourcePath, null, projects);
+  journal.phase = "complete";
+  for (const record of journal.projects) record.status = "complete";
+  saveJournal(journalPath, journal);
 }
 
 async function verifyProjectFile(
@@ -308,7 +329,7 @@ async function verifyProjectFile(
   }
 }
 
-function updateManifestAfterMigration(context: ProjectContext, batchId: string, sourceFingerprint: string): void {
+function updateManifestAfterMigration(context: ProjectContext, batchId: string, sourceFingerprint: string | null): void {
   context.manifest.database = {
     path: context.manifest.database?.path || PROJECT_DATABASE_RELATIVE_PATH,
     formatVersion: PROJECT_DATABASE_FORMAT_VERSION,
@@ -328,7 +349,7 @@ async function migrateOneProject(
   expectedCounts: Record<string, number>,
 ): Promise<void> {
   if (record.status === "complete") {
-    await verifyProjectFile(context, expectedCounts, journal.sourceFingerprint, journal.batchId);
+    await verifyProjectFile(context, expectedCounts, journal.sourceFingerprint || undefined, journal.batchId);
     return;
   }
 
@@ -382,7 +403,7 @@ async function migrateOneProject(
   record.status = "published";
   record.rowCounts = expectedCounts;
   saveJournal(journalPath, journal);
-  await verifyProjectFile(context, expectedCounts, journal.sourceFingerprint, journal.batchId);
+  await verifyProjectFile(context, expectedCounts, journal.sourceFingerprint || undefined, journal.batchId);
   updateManifestAfterMigration(context, journal.batchId, journal.sourceFingerprint);
   record.status = "complete";
   saveJournal(journalPath, journal);
@@ -407,19 +428,25 @@ export async function migrateLegacyProjectDatabases(options: ProjectDatabaseMigr
     for (const context of contexts) {
       const original = journal?.projects.find((record) => record.projectId === context.id);
       const metadata = await verifyProjectFile(context, undefined,
-        !context.manifest.database && original ? journal?.sourceFingerprint : undefined,
-        !context.manifest.database && original ? journal?.batchId : undefined);
+        !context.manifest.database && original ? journal?.sourceFingerprint || undefined : undefined,
+        !context.manifest.database && original && journal?.sourceFingerprint ? journal.batchId : undefined);
       if (!context.manifest.database) {
         context.manifest.database = metadata;
         writeProjectManifestByDir(context.directory, context.manifest);
         console.info("[DB migration] 已从有效项目库恢复清单数据库元数据", context.name);
       }
     }
+    // 已有独立项目库也要封存初始化，后续缺库不能回退到按名称拆分旧数据。
+    if (!journal) recordCompletedInitialization(sourcePath, contexts, journalPath);
     return;
   }
 
   if (!fs.existsSync(sourcePath)) {
-    if (contexts.length === 0 && !journal) return;
+    if (contexts.length === 0 && !journal) {
+      // 全新安装同样只初始化一次，未来出现同名项目或旧备份都不再自动导入。
+      recordCompletedInitialization(sourcePath, contexts, journalPath);
+      return;
+    }
     throw new Error("旧总库不存在，且项目数据库迁移未全部完成：" + sourcePath + "。请从备份恢复旧总库");
   }
 
@@ -433,14 +460,32 @@ export async function migrateLegacyProjectDatabases(options: ProjectDatabaseMigr
     runMigrations(source, legacyMigrations);
     const sourceVersion = source.prepare("SELECT MAX(version) AS version FROM schema_version").get() as { version: number };
     if (sourceVersion.version > CURRENT_DATABASE_SCHEMA_VERSION) throw new Error("旧总库结构比当前客户端更新，禁止降级拆分");
-    const expectedByName = preflightProjectOwnership(source, contexts);
+    const { countsByName: expectedByName, skippedProjects } = preflightProjectOwnership(source, contexts);
     const projectCounts = new Map(contexts.map((context) => [context.name, readTableCounts(source, context.name)]));
     if (!journal) {
       journal = makeJournal(sourcePath, sourceFingerprint, contexts);
       saveJournal(journalPath, journal);
     }
+    journal.skippedProjects = skippedProjects;
+    for (const record of journal.projects) {
+      // 中断期间项目被删除时也跳过；同名或同 ID 的身份冲突仍交给下方校验。
+      if (!contexts.some((context) => context.id === record.projectId || context.name === record.projectName)) {
+        record.status = "skipped";
+      } else if (record.status === "skipped") {
+        // 未完成批次中目录恢复后重新核验，不能把仍存在的项目继续当作已跳过。
+        record.status = "pending";
+      }
+    }
+    saveJournal(journalPath, journal);
+    if (skippedProjects.length) {
+      console.warn("[DB migration] 跳过目录不存在的旧项目，关联记录仍保留在旧总库", {
+        projectRoot, sourcePath, skippedProjects,
+      });
+    }
     const recordsById = new Map(journal.projects.map((record) => [record.projectId, record]));
-    if (journal.projects.length !== contexts.length) throw new Error("迁移台账中的项目清单与当前项目目录不一致");
+    if (journal.projects.filter((record) => record.status !== "skipped").length !== contexts.length) {
+      throw new Error("迁移台账中的项目清单与当前项目目录不一致");
+    }
     for (const context of contexts) {
       const record = recordsById.get(context.id);
       if (!record || record.projectName !== context.name || path.resolve(record.databasePath) !== context.databasePath) {
@@ -458,7 +503,9 @@ export async function migrateLegacyProjectDatabases(options: ProjectDatabaseMigr
     }
     journal.phase = "complete";
     saveJournal(journalPath, journal);
-    console.info("[DB migration] 旧总库拆分批次完成", { batchId: journal.batchId, projects: contexts.length, sourcePath });
+    console.info("[DB migration] 旧总库拆分批次完成", {
+      batchId: journal.batchId, projects: contexts.length, skippedProjects: skippedProjects.length, sourcePath,
+    });
   } finally {
     source.discardAndClose();
   }
